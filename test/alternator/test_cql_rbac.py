@@ -1104,7 +1104,7 @@ def test_rbac_streams_autorevoke(dynamodb, cql):
 # have opened many risks, the most serious of which being the ability to
 # read system.roles which contains the secret key of other, possibly more
 # privileged, users.
-def test_rbac_system_table(dynamodb, cql):
+def test_rbac_system_table_read(dynamodb, cql):
     with new_role(cql) as (role, key):
         with new_dynamodb(dynamodb, role, key) as d:
             client = d.meta.client
@@ -1117,3 +1117,74 @@ def test_rbac_system_table(dynamodb, cql):
             # read will succeed:
             with temporary_grant(cql, 'SELECT', tbl1, role):
                 authorized(lambda: client.scan(TableName=internal_prefix+tbl1))
+
+# Test that the permissions checks for writing to system tables (as requested
+# in issue #12348) are stricter than reading: It's not enough that the user
+# has write permissions on the specific system table, the user must also be a
+# "superuser". The reason for this extra restriction is issue #23218 -
+# without this restriction a user given write permissions to ALL KEYSPACES
+# is able to turn itself into a superuser (by writing into the roles table)
+# and gain all other permissions.
+def test_rbac_system_table_write(dynamodb, cql, test_table_s):
+    config_table = dynamodb.Table('.scylla.alternator.system.config')
+    # We use the 'query_tombstone_page_limit' configuration option as
+    # something we can harmlessly write to (if we write the same value as we
+    # read). If in the future this configuration parameter is dropped, this
+    # test should be changed to use a different option.
+    parameter = 'query_tombstone_page_limit'
+    old_val = config_table.query(
+        KeyConditionExpression='#key=:val',
+        ExpressionAttributeNames={'#key': 'name'},
+        ExpressionAttributeValues={':val': parameter}
+        )['Items'][0]['value']
+    # Try to write to the system table using the superuser role "cql",
+    # to skip the test if alternator_allow_system_table_write is false.
+    try:
+        config_table.update_item(Key={'name': parameter},
+            UpdateExpression='SET #val = :val',
+            ExpressionAttributeNames={'#val': 'value'},
+            ExpressionAttributeValues={':val': old_val})
+    except Exception as e:
+        if 'alternator_allow_system_table_write' in str(e):
+            pytest.skip('need alternator_allow_system_table_write=true')
+        else:
+            raise
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tbl1 = d.Table('.scylla.alternator.system.config')
+            # Without special permissions, writing the system table will
+            # fail:
+            unauthorized(lambda: tbl1.update_item(Key={'name': parameter},
+                UpdateExpression='SET #val = :val',
+                ExpressionAttributeNames={'#val': 'value'},
+                ExpressionAttributeValues={':val': old_val}))
+            # Adding MODIFY permissions on all keyspaces, the read write should
+            # still fail because the user is not a superuser.
+            # Because it takes time for the permission modification to take
+            # effect, a write failure might not prove the permission check is
+            # correct but just that the new permissions have not yet taken
+            # effect. So we need to wait until a write to another table
+            # succeds, which proves the permission change took effect, and
+            # only then we can check that the write on the system table fails.
+            tbl2 = d.Table(test_table_s.name)
+            p = random_string()
+            unauthorized(lambda: tbl2.update_item(Key={'p': p},
+                UpdateExpression='SET #val = :val',
+                ExpressionAttributeNames={'#val': 'value'},
+                ExpressionAttributeValues={':val': old_val}))
+            with temporary_grant(cql, 'MODIFY', 'ALL KEYSPACES', role):
+                authorized(lambda: tbl2.update_item(Key={'p': p},
+                    UpdateExpression='SET #val = :val',
+                    ExpressionAttributeNames={'#val': 'value'},
+                    ExpressionAttributeValues={':val': old_val}))
+                unauthorized(lambda: tbl1.update_item(Key={'name': parameter},
+                    UpdateExpression='SET #val = :val',
+                    ExpressionAttributeNames={'#val': 'value'},
+                    ExpressionAttributeValues={':val': old_val}))
+            # Finally, if we make the role a superuser, the write to the
+            # system table will succeed.
+            cql.execute(f'ALTER ROLE "{role}" WITH SUPERUSER = true')
+            authorized(lambda: tbl1.update_item(Key={'name': parameter},
+                UpdateExpression='SET #val = :val',
+                ExpressionAttributeNames={'#val': 'value'},
+                ExpressionAttributeValues={':val': old_val}))

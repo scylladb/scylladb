@@ -155,6 +155,16 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             seastar::metrics::make_histogram("batch_item_count_histogram", seastar::metrics::description("Histogram of the number of items in a batch request"), labels,
                     [&stats]{ return estimated_histogram_to_metrics(stats.api_operations.batch_write_item_histogram);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
     });
+
+    // Only register the following metrics for the global metrics, not per-table
+    if (!has_table) {
+        metrics.add_group("alternator", {
+            seastar::metrics::make_counter("authentication_failures", stats.authentication_failures,
+                seastar::metrics::description("total number of authentication failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_counter("authorization_failures", stats.authorization_failures,
+                seastar::metrics::description("total number of authorization failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+        });
+    }
 }
 
 void register_metrics(seastar::metrics::metric_groups& metrics, const stats& stats) {

@@ -109,6 +109,32 @@ to do what, configure the following in ScyllaDB's configuration:
     alternator_enforce_authorization: true
 ```
 
+Note: switching `alternator_enforce_authorization` from `false` to `true`
+before the client application has the proper secret keys and permission
+tables set up will cause the application's requests to immediately fail.
+Therefore, we recommend to begin by keeping `alternator_enforce_authorization`
+set to `false` and setting `alternator_warn_authorization` to `true`.
+This setting will continue to allow all requests without failing on
+authentication or authorization errors - but will _count_ would-be
+authentication and authorization failures in the two metrics:
+
+* `scylla_alternator_authentication_failures`
+* `scylla_alternator_authorization_failures`
+
+`alternator_warn_authorization=true` also generates a WARN-level log message
+on each authentication or authorization failure. These log messages each
+includes the string `alternator_enforce_authorization=true`, and information
+that can help pinpoint the source of the error - such as the username
+involved in the attempt, and the address of the client sending the request.
+
+When you see that both metrics are not increasing (or, alternatively, that no
+more log messages appear), you can be sure that the application is properly
+set up and can finally set `alternator_enforce_authorization` to `true`.
+You can leave `alternator_warn_authorization` set or unset, depending on
+whether or not you want to see log messages when requests fail on
+authentication/authorization (in any case, the metric counts these failures,
+and the client will also get the error).
+
 Alternator implements the same [signature protocol](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html)
 as DynamoDB and the rest of AWS. Clients use, as usual, an access key ID and
 a secret access key to prove their identity and the authenticity of their
