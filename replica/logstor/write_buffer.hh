@@ -55,6 +55,8 @@ public:
     }
 };
 
+using log_location_with_holder = std::tuple<log_location, seastar::gate::holder>;
+
 // Manages a single aligned buffer for accumulating records and writing
 // them to the segment manager.
 //
@@ -114,6 +116,8 @@ private:
 
     shared_promise<log_location> _written;
 
+    seastar::gate _write_gate;
+
     struct record_in_buffer {
         log_record_writer writer;
         size_t offset_in_buffer;
@@ -135,6 +139,8 @@ public:
     write_buffer(write_buffer&&) noexcept = default;
     write_buffer& operator=(write_buffer&&) noexcept = default;
 
+    future<> close();
+
     size_t get_buffer_size() const noexcept { return _buffer_size; }
     size_t offset_in_buffer() const noexcept { return _buffer_size - _stream.size(); }
 
@@ -152,7 +158,15 @@ public:
     size_t get_record_count() const noexcept { return _record_count; }
 
     // Write a record to the buffer.
+    // Returns a future that will be resolved with the log location once flushed and a gate holder
+    // that keeps the write buffer open. The gate should be held for index updates after the write
+    // is done.
+    future<log_location_with_holder> write_with_holder(log_record_writer);
+
+    // Write a record to the buffer.
     // Returns a future that will be resolved with the log location once flushed.
+    // If there are follow-up operations to the write such as index updates then consider
+    // using write_with_holder instead to keep the write buffer open until those operations are complete.
     future<log_location> write(log_record_writer);
 
     static size_t estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size);
@@ -176,8 +190,8 @@ private:
     std::vector<record_in_buffer>& records();
 
     /// Complete all tracked writes with their locations when the buffer is flushed to base_location
-    void complete_writes(log_location base_location);
-    void abort_writes(std::exception_ptr) noexcept;
+    future<> complete_writes(log_location base_location);
+    future<> abort_writes(std::exception_ptr);
 
     void pad_to_alignment(size_t alignment);
     void finalize(size_t alignment);
@@ -195,11 +209,12 @@ class buffered_writer {
     segment_manager& _sm;
 
     struct active_buffer {
-        write_buffer buf;
+        write_buffer* buf;
         bool flush_requested{false};
     } _active_buffer;
 
-    seastar::queue<write_buffer> _available_buffers;
+    std::vector<write_buffer> _buffers;
+    seastar::queue<write_buffer*> _available_buffers;
     seastar::gate _async_gate;
     seastar::condition_variable _buffer_switched;
     seastar::scheduling_group _flush_sg;
@@ -213,11 +228,11 @@ public:
     future<> start();
     future<> stop();
 
-    future<log_location> write(log_record);
+    future<log_location_with_holder> write(log_record);
 
 private:
-    future<write_buffer> switch_buffer();
-    future<> flush(write_buffer);
+    future<write_buffer*> switch_buffer();
+    future<> flush(write_buffer*);
 
 };
 

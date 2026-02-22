@@ -92,7 +92,8 @@ future<> logstor::write(const mutation& m, group_id group) {
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record)).then([this, gen, key = std::move(key)] (log_location location) {
+    return _write_buffer.write(std::move(record)).then_unpack([this, gen, key = std::move(key)]
+            (log_location location, seastar::gate::holder op) {
         index_entry new_entry {
             .location = location,
             .generation = gen,

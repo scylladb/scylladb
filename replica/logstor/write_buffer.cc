@@ -52,6 +52,13 @@ void write_buffer::reset() {
     _record_count = 0;
     _written = {};
     _records_copy.clear();
+    _write_gate = {};
+}
+
+future<> write_buffer::close() {
+    if (!_write_gate.is_closed()) {
+        co_await _write_gate.close();
+    }
 }
 
 size_t write_buffer::get_max_write_size() const noexcept {
@@ -69,7 +76,7 @@ bool write_buffer::has_data() const noexcept {
     return offset_in_buffer() > buffer_header_size;
 }
 
-future<log_location> write_buffer::write(log_record_writer writer) {
+future<log_location_with_holder> write_buffer::write_with_holder(log_record_writer writer) {
     const auto data_size = writer.size();
 
     if (!can_fit(data_size)) {
@@ -100,12 +107,28 @@ future<log_location> write_buffer::write(log_record_writer writer) {
         });
     }
 
-    return _written.get_shared_future().then([data_offset_in_buffer, data_size] (log_location base_location) {
-        return log_location {
-            .segment = base_location.segment,
-            .offset = base_location.offset + data_offset_in_buffer,
-            .size = data_size
-        };
+    // hold the write buffer until the write is complete, and pass the holder to the
+    // caller for follow-up operations that should continue holding the buffer, such
+    // as index updates.
+    auto op = _write_gate.hold();
+
+    return _written.get_shared_future().then([data_offset_in_buffer, data_size, op = std::move(op)] (log_location base_location) mutable {
+        return std::make_tuple(
+            log_location {
+                .segment = base_location.segment,
+                .offset = base_location.offset + data_offset_in_buffer,
+                .size = data_size
+            },
+            std::move(op)
+        );
+    });
+}
+
+future<log_location> write_buffer::write(log_record_writer writer) {
+    // write and leave the gate immediately after the write.
+    // use carefully when the gate it not needed.
+    return write_with_holder(std::move(writer)).then_unpack([] (log_location loc, seastar::gate::holder op) {
+        return loc;
     });
 }
 
@@ -129,14 +152,16 @@ void write_buffer::write_header(segment_generation seg_gen) {
     ser::serialize<buffer_header>(_header_stream, _buffer_header);
 }
 
-void write_buffer::complete_writes(log_location base_location) {
+future<> write_buffer::complete_writes(log_location base_location) {
     _written.set_value(base_location);
+    co_await close();
 }
 
-void write_buffer::abort_writes(std::exception_ptr ex) noexcept {
+future<> write_buffer::abort_writes(std::exception_ptr ex) {
     if (!_written.available()) {
         _written.set_exception(std::move(ex));
     }
+    co_await close();
 }
 
 std::vector<write_buffer::record_in_buffer>& write_buffer::records() {
@@ -161,13 +186,20 @@ size_t write_buffer::estimate_required_segments(size_t net_data_size, size_t rec
 
 buffered_writer::buffered_writer(segment_manager& sm, seastar::scheduling_group flush_sg)
         : _sm(sm)
-        , _active_buffer({
-            .buf = write_buffer(_sm.get_segment_size(), true),
-        })
         , _available_buffers(num_flushing_buffers)
         , _flush_sg(flush_sg) {
-    for (size_t i = 0; i < num_flushing_buffers; ++i) {
-        _available_buffers.push(write_buffer(_sm.get_segment_size(), true));
+
+    _buffers.reserve(num_flushing_buffers + 1);
+    for (size_t i = 0; i < num_flushing_buffers + 1; ++i) {
+        _buffers.emplace_back(_sm.get_segment_size(), true);
+    }
+
+    _active_buffer = active_buffer {
+        .buf = &_buffers[0],
+    };
+
+    for (size_t i = 1; i < num_flushing_buffers + 1; ++i) {
+        _available_buffers.push(&_buffers[i]);
     }
 }
 
@@ -186,29 +218,29 @@ future<> buffered_writer::stop() {
     logstor_logger.info("Write buffer stopped");
 }
 
-future<log_location> buffered_writer::write(log_record record) {
+future<log_location_with_holder> buffered_writer::write(log_record record) {
     auto holder = _async_gate.hold();
 
     log_record_writer writer(std::move(record));
 
-    if (writer.size() > _active_buffer.buf.get_max_write_size()) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), _active_buffer.buf.get_max_write_size()));
+    if (writer.size() > _active_buffer.buf->get_max_write_size()) {
+        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", writer.size(), _active_buffer.buf->get_max_write_size()));
     }
 
     // Check if write fits in current buffer
-    while (!_active_buffer.buf.can_fit(writer)) {
+    while (!_active_buffer.buf->can_fit(writer)) {
         co_await _buffer_switched.wait();
     }
 
     // Write to buffer at current position
-    auto fut = _active_buffer.buf.write(std::move(writer));
+    auto fut = _active_buffer.buf->write_with_holder(std::move(writer));
 
     // Trigger flush for the active buffer if not in progress
     if (!std::exchange(_active_buffer.flush_requested, true)) {
         (void)with_gate(_async_gate, [this] {
-            return switch_buffer().then([this] (write_buffer old_buf) mutable {
-                return with_scheduling_group(_flush_sg, [this, buf = std::move(old_buf)] mutable {
-                    return flush(std::move(buf));
+            return switch_buffer().then([this] (write_buffer* old_buf) mutable {
+                return with_scheduling_group(_flush_sg, [this, old_buf] mutable {
+                    return flush(old_buf);
                 });
             });
         });
@@ -217,7 +249,7 @@ future<log_location> buffered_writer::write(log_record record) {
     co_return co_await std::move(fut);
 }
 
-future<write_buffer> buffered_writer::switch_buffer() {
+future<write_buffer*> buffered_writer::switch_buffer() {
     // Wait for and get the next available buffer
     auto new_buf = co_await _available_buffers.pop_eventually();
 
@@ -231,11 +263,11 @@ future<write_buffer> buffered_writer::switch_buffer() {
     co_return std::move(old_active_buffer.buf);
 }
 
-future<> buffered_writer::flush(write_buffer buf) {
-    co_await _sm.write(buf);
+future<> buffered_writer::flush(write_buffer* buf) {
+    co_await _sm.write(*buf);
 
     // Return the flushed buffer to the available queue
-    buf.reset();
+    buf->reset();
     _available_buffers.push(std::move(buf));
 }
 

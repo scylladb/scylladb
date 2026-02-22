@@ -508,9 +508,9 @@ struct separator {
         buffer(buffer&&) noexcept = default;
         buffer& operator=(buffer&&) noexcept = default;
 
-        future<log_location> write(log_record_writer writer) {
+        future<log_location_with_holder> write(log_record_writer writer) {
             debt_units += writer.size();
-            return buf->write(std::move(writer));
+            return buf->write_with_holder(std::move(writer));
         }
     };
     absl::flat_hash_map<group_id, std::deque<buffer>> _group_buffers;
@@ -1218,8 +1218,9 @@ future<log_location> segment_manager_impl::write(write_buffer& wb) {
         _stats.bytes_written += data.size();
         _stats.data_bytes_written += wb.get_net_data_size();
 
-        // complete all buffered writes with their individual locations
-        wb.complete_writes(loc);
+        // complete all buffered writes with their individual locations and wait
+        // for them to be updated in the index.
+        co_await wb.complete_writes(loc);
 
         co_await with_scheduling_group(_cfg.separator_sg, [&] {
             return _compaction_mgr.write_to_separator(*sep, wb, loc);
@@ -1275,7 +1276,7 @@ future<log_location> segment_manager_impl::write_full_segment(write_buffer& wb, 
     }
 
     // complete all buffered writes with their individual locations
-    wb.complete_writes(loc);
+    co_await wb.complete_writes(loc);
 
     (void)with_gate(_async_gate, [this, seg] () {
         return close_segment(std::move(seg));
@@ -1761,16 +1762,13 @@ future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segm
                 flush_count++;
                 auto base_location = co_await sm.write_full_segment(buf, gid, write_source::compaction);
                 co_await when_all_succeed(pending_updates.begin(), pending_updates.end());
-
                 logstor_logger.trace("Compaction buffer flushed to {} with {} bytes", base_location, buf.get_net_data_size());
-
-                buf.reset();
-                pending_updates.clear();
             }
+            co_await buf.close();
+            buf.reset();
+            pending_updates.clear();
         }
     };
-
-    // TODO wait for pending writes that didn't update the index yet.
 
     compaction_buffer cb(_sm, _sm.get_segment_size(), gid);
 
@@ -1800,9 +1798,9 @@ future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segm
         }
 
         // write the record and then update the index with the new location
-        auto write_and_update_index = cb.buf.write(std::move(writer)).then(
+        auto write_and_update_index = cb.buf.write_with_holder(std::move(writer)).then_unpack(
                 [this, key = std::move(key), read_location, &records_rewritten, &records_skipped]
-                (log_location new_location) {
+                (log_location new_location, seastar::gate::holder op) {
 
             if (update_record_location(key, read_location, new_location)) {
                 records_rewritten++;
@@ -1933,8 +1931,8 @@ future<> compaction_manager::write_to_separator(separator& sep, write_buffer& wb
         log_location prev_loc = wb.get_record_location(base_location, w);
 
         auto& buf = get_separator_buffer(sep, w.writer);
-        auto f = buf.write(std::move(w.writer)).then(
-            [this, key = std::move(key), prev_loc] (log_location new_loc) {
+        auto f = buf.write(std::move(w.writer)).then_unpack(
+            [this, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
                 if (!update_record_location(key, prev_loc, new_loc)) {
                     _sm.free_record(new_loc);
                 }
@@ -1955,8 +1953,8 @@ future<> compaction_manager::write_to_separator(separator& sep, log_segment_id s
         auto writer = log_record_writer(std::move(record));
 
         auto& buf = get_separator_buffer(sep, writer);
-        auto f = buf.write(std::move(writer)).then(
-            [this, key = std::move(key), prev_loc = read_location] (log_location new_loc) {
+        auto f = buf.write(std::move(writer)).then_unpack(
+            [this, key = std::move(key), prev_loc = read_location] (log_location new_loc, seastar::gate::holder op) {
                 if (!update_record_location(key, prev_loc, new_loc)) {
                     _sm.free_record(new_loc);
                 }
@@ -1979,6 +1977,7 @@ future<> compaction_manager::flush_separator(separator& sep) {
                 co_await when_all_succeed(buf.pending_updates.begin(), buf.pending_updates.end());
                 _stats.separator_buffer_flushed++;
             }
+            co_await bufs.front().buf->close();
             auto wb = std::move(bufs.front().buf);
             bufs.pop_front();
 
@@ -2002,7 +2001,7 @@ future<> compaction_manager::abort_separator(separator& sep) {
     for (auto&& [gid, bufs] : sep._group_buffers) {
         while (!bufs.empty()) {
             auto& buf = bufs.front();
-            buf.buf->abort_writes(std::make_exception_ptr(abort_requested_exception()));
+            co_await buf.buf->abort_writes(std::make_exception_ptr(abort_requested_exception()));
             for (auto&& f : buf.pending_updates) {
                 try {
                     co_await std::move(f);
