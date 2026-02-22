@@ -16,7 +16,7 @@
 #include <seastar/core/sstring.hh>
 #include "utils/log.hh"
 #include <chrono>
-#include <map>
+#include <unordered_map>
 #include <vector>
 #include <functional>
 #include <seastar/net/inet_address.hh>
@@ -49,26 +49,26 @@ public:
     }
 
     void trigger_refresh() {
-        refresh_cv.signal();
+        _refresh_cv.signal();
     }
 
     seastar::future<> refresh_addr_task();
 
     seastar::future<> stop() {
-        abort_refresh.request_abort();
-        refresh_cv.signal();
-        return tasks_gate.close();
+        _abort_refresh.request_abort();
+        _refresh_cv.signal();
+        return _tasks_gate.close();
     }
 
 private:
     seastar::future<> refresh_addr();
 
-    seastar::gate tasks_gate;
-    logging::logger& vslogger;
-    seastar::abort_source abort_refresh;
-    seastar::lowres_clock::time_point last_refresh;
+    seastar::gate _tasks_gate;
+    logging::logger& _logger;
+    seastar::abort_source _abort_refresh;
+    seastar::lowres_clock::time_point _last_refresh;
     std::chrono::milliseconds _refresh_interval;
-    seastar::condition_variable refresh_cv;
+    seastar::condition_variable _refresh_cv;
     resolver_type _resolver;
     std::vector<seastar::sstring> _hosts;
     host_address_map _addresses;

@@ -40,10 +40,19 @@ auto wait_for_timeout(lowres_clock::duration timeout, abort_source& as) -> futur
     co_return true;
 }
 
+auto to_address_type(const std::vector<net::hostent::address_entry>& entries) -> dns::address_type {
+    dns::address_type addrs;
+    addrs.reserve(entries.size());
+    for (auto& e : entries) {
+        addrs.push_back(e.addr);
+    }
+    return addrs;
+}
+
 } // namespace
 
 dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener, uint64_t& refreshes_counter)
-    : vslogger(logger)
+    : _logger(logger)
     , _refresh_interval(DNS_REFRESH_INTERVAL)
     , _resolver([this](auto const& host) -> future<address_type> {
         auto f = co_await coroutine::as_future(net::dns::get_host_by_name(host));
@@ -52,11 +61,11 @@ dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_
             if (try_catch<std::system_error>(err) != nullptr) {
                 co_return address_type{};
             }
-            vslogger.warn("Failed to resolve vector store service address: {}", err);
+            _logger.warn("Failed to resolve vector store service address: {}", err);
             co_await coroutine::return_exception_ptr(std::move(err));
         }
-        auto addr = co_await std::move(f);
-        co_return addr.addr_list;
+        auto entry = co_await std::move(f);
+        co_return to_address_type(entry.addr_entries);
     })
     , _hosts(std::move(hosts))
     , _listener(std::move(listener))
@@ -65,10 +74,10 @@ dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_
 
 void dns::start_background_tasks() {
     // start the background task to refresh the host address
-    (void)try_with_gate(tasks_gate, [this] {
+    (void)try_with_gate(_tasks_gate, [this] {
         return refresh_addr_task();
     }).handle_exception([this](std::exception_ptr eptr) {
-        on_internal_error_noexcept(vslogger, fmt::format("The Vector Store Client refresh task failed: {}", eptr));
+        on_internal_error_noexcept(_logger, fmt::format("The Vector Store Client refresh task failed: {}", eptr));
     });
 }
 
@@ -77,40 +86,40 @@ seastar::future<> dns::refresh_addr_task() {
     for (;;) {
         auto exception_occurred = false;
         try {
-            if (abort_refresh.abort_requested()) {
+            if (_abort_refresh.abort_requested()) {
                 break;
             }
 
             // Do not refresh the service address too often
             auto now = seastar::lowres_clock::now();
-            auto current_duration = now - last_refresh;
+            auto current_duration = now - _last_refresh;
             if (current_duration > _refresh_interval) {
-                last_refresh = now;
+                _last_refresh = now;
                 co_await refresh_addr();
             } else {
                 // Wait till the end of the refreshing interval
-                if (co_await wait_for_timeout(_refresh_interval - current_duration, abort_refresh)) {
+                if (co_await wait_for_timeout(_refresh_interval - current_duration, _abort_refresh)) {
                     continue;
                 }
                 // If the wait was aborted, we stop refreshing
                 break;
             }
 
-            if (abort_refresh.abort_requested()) {
+            if (_abort_refresh.abort_requested()) {
                 break;
             }
 
-            co_await refresh_cv.when();
+            co_await _refresh_cv.when();
         } catch (const std::exception& e) {
-            vslogger.error("Vector Store Client refresh task failed: {}", e.what());
+            _logger.error("Vector Store Client refresh task failed: {}", e.what());
             exception_occurred = true;
         } catch (...) {
-            vslogger.error("Vector Store Client refresh task failed with unknown exception");
+            _logger.error("Vector Store Client refresh task failed with unknown exception");
             exception_occurred = true;
         }
         if (exception_occurred) {
             // If an exception occurred, we wait for the next signal to refresh the address
-            co_await wait_for_timeout(EXCEPTION_OCCURRED_WAIT, abort_refresh);
+            co_await wait_for_timeout(EXCEPTION_OCCURRED_WAIT, _abort_refresh);
         }
     }
 }

@@ -25,26 +25,26 @@ namespace test::vector_search {
 constexpr auto STANDARD_WAIT = std::chrono::seconds(10);
 
 class abort_source_timeout {
-    abort_source as;
-    timer<> t;
+    abort_source _as;
+    timer<> _t;
 
 public:
     explicit abort_source_timeout(std::chrono::milliseconds timeout = STANDARD_WAIT)
-        : t(timer([&]() {
-            as.request_abort();
+        : _t(timer([&]() {
+            _as.request_abort();
         })) {
-        t.arm(timeout);
+        _t.arm(timeout);
     }
 
     abort_source& get() {
-        return as;
+        return _as;
     }
 
     abort_source& reset(std::chrono::milliseconds timeout = STANDARD_WAIT) {
-        t.cancel();
-        as = abort_source();
-        t.arm(timeout);
-        return as;
+        _t.cancel();
+        _as = abort_source();
+        _t.arm(timeout);
+        return _as;
     }
 };
 
