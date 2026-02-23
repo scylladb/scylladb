@@ -653,18 +653,12 @@ scheduling_group service_level_controller::auth_integration::get_user_cached_sch
 }
 
 future<scheduling_group> service_level_controller::get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr) {
-    // Special case:
-    // -------------
     // The maintenance socket can communicate with Scylla before `auth_integration`
     // is registered, and we need to prepare for it.
-    // For the discussion, see: scylladb/scylladb#26816.
-    //
-    // TODO: Get rid of this.
-    if (!usr.has_value() || auth::is_anonymous(usr.value())) {
+    if (!_auth_integration) {
         return make_ready_future<scheduling_group>(get_default_scheduling_group());
     }
 
-    SCYLLA_ASSERT(_auth_integration != nullptr);
     return _auth_integration->get_user_scheduling_group(usr);
 }
 
