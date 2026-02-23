@@ -491,7 +491,7 @@ async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, obj
         objconf = object_storage.create_endpoint_conf()
         cfg['object_storage_endpoints'] = objconf
 
-    cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug:api=info' ]
+    cmd = [ '--logger-log-level', 'sstables_loader=debug:snapshots=trace:s3=trace:http=debug:api=info:raft_topology=debug:sstables_tablet_aware_loader=debug' ]
     servers = []
     host_ids = {}
 
@@ -574,6 +574,7 @@ async def check_streaming_directions(logger, servers, topology, host_ids, scope,
         streamed_to = defaultdict(int)
         log, mark = log_marks[s.server_id]
         direct_downloads = await log.grep('sstables_loader - Adding downloaded SSTables to the table', from_mark=mark)
+        direct_downloads += await log.grep('sstables_tablet_aware_loader - Adding downloaded SSTables to the table', from_mark=mark)
         res = await log.grep(r'sstables_loader - load_and_stream:.*target_node=(?P<target_host_id>[0-9a-f-]+)', from_mark=mark)
         for r in res:
             target_host_id = r[1].group('target_host_id')
@@ -712,6 +713,7 @@ def create_schema(ks, cf, min_tablet_count=None):
     return schema
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tablets_restore", (False, True))
 @pytest.mark.parametrize("topology_rf_validity", [
         (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
         (topo(rf = 3, nodes = 5, racks = 1, dcs = 1), False),
@@ -720,7 +722,7 @@ def create_schema(ks, cf, min_tablet_count=None):
         (topo(rf = 2, nodes = 8, racks = 4, dcs = 2), True)
     ])
 
-async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerClient, object_storage, topology_rf_validity):
+async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerClient, object_storage, tablets_restore, topology_rf_validity):
     '''Check that restoring of a cluster with stream scopes works'''
 
     topology, rf_rack_valid_keyspaces = topology_rf_validity
@@ -736,8 +738,12 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
     num_keys = 10
     original_min_tablet_count=5
 
-    scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
-    restored_min_tablet_counts = [original_min_tablet_count] if build_mode == 'debug' else [2, original_min_tablet_count, 10]
+    if tablets_restore:
+        scopes = ['node']
+        restored_min_tablet_counts = [original_min_tablet_count]
+    else:
+        scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
+        restored_min_tablet_counts = [original_min_tablet_count] if build_mode == 'debug' else [2, original_min_tablet_count, 10]
     
     schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=original_min_tablet_count)
 
@@ -747,7 +753,10 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
     prefix = f'{cf}/{snap_name}'
 
-    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+    if tablets_restore:
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{prefix}', ks, cf, object_storage, manager, logger) for s in servers))
+    else:
+        await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
 
     for scope in scopes:
         # We can support rack-aware restore with rack lists, if we restore the rack-list per dc as it was at backup time.
@@ -767,7 +776,12 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
 
                 log_marks = await mark_all_logs(manager, servers)
 
-                await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
+                if tablets_restore:
+                    logger.info(f'Restore cluster via {servers[1].ip_addr}')
+                    manifests = [ f'{s.server_id}/{prefix}/manifest.json' for s in servers ]
+                    await manager.api.restore_tablets(servers[1].ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, manifests)
+                else:
+                    await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
 
                 await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=pro)
                 if restored_min_tablet_count == original_min_tablet_count:
