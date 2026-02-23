@@ -184,6 +184,72 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
 
     table.delete()
 
+@pytest.mark.parametrize("with_down_node", [False, True], ids=["all_nodes_up", "one_node_down"])
+async def test_alternator_ttl_multinode_expiration(manager: ManagerClient, with_down_node):
+    """When the cluster has multiple nodes, different nodes are responsible
+       for checking expiration in different token ranges - each node is
+       responsible for its "primary ranges". Let's check that this expiration
+       really does happen - for the entire token range - by writing many
+       partitions that will span the entire token range, and seeing that they
+       all expire. We don't check that nodes don't do more work than they
+       should - an inefficient implementation where every node scans the
+       entire data set will also pass this test.
+       When the test is run a second time with with_down_node=True, we verify
+       that TTL expiration works correctly even when one of the nodes is
+       brought down. This node's TTL scanner is responsible for scanning part
+       of the token range, so when this node is down, part of the data might
+       not get expired. At that point - other node(s) should take over
+       expiring data in that range - and this test verifies that this indeed
+       happens. Reproduces issue #9787 and SCYLLADB-777.
+    """
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
+    alternator = get_alternator(servers[0].ip_addr)
+
+    if with_down_node:
+        # Bring down one of nodes. Everything we do below, like creating a
+        # table, reading and writing, should continue to work with one node
+        # down.
+        await manager.server_stop_gracefully(servers[2].server_id)
+
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH' },
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'N' },
+        ])
+    # Set the "expiration" column to mark item's expiration time
+    table.meta.client.update_time_to_live(TableName=table.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+
+    # Insert 50 rows, in different partitions, so the murmur3 hash maps them
+    # all over the token space so different nodes would be responsible for
+    # expiring them. All items are marked to expire 10 seconds in the past,
+    # so should all expire as soon as possible, during this test.
+    expiration = int(time.time()) - 10
+    with table.batch_writer() as batch:
+        for p in range(50):
+            batch.put_item({'p': p, 'expiration': expiration})
+    # Expect that after a short delay, all items in the table will have
+    # expired - so a scan should return no responses. This should happen
+    # even though one of the nodes is down and not doing its usual
+    # expiration-scanning work.
+    timeout = time.time() + 60
+    items = -1
+    while items != 0 and time.time() < timeout:
+        response = table.scan(ConsistentRead=True)
+        items = len(response['Items'])
+        # In theory (though probably not in practice in this test), a scan()
+        # can return zero items but have more pages - so we need to be more
+        # diligent and scan all pages to check it's completely empty.
+        while items == 0 and 'LastEvaluatedKey' in response:
+            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'], ConsistentRead=True)
+            items += len(response['Items'])
+        if items == 0:
+            break
+        time.sleep(0.1)
+    assert items == 0
+
 @pytest.mark.asyncio
 async def test_localnodes_broadcast_rpc_address(manager: ManagerClient):
     """Test that if the "broadcast_rpc_address" of a node is set, the
