@@ -126,6 +126,12 @@ public:
 
     // Must be called on shard 0
     void schedule_expiration(gc_clock::time_point when, sstring ks_name, sstring table_name, sstring tag);
+
+    // For canceling expiration, ks_name or table_name can be empty
+    // And then all snapshots with the given tag (or all, if `tag` is empty) are erased from the expiration queue
+    // within the given scope.
+    // Must be called on shard 0
+    void cancel_expiration(sstring tag, std::vector<sstring> ks_names = {}, sstring table_name = "");
 private:
     config _config;
     sharded<replica::database>& _db;

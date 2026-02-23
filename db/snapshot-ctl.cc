@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <unordered_set>
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -201,6 +203,9 @@ future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vect
 
 future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
     snap_log.debug("clear_snapshot: tag={} keyspaces={} table={}", tag, fmt::join(keyspace_names, ","), cf_name);
+    co_await container().invoke_on(0, [&] (auto& sc) {
+        return sc.cancel_expiration(tag, keyspace_names, cf_name);
+    });
     co_return co_await run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] (this auto) -> future<> {
         // clear_snapshot enumerates keyspace_names and uses cf_name as a
         // filter in each. When cf_name needs resolution (e.g. logical index
@@ -276,6 +281,7 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
     if (!storage_options.is_local_type()) {
         throw std::invalid_argument("not able to backup a non-local table");
     }
+    cancel_expiration(snapshot_name, {keyspace}, table);
     auto& local_storage_options = std::get<data_dictionary::storage_options::local>(storage_options.value);
     //
     // The keyspace data directories and their snapshots are arranged as follows:
@@ -364,6 +370,28 @@ void snapshot_ctl::schedule_expiration(gc_clock::time_point when, sstring ks_nam
         std::ranges::push_heap(_expiration_queue, std::greater{}, &expiration_info::expires_at);
         _expiration_cond.signal();
     }
+}
+
+void snapshot_ctl::cancel_expiration(sstring tag, std::vector<sstring> ks_names, sstring table_name) {
+    if (this_shard_id() != 0) {
+        on_internal_error(snap_log, "cancel_expiration must be called on shard 0");
+    }
+    snap_log.debug("Cancel expiration of snapshots with tag='{}' in keyspaces={} table={}", tag, fmt::join(ks_names, ","), table_name);
+    std::unordered_set<sstring> keyspaces;
+    std::ranges::move(ks_names, std::inserter(keyspaces, keyspaces.end()));
+    _expiration_queue.erase(std::remove_if(_expiration_queue.begin(), _expiration_queue.end(), [&] (const expiration_info& info) {
+        if (!tag.empty() && info.tag != tag) {
+            return false;
+        }
+        if (!keyspaces.empty() && !keyspaces.contains(info.ks_name)) {
+            return false;
+        }
+        if (!table_name.empty() && info.table_name != table_name) {
+            return false;
+        }
+        return true;
+    }), _expiration_queue.end());
+    std::ranges::make_heap(_expiration_queue, std::greater{}, &expiration_info::expires_at);
 }
 
 } // namespace db
