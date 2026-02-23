@@ -25,10 +25,10 @@ class database;
 } // namespace replica
 
 struct minimal_sst_info {
-    shard_id _shard;
-    sstables::generation_type _generation;
-    sstables::sstable_version_types _version;
-    sstables::sstable_format_types _format;
+    shard_id shard;
+    sstables::generation_type generation;
+    sstables::sstable_version_types version;
+    sstables::sstable_format_types format;
 };
 
 future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);

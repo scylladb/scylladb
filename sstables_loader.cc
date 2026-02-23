@@ -212,7 +212,7 @@ private:
         auto& table = db.find_column_family(ks, cf);
         auto& sst_manager = table.get_sstables_manager();
         auto sst = sst_manager.make_sstable(
-            table.schema(), table.get_storage_options(), min_info._generation, sstables::sstable_state::normal, min_info._version, min_info._format);
+            table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
         sst->set_sstable_level(0);
         auto units = co_await sst_manager.dir_semaphore().get_units(1);
         co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
@@ -243,7 +243,7 @@ private:
         sst_classification_info downloaded_sstables(smp::count);
         for (const auto& sstable : sstables) {
             auto min_info = co_await download_sstable(_db.local(), _table, sstable, llog);
-            downloaded_sstables[min_info._shard].emplace_back(min_info);
+            downloaded_sstables[min_info.shard].emplace_back(min_info);
         }
         co_return downloaded_sstables;
     }
