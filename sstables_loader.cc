@@ -244,11 +244,10 @@ private:
         }
     }
 
-    future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
+    future<minimal_sst_info> download_sstable(sstables::shared_sstable sstable) const {
         constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
         constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
         sst_classification_info downloaded_sstables(smp::count);
-        for (const auto& sstable : sstables) {
             auto components = sstable->all_components();
 
             // Move the TOC to the front to be processed first since `sstables::create_stream_sink` takes care
@@ -328,13 +327,21 @@ private:
                             on_internal_error(llog, "Fully-contained sstable must belong to one shard only");
                         }
                         llog.debug("SSTable shards {}", fmt::join(shards, ", "));
-                        downloaded_sstables[shards.front()].emplace_back(shards.front(), gen, descriptor.version, descriptor.format);
+                        co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format};
                     }
                 } catch (...) {
                     llog.info("Error downloading SSTable component {}. Reason: {}", it->first, std::current_exception());
                     throw;
                 }
             }
+        throw std::logic_error("SSTable must have at least one component");
+    }
+
+    future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
+        sst_classification_info downloaded_sstables(smp::count);
+        for (const auto& sstable : sstables) {
+            auto min_info = co_await download_sstable(sstable);
+            downloaded_sstables[min_info._shard].emplace_back(min_info);
         }
         co_return downloaded_sstables;
     }
