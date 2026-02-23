@@ -66,6 +66,7 @@ target_sources(utils
     azure/identity/default_credentials.cc
     gcp/gcp_credentials.cc
     gcp/object_storage.cc
+    gcp/object_storage_retry_strategy.cc
     )
 target_include_directories(utils
   PUBLIC

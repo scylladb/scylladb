@@ -9,6 +9,7 @@
 
 #include "object_storage.hh"
 #include "gcp_credentials.hh"
+#include "object_storage_retry_strategy.hh"
 
 #include <algorithm>
 #include <numeric>
@@ -20,12 +21,16 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/units.hh>
 #include <seastar/http/client.hh>
 #include <seastar/util/short_streams.hh>
 
 #include "utils/rest/client.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/http.hh"
+#include "utils/http_client_error_processing.hh"
 #include "utils/overloaded_functor.hh"
 
 static logger gcp_storage("gcp_storage");
@@ -226,6 +231,7 @@ class utils::gcp::storage::client::impl {
     seastar::semaphore& _limits;
     seastar::http::experimental::client _client;
     shared_ptr<seastar::tls::certificate_credentials> _certs;
+    future<> authorize(request_wrapper& req, const std::string& scope);
 public:
     impl(const utils::http::url_info&, std::optional<google_credentials>, seastar::semaphore*, shared_ptr<seastar::tls::certificate_credentials> creds);
     impl(std::string_view endpoint, std::optional<google_credentials>, seastar::semaphore*, shared_ptr<seastar::tls::certificate_credentials> creds);
@@ -242,6 +248,13 @@ public:
     }
     future<> close();
 };
+
+future<> storage::client::impl::authorize(request_wrapper& req, const std::string& scope) {
+    if (_credentials) {
+        co_await _credentials->refresh(scope, &storage_scope_implies, _certs);
+        req.add_header(utils::gcp::AUTHORIZATION, format_bearer(_credentials->token));
+    }
+}
 
 utils::gcp::storage::client::impl::impl(const utils::http::url_info& url, std::optional<google_credentials> c, seastar::semaphore* memory, shared_ptr<seastar::tls::certificate_credentials> certs)
     : _endpoint(url.host)
@@ -293,104 +306,87 @@ using namespace std::chrono_literals;
 /**
  * Performs a REST post/put/get with credential refresh/retry.
  */
-future<> 
+future<>
 utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, handler_func_ex handler, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
-    static constexpr auto max_retries = 10;
+    rest::request_wrapper req(_endpoint);
+    req.target(path);
+    req.method(op);
 
-    exponential_backoff_retry exr(10ms, 10000ms);
-    bool do_backoff = false;
+    for (auto& [k,v] : headers) {
+        req.add_header(k, v);
+    }
 
-    for (int retry = 0; ; ++retry) {
-        if (std::exchange(do_backoff, false)) {
-            co_await (as ? exr.retry(*as) : exr.retry());
-        }
+    std::visit(overloaded_functor {
+        [&](const std::string& s) { req.content(content_type, s); },
+        [&](const writer_and_size& ws) { req.content(content_type, ws.first, ws.second); }
+    }, body);
 
-        rest::request_wrapper req(_endpoint);
-        req.target(path);
-        req.method(op);
+    // GCP storage requires this even if content is empty
+    req.add_header("Content-Length", std::to_string(req.request().content_length));
 
-        if (_credentials) {
-            try {
-                try {
-                    co_await _credentials->refresh(scope, &storage_scope_implies, _certs);
-                    req.add_header(utils::gcp::AUTHORIZATION, format_bearer(_credentials->token));
-                } catch (httpd::unexpected_status_error& e) {
-                    switch (e.status()) {
-                    default:
-                        if (reply::classify_status(e.status()) != reply::status_class::server_error) {
-                            break;
-                        }
-                        [[fallthrough]];
-                    case status_type::request_timeout:
-                    case status_type::too_many_requests:
-                        if (retry < max_retries) {
-                            gcp_storage.debug("Got {}: {}", e.status(), std::current_exception());
-                            // service unavailable etc -> retry
-                            do_backoff = true;
-                            continue;
-                        }
-                        break;
-                    }
-                    throw;
-                }
-            } catch (...) {
-                gcp_storage.error("Error refreshing credentials: {}", std::current_exception());
-                std::throw_with_nested(permission_error("Error refreshing credentials"));
-            }
-        }
+    gcp_storage.trace("Sending: {}", redacted_request_type {
+        req.request(),
+        bearer_filter()
+    });
 
-        for (auto& [k,v] : headers) {
-            req.add_header(k, v);
-        }
-
-        std::visit(overloaded_functor {
-            [&](const std::string& s) { req.content(content_type, s); },
-            [&](const writer_and_size& ws) { req.content(content_type, ws.first, ws.second); }
-        }, body);
-
-        // GCP storage requires this even if content is empty
-        req.add_header("Content-Length", std::to_string(req.request().content_length));
-
-        gcp_storage.trace("Sending: {}", redacted_request_type {
-            req.request(),
-            bearer_filter()
-        });
-
+    try {
         try {
-            co_await rest::simple_send(_client, req, [&handler](const seastar::http::reply& res, seastar::input_stream<char>& in) -> future<> {
-                gcp_storage.trace("Result: {}", res);
-                if (res._status == status_type::unauthorized) {
-                    throw permission_error(int(res._status), co_await get_gcp_error_message(in));
-                } else if (res._status == status_type::request_timeout || res._status == status_type::too_many_requests || reply::classify_status(res._status) == reply::status_class::server_error) {
-                    throw storage_error(int(res._status), co_await get_gcp_error_message(in));
-                }
-                co_await handler(res, in);
-            }, as);
-            break;
-        } catch (storage_error& e) {
-            gcp_storage.debug("{}: Got unexpected response: {}", _endpoint, e.what());
-            auto s = status_type(e.status());
-            switch (s) {
-            default:
-                if (reply::classify_status(s) != reply::status_class::server_error) {
-                    break;
-                }
-                [[fallthrough]];
-            case status_type::request_timeout:
-            case status_type::too_many_requests:
-                do_backoff = true;
-                [[fallthrough]];
-            case status_type::unauthorized:
-                if (retry < max_retries) {
-                    continue; // retry loop. 
-                }
-                break;
-            }
-            throw;
+            co_await authorize(req, scope);
         } catch (...) {
-            // network, whatnot. maybe add retries here as well, but should really 
-            // be on seastar level
-            throw;
+            // just disregard the failure, we will retry below in the wrapped handler
+        }
+        auto wrapped_handler = [this, handler = std::move(handler), &req, scope](const reply& rep, input_stream<char>& in) -> future<> {
+            auto _in = std::move(in);
+            auto status_class = reply::classify_status(rep._status);
+            /*
+             * Surprisingly Google Cloud Storage (GCS) commonly returns HTTP 308 during resumable uploads, including when you use PUT. This is expected behavior and
+             * not an error. The 308 tells the client to continue the upload at the same URL without changing the method or body, which is exactly how GCS’s
+             * resumable upload protocol works.
+             */
+            if (status_class != reply::status_class::informational && status_class != reply::status_class::success &&
+                rep._status != status_type::permanent_redirect) {
+                if (rep._status == status_type::unauthorized) {
+                    gcp_storage.warn("Request to failed with status {}. Refreshing credentials.", rep._status);
+                    co_await authorize(req, scope);
+                }
+                auto content = co_await util::read_entire_stream_contiguous(_in);
+                auto error_msg = get_gcp_error_message(std::string_view(content));
+                gcp_storage.debug("Got unexpected response status: {}, content: {}", rep._status, content);
+                co_await coroutine::return_exception_ptr(std::make_exception_ptr(httpd::unexpected_status_error(rep._status)));
+                }
+
+            std::exception_ptr eptr;
+            try {
+                // TODO: rename the fault injection point to something more generic
+                if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
+                    throw httpd::unexpected_status_error(status_type::unauthorized);
+                }
+                co_await handler(rep, _in);
+            } catch (...) {
+                eptr = std::current_exception();
+            }
+            if (eptr) {
+                co_await coroutine::return_exception_ptr(std::move(eptr));
+            }
+        };
+        object_storage_retry_strategy retry_strategy(10,10ms,10000ms, as);
+        co_return co_await rest::simple_send(_client, req, wrapped_handler, &retry_strategy, as);
+    } catch (...) {
+        try {
+            std::rethrow_exception(std::current_exception());
+        } catch (const httpd::unexpected_status_error& e) {
+            auto status = e.status();
+
+            if (reply::classify_status(status) == reply::status_class::redirection || status == reply::status_type::not_found) {
+                throw storage_io_error{ENOENT, format("GCP object doesn't exist ({})", status)};
+            }
+            if (status == reply::status_type::forbidden || status == reply::status_type::unauthorized) {
+                throw storage_io_error{EACCES, format("GCP access denied ({})", status)};
+            }
+
+            throw storage_io_error{EIO, format("GCP request failed with ({})", status)};
+        } catch (...) {
+            throw storage_io_error{EIO, format("GCP error ({})", std::current_exception())};
         }
     }
 }
@@ -1003,21 +999,22 @@ future<> utils::gcp::storage::client::delete_object(std::string_view bucket_in, 
 
     auto path = fmt::format("/storage/v1/b/{}/o/{}", bucket, seastar::http::internal::url_encode(object_name));
 
-    auto res = co_await _impl->send_with_retry(path
-        , GCP_OBJECT_SCOPE_READ_WRITE
-        , ""s
-        , ""s
-        , httpclient::method_type::DELETE
-    );
+    httpclient::result_type res;
+    try {
+        res = co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_WRITE, ""s, ""s, httpclient::method_type::DELETE);
+    } catch (const storage_io_error& ex) {
+        if (ex.code().value() == ENOENT) {
+            gcp_storage.debug("Could not delete {}:{} - no such object", bucket, object_name);
+            co_return; // ok...?
+        }
+        std::rethrow_exception(std::current_exception());
+    }
 
     switch (res.result()) {
     case status_type::ok:
     case status_type::no_content:
         gcp_storage.debug("Deleted {}:{}", bucket, object_name);
         co_return; // done and happy
-    case status_type::not_found:
-        gcp_storage.debug("Could not delete {}:{} - no such object", bucket, object_name);
-        co_return; // ok...?
     default:
         throw failed_operation(fmt::format("Could not delete object {}:{}: {} ({})", bucket, object_name, res.result()
             , get_gcp_error_message(res.body())

@@ -114,6 +114,7 @@ private:
 using handler_func_ex = std::function<future<>(const seastar::http::reply&, seastar::input_stream<char>&)>;
 
 seastar::future<> simple_send(seastar::http::experimental::client&, seastar::http::request&, const handler_func_ex&, seastar::abort_source* = nullptr);
+seastar::future<> simple_send(seastar::http::experimental::client&, seastar::http::request&, const handler_func_ex&, const http::experimental::retry_strategy* strategy, seastar::abort_source* = nullptr);
 
 // Interface for redacting sensitive data from HTTP requests and responses before logging.
 class http_log_filter {
