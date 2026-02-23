@@ -496,16 +496,20 @@ modes = {
         'advanced_optimizations': False,
     },
     'sanitize': {
-        'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
+        # SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION is deliberately absent: Seastar builds
+        # Sanitize mode with SEASTAR_DEFAULT_ALLOCATOR, which the injector does not support.
+        'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION -DSCYLLA_ENABLE_PREEMPTION_SOURCE',
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*50,
-        'optimization-level': 's',
+        'optimization-level': '2',
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Sanitize',
         'can_have_debug_info': True,
+        'debuginfo-level': '1',
         'build_seastar_shared_libs': False,
         'default': False,
-        'description': 'a mode with optimizations and sanitizers enabled, used for finding memory errors',
+        'description': 'a mode with optimizations and sanitizers enabled, '
+                       'designed to simulate release behavior while retaining runtime checks for CI runs',
         'advanced_optimizations': False,
     },
     'coverage': {
@@ -2538,7 +2542,7 @@ def configure_c_ares(build_dir, mode, mode_config, compiler_cache=None):
     # optimization level and debug info explicitly rather than inheriting them.
     c_flags += ' -O{}'.format(mode_config['optimization-level'])
     if args.debuginfo and mode_config['can_have_debug_info']:
-        c_flags += ' -g -gz'
+        c_flags += ' ' + ' '.join(get_debuginfo_flags(mode_config))
     if '-DSANITIZE' in mode_config['cxxflags']:
         c_flags += ' -fsanitize=address -fsanitize=undefined'
 
@@ -2761,6 +2765,14 @@ cpp_jwt_encryption_sources = [
     'ent/encryption/utils.cc',
 ]
 
+def get_debuginfo_flags(mode_config):
+    return [f"-g{mode_config.get('debuginfo-level', '')}", '-gz']
+
+
+def has_debuginfo_flag(flags):
+    return any(re.fullmatch(r'-g[1-3]?', flag) for flag in flags)
+
+
 def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags = [
         # we need this flag for correct precompiled header handling in connection with ccache (or similar)
@@ -2796,7 +2808,7 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags.append(f'-DSCYLLA_BUILD_MODE={mode}')
 
     if debuginfo and mode_config['can_have_debug_info']:
-        cxxflags += ['-g', '-gz']
+        cxxflags += get_debuginfo_flags(mode_config)
 
     return cxxflags
 
@@ -3555,7 +3567,7 @@ def create_build_system(args):
     # the result in case one of the linked static libraries happens to
     ## have some debug symbols. See issue #23834.
     for mode, mode_config in build_modes.items():
-        if '-g' not in user_cflags.split() + mode_config['cxxflags'].split():
+        if not has_debuginfo_flag(user_cflags.split() + mode_config['cxxflags'].split()):
             mode_config['cxx_ld_flags'] += ' -Wl,--strip-debug'
 
     ninja = find_ninja()

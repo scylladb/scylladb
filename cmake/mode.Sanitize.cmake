@@ -5,7 +5,8 @@ set(CMAKE_CXX_FLAGS_SANITIZE
   "")
 update_build_flags(Sanitize
   WITH_DEBUG_INFO
-  OPTIMIZATION_LEVEL "s")
+  DEBUG_INFO_LEVEL "1"
+  OPTIMIZATION_LEVEL "2")
 
 set(scylla_build_mode_Sanitize "sanitize")
 set(Seastar_DEFINITIONS_SANITIZE
@@ -13,7 +14,8 @@ set(Seastar_DEFINITIONS_SANITIZE
   DEBUG
   SANITIZE
   DEBUG_LSA_SANITIZER
-  SCYLLA_ENABLE_ERROR_INJECTION)
+  SCYLLA_ENABLE_ERROR_INJECTION
+  SCYLLA_ENABLE_PREEMPTION_SOURCE)
 foreach(definition ${Seastar_DEFINITIONS_SANITIZE})
   add_compile_definitions(
     $<$<CONFIG:Sanitize>:${definition}>)
