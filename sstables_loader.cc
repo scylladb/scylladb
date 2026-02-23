@@ -31,6 +31,13 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "sstables_loader_helpers.hh"
+#include "db/system_distributed_keyspace.hh"
+#include "idl/sstables_loader.dist.hh"
+
+#include "sstables/object_storage_client.hh"
+#include "utils/rjson.hh"
+#include "db/system_distributed_keyspace.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -204,11 +211,6 @@ private:
         return result;
     }
 
-    struct minimal_sst_info {
-        sstables::generation_type _generation;
-        sstables::sstable_version_types _version;
-        sstables::sstable_format_types _format;
-    };
     using sst_classification_info = std::vector<std::vector<minimal_sst_info>>;
 
     future<> attach_sstable(shard_id from_shard, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) const {
@@ -217,7 +219,7 @@ private:
         auto& table = db.find_column_family(ks, cf);
         auto& sst_manager = table.get_sstables_manager();
         auto sst = sst_manager.make_sstable(
-            table.schema(), table.get_storage_options(), min_info._generation, sstables::sstable_state::normal, min_info._version, min_info._format);
+            table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
         sst->set_sstable_level(0);
         auto units = co_await sst_manager.dir_semaphore().get_units(1);
         sstables::sstable_open_config cfg {
@@ -254,97 +256,10 @@ private:
     }
 
     future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
-        constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
-        constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
         sst_classification_info downloaded_sstables(smp::count);
         for (const auto& sstable : sstables) {
-            auto components = sstable->all_components();
-
-            // Move the TOC to the front to be processed first since `sstables::create_stream_sink` takes care
-            // of creating behind the scene TemporaryTOC instead of usual one. This assures that in case of failure
-            // this partially created SSTable will be cleaned up properly at some point.
-            auto toc_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::TOC; });
-            if (toc_it != components.begin()) {
-                swap(*toc_it, components.front());
-            }
-
-            // Ensure the Scylla component is processed second.
-            //
-            // The sstable_sink->output() call for each component may invoke load_metadata()
-            // and save_metadata(), but these functions only operate correctly if the Scylla
-            // component file already exists on disk. If the Scylla component is written first,
-            // load_metadata()/save_metadata() become no-ops, leaving the original Scylla
-            // component (with outdated metadata) untouched.
-            //
-            // By placing the Scylla component second, we guarantee that:
-            //   1) The first component (TOC) is written and the Scylla component file already
-            //      exists on disk when subsequent output() calls happen.
-            //   2) Later output() calls will overwrite the Scylla component with the correct,
-            //      updated metadata.
-            //
-            // In short: Scylla must be written second so that all following output() calls
-            // can properly update its metadata instead of silently skipping it.
-            auto scylla_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::Scylla; });
-            if (scylla_it != std::next(components.begin())) {
-                swap(*scylla_it, *std::next(components.begin()));
-            }
-
-            auto gen = _table.get_sstable_generation_generator()();
-            auto files = co_await sstable->readable_file_for_all_components();
-            for (auto it = components.cbegin(); it != components.cend(); ++it) {
-                try {
-                    auto descriptor = sstable->get_descriptor(it->first);
-                    auto sstable_sink = sstables::create_stream_sink(
-                        _table.schema(),
-                        _table.get_sstables_manager(),
-                        _table.get_storage_options(),
-                        sstables::sstable_state::normal,
-                        sstables::sstable::component_basename(
-                            _table.schema()->ks_name(), _table.schema()->cf_name(), descriptor.version, gen, descriptor.format, it->first),
-                        sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend(),
-                                                           .leave_unsealed = true});
-                    auto out = co_await sstable_sink->output(foptions, stream_options);
-
-                    input_stream src(co_await [this, &it, sstable, f = files.at(it->first)]() -> future<input_stream<char>> {
-                        const auto fis_options = file_input_stream_options{.buffer_size = 128_KiB, .read_ahead = 2};
-
-                        if (it->first != sstables::component_type::Data) {
-                            co_return input_stream<char>(
-                                co_await sstable->get_storage().make_source(*sstable, it->first, f, 0, std::numeric_limits<size_t>::max(), fis_options));
-                        }
-                        auto permit = co_await _db.local().obtain_reader_permit(_table, "download_fully_contained_sstables", db::no_timeout, {});
-                        co_return co_await (
-                            sstable->get_compression()
-                                ? sstable->data_stream(0, sstable->ondisk_data_size(), std::move(permit), nullptr, nullptr, sstables::sstable::raw_stream::yes)
-                                : sstable->data_stream(0, sstable->data_size(), std::move(permit), nullptr, nullptr, sstables::sstable::raw_stream::no));
-                    }());
-
-                    std::exception_ptr eptr;
-                    try {
-                        co_await seastar::copy(src, out);
-                    } catch (...) {
-                        eptr = std::current_exception();
-                        llog.info("Error downloading SSTable component {}. Reason: {}", it->first, eptr);
-                    }
-                    co_await src.close();
-                    co_await out.close();
-                    if (eptr) {
-                        co_await sstable_sink->abort();
-                        std::rethrow_exception(eptr);
-                    }
-                    if (auto sst = co_await sstable_sink->close()) {
-                        const auto& shards = sstable->get_shards_for_this_sstable();
-                        if (shards.size() != 1) {
-                            on_internal_error(llog, "Fully-contained sstable must belong to one shard only");
-                        }
-                        llog.debug("SSTable shards {}", fmt::join(shards, ", "));
-                        downloaded_sstables[shards.front()].emplace_back(gen, descriptor.version, descriptor.format);
-                    }
-                } catch (...) {
-                    llog.info("Error downloading SSTable component {}. Reason: {}", it->first, std::current_exception());
-                    throw;
-                }
-            }
+            auto min_info = co_await download_sstable(_db.local(), _table, sstable, llog);
+            downloaded_sstables[min_info.shard].emplace_back(min_info);
         }
         co_return downloaded_sstables;
     }
@@ -506,26 +421,9 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
     auto reversed_sstables = sstables | std::views::reverse;
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : tablets_sstables) {
-        for (const auto& sst : reversed_sstables) {
-            auto sst_first = sst->get_first_decorated_key().token();
-            auto sst_last = sst->get_last_decorated_key().token();
-
-            // SSTable entirely after tablet -> no further SSTables (larger keys) can overlap
-            if (tablet_range.after(sst_first, dht::token_comparator{})) {
-                break;
-            }
-            // SSTable entirely before tablet -> skip and continue scanning later (larger keys)
-            if (tablet_range.before(sst_last, dht::token_comparator{})) {
-                continue;
-            }
-
-            if (tablet_range.contains(dht::token_range{sst_first, sst_last}, dht::token_comparator{})) {
-                sstables_fully_contained.push_back(sst);
-            } else {
-                sstables_partially_contained.push_back(sst);
-            }
-            co_await coroutine::maybe_yield();
-        }
+        auto [fully, partially] = co_await get_sstables_for_tablet(reversed_sstables, tablet_range, [](const auto& sst) { return sst->get_first_decorated_key().token(); }, [](const auto& sst) { return sst->get_last_decorated_key().token(); });
+        sstables_fully_contained = std::move(fully);
+        sstables_partially_contained = std::move(partially);
     }
     co_return std::move(tablets_sstables);
 }
@@ -958,6 +856,7 @@ sstables_loader::sstables_loader(sharded<replica::database>& db,
         sharded<db::view::view_building_worker>& vbw,
         tasks::task_manager& tm,
         sstables::storage_manager& sstm,
+        db::system_distributed_keyspace& sys_dist_ks,
         seastar::scheduling_group sg)
     : _db(db)
     , _ss(ss)
@@ -966,12 +865,25 @@ sstables_loader::sstables_loader(sharded<replica::database>& db,
     , _view_building_worker(vbw)
     , _task_manager_module(make_shared<task_manager_module>(tm))
     , _storage_manager(sstm)
+    , _sys_dist_ks(sys_dist_ks)
     , _sched_group(std::move(sg))
 {
     tm.register_module("sstables_loader", _task_manager_module);
+    ser::sstables_loader_rpc_verbs::register_restore_tablet(&_messaging, [this] (const rpc::client_info& cinfo, locator::global_tablet_id gid, sstring snap_name, sstring endpoint, sstring bucket) -> future<restore_result> {
+        llog.info("Downloading sstables for tablet {} from {}@{}/{}", gid, snap_name, endpoint, bucket);
+        try {
+            co_await download_tablet_sstables(gid, snap_name, endpoint, bucket);
+        } catch (...) {
+            llog.info("Error downloading sstables for tablet {}. Reason: {}", gid, std::current_exception());
+            throw;
+        }
+        llog.debug("Finished loading sstables for tablet {}", gid);
+        co_return restore_result{};
+    });
 }
 
 future<> sstables_loader::stop() {
+    co_await ser::sstables_loader_rpc_verbs::unregister(&_messaging),
     co_await _task_manager_module->stop();
 }
 
@@ -987,7 +899,236 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
                                                                                        std::move(prefix), std::move(sstables), scope, primary_replica_only(primary_replica));
     co_return task->id();
 }
+
+future<> sstables_loader::attach_sstable(table_id tid, const minimal_sst_info& min_info) const {
+    auto& db = _db.local();
+    auto& table = db.find_column_family(tid);
+    llog.debug("Adding downloaded SSTables to the table {} on shard {}", table.schema()->cf_name(), this_shard_id());
+    auto& sst_manager = table.get_sstables_manager();
+    auto sst = sst_manager.make_sstable(
+        table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
+    sst->set_sstable_level(0);
+    auto erm = table.get_effective_replication_map();
+    sstables::sstable_open_config cfg {
+        .unsealed_sstable = true,
+        .ignore_component_digest_mismatch = db.get_config().ignore_component_digest_mismatch(),
+    };
+    co_await sst->load(erm->get_sharder(*table.schema()), cfg);
+    co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
+        if (loading_sst == sst) {
+            auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
+            co_await loading_sst->seal_sstable(writer_cfg.backup);
+        }
+    });
+}
+
+future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid, sstring snap_name, sstring endpoint, sstring bucket) {
+    auto s = _db.local().find_schema(tid.table);
+    const auto& tm = _db.local().get_token_metadata();
+    auto tablet_range = tm.tablets().get_tablet_map(tid.table).get_token_range(tid.tablet);
+    const auto& topo = tm.get_topology();
+
+    auto sst_infos = co_await _sys_dist_ks.get_snapshot_sstables(snap_name, s->ks_name(), s->cf_name(), topo.get_datacenter(), topo.get_rack(),
+            db::consistency_level::LOCAL_QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
+    llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);
+    if (sst_infos.empty()) {
+        throw std::runtime_error(format("No SSTables found in system_distributed.snapshot_sstables for {}", snap_name));
+    }
+
+    auto [ fully, partially ] = co_await get_sstables_for_tablet(sst_infos, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
+    if (!partially.empty()) {
+        llog.debug("Sstable {} is partially contained", partially.front().sstable_id);
+        throw std::logic_error("sstables_partially_contained");
+    }
+    llog.debug("{} SSTables filtered by range {} for tablet {}", fully.size(), tablet_range, tid);
+    if (fully.empty()) {
+        // It can happen that a tablet exists and contains no data. Just skip it
+        co_return;
+    }
+
+    std::unordered_map<sstring, std::vector<sstring>> toc_names_by_prefix;
+    for (const auto& e : fully) {
+        toc_names_by_prefix[e.prefix].emplace_back(e.toc_name);
+    }
+
+    auto ep_type = _storage_manager.get_endpoint_type(endpoint);
+    sstables::sstable_open_config cfg {
+        .load_bloom_filter = false,
+    };
+
+    using sstables_col = std::vector<sstables::shared_sstable>;
+    using prefix_sstables = std::vector<sstables_col>;
+
+    auto sstables_on_shards = co_await map_reduce(toc_names_by_prefix, [&] (auto ent) {
+        return replica::distributed_loader::get_sstables_from_object_store(_db, s->ks_name(), s->cf_name(),
+                std::move(ent.second), endpoint, ep_type, bucket, std::move(ent.first), cfg, [&] { return nullptr; }).then_unpack([] (table_id, auto sstables) {
+                    return make_ready_future<std::vector<sstables_col>>(std::move(sstables));
+                });
+    }, std::vector<prefix_sstables>(smp::count), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
+        // We can't move individual elements of b[i], because these
+        // are lw_shared_ptr-s collected on another shard. So we move
+        // the whole sstables_col here so that subsequent code will
+        // walk over it and move the pointers where it wants on proper
+        // shard.
+        for (unsigned i = 0; i < smp::count; i++) {
+            a[i].push_back(std::move(b[i]));
+        }
+        return a;
+    });
+
+    auto downloaded_ssts = co_await container().map_reduce0(
+        [tid, &sstables_on_shards](auto& loader) -> future<std::vector<std::vector<minimal_sst_info>>> {
+            sstables_col sst_chunk;
+            for (auto& psst : sstables_on_shards[this_shard_id()]) {
+                for (auto&& sst : psst) {
+                    sst_chunk.push_back(std::move(sst));
+                }
+            }
+            std::vector<std::vector<minimal_sst_info>> local_min_infos(smp::count);
+            co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos](const auto& sst) -> future<> {
+                auto& table = loader._db.local().find_column_family(tid.table);
+                auto min_info = co_await download_sstable(loader._db.local(), table, sst, llog);
+                local_min_infos[min_info.shard].emplace_back(std::move(min_info));
+            });
+            co_return local_min_infos;
+        },
+        std::vector<std::vector<minimal_sst_info>>(smp::count),
+        [](auto init, auto&& item) -> std::vector<std::vector<minimal_sst_info>> {
+            for (std::size_t i = 0; i < item.size(); ++i) {
+                init[i].append_range(std::move(item[i]));
+            }
+            return init;
+        });
+
+    co_await container().invoke_on_all([tid, &downloaded_ssts] (auto& loader) -> future<> {
+        auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
+        co_await max_concurrent_for_each(shard_ssts, 16, [&loader, tid](const auto& min_info) -> future<> { co_await loader.attach_sstable(tid.table, min_info); });
+    });
+}
+
 future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_tests(const std::vector<sstables::shared_sstable>& sstables,
                                                                                   std::vector<dht::token_range>&& tablets_ranges) {
     return tablet_sstable_streamer::get_sstables_for_tablets(sstables, std::move(tablets_ranges));
+}
+
+static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace, sstring table,
+                                 const sstring& expected_snapshot_name,
+                                 const sstring& manifest_prefix, db::system_distributed_keyspace& sys_dist_ks,
+                                 db::consistency_level cl) {
+    // Read the entire JSON content
+    rjson::chunked_content content = co_await util::read_entire_stream(is);
+
+    rjson::value parsed = rjson::parse(std::move(content));
+
+    // Basic validation that tablet_count is a power of 2, as expected by our restore process
+    size_t tablet_count = parsed["table"]["tablet_count"].GetUint64();
+    if (!std::has_single_bit(tablet_count)) {
+        on_internal_error(llog, fmt::format("Invalid tablet_count {} in manifest {}, expected a power of 2", tablet_count, manifest_prefix));
+    }
+
+    // Extract the necessary fields from the manifest
+    // Expected JSON structure documented in docs/dev/object_storage.md
+    auto snapshot_name = rjson::to_sstring(parsed["snapshot"]["name"]);
+    if (snapshot_name != expected_snapshot_name) {
+        throw std::runtime_error(fmt::format("Manifest {} belongs to snapshot '{}', expected '{}'",
+            manifest_prefix, snapshot_name, expected_snapshot_name));
+    }
+    if (keyspace.empty()) {
+        keyspace = rjson::to_sstring(parsed["table"]["keyspace_name"]);
+    }
+    if (table.empty()) {
+        table = rjson::to_sstring(parsed["table"]["table_name"]);
+    }
+    auto datacenter = rjson::to_sstring(parsed["node"]["datacenter"]);
+    auto rack = rjson::to_sstring(parsed["node"]["rack"]);
+
+    // Process each sstable entry in the manifest
+    // FIXME: cleanup of the snapshot-related rows is needed in case anything throws in here.
+    for (auto& sstable_entry : parsed["sstables"].GetArray()) {
+        auto id = rjson::to_sstable_id(sstable_entry["id"]);
+        auto first_token = rjson::to_token(sstable_entry["first_token"]);
+        auto last_token = rjson::to_token(sstable_entry["last_token"]);
+        auto toc_name = rjson::to_sstring(sstable_entry["toc_name"]);
+        auto prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
+        // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
+        // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
+        co_await sys_dist_ks.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
+                                                    toc_name, prefix, cl);
+    }
+
+    co_return tablet_count;
+}
+
+future<size_t> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring expected_snapshot_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+    // Download manifests in parallel and populate system_distributed.snapshot_sstables
+    // with the content extracted from each manifest
+    auto client = sm.get_endpoint_client(endpoint);
+
+    // tablet_count to be returned by this function, we also validate that all manifests passed contain the same tablet count
+    std::optional<size_t> tablet_count;
+
+    co_await seastar::max_concurrent_for_each(manifest_prefixes, 16, [&] (const sstring& manifest_prefix) {
+        // Download the manifest JSON file
+        sstables::object_name name(bucket, manifest_prefix);
+        auto source = client->make_download_source(name);
+        return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
+            return process_manifest(is, keyspace, table, expected_snapshot_name, manifest_prefix, sys_dist_ks, cl).then([&](size_t count) {
+                if (!tablet_count) {
+                    tablet_count = count;
+                } else if (*tablet_count != count) {
+                    throw std::runtime_error(fmt::format("Inconsistent tablet_count values in manifest {}: expected {}, got {}", manifest_prefix, *tablet_count, count));
+                }
+            });
+        });
+    });
+
+    co_return *tablet_count;
+}
+
+class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::task::impl {
+    sharded<sstables_loader>& _loader;
+    table_id _tid;
+    sstring _snap_name;
+    sstring _endpoint;
+    sstring _bucket;
+
+public:
+    tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
+            table_id tid, sstring snap_name, sstring endpoint, sstring bucket) noexcept
+        : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
+        , _loader(loader)
+        , _tid(std::move(tid))
+        , _snap_name(std::move(snap_name))
+        , _endpoint(std::move(endpoint))
+        , _bucket(std::move(bucket))
+    {
+        _status.progress_units = "batches";
+    }
+
+    virtual std::string type() const override {
+        return "restore_tablets";
+    }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::no;
+    }
+
+    virtual tasks::is_user_task is_user_task() const noexcept override {
+        return tasks::is_user_task::yes;
+    }
+
+    tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable::no;
+    }
+
+protected:
+    virtual future<> run() override {
+        co_await _loader.local()._ss.local().restore_tablets(_tid, _snap_name, _endpoint, _bucket);
+    }
+};
+
+future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, utils::chunked_vector<sstring> manifests) {
+    co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, endpoint, bucket, snap_name, std::move(manifests));
+    auto task = co_await _task_manager_module->make_and_start_task<tablet_restore_task_impl>({}, container(), keyspace, tid, std::move(snap_name), std::move(endpoint), std::move(bucket));
+    co_return task->id();
 }

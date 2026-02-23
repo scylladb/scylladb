@@ -70,6 +70,10 @@ public:
 #include <rapidjson/allocators.h>
 #include <rapidjson/ostreamwrapper.h>
 #include <seastar/core/sstring.hh>
+#include "utils/UUID.hh"
+#include "dht/token.hh"
+#include "sstables/types.hh"
+
 #include "seastarx.hh"
 
 namespace rjson {
@@ -249,7 +253,14 @@ inline sstring to_sstring(const rjson::value& str) {
 inline std::string to_string(const rjson::value& str) {
     return std::string(str.GetString(), str.GetStringLength());
 }
-
+// Helper for conversion to dht::token
+inline dht::token to_token(const rjson::value& v) {
+    return dht::token::from_int64(v.GetInt64());
+}
+// Helper for conversion to sstables::sstable_id
+inline sstables::sstable_id to_sstable_id(const rjson::value& v) {
+    return sstables::sstable_id(utils::UUID(rjson::to_string_view(v)));
+}
 // Returns a pointer to JSON member if it exists, nullptr otherwise
 rjson::value* find(rjson::value& value, std::string_view name);
 const rjson::value* find(const rjson::value& value, std::string_view name);

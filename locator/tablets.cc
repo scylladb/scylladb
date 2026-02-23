@@ -72,6 +72,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::previous;
         case tablet_transition_stage::end_migration:
             return write_replica_set_selector::next;
+        case tablet_transition_stage::restore:
+            return write_replica_set_selector::previous;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
 }
@@ -105,6 +107,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
             return read_replica_set_selector::previous;
         case tablet_transition_stage::end_migration:
             return read_replica_set_selector::next;
+        case tablet_transition_stage::restore:
+            return read_replica_set_selector::previous;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
 }
@@ -113,12 +117,14 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
                                                tablet_transition_kind transition,
                                                tablet_replica_set next,
                                                std::optional<tablet_replica> pending_replica,
-                                               service::session_id session_id)
+                                               service::session_id session_id,
+                                               std::optional<locator::restore_config> restore_cfg)
     : stage(stage)
     , transition(transition)
     , next(std::move(next))
     , pending_replica(std::move(pending_replica))
     , session_id(session_id)
+    , restore_cfg(std::move(restore_cfg))
     , writes(get_selector_for_writes(stage))
     , reads(get_selector_for_reads(stage))
 { }
@@ -168,12 +174,20 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
 
             return result;
         }
-        case tablet_transition_kind::repair:
+        case tablet_transition_kind::repair: {
             auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
             result.stream_weight = locator::tablet_migration_stream_weight_repair;
             result.read_from = s;
             result.written_to = std::move(s);
             return result;
+        }
+        case tablet_transition_kind::restore: {
+            auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
+            result.stream_weight = locator::tablet_migration_stream_weight_restore;
+            result.read_from = s;
+            result.written_to = std::move(s);
+            return result;
+        }
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition kind: {}", static_cast<int>(trinfo.transition)));
 }
@@ -765,6 +779,7 @@ static const std::unordered_map<tablet_transition_stage, sstring> tablet_transit
     {tablet_transition_stage::cleanup_target, "cleanup_target"},
     {tablet_transition_stage::revert_migration, "revert_migration"},
     {tablet_transition_stage::end_migration, "end_migration"},
+    {tablet_transition_stage::restore, "restore"},
 };
 
 static const std::unordered_map<sstring, tablet_transition_stage> tablet_transition_stage_from_name = std::invoke([] {
@@ -798,6 +813,7 @@ static const std::unordered_map<tablet_transition_kind, sstring> tablet_transiti
         {tablet_transition_kind::rebuild, "rebuild"},
         {tablet_transition_kind::rebuild_v2, "rebuild_v2"},
         {tablet_transition_kind::repair, "repair"},
+        {tablet_transition_kind::restore, "restore"},
 };
 
 static const std::unordered_map<sstring, tablet_transition_kind> tablet_transition_kind_from_name = std::invoke([] {
@@ -1030,6 +1046,8 @@ std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, 
                 break;
             }
             case tablet_transition_kind::intranode_migration:
+                [[fallthrough]];
+            case tablet_transition_kind::restore:
                 [[fallthrough]];
             case tablet_transition_kind::repair:
                 break;

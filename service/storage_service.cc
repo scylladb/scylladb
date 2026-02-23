@@ -5245,6 +5245,60 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
     });
 }
 
+future<> storage_service::restore_tablets(table_id table, sstring snap_name, sstring endpoint, sstring bucket) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.restore_tablets(table, snap_name, endpoint, bucket);
+        });
+    }
+
+    // Holding tm around transit_tablet() can lead to deadlock, if state machine is busy
+    // with something which executes a barrier. The barrier will wait for tm to die, and
+    // transit_tablet() will wait for the barrier to finish.
+    // Due to that, we first collect tablet boundaries, then prepare and submit transition
+    // mutations. Since this code is called with equal min:max tokens set for the table,
+    // the tablet map cannot split and merge and, thus, the static vector of tokens should
+    // map to correct tablet boundaries throughout the whole operation
+    utils::chunked_vector<std::pair<locator::tablet_id, dht::token>> tablets;
+    {
+        const auto tm = get_token_metadata_ptr();
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
+            auto last_token = tmap.get_last_token(tid);
+            tablets.push_back(std::make_pair(tid, last_token));
+            return make_ready_future<>();
+        });
+    }
+
+    std::vector<future<>> wait;
+    co_await coroutine::parallel_for_each(tablets, [&] (const auto& tablet) -> future<> {
+        auto [ tid, last_token ] = tablet;
+        auto gid = locator::global_tablet_id{table, tid};
+        co_await transit_tablet(table, last_token, [&] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
+            utils::chunked_vector<canonical_mutation> updates;
+            updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
+                .set_stage(last_token, locator::tablet_transition_stage::restore)
+                .set_new_replicas(last_token, tmap.get_tablet_info(tid).replicas)
+                .set_restore_config(last_token, locator::restore_config{ snap_name, endpoint, bucket })
+                .set_transition(last_token, locator::tablet_transition_kind::restore)
+                .build());
+
+            sstring reason = format("Restoring tablet {}", gid);
+            return std::make_tuple(std::move(updates), std::move(reason));
+        }, false);
+        wait.emplace_back(_topology_state_machine.event.wait([this, gid] {
+            auto& tmap = get_token_metadata().tablets().get_tablet_map(gid.table);
+            return !tmap.get_tablet_transition_info(gid.tablet);
+        }));
+    });
+
+    co_await when_all_succeed(wait.begin(), wait.end()).discard_result();
+    slogger.info("Restoring {} finished", table);
+}
+
 future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables() {
     auto holder = _async_gate.hold();
 
@@ -5326,7 +5380,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     co_return std::move(load_stats);
 }
 
-future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
+future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations, bool wait_to_finish) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         bool topology_busy;
@@ -5374,6 +5428,10 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
         } catch (group0_concurrent_modification&) {
             rtlogger.debug("transit_tablet(): concurrent modification, retrying");
         }
+    }
+
+    if (!wait_to_finish) {
+        co_return;
     }
 
     // Wait for transition to finish.
