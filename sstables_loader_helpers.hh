@@ -34,28 +34,28 @@ struct minimal_sst_info {
 future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);
 
 template <std::ranges::input_range Range, typename T = std::ranges::range_value_t<Range>>
-seastar::future<std::tuple<std::vector<T>, std::vector<T>>> get_sstables_for_tablet(Range&& sstables,
-                                                                                                                         const dht::token_range& tablet_range,
+seastar::future<std::tuple<std::vector<T>, std::vector<T>>> get_sstables_for_tablet(Range&& ranges,
+                                                                                                                         const dht::token_range& token_range,
                                                                                                                          auto&& get_first, auto&& get_last) {
     std::vector<T> fully_contained;
     std::vector<T> partially_contained;
-    for (const auto& sst : sstables) {
-        auto sst_first = get_first(sst);
-        auto sst_last = get_last(sst);
+    for (const auto& range : ranges) {
+        auto first_token = get_first(range);
+        auto last_token = get_last(range);
 
-        // SSTable entirely after tablet -> no further SSTables (larger keys) can overlap
-        if (tablet_range.after(sst_first, dht::token_comparator{})) {
+        // Range entirely after token range -> no further ranges (larger keys) can overlap
+        if (token_range.after(first_token, dht::token_comparator{})) {
             break;
         }
-        // SSTable entirely before tablet -> skip and continue scanning later (larger keys)
-        if (tablet_range.before(sst_last, dht::token_comparator{})) {
+        // Range entirely before token range -> skip and continue scanning later (larger keys)
+        if (token_range.before(last_token, dht::token_comparator{})) {
             continue;
         }
 
-        if (tablet_range.contains(dht::token_range{sst_first, sst_last}, dht::token_comparator{})) {
-            fully_contained.push_back(sst);
+        if (token_range.contains(dht::token_range{first_token, last_token}, dht::token_comparator{})) {
+            fully_contained.push_back(range);
         } else {
-            partially_contained.push_back(sst);
+            partially_contained.push_back(range);
         }
         co_await coroutine::maybe_yield();
     }
