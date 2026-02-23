@@ -34,7 +34,7 @@ def scylla_path(build_mode):
 
 @pytest.mark.parametrize("mode", ["read"])
 async def test_perf_simple_query(scylla_path, mode, tmp_path):
-    args = [scylla_path, "perf-simple-query", "--duration", "1", "--partitions", "1000"]
+    args = [scylla_path, "perf-simple-query", "--duration", "1", "--partitions", "1000", "--stop-on-error", "false"]
     await run(args)
 
 
@@ -54,7 +54,8 @@ async def test_perf_cql_raw(scylla_path, tmp_path, workload):
         "--smp", "2",
         "--workdir", str(tmp_path),
         "--developer-mode", "1",
-        "--partitions", "1000"
+        "--partitions", "1000",
+        "--continue-after-error", "true"
     ]
     try:
         await run(cmd)
@@ -81,7 +82,8 @@ async def test_perf_alternator(scylla_path, tmp_path, workload):
         "--smp", "2",
         "--workdir", str(tmp_path),
         "--developer-mode", "1",
-        "--partitions", "1000"
+        "--partitions", "1000",
+        "--continue-after-error", "true"
     ]
     try:
         await run(cmd)
@@ -101,7 +103,8 @@ async def test_perf_cql_raw_remote(scylla_path, tmp_path, workload, manager):
         "--duration", "1",
         "--remote-host", host,
         "--smp", "1",
-        "--partitions", "1000"
+        "--partitions", "1000",
+        "--continue-after-error", "true"
     ]
     await run(client_cmd)
 
@@ -121,6 +124,7 @@ async def test_perf_alternator_remote(scylla_path, tmp_path, workload, manager):
         "--duration", "1",
         "--remote-host", host,
         "--smp", "1",
-        "--partitions", "1000"
+        "--partitions", "1000",
+        "--continue-after-error", "true"
     ]
     await run(client_cmd)
