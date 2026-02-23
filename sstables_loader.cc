@@ -30,6 +30,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "idl/sstables_loader.dist.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -958,9 +959,14 @@ sstables_loader::sstables_loader(sharded<replica::database>& db,
     , _sched_group(std::move(sg))
 {
     tm.register_module("sstables_loader", _task_manager_module);
+    ser::sstables_loader_rpc_verbs::register_restore_tablet(&_messaging, [this] (const rpc::client_info& cinfo, locator::global_tablet_id gid, sstring snap_name, sstring endpoint, sstring bucket) -> future<restore_result> {
+        llog.info("Loading sstables for tablet {} from {}/{}", gid, endpoint, bucket);
+        co_return restore_result{};
+    });
 }
 
 future<> sstables_loader::stop() {
+    co_await ser::sstables_loader_rpc_verbs::unregister(&_messaging),
     co_await _task_manager_module->stop();
 }
 

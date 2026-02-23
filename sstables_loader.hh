@@ -23,6 +23,9 @@ namespace replica {
 class database;
 }
 
+struct restore_result {
+};
+
 namespace sstables { class storage_manager; }
 
 namespace netw { class messaging_service; }
