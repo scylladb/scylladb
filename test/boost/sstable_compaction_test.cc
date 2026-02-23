@@ -157,8 +157,8 @@ static void assert_table_sstable_count(table_for_tests& t, size_t expected_count
     BOOST_REQUIRE(uint64_t(t->get_stats().live_sstable_count) == expected_count);
 }
 
-static void corrupt_sstable(sstables::shared_sstable sst) {
-    auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+static void corrupt_sstable(sstables::shared_sstable sst, component_type type = component_type::Data) {
+    auto f = open_file_dma(sstables::test(sst).filename(type).native(), open_flags::wo).get();
     auto close_f = deferred_close(f);
     const auto wbuf_align = f.memory_dma_alignment();
     const auto wbuf_len = f.disk_write_dma_alignment();
@@ -2487,7 +2487,7 @@ void scrub_validate_corrupted_content(compress_sstable compress) {
     });
 }
 
-void scrub_validate_corrupted_file(compress_sstable compress) {
+void scrub_validate_corrupted_file(compress_sstable compress, component_type component = component_type::Data) {
     scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
@@ -2498,12 +2498,12 @@ void scrub_validate_corrupted_file(compress_sstable compress) {
             tests::no_expiry_expiry_generator(),
             std::uniform_int_distribution<size_t>(10, 10)).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [component] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
-        // Corrupt the data to cause an invalid checksum.
-        corrupt_sstable(sst);
+        // Corrupt the component file to cause an invalid checksum.
+        corrupt_sstable(sst, component);
 
         compaction::compaction_type_options::scrub opts = {
             .operation_mode = compaction::compaction_type_options::scrub::mode::validate,
@@ -2629,6 +2629,13 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file) {
     for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
         testlog.info("Validating {}compressed SSTable with invalid checksums...", compress == compress_sstable::no ? "un" : "");
         scrub_validate_corrupted_file(compress);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_index) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with corrupted index...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_corrupted_file(compress, component_type::Index);
     }
 }
 
