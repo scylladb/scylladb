@@ -490,16 +490,17 @@ modes = {
         'advanced_optimizations': False,
     },
     'sanitize': {
-        'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
+        'cxxflags': '-g -DSANITIZE -DSCYLLA_ENABLE_ERROR_INJECTION -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_PREEMPTION_SOURCE' ,
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*50,
-        'optimization-level': 's',
+        'optimization-level': '2',
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Sanitize',
         'can_have_debug_info': True,
         'build_seastar_shared_libs': False,
         'default': False,
-        'description': 'a mode with optimizations and sanitizers enabled, used for finding memory errors',
+        'description': 'A build mode with optimizations and sanitizers enabled,  '
+        'designed to simulate release behavior while retaining runtime checks for CI runs.',
         'advanced_optimizations': False,
     },
     'coverage': {
