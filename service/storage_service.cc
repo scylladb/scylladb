@@ -6277,7 +6277,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     if (!server_rs) {
                         on_internal_error(rtlogger, format("Got {} request for node {} not found in topology", cmd.cmd, id));
                     }
-                    const auto& rs = server_rs->second;
+                    const auto rs = server_rs->second;
                     auto tstate = _topology_state_machine._topology.tstate;
                     auto session = _topology_state_machine._topology.session;
                     if (!rs.ring || rs.ring->tokens.empty()) {
