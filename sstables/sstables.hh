@@ -330,7 +330,7 @@ public:
     // (e.g. parse error), it will return with validation error count seen up to
     // the abort. In the latter case it will call the error-handler before doing so.
     future<uint64_t> validate(reader_permit permit, abort_source& abort,
-            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor());
+            std::function<void(sstring)> error_handler, sstables::read_monitor& monitor = default_read_monitor(), bool validate_index = false);
 
     encoding_stats get_encoding_stats_for_compaction() const;
 
@@ -741,6 +741,7 @@ private:
     void validate_max_local_deletion_time();
     void validate_partitioner();
     void validate_component_digest(component_type type, uint32_t computed_digest) const;
+    future<> validate_index_digest() const;
     future<uint32_t> compute_component_file_digest(component_type type) const;
     future<uint32_t> compute_component_file_digest(file f, size_t size) const;
 

@@ -1244,6 +1244,28 @@ void sstable::validate_component_digest(component_type type, uint32_t computed_d
     }
 }
 
+future<> sstable::validate_index_digest() const {
+    auto validate_component = [this] (component_type type, const file& f, size_t size) -> future<> {
+        auto expected_digest = get_component_digest(type);
+        if (!expected_digest) {
+            co_return;
+        }
+        auto computed_digest = co_await compute_component_file_digest(f, size);
+        if (*expected_digest != computed_digest) {
+            throw malformed_sstable_exception(
+                fmt::format("{} digest mismatch in {}: expected {}, computed {}",
+                            type, get_filename(), *expected_digest, computed_digest));
+        }
+    };
+
+    if (_index_file) {
+        co_await validate_component(component_type::Index, _index_file, _index_file_size);
+    } else {
+        co_await validate_component(component_type::Partitions, _partitions_file, _partitions_file_size);
+        co_await validate_component(component_type::Rows, _rows_file, _rows_file_size);
+    }
+}
+
 void sstable::validate_min_max_metadata() {
     auto entry = _components->statistics.contents.find(metadata_type::Stats);
     if (entry == _components->statistics.contents.end()) {
@@ -2388,7 +2410,7 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 }
 
 future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
-        std::function<void(sstring)> error_handler, sstables::read_monitor& monitor) {
+        std::function<void(sstring)> error_handler, sstables::read_monitor& monitor, bool validate_index) {
     auto handle_sstable_exception = [&error_handler](const malformed_sstable_exception& e, uint64_t& errors) -> std::exception_ptr {
         std::exception_ptr ex;
         try {
@@ -2406,6 +2428,9 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     try {
         checksum = co_await read_checksum();
         co_await read_digest();
+        if (validate_index) {
+            co_await validate_index_digest();
+        }
     } catch (const malformed_sstable_exception& e) {
         ex = handle_sstable_exception(e, errors);
     }
