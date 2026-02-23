@@ -33,12 +33,12 @@ struct minimal_sst_info {
 
 future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);
 
-template <std::ranges::input_range Range>
-future<std::tuple<std::vector<sstables::shared_sstable>, std::vector<sstables::shared_sstable>>> get_sstables_for_tablet(Range&& sstables,
+template <std::ranges::input_range Range, typename T = std::ranges::range_value_t<Range>>
+seastar::future<std::tuple<std::vector<T>, std::vector<T>>> get_sstables_for_tablet(Range&& sstables,
                                                                                                                          const dht::token_range& tablet_range,
                                                                                                                          auto&& get_first, auto&& get_last) {
-    std::vector<sstables::shared_sstable> fully_contained;
-    std::vector<sstables::shared_sstable> partially_contained;
+    std::vector<T> fully_contained;
+    std::vector<T> partially_contained;
     for (const auto& sst : sstables) {
         auto sst_first = get_first(sst);
         auto sst_last = get_last(sst);
