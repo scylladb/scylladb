@@ -30,7 +30,6 @@ def tbl_set(cql, test_keyspace):
 # take a constant. This feature is barely useful for WHERE clauses, and
 # even less useful for selectors, but should be allowed for both.
 # Reproduces #12607.
-@pytest.mark.xfail(reason="issue #12607")
 def test_constant_function_parameter(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, 0x03)")
