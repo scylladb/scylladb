@@ -405,7 +405,7 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
     auto reversed_sstables = sstables | std::views::reverse;
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : tablets_sstables) {
-        auto [fully, partially] = co_await get_sstables_for_tablet(reversed_sstables, tablet_range);
+        auto [fully, partially] = co_await get_sstables_for_tablet(reversed_sstables, tablet_range, [](const auto& sst) { return sst->get_first_decorated_key().token(); }, [](const auto& sst) { return sst->get_last_decorated_key().token(); });
         sstables_fully_contained = std::move(fully);
         sstables_partially_contained = std::move(partially);
     }

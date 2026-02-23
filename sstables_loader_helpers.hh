@@ -35,12 +35,13 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
 
 template <std::ranges::input_range Range>
 future<std::tuple<std::vector<sstables::shared_sstable>, std::vector<sstables::shared_sstable>>> get_sstables_for_tablet(Range&& sstables,
-                                                                                                                         const dht::token_range& tablet_range) {
+                                                                                                                         const dht::token_range& tablet_range,
+                                                                                                                         auto&& get_first, auto&& get_last) {
     std::vector<sstables::shared_sstable> fully_contained;
     std::vector<sstables::shared_sstable> partially_contained;
     for (const auto& sst : sstables) {
-        auto sst_first = sst->get_first_decorated_key().token();
-        auto sst_last = sst->get_last_decorated_key().token();
+        auto sst_first = get_first(sst);
+        auto sst_last = get_last(sst);
 
         // SSTable entirely after tablet -> no further SSTables (larger keys) can overlap
         if (tablet_range.after(sst_first, dht::token_comparator{})) {
