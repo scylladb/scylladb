@@ -204,6 +204,7 @@ private:
     }
 
     struct minimal_sst_info {
+        shard_id _shard;
         sstables::generation_type _generation;
         sstables::sstable_version_types _version;
         sstables::sstable_format_types _format;
@@ -327,7 +328,7 @@ private:
                             on_internal_error(llog, "Fully-contained sstable must belong to one shard only");
                         }
                         llog.debug("SSTable shards {}", fmt::join(shards, ", "));
-                        downloaded_sstables[shards.front()].emplace_back(gen, descriptor.version, descriptor.format);
+                        downloaded_sstables[shards.front()].emplace_back(shards.front(), gen, descriptor.version, descriptor.format);
                     }
                 } catch (...) {
                     llog.info("Error downloading SSTable component {}. Reason: {}", it->first, std::current_exception());
