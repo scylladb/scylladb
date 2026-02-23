@@ -102,7 +102,7 @@ public:
      * If no tag is specified we will remove all snapshots.
      * If a cf_name is specified, only that table will be deleted
      */
-    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
+    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name, bool cancel_garbage_collection = true);
 
     future<tasks::task_id> start_backup(sstring endpoint, sstring bucket, sstring prefix, sstring keyspace, sstring table, sstring snapshot_name, bool move_files);
 
@@ -113,6 +113,12 @@ public:
 
     // Must be called on shard 0
     void schedule_garbage_collection(gc_clock::time_point when, sstring ks_name, sstring table_name, sstring tag);
+
+    // For canceling garbage collection, ks_name or table_name can be empty
+    // And then all snapshots with the given tag are erased from the garbage-collection queue
+    // within the given scope.
+    // Must be called on shard 0
+    void cancel_garbage_collection(sstring tag, std::vector<sstring> ks_names = {}, sstring table_name = "");
 private:
     config _config;
     sharded<replica::database>& _db;

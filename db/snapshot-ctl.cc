@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <unordered_set>
+
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -127,10 +129,13 @@ future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vect
     co_await replica::database::snapshot_tables_on_all_shards(_db, ks_name, std::move(tables), std::move(tag), opts);
 }
 
-future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
-    snap_log.debug("clear_snapshot: tag={} keyspaces={} table={}", tag, fmt::join(keyspace_names, ","), cf_name);
-    return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] {
-        return _db.local().clear_snapshot(tag, keyspace_names, cf_name);
+future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name, bool do_cancel_garbage_collection) {
+    snap_log.debug("clear_snapshot: tag={} keyspaces={} table={}, cancel_garbage_collection={}", tag, fmt::join(keyspace_names, ","), cf_name, do_cancel_garbage_collection);
+    return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name), do_cancel_garbage_collection] () mutable -> future<> {
+        co_await _db.local().clear_snapshot(tag, keyspace_names, cf_name);
+        if (do_cancel_garbage_collection) {
+            cancel_garbage_collection(tag, std::move(keyspace_names), cf_name);
+        }
     });
 }
 
@@ -169,6 +174,7 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
     if (!storage_options.is_local_type()) {
         throw std::invalid_argument("not able to backup a non-local table");
     }
+    cancel_garbage_collection(snapshot_name, {keyspace}, table);
     auto& local_storage_options = std::get<data_dictionary::storage_options::local>(storage_options.value);
     //
     // The keyspace data directories and their snapshots are arranged as follows:
@@ -210,14 +216,14 @@ future<> snapshot_ctl::garbage_collector() {
     auto garbage_collect_snapshot = [this] (const gc_info& info) -> future<> {
         snap_log.info("Garbage collecting snapshot {} of table {}.{}", info.tag, info.ks_name, info.table_name);
         try {
-            co_await clear_snapshot(info.tag, {info.ks_name}, info.table_name);
+            constexpr bool cancel_gc = false;   // no need to cancel garbage collection since it's being executed now
+            co_await clear_snapshot(info.tag, {info.ks_name}, info.table_name, cancel_gc);
         } catch (...) {
             snap_log.warn("Failed to garbage collect snapshot {} of table {}.{}: {}: Ignored", info.tag, info.ks_name, info.table_name, std::current_exception());
         }
     };
     while (!_shutdown) {
         future<> gc_future = make_ready_future();
-        // FIXME: do not garbage collect snapshots during backup
         while (!_gc_queue.empty() && _gc_queue.front().expires_at <= gc_clock::now()) {
             auto info = _gc_queue.front();
             std::ranges::pop_heap(_gc_queue, std::greater{}, &gc_info::expires_at);
@@ -254,6 +260,28 @@ void snapshot_ctl::schedule_garbage_collection(gc_clock::time_point when, sstrin
         std::ranges::push_heap(_gc_queue, std::greater{}, &gc_info::expires_at);
         _gc_cond.signal();
     }
+}
+
+void snapshot_ctl::cancel_garbage_collection(sstring tag, std::vector<sstring> ks_names, sstring table_name) {
+    if (this_shard_id() != 0) {
+        on_internal_error(snap_log, "cancel_garbage_collection must be called on shard 0");
+    }
+    snap_log.debug("Cancel garbage collection of snapshot {} in keyspaces={} table={}", tag, fmt::join(ks_names, ","), table_name);
+    std::unordered_set<sstring> keyspaces;
+    std::ranges::move(ks_names, std::inserter(keyspaces, keyspaces.end()));
+    _gc_queue.erase(std::remove_if(_gc_queue.begin(), _gc_queue.end(), [&] (const gc_info& info) {
+        if (info.tag != tag) {
+            return false;
+        }
+        if (!keyspaces.empty() && !keyspaces.contains(info.ks_name)) {
+            return false;
+        }
+        if (!table_name.empty() && info.table_name != table_name) {
+            return false;
+        }
+        return true;
+    }), _gc_queue.end());
+    std::ranges::make_heap(_gc_queue, std::greater{}, &gc_info::expires_at);
 }
 
 } // namespace db
