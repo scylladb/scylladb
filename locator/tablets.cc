@@ -168,12 +168,13 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
 
             return result;
         }
-        case tablet_transition_kind::repair:
+        case tablet_transition_kind::repair: {
             auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
             result.stream_weight = locator::tablet_migration_stream_weight_repair;
             result.read_from = s;
             result.written_to = std::move(s);
             return result;
+        }
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition kind: {}", static_cast<int>(trinfo.transition)));
 }
