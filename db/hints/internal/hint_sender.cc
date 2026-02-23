@@ -249,20 +249,20 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     host_id_vector_replica_set natural_endpoints = ermp->get_natural_replicas(token);
     host_id_vector_topology_change pending_endpoints  = ermp->get_pending_replicas(token);
 
-    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints] () mutable -> future<> {
+    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints, &token] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
-        const auto& tm = ermp->get_token_metadata();
         const auto dst = end_point_key();
 
-        if (std::ranges::contains(natural_endpoints, dst) && !tm.is_leaving(dst)) {
+        const bool is_leaving = ermp->is_leaving(dst, token);
+        if (std::ranges::contains(natural_endpoints, dst) && !is_leaving) {
             manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
             // dst is not duplicated in pending_endpoints because it's in natural_endpoints
             return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst, std::move(pending_endpoints));
         } else {
             if (manager_logger.is_enabled(log_level::trace)) {
-                if (tm.is_leaving(end_point_key())) {
-                    manager_logger.trace("hint_sender[{}]:send_one_mutation: Original target is leaving. Mutating from scratch", dst);
+                if (is_leaving) {
+                    manager_logger.trace("hint_sender[{}]:send_one_mutation: Original target host is leaving, or tablet replica is migrated away. Mutating from scratch", dst);
                 } else {
                     manager_logger.trace("hint_sender[{}]:send_one_mutation: Endpoint set has changed and original target is no longer a replica. Mutating from scratch", dst);
                 }
