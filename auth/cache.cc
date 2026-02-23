@@ -110,15 +110,23 @@ future<> cache::prune(const resource& r) {
 future<> cache::reload_all_permissions() noexcept {
     SCYLLA_ASSERT(_permission_loader);
     auto units = co_await get_units(_loading_sem, 1, _as);
+    auto copy_keys = [] (const std::unordered_map<resource, permission_set>& m) {
+        std::vector<resource> keys;
+        keys.reserve(m.size());
+        for (const auto& [res, _] : m) {
+            keys.push_back(res);
+        }
+        return keys;
+    };
     const role_or_anonymous anon;
-    for (auto& [res, perms] : _anonymous_permissions) {
-        perms = co_await _permission_loader(anon, res);
+    for (const auto& res : copy_keys(_anonymous_permissions)) {
+        _anonymous_permissions[res] = co_await _permission_loader(anon, res);
     }
     for (auto& [role, entry] : _roles) {
         auto& perms_cache = entry->cached_permissions;
         auto r = role_or_anonymous(role);
-        for (auto& [res, perms] : perms_cache) {
-            perms = co_await _permission_loader(r, res);
+        for (const auto& res : copy_keys(perms_cache)) {
+            perms_cache[res] = co_await _permission_loader(r, res);
         }
     }
     logger.debug("Reloaded auth cache with {} entries", _roles.size());
