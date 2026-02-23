@@ -7410,7 +7410,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     co_return std::move(load_stats);
 }
 
-future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
+future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations, bool wait_to_finish) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         bool topology_busy;
@@ -7458,6 +7458,10 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
         } catch (group0_concurrent_modification&) {
             rtlogger.debug("transit_tablet(): concurrent modification, retrying");
         }
+    }
+
+    if (!wait_to_finish) {
+        co_return;
     }
 
     // Wait for transition to finish.
