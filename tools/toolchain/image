@@ -1,1 +1,7 @@
+<<<<<<< HEAD
 docker.io/scylladb/scylla-toolchain:fedora-43-20260113
+||||||| parent of 5baf16005f (build: install antlr3 from maven + source, not rpm packages)
+docker.io/scylladb/scylla-toolchain:fedora-43-20260203
+=======
+docker.io/scylladb/scylla-toolchain:fedora-43-20260223
+>>>>>>> 5baf16005f (build: install antlr3 from maven + source, not rpm packages)
