@@ -3477,8 +3477,6 @@ BOOST_AUTO_TEST_CASE(evaluate_field_selection) {
 
 BOOST_AUTO_TEST_CASE(evaluate_column_mutation_attribute) {
     auto s = make_simple_test_schema();
-    auto ttls = std::array{ int32_t(1), int32_t(2) };
-    auto timestamps = std::array{ int64_t(12345), int64_t(23456) };
     auto ttl_of_s = column_mutation_attribute{
         .kind = column_mutation_attribute::attribute_kind::ttl,
         .column = column_value(&s->static_column_at(0)),
