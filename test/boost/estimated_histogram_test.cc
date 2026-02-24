@@ -105,6 +105,29 @@ BOOST_AUTO_TEST_CASE(test_basic_estimated) {
     BOOST_CHECK_EQUAL(validate_histogram(res, {5, 8, 10, 14, 20, 20, 20, 20, 20, 20, 20, 21}, {160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024}), "");
 }
 
+BOOST_AUTO_TEST_CASE(test_metrics_histogram_min_lt_precision) {
+    utils::approx_exponential_histogram<1, 1024, 4> hist;
+    hist.add(1);
+    hist.add(2);
+    hist.add(2);
+    hist.add(3);
+    hist.add(4);
+
+    auto res = to_metrics_histogram(hist);
+    BOOST_CHECK_EQUAL(res.buckets.size(), 36);
+    BOOST_CHECK(res.native_histogram.has_value());
+    BOOST_CHECK_EQUAL(res.native_histogram->schema, 2);
+    BOOST_CHECK_EQUAL(res.native_histogram->min_id, 9);
+
+    std::vector<double> expected_bounds{1, 2, 3, 4, 5};
+    std::vector<uint64_t> expected_counts{1, 3, 4, 4, 5};
+    for (size_t i = 0; i < expected_bounds.size(); i++) {
+        BOOST_CHECK_EQUAL(res.buckets[i].upper_bound, expected_bounds[i]);
+        BOOST_CHECK_EQUAL(res.buckets[i].count, expected_counts[i]);
+    }
+    BOOST_CHECK_EQUAL(res.buckets.back().count, res.sample_count);
+}
+
 BOOST_AUTO_TEST_CASE(test_estimated_statistics) {
     utils::approx_exponential_histogram<128, 1024, 4> hist;
     hist.add(1);
