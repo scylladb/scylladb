@@ -200,8 +200,6 @@ for two cases. One is setting replication factor to 0, in which case the number 
 The other is when the numeric replication factor is equal to the current number of replicas
 for a given datacanter, in which case the current rack list is preserved.
 
-Altering from a numeric replication factor to a rack list is not supported yet.
-
 Note that when ``ALTER`` ing keyspaces and supplying ``replication_factor``,
 auto-expansion will only *add* new datacenters for safety, it will not alter
 existing datacenters or remove any even if they are no longer in the cluster.
@@ -423,6 +421,21 @@ An empty list is allowed, and it's equivalent to numeric replication factor of 0
 Altering from a rack list to a numeric replication factor is not supported.
 
 Keyspaces which use rack lists are :term:`RF-rack-valid <RF-rack-valid keyspace>` if each rack in the rack list contains at least one node (excluding :doc:`zero-token nodes </architecture/zero-token-nodes>`).
+
+.. _conversion-to-rack-list-rf:
+
+Conversion to rack-list replication factor
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To migrate a keyspace from a numeric replication factor to a rack-list replication factor, provide the rack-list replication factor explicitly in ALTER KEYSPACE statement. The number of racks in the list must be equal to the numeric replication factor. The replication factor can be converted in any number of DCs at once. In a statement that converts replication factor, no replication factor updates (increase or decrease) are allowed in any DC.
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 3, 'dc2' : 1} AND tablets = { 'enabled': true };
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2', 'RAC3'], 'dc2' : ['RAC4']} AND tablets = { 'enabled': true };
 
 .. _drop-keyspace-statement:
 
