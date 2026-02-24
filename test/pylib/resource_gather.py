@@ -93,26 +93,27 @@ class ResourceGather(ABC):
             env.update(os.environ)
         else:
             env = os.environ.copy()
-        p = subprocess.Popen(
-            args=args,
-            bufsize=1,
-            stdout=output_file.open(mode="w", encoding="utf-8"),
-            stderr=subprocess.STDOUT,
-            preexec_fn=self.put_process_to_cgroup,
-            close_fds=True,
-            cwd=cwd,
-            env=env,
-            text=True,
-        )
-        try:
-            p.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            logger.critical(f"Process {args} timed out")
-            p.kill()
-            p.communicate()
-        except KeyboardInterrupt:
-            p.kill()
-            raise
+        with output_file.open(mode="w", encoding="utf-8") as output_handle:
+            p = subprocess.Popen(
+                args=args,
+                bufsize=1,
+                stdout=output_handle,
+                stderr=subprocess.STDOUT,
+                preexec_fn=self.put_process_to_cgroup,
+                close_fds=True,
+                cwd=cwd,
+                env=env,
+                text=True,
+            )
+            try:
+                p.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                logger.critical(f"Process {args} timed out")
+                p.kill()
+                p.communicate()
+            except KeyboardInterrupt:
+                p.kill()
+                raise
         return p
 
     def make_cgroup(self) -> None:
