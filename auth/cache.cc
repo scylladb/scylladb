@@ -47,7 +47,7 @@ void cache::set_permission_loader(permission_loader_func loader) {
     _permission_loader = std::move(loader);
 }
 
-lw_shared_ptr<const cache::role_record> cache::get(const role_name_t& role) const noexcept {
+lw_shared_ptr<const cache::role_record> cache::get(std::string_view role) const noexcept {
     auto it = _roles.find(role);
     if (it == _roles.end()) {
         return {};

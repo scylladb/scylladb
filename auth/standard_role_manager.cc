@@ -90,13 +90,12 @@ future<std::optional<standard_role_manager::record>> standard_role_manager::find
     if (legacy_mode(_qp)) {
         return legacy_find_record(role_name);
     }
-    auto name = sstring(role_name);
-    auto role = _cache.get(name);
+    auto role = _cache.get(role_name);
     if (!role) {
         return make_ready_future<std::optional<record>>(std::nullopt);
     }
     return make_ready_future<std::optional<record>>(std::make_optional(record{
-        .name = std::move(name),
+        .name = sstring(role_name),
         .is_superuser = role->is_superuser,
         .can_login = role->can_login,
         .member_of = role->member_of
