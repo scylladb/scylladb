@@ -20,7 +20,7 @@ from functools import cache
 import random
 import string
 
-from typing import Optional, TypeVar, Any, cast
+from typing import List, Optional, TypeVar, Any, cast
 
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
@@ -380,6 +380,26 @@ async def gather_safely(*awaitables: Awaitable):
     for result in results:
         if isinstance(result, BaseException):
             raise result from None
+    return results
+
+
+async def gather_safely_and_ignore_specific_exceptions(awaitables: List[Awaitable], ignore_exceptions: List[str] | str):
+    """
+    Same as gather_safely but this can ignore specific exceptions happening during the gathering 
+    This will help in specific situations where some exceptions are expected
+    also i will make the test code look cleaner (let the infra do the heavy lifting). 
+    """
+    if isinstance(ignore_exceptions, str): 
+        ignore_exceptions = [ignore_exceptions]
+    elif not isinstance(ignore_exceptions, list): 
+        raise TypeError(f"ignore_exceptions should be a string or a list of strings but got {type(ignore_exceptions)}")
+    elif any(not isinstance(s, str) for s in ignore_exceptions):
+        raise TypeError("ignore_exceptions should be a list of strings but got list of different types")         
+    results = await asyncio.gather(*awaitables, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            if not any(s in str(result).lower() for s in ignore_exceptions):
+                raise result from None
     return results
 
 
