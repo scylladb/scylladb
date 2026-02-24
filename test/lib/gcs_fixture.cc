@@ -44,150 +44,22 @@ static future<std::optional<google_credentials>> credentials(const std::string& 
 }
 
 static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const tmpdir& tmp) {
-    std::vector<std::string> params({
-        "", "-filesystem-root", (tmp.path() / "objects").string()
-    });
-
-    size_t port_index = 0;
-
-    auto exec = tp::find_file_in_path("fake-gcs-server");
-    if (exec.empty()) {
-        exec = tp::find_file_in_path("docker");
-        if (exec.empty()) {
-            exec = tp::find_file_in_path("podman");
-        }
-        if (exec.empty()) {
-            throw std::runtime_error("Could not find fake-gcs-server, docker or podman.");
-        }
-
-        // publish port ephemeral, allows parallel instances
-        params = {
-            "",
-            "run", "--rm", "-p", "--", // set below
-            "docker.io/fsouza/fake-gcs-server:1.52.3"
-        };
-        port_index = 4;
-    }
-
-    params[0] = exec.string();
-    params.emplace_back("-scheme");
-    params.emplace_back("http");
-    params.emplace_back("-log-level");
-    params.emplace_back("debug");
-
-    auto len = params.size();
-
-    struct in_use{};
-
-    constexpr auto max_retries = 8;
-
-    for (int retries = 0;; ++retries) {
-        // podman in podman is hell. we run our "dbuild" with host network mode
-        // so _cannot_ rely on ephermal ports or anything nice, atomic to 
-        // pick a port. And fake-gcs-server does not support port=0 to pick one.
-        // *sigh*. Fall back to create a socket, get the port, close it and hope
-        // noone manages to steal the port again before we start our test server.
-        // This is not reliable. At all. But works most of the time (right...)
-        in_port_t port;
-        {
-            auto tmp_socket = seastar::listen({});
-            port = tmp_socket.local_address().port();
-        }
-
-        auto port_string = std::to_string(port);
-
-        params.resize(len);
-        if (port_index != 0) {
-            params[port_index] = port_string + ":" + port_string;
-        }
-        params.emplace_back("--port");
-        params.emplace_back(port_string);
-
-        BOOST_TEST_MESSAGE(fmt::format("Will run {}", params));
-
-        promise<> ready_promise;
-        auto ready_fut = ready_promise.get_future();
-
-        auto ps = co_await tp::process_fixture::create(exec
-            , params
-            , {}
-            , tp::process_fixture::create_copy_handler(std::cout)
-            // Must look at stderr log for state, because if we are using podman (and docker?)
-            // the server port might in fact be connectible even before the actual 
-            // fake-gcs-server is up (in container), due to the port publisher.
-            // Could do actual HTTP connection etc, but seems tricky.
-            , [done = false, ready_promise = std::move(ready_promise), h = tp::process_fixture::create_copy_handler(std::cerr)](std::string_view line) mutable -> future<consumption_result<char>> {
-                if (!done && line.find("server started at") != std::string::npos) {
-                    BOOST_TEST_MESSAGE(fmt::format("Got start message: {}", line));
-                    done = true;
-                    ready_promise.set_value();
-                }
-                if (!done && line.find("address already in use") != std::string::npos) {
-                    ready_promise.set_exception(in_use{});
-                }
-                // podman
-                if (!done && line.find("Address already in use") != std::string::npos) {
-                    ready_promise.set_exception(in_use{});
-                }
-                // docker
-                if (!done && line.find("port is already allocated") != std::string::npos) {
-                    ready_promise.set_exception(in_use{});
-                }
-                return h(line);
+    return tp::start_docker_service("local-kms"
+        , "docker.io/fsouza/fake-gcs-server:1.52.3"
+        , {}
+        , [](std::string_view line) {
+            if (line.find("server started at") != std::string::npos) {
+                return tp::service_parse_state::success;
             }
-        );
-
-        std::exception_ptr p;
-        bool retry = false;
-
-        try {
-            BOOST_TEST_MESSAGE("Waiting for fake-gcs-server process to laúnch...");
-            // arbitrary timeout of 120s for the server to make some output. Very generous.
-            // but since we (maybe) run docker, and might need to pull image, this can take
-            // some time if we're unlucky.
-            co_await with_timeout(std::chrono::steady_clock::now() + 120s, std::move(ready_fut));
-        } catch (in_use&) {
-            retry = true;
-            p = std::current_exception();
-        } catch (...) {
-            p = std::current_exception();
-        }
-
-        auto backoff = 0ms;
-
-        while (!p) {
-            if (backoff > 0ms) {
-                co_await seastar::sleep(backoff);
+            if (line.find("address already in use") != std::string::npos) {
+                return tp::service_parse_state::failed;
             }
-            try {
-                BOOST_TEST_MESSAGE("Attempting to connect to fake-gcs-fixture");
-                // TODO: seastar does not have a connect with timeout. That would be helpful here. But alas...
-                co_await with_timeout(std::chrono::steady_clock::now() + 20s, seastar::connect(socket_address(net::inet_address("127.0.0.1"), port)));
-                BOOST_TEST_MESSAGE("fake-gcs-server up and available"); // debug print. Why not.
-            } catch (std::system_error&) {
-                if (retries < max_retries) {
-                    backoff = 100ms;
-                    continue;
-                }
-                p = std::current_exception();
-            } catch (...) {
-                p = std::current_exception();
-            }
-            break;
+            return tp::service_parse_state::cont;
         }
-
-        if (p != nullptr) {
-            BOOST_TEST_MESSAGE(fmt::format("Got exception starting fake-gcs-server: {}", p));
-            ps.terminate();
-            co_await ps.wait();
-            if (!retry || retries >= max_retries) {
-                std::rethrow_exception(p);
-            }
-            continue;
-        }
-
-        co_return std::make_tuple(std::move(ps), port);
-    }
+        , {} 
+        , { "-scheme", "http", "-log-level", "debug", "--port", "4443", "-public-host", "127.0.0.1" } // image args
+        , 4443
+    );
 }
 
 class gcs_fixture::impl {
