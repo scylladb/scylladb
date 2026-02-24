@@ -28,150 +28,22 @@ using namespace std::chrono_literals;
 using namespace std::string_view_literals;
 
 static future<std::tuple<tp::process_fixture, int>> start_fake_kms_server(const tmpdir& tmp, const fs::path& seed) {
-    std::vector<std::string> params(1);
-
-    size_t port_index = 0;
-
-    auto exec = tp::find_file_in_path("local-kms");
-    if (exec.empty()) {
-        exec = tp::find_file_in_path("docker");
-        if (exec.empty()) {
-            exec = tp::find_file_in_path("podman");
-        }
-        if (exec.empty()) {
-            throw std::runtime_error("Could not find local-kms, docker or podman.");
-        }
-
-        // publish port ephemeral, allows parallel instances
-        params = {
-            "",
-            "run", "--rm", 
-            "-v", seed.string() + ":/init/seed.yaml",
-            "-p", "--", // set below
-            "-e", "--", // set below
-            "docker.io/nsmithuk/local-kms:3"
-        };
-        port_index = 6;
-    }
-
-    params[0] = exec.string();
-
-    struct in_use{};
-    constexpr auto max_retries = 8;
-
-    for (int retries = 0;; ++retries) {
-        // podman in podman is hell. we run our "dbuild" with host network mode
-        // so _cannot_ rely on ephermal ports or anything nice, atomic to 
-        // pick a port. And local-kms does not support port=0 to pick one.
-        // *sigh*. Fall back to create a socket, get the port, close it and hope
-        // noone manages to steal the port again before we start our test server.
-        // This is not reliable. At all. But works most of the time (right...)
-        in_port_t port;
-        {
-            auto tmp_socket = seastar::listen({});
-            port = tmp_socket.local_address().port();
-            tmp_socket.abort_accept();
-        }
-
-        auto port_string = std::to_string(port);
-
-        if (port_index != 0) {
-            params[port_index] = port_string + ":" + port_string;
-            params[port_index + 2] = "PORT=" + port_string;
-        }
-
-        BOOST_TEST_MESSAGE(fmt::format("Will run {}", params));
-
-        std::vector<std::string> env;
-
-        if (port_index == 0) { // running actual exec
-            env.emplace_back("PORT=" + port_string);
-            env.emplace_back("KMS_SEED_PATH=" + seed.string());
-        }
-
-        promise<> ready_promise;
-        auto ready_fut = ready_promise.get_future();
-
-        auto ps = co_await tp::process_fixture::create(exec
-            , params
-            , env
-            , tp::process_fixture::create_copy_handler(std::cout)
-            // Must look at stderr log for state, because if we are using podman (and docker?)
-            // the port might in fact be connectible even before the actual 
-            // mock server is up (in container), due to the port publisher.
-            // Could do actual HTTP connection etc, but seems tricky.
-            , [done = false, ready_promise = std::move(ready_promise), h = tp::process_fixture::create_copy_handler(std::cerr)](std::string_view line) mutable -> future<consumption_result<char>> {
-                if (!done && line.find("Local KMS started on") != std::string::npos) {
-                    BOOST_TEST_MESSAGE(fmt::format("Got start message: {}", line));
-                    done = true;
-                    ready_promise.set_value();
-                }
-                if (!done && line.find("address already in use") != std::string::npos) {
-                    ready_promise.set_exception(in_use{});
-                }
-                // podman
-                if (!done && line.find("Address already in use") != std::string::npos) {
-                    ready_promise.set_exception(in_use{});
-                }
-                // docker
-                if (!done && line.find("port is already allocated") != std::string::npos) {
-                    ready_promise.set_exception(in_use{});
-                }
-                return h(line);
+    return tp::start_docker_service("local-kms"
+        , "docker.io/nsmithuk/local-kms:3"
+        , {}
+        , [](std::string_view line) {
+            if (line.find("Local KMS started on") != std::string::npos) {
+                return tp::service_parse_state::success;
             }
-        );
-
-        std::exception_ptr p;
-        bool retry = false;
-
-        try {
-            BOOST_TEST_MESSAGE("Waiting for process to laúnch...");
-            // arbitrary timeout of 120s for the server to make some output. Very generous.
-            // but since we (maybe) run docker, and might need to pull image, this can take
-            // some time if we're unlucky.
-            co_await with_timeout(std::chrono::steady_clock::now() + 120s, std::move(ready_fut));
-        } catch (in_use&) {
-            retry = true;
-            p = std::current_exception();
-        } catch (...) {
-            p = std::current_exception();
-        }
-
-        auto backoff = 0ms;
-        while (!p) {
-            if (backoff > 0ms) {
-                co_await seastar::sleep(backoff);
+            if (line.find("address already in use") != std::string::npos) {
+                return tp::service_parse_state::failed;
             }
-            try {
-                BOOST_TEST_MESSAGE("Attempting to connect to local-kms");
-                // TODO: seastar does not have a connect with timeout. That would be helpful here. But alas...
-                co_await with_timeout(std::chrono::steady_clock::now() + 20s, seastar::connect(socket_address(net::inet_address("127.0.0.1"), port)));
-                BOOST_TEST_MESSAGE("local-kms up and available"); // debug print. Why not.
-            } catch (std::system_error&) {
-                retry = true;
-                if (retries < max_retries) {
-                    backoff = 100ms;
-                    continue;
-                }
-                p = std::current_exception();
-            } catch (...) {
-                p = std::current_exception();
-            }
-            break;
+            return tp::service_parse_state::cont;
         }
-
-        if (p != nullptr) {
-            BOOST_TEST_MESSAGE(fmt::format("Got exception starting local-kms server: {}", p));
-            ps.terminate();
-            co_await ps.wait();
-            if (!retry || retries >= max_retries) {
-                std::rethrow_exception(p);
-            }
-            continue;
-        }
-
-        co_return std::make_tuple(std::move(ps), port);
-    }
+        , { "-v", seed.string() + ":/init/seed.yaml", } // docker args. need to set seed
+        , {}
+        , 8080
+    );
 }
 
 class aws_kms_fixture::impl {
