@@ -293,3 +293,40 @@ async def test_recovery_with_segment_reuse(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
             assert len(rows) == 1, f"Key {pk} not found after recovery"
             assert rows[0].v == expected_v, f"Key {pk} value mismatch after recovery"
+
+@pytest.mark.asyncio
+async def test_compaction(manager: ManagerClient):
+    """
+    Test log compaction by creating dead data and verifying space reclamation.
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    cfg = {'enable_kv_storage': True, 'experimental_features': ['kv-storage']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH kv_storage = true")
+
+        # write few segments with unique keys, then few segments with overwrites.
+        # write large values so each write fills a single segment.
+        value_size = 120 * 1024
+        value = 'x' * value_size
+
+        # write few unique keys
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
+
+        # few writes to the same key to create dead data except the last one
+        for i in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, '{value}')")
+
+        # the barrier will flush all segments and put them into a single compaction group since
+        # there is a single tablet.
+        await manager.api.logstor_barrier(servers[0].ip_addr)
+
+        # trigger compaction. should take the 4 segments with dead data and compact them
+        await manager.api.logstor_compaction(servers[0].ip_addr)
+
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        segments_compacted = metrics.get("scylla_logstor_sm_segments_compacted") or 0
+        assert segments_compacted == 4, f"Expected 4 segments to be compacted, but got {segments_compacted}"
