@@ -278,6 +278,9 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
         }
     }
     
+    if (update_auth_cache_roles.size()) {
+        co_await _ss.auth_cache().load_roles(std::move(update_auth_cache_roles));
+    }
     if (update_service_levels_cache || update_service_levels_effective_cache) { // this also updates SL effective cache
         co_await _ss.update_service_levels_cache(qos::update_both_cache_levels(update_service_levels_cache), qos::query_context::group0);
     }
@@ -286,9 +289,6 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     }
     if (update_cdc_streams.size()) {
         co_await _ss.load_cdc_streams(std::move(update_cdc_streams));
-    }
-    if (update_auth_cache_roles.size()) {
-        co_await _ss.auth_cache().load_roles(std::move(update_auth_cache_roles));
     }
 }
 
