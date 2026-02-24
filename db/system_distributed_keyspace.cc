@@ -169,6 +169,26 @@ schema_ptr service_levels() {
     return schema;
 }
 
+schema_ptr snapshot_cql_tables() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_CQL_TABLES);
+        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_CQL_TABLES, std::make_optional(id))
+                // Name of the snapshot
+                .with_column("snapshot_name", utf8_type, column_kind::partition_key)
+                // Keyspace where the table belongs
+                .with_column("keyspace", utf8_type, column_kind::clustering_key)
+                // Table name
+                .with_column("table", utf8_type, column_kind::clustering_key)
+                // Whether this table is a materialized view
+                .with_column("is_view", boolean_type)
+                // CQL schema string of the table
+                .with_column("schema", utf8_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 // This is the set of tables which this node ensures to exist in the cluster.
 // It does that by announcing the creation of these schemas on initialization
 // of the `system_distributed_keyspace` service (see `start()`), unless it first
@@ -186,6 +206,7 @@ static std::vector<schema_ptr> ensured_tables() {
         cdc_desc(),
         cdc_timestamps(),
         service_levels(),
+        snapshot_cql_tables(),
     };
 }
 
@@ -203,7 +224,7 @@ static void check_exists(std::string_view ks_name, std::string_view cf_name, con
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
-    return {view_build_status(), cdc_desc(), cdc_timestamps(), service_levels()};
+    return {view_build_status(), cdc_desc(), cdc_timestamps(), service_levels(), snapshot_cql_tables()};
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_everywhere_tables() {
@@ -836,6 +857,36 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
 future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {
     static sstring prepared_query = format("DELETE FROM {}.{} WHERE service_level= ?;", NAME, SERVICE_LEVELS);
     return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no).discard_result();
+}
+
+future<> system_distributed_keyspace::insert_snapshot_cql_table(sstring snapshot_name, sstring ks, sstring table, bool is_view, sstring schema, db::consistency_level cl) {
+    static constexpr uint64_t ttl_seconds = std::chrono::seconds(std::chrono::days(3)).count();
+    sstring query = format("INSERT INTO {}.{} (snapshot_name, \"keyspace\", \"table\", is_view, \"schema\") VALUES (?, ?, ?, ?, ?) USING TTL {}", NAME, SNAPSHOT_CQL_TABLES, ttl_seconds);
+    return _qp.execute_internal(
+            query,
+            cl,
+            internal_distributed_query_state(),
+            { std::move(snapshot_name), std::move(ks), std::move(table), is_view, std::move(schema) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<sstring>
+system_distributed_keyspace::get_snapshot_cql_table_schema(sstring snapshot_name, sstring ks, sstring table, db::consistency_level cl) const {
+    sstring query = format("SELECT \"schema\" FROM {}.{}"
+            " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ?", NAME, SNAPSHOT_CQL_TABLES);
+
+    auto cql = co_await _qp.execute_internal(
+            query + ";",
+            cl,
+            internal_distributed_query_state(),
+            { std::move(snapshot_name), std::move(ks), std::move(table) },
+            cql3::query_processor::cache_internal::yes);
+
+    SCYLLA_ASSERT(cql);
+    if (cql->empty()) {
+        throw std::runtime_error(format("Snapshot {} for {}.{} doesn't exist", snapshot_name, ks, table));
+    }
+    co_return cql->one().get_as<sstring>("schema");
 }
 
 }

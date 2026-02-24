@@ -167,6 +167,11 @@ All tables in a keyspace are uploaded, the destination object names will look li
 or 
 `gs://bucket/some/prefix/to/store/data/.../sstable`
 
+# System tables
+There are a few system tables that object storage related code needs to touch in order to operate.
+* [system_distributed.snapshot_cql_tables](docs/dev/snapshot_cql_tables.md) - Used during restore to get the CQL schema of tables that need to be restored.
+* [system.sstables](docs/dev/system_keyspace.md#systemsstables) - Used to keep track of SSTables on object storage when a keyspace is created with S3 storage_options.
+
 # Manipulating S3 data
 
 This section intends to give an overview of where, when and how we store data in S3 and provide a quick set of commands  
