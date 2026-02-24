@@ -124,6 +124,7 @@ private:
 
     future<role_to_directly_granted_map> query_all_directly_granted_legacy(::service::query_state&);
     future<role_set> query_all_legacy(::service::query_state&);
+    future<std::optional<sstring>> get_attribute_legacy(std::string_view role_name, std::string_view attribute_name, ::service::query_state&);
 };
 
 } // namespace auth

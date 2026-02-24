@@ -756,7 +756,7 @@ future<bool> standard_role_manager::can_login(std::string_view role_name) {
     });
 }
 
-future<std::optional<sstring>> standard_role_manager::get_attribute(std::string_view role_name, std::string_view attribute_name, ::service::query_state& qs) {
+future<std::optional<sstring>> standard_role_manager::get_attribute_legacy(std::string_view role_name, std::string_view attribute_name, ::service::query_state& qs) {
     const sstring query = seastar::format("SELECT name, value FROM {}.{} WHERE role = ? AND name = ?",
             get_auth_ks_name(_qp),
             ROLE_ATTRIBUTES_CF);
@@ -768,11 +768,26 @@ future<std::optional<sstring>> standard_role_manager::get_attribute(std::string_
     co_return std::optional<sstring>{};
 }
 
+future<std::optional<sstring>> standard_role_manager::get_attribute(std::string_view role_name, std::string_view attribute_name, ::service::query_state& qs) {
+    if (legacy_mode(_qp)) {
+        co_return co_await get_attribute_legacy(role_name, attribute_name, qs);
+    }
+    auto role = _cache.get(role_name);
+    if (!role) {
+        co_return std::nullopt;
+    }
+    auto it = role->attributes.find(attribute_name);
+    if (it != role->attributes.end()) {
+        co_return it->second;
+    }
+    co_return std::nullopt;
+}
+
 future<role_manager::attribute_vals> standard_role_manager::query_attribute_for_all (std::string_view attribute_name, ::service::query_state& qs) {
     return query_all_legacy(qs).then([this, attribute_name, &qs] (role_set roles) {
         return do_with(attribute_vals{}, [this, attribute_name, roles = std::move(roles), &qs] (attribute_vals &role_to_att_val) {
             return parallel_for_each(roles.begin(), roles.end(), [this, &role_to_att_val, attribute_name, &qs] (sstring role) {
-                return get_attribute(role, attribute_name, qs).then([&role_to_att_val, role] (std::optional<sstring> att_val) {
+                return get_attribute_legacy(role, attribute_name, qs).then([&role_to_att_val, role] (std::optional<sstring> att_val) {
                     if (att_val) {
                         role_to_att_val.emplace(std::move(role), std::move(*att_val));
                     }
