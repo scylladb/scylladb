@@ -121,6 +121,8 @@ private:
             std::string_view grantee_name,
             bool recurse,
             role_set& roles);
+
+    future<role_to_directly_granted_map> query_all_directly_granted_legacy(::service::query_state&);
 };
 
 } // namespace auth

@@ -659,7 +659,7 @@ future<role_set> standard_role_manager::query_granted(std::string_view grantee_n
     });
 }
 
-future<role_to_directly_granted_map> standard_role_manager::query_all_directly_granted(::service::query_state& qs) {
+future<role_to_directly_granted_map> standard_role_manager::query_all_directly_granted_legacy(::service::query_state& qs) {
     const sstring query = seastar::format("SELECT * FROM {}.{}",
             get_auth_ks_name(_qp),
             ROLE_MEMBERS_CF);
@@ -679,6 +679,19 @@ future<role_to_directly_granted_map> standard_role_manager::query_all_directly_g
                 return std::make_pair(row.get_as<sstring>("member"), row.get_as<sstring>("role")); }
     );
 
+    co_return roles_map;
+}
+
+future<role_to_directly_granted_map> standard_role_manager::query_all_directly_granted(::service::query_state& qs) {
+    if (legacy_mode(_qp)) {
+        co_return co_await query_all_directly_granted_legacy(qs);
+    }
+    role_to_directly_granted_map roles_map;
+    _cache.for_each_role([&roles_map] (const cache::role_name_t& name, const cache::role_record& record) {
+        for (const auto& granted_role : record.member_of) {
+            roles_map.emplace(name, granted_role);
+        }
+    });
     co_return roles_map;
 }
 
