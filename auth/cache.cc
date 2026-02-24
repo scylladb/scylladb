@@ -110,15 +110,23 @@ future<> cache::prune(const resource& r) {
 future<> cache::reload_all_permissions() noexcept {
     SCYLLA_ASSERT(_permission_loader);
     auto units = co_await get_units(_loading_sem, 1, _as);
+    auto copy_keys = [] (const std::unordered_map<resource, permission_set>& m) {
+        std::vector<resource> keys;
+        keys.reserve(m.size());
+        for (const auto& [res, _] : m) {
+            keys.push_back(res);
+        }
+        return keys;
+    };
     const role_or_anonymous anon;
-    for (auto& [res, perms] : _anonymous_permissions) {
-        perms = co_await _permission_loader(anon, res);
+    for (const auto& res : copy_keys(_anonymous_permissions)) {
+        _anonymous_permissions[res] = co_await _permission_loader(anon, res);
     }
     for (auto& [role, entry] : _roles) {
         auto& perms_cache = entry->cached_permissions;
         auto r = role_or_anonymous(role);
-        for (auto& [res, perms] : perms_cache) {
-            perms = co_await _permission_loader(r, res);
+        for (const auto& res : copy_keys(perms_cache)) {
+            perms_cache[res] = co_await _permission_loader(r, res);
         }
     }
     logger.debug("Reloaded auth cache with {} entries", _roles.size());
@@ -228,6 +236,7 @@ future<> cache::load_all() {
         co_await distribute_role(name, role);
     }
     co_await container().invoke_on_others([this](cache& c) -> future<> {
+        auto units = co_await get_units(c._loading_sem, 1, c._as);
         c._current_version = _current_version;
         co_await c.prune_all();
     });
@@ -287,10 +296,11 @@ future<> cache::load_roles(std::unordered_set<role_name_t> roles) {
 
 future<> cache::distribute_role(const role_name_t& name, lw_shared_ptr<role_record> role) {
     auto role_ptr = role.get();
-    co_await container().invoke_on_others([&name, role_ptr](cache& c) {
+    co_await container().invoke_on_others([&name, role_ptr](cache& c) -> future<> {
+        auto units = co_await get_units(c._loading_sem, 1, c._as);
         if (!role_ptr) {
             c.remove_role(name);
-            return;
+            co_return;
         }
         auto role_copy = make_lw_shared<role_record>(*role_ptr);
         c.add_role(name, std::move(role_copy));
