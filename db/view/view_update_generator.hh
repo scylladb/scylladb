@@ -121,7 +121,8 @@ public:
             mutation_reader_opt existings,
             tracing::trace_state_ptr tr_state,
             gc_clock::time_point now,
-            db::timeout_clock::time_point timeout);
+            db::timeout_clock::time_point timeout,
+            wait_for_all_updates synchronous);
 
 private:
     bool should_throttle() const;
