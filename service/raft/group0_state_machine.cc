@@ -247,8 +247,6 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     for (const auto& m : modules.entries) {
         if (m.table == db::system_keyspace::service_levels_v2()->id()) {
             update_service_levels_cache = true;
-        } else if (m.table == db::system_keyspace::role_members()->id() || m.table == db::system_keyspace::role_attributes()->id()) {
-            update_service_levels_effective_cache = true;
         } else if (m.table == db::system_keyspace::dicts()->id()) {
             auto pk_type = db::system_keyspace::dicts()->partition_key_type();
             auto name_value = pk_type->deserialize_value(m.pk.representation());
@@ -267,6 +265,11 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
             auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
             update_cdc_streams.insert(cdc_log_table_id);
         } else if (auth::cache::includes_table(m.table)) {
+            if (m.table == db::system_keyspace::role_members()->id() ||
+                    m.table == db::system_keyspace::role_attributes()->id()) {
+                update_service_levels_effective_cache = true;
+            }
+
             auto schema = _ss.get_database().find_schema(m.table);
             const auto elements = m.pk.explode(*schema);
             auto role = value_cast<sstring>(schema->partition_key_type()->
