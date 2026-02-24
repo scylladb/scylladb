@@ -70,6 +70,9 @@ public:
     /* This table is used by the backup and restore code to store per-sstable metadata.
      * The data the coordinator node puts in this table comes from the snapshot manifests. */
     static constexpr auto SNAPSHOT_SSTABLES = "snapshot_sstables";
+    /* This table is used by the backup and restore code to store per-table CQL schema metadata.
+     * The data the coordinator node puts in this table comes from the snapshot manifests. */
+    static constexpr auto SNAPSHOT_CQL_TABLES = "snapshot_cql_tables";
 
     static constexpr uint64_t SNAPSHOT_SSTABLES_TTL_SECONDS = std::chrono::seconds(std::chrono::days(3)).count();
 
@@ -121,6 +124,8 @@ public:
      * Returns a vector of `snapshot_sstable_entry` structs containing `sstable_id`, `first_token`, `last_token`,
      * `toc_name`, and `prefix`. Uses consistency level `LOCAL_QUORUM` by default. */
     future<utils::chunked_vector<snapshot_sstable_entry>> get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM, std::optional<dht::token> start_token = std::nullopt, std::optional<dht::token> end_token = std::nullopt) const;
+    future<> insert_snapshot_cql_table(sstring snapshot_name, sstring ks, sstring table, bool is_view, sstring schema, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<sstring> get_snapshot_cql_table_schema(sstring snapshot_name, sstring ks, sstring table, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM) const;
 
     future<> update_sstable_download_status(sstring snapshot_name,
                                             sstring ks,
