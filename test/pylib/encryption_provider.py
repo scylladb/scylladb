@@ -180,21 +180,17 @@ class KMSKeyProviderFactory(KeyProviderFactory):
         self.endpoint_url = None
         self.server = None
         self.region = None
-
-    def _docker_args(self, host, port):
-        # pylint: disable=unused-argument
-        return ["-e", f'PORT={port}']
     
     async def __aenter__(self):
         master_key = os.getenv('KMS_KEY_ALIAS')
         aws_region = os.getenv('KMS_AWS_REGION')
  
         if master_key is None:
-            self.server = DockerizedServer("docker.io/nsmithuk/local-kms:3", self.tmpdir, 
+            self.server = DockerizedServer("docker.io/nsmithuk/local-kms:3", self.tmpdir,
                                            logfilenamebase="local-kms",
-                                           docker_args=self._docker_args,
                                            success_string="Local KMS started on",
-                                           failure_string="address already in use"
+                                           failure_string="address already in use",
+                                           port=8080
                                            )
             await self.server.start()
             self.endpoint_url = f'http://{self.server.host}:{self.server.port}'
