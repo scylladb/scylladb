@@ -123,6 +123,7 @@ private:
             role_set& roles);
 
     future<role_to_directly_granted_map> query_all_directly_granted_legacy(::service::query_state&);
+    future<role_set> query_all_legacy(::service::query_state&);
 };
 
 } // namespace auth

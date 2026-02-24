@@ -695,7 +695,7 @@ future<role_to_directly_granted_map> standard_role_manager::query_all_directly_g
     co_return roles_map;
 }
 
-future<role_set> standard_role_manager::query_all(::service::query_state& qs) {
+future<role_set> standard_role_manager::query_all_legacy(::service::query_state& qs) {
     const sstring query = seastar::format("SELECT {} FROM {}.{}",
             meta::roles_table::role_col_name,
             get_auth_ks_name(_qp),
@@ -724,6 +724,18 @@ future<role_set> standard_role_manager::query_all(::service::query_state& qs) {
             [] (const cql3::untyped_result_set_row& row) {
                 return row.get_as<sstring>(role_col_name_string);}
     );
+    co_return roles;
+}
+
+future<role_set> standard_role_manager::query_all(::service::query_state& qs) {
+    if (legacy_mode(_qp)) {
+        co_return co_await query_all_legacy(qs);
+    }
+    role_set roles;
+    roles.reserve(_cache.roles_count());
+    _cache.for_each_role([&roles] (const cache::role_name_t& name, const cache::role_record&) {
+        roles.insert(name);
+    });
     co_return roles;
 }
 
@@ -758,7 +770,7 @@ future<std::optional<sstring>> standard_role_manager::get_attribute(std::string_
 }
 
 future<role_manager::attribute_vals> standard_role_manager::query_attribute_for_all (std::string_view attribute_name, ::service::query_state& qs) {
-    return query_all(qs).then([this, attribute_name, &qs] (role_set roles) {
+    return query_all_legacy(qs).then([this, attribute_name, &qs] (role_set roles) {
         return do_with(attribute_vals{}, [this, attribute_name, roles = std::move(roles), &qs] (attribute_vals &role_to_att_val) {
             return parallel_for_each(roles.begin(), roles.end(), [this, &role_to_att_val, attribute_name, &qs] (sstring role) {
                 return get_attribute(role, attribute_name, qs).then([&role_to_att_val, role] (std::optional<sstring> att_val) {
