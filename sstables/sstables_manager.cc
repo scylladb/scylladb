@@ -8,6 +8,8 @@
 
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <seastar/core/smp.hh>
+#include <algorithm>
 #include <unordered_map>
 #include "utils/log.hh"
 #include "sstables/sstables_manager.hh"
@@ -218,6 +220,24 @@ locator::host_id sstables_manager::get_local_host_id() const {
     return _resolve_host_id();
 }
 
+double sstables_manager::effective_summary_ratio() const noexcept {
+    if (_config.sstable_summary_ratio_is_set) {
+        return _config.sstable_summary_ratio;
+    }
+    // Disk capacity is total (all shards), but available_memory is per-shard.
+    // Divide by shard count to get the per-shard share of disk.
+    auto disk_capacity = _config.total_disk_capacity / smp::count;
+    if (!disk_capacity || !_config.available_memory) {
+        return 0.0005; // fall back to default
+    }
+    auto ratio = _config.sstable_summary_memory_fraction() *
+            (static_cast<double>(_config.available_memory) / static_cast<double>(disk_capacity));
+    auto ret = std::clamp(ratio, 0.0, 1.0);
+    smlogger.debug("Effective summary ratio is {} (sstable_summary_memory_fraction={}, disk_capacity={}, available_memory={})",
+            ret, _config.sstable_summary_memory_fraction(), disk_capacity, _config.available_memory);
+    return ret;
+}
+
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         const data_dictionary::storage_options& storage,
         generation_type generation,
@@ -241,7 +261,7 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     cfg.validation_level = _config.enable_sstable_key_validation
             ? mutation_fragment_stream_validation_level::clustering_key
             : mutation_fragment_stream_validation_level::token;
-    cfg.summary_byte_cost = summary_byte_cost(_config.sstable_summary_ratio);
+    cfg.summary_byte_cost = summary_byte_cost(effective_summary_ratio());
 
     cfg.origin = std::move(origin);
 

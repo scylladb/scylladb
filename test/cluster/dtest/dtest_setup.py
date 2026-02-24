@@ -497,6 +497,9 @@ class DTestSetup:
         values: dict[str, Any] = self.cluster_options | {
             "phi_convict_threshold": 5,
             "task_ttl_in_seconds": 0,
+            # Set sstable_summary_ratio explicitly so test outcomes don't
+            # depend on how much disk space the test machine actually has.
+            "sstable_summary_ratio": 0.0005,
             "read_request_timeout_in_ms": timeout,
             "range_request_timeout_in_ms": range_timeout,
             "write_request_timeout_in_ms": timeout,

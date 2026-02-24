@@ -1488,6 +1488,7 @@ struct database_config {
     seastar::scheduling_group commitlog_scheduling_group;
     seastar::scheduling_group schema_commitlog_scheduling_group;
     size_t available_memory;
+    uint64_t total_data_disk_capacity = 0;
 };
 
 struct string_pair_eq {

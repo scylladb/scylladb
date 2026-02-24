@@ -154,6 +154,10 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         'rf_rack_valid_keyspaces': True,
 
         'alternator_allow_system_table_write': True,
+
+        # Set sstable_summary_ratio explicitly so test outcomes don't
+        # depend on how much disk space the test machine actually has.
+        'sstable_summary_ratio': 0.0005,
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line

@@ -638,6 +638,12 @@ private:
             dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
 
+            // Set sstable_summary_ratio explicitly for tests so the outcome
+            // doesn't depend on how much disk space the machine has.
+            if (!cfg->sstable_summary_ratio.is_set()) {
+                cfg->sstable_summary_ratio.set(0.0005);
+            }
+
             auto get_tm_cfg = sharded_parameter([&] {
                 return tasks::task_manager::config {
                     .task_ttl = cfg->task_ttl_seconds,
