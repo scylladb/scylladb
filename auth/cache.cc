@@ -55,6 +55,16 @@ lw_shared_ptr<const cache::role_record> cache::get(const role_name_t& role) cons
     return it->second;
 }
 
+void cache::for_each_role(const std::function<void(const role_name_t&, const role_record&)>& func) const {
+    for (const auto& [name, record] : _roles) {
+        func(name, *record);
+    }
+}
+
+size_t cache::roles_count() const noexcept {
+    return _roles.size();
+}
+
 future<permission_set> cache::get_permissions(const role_or_anonymous& role, const resource& r) {
     std::unordered_map<resource, permission_set>* perms_cache;
     lw_shared_ptr<role_record> role_ptr;
