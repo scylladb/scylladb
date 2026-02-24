@@ -347,8 +347,8 @@ install -d -m755 "$retc"/scylla.d
 scylla_yaml_dir=$(mktemp -d)
 scylla_yaml=$scylla_yaml_dir/scylla.yaml
 grep -v api_ui_dir conf/scylla.yaml | grep -v api_doc_dir > $scylla_yaml
-echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> $scylla_yaml
-echo "api_doc_dir: /opt/scylladb/api/api-doc/" >> $scylla_yaml
+echo "api_ui_dir: $rprefix/swagger-ui/dist/" >> $scylla_yaml
+echo "api_doc_dir: $rprefix/api/api-doc/" >> $scylla_yaml
 installconfig 644 $scylla_yaml "$retc"/scylla
 rm -rf $scylla_yaml_dir
 
