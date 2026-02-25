@@ -2121,6 +2121,75 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_tombstone_gc_rf_one) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const std::string keyspace_name = get_name();
+        const std::string table_name = "tbl";
+
+        env.execute_cql(std::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int PRIMARY KEY)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}", keyspace_name, table_name)).get();
+
+        auto& db = env.local_db();
+        auto& tbl = db.find_column_family(keyspace_name, table_name);
+        const auto schema = tbl.schema();
+
+        auto& st = tbl.get_compaction_manager().get_shared_tombstone_gc_state();
+
+        BOOST_REQUIRE(st.is_table_rf_one(schema->id()));
+
+        auto tombstone_gc = tbl.get_tombstone_gc_state();
+
+        const auto pk = partition_key::from_single_value(*schema, serialized(1));
+        const auto dk = dht::decorate_key(*schema, pk);
+
+        const auto now = gc_clock::now();
+
+        // With RF=1, tombstone-gc should act as if configured in 'immediate' mode.
+        BOOST_REQUIRE_EQUAL(tombstone_gc.get_gc_before_for_key(schema, dk, now), now);
+
+        env.execute_cql(std::format("ALTER KEYSPACE {}"
+                    " WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 2}}",
+                    keyspace_name)).get();
+
+        BOOST_REQUIRE(!st.is_table_rf_one(schema->id()));
+
+        // After changing RF to > 1, tombstone-gc should revert to regular
+        // repair-mode behaviour. Since there was no repair yet, this should
+        // return min timepoint (no GC).
+        BOOST_REQUIRE_EQUAL(tombstone_gc.get_gc_before_for_key(schema, dk, now), gc_clock::time_point::min());
+
+        // Altering back to RF=1 should re-add the table to the rf=1 table list
+        env.execute_cql(std::format("ALTER KEYSPACE {}"
+                    " WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}}",
+                    keyspace_name)).get();
+        BOOST_REQUIRE(st.is_table_rf_one(schema->id()));
+
+        // Dropping the table should clean up (removing the table from the rf=1 list).
+        env.execute_cql(std::format("DROP TABLE {}.{}", keyspace_name, table_name)).get();
+        BOOST_REQUIRE(!st.is_table_rf_one(schema->id()));
+    });
+}
+
+SEASTAR_TEST_CASE(test_default_tombstone_gc_local_replication) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const std::string keyspace_name = get_name();
+        const std::string table_name = "tbl";
+
+        env.execute_cql(std::format("CREATE KEYSPACE {} WITH replication = {{'class': 'LocalStrategy'}}", keyspace_name)).get();
+        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int PRIMARY KEY)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}", keyspace_name, table_name)).get();
+
+        auto& db = env.local_db();
+        auto& tbl = db.find_column_family(keyspace_name, table_name);
+        const auto schema = tbl.schema();
+
+        BOOST_REQUIRE_EQUAL(schema->tombstone_gc_options().mode(), tombstone_gc_mode::timeout);
+    });
+}
+
 SEASTAR_TEST_CASE(test_flush_empty_table_waits_on_outstanding_flush) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");

@@ -580,6 +580,11 @@ class ScyllaRESTAPIClient:
             params['cf'] = table
         return await self.client.get_json('/storage_service/tokens_endpoint', host=node_ip, params=params)
 
+    async def log(self, node_ip: str, message: str, level: str = "info") -> None:
+        """Log a message at the given level"""
+        assert level in ["trace", "debug", "info", "warn", "error"]
+        await self.client.post(f"/system/log", host=node_ip, params={"message": message, "level": level})
+
     def close(self):
         """Close the client and release resources (connectors, file descriptors)"""
         self.client.close()

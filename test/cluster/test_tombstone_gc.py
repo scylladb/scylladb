@@ -11,6 +11,8 @@ import logging
 import time
 import pytest
 
+from cassandra.query import SimpleStatement, ConsistencyLevel
+
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
@@ -293,3 +295,101 @@ async def test_group0_state_id_failure(manager: ManagerClient):
     matches = await log.grep(r"Fail to apply application_state.*endpoint_state_map does not contain endpoint .* application_states = {GROUP0_STATE_ID")
 
     assert not matches, "The 'endpoint_state_map does not contain endpoint' warning appeared in the log"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("tablets", (True, False))
+async def test_tombstone_gc_rf_one(manager: ManagerClient, tablets: bool):
+    """ Check Tombstone GC with RF=1
+
+    In particular, check that:
+    * All tables default to tombstone_gc mode 'repair', even with RF=1
+    * When RF=1, tombtone-gc mode 'repair' works like tombstone-gc mode 'immediate'
+    * When RF>1, tombstone-gc mode 'repair' works like normal repair-based tombstone gc
+    * The above also holds during the RF increase process
+    """
+    servers = await manager.servers_add(2, auto_rack_dc="dc1", config={'enable_cache': False})
+
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    if tablets:
+        tablets_enabled = "true"
+        rf1_replication = "['rack1']"
+        rf2_replication = "['rack1', 'rack2']"
+    else:
+        tablets_enabled = "false"
+        rf1_replication = "1"
+        rf2_replication = "2"
+
+    async def get_partition_tombstone_count(table: str, p: int):
+        count = 0
+        for host in hosts:
+            mf_query = f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE p = {p} AND partition_region = 0 ALLOW FILTERING"
+            res = list(await cql.run_async(mf_query.format(keyspace), host=host))
+            logger.info(f"Host {host} returned {res}")
+            count += len(res)
+        return count
+
+    async def check_tombstone_gc(table: str, p: int, rf: int, rf_inc_in_progress: bool):
+        await manager.api.log(servers[0].ip_addr, f"check_tombstone_gc({table}, {p}, {rf}, {rf_inc_in_progress})")
+
+        if rf_inc_in_progress:
+            assert rf == 1
+            consistency_level = ConsistencyLevel.ONE
+        else:
+            consistency_level = ConsistencyLevel.ALL
+
+        def check_tombstone_count(tombstone_count: int):
+            if rf_inc_in_progress:
+                assert tombstone_count >= rf and tombstone_count <= rf + 1
+            else:
+                assert tombstone_count == rf
+
+        await cql.run_async(SimpleStatement(f"DELETE FROM {table} WHERE p = {p}", consistency_level=consistency_level))
+
+        check_tombstone_count(await get_partition_tombstone_count(table, p))
+
+        await asyncio.sleep(1) # wait a bit to ensure the tombstone timestamp is in the past
+
+        await asyncio.gather(*[manager.api.flush_all_keyspaces(srv.ip_addr) for srv in servers])
+        await asyncio.gather(*[manager.api.keyspace_compaction(srv.ip_addr, keyspace) for srv in servers])
+
+        tombstone_count = await get_partition_tombstone_count(table, p)
+        if rf > 1 or rf_inc_in_progress:
+            check_tombstone_count(tombstone_count)
+        else:
+            assert tombstone_count == 0
+
+    async with new_test_keyspace(manager, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': {rf1_replication}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
+        async with new_test_table(manager, keyspace, "p int primary key") as table:
+            # default should be repair, even with RF=1
+            check_tombstone_gc_mode(cql, table, "repair")
+
+            if tablets:
+                # Insert some data, to have something to migrate to new replicas later
+                await asyncio.gather(*[cql.run_async(f"INSERT INTO {table} (p) VALUES ({x})") for x in range(100, 120)])
+                await asyncio.gather(*[manager.api.flush_keyspace(srv.ip_addr, keyspace) for srv in servers])
+
+            await check_tombstone_gc(table, 1, 1, False)
+
+            if tablets:
+                log0 = await manager.server_open_log(servers[0].server_id)
+                m = await log0.mark()
+
+                await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, f"block_tablet_streaming", False, parameters={'keyspace': keyspace, 'table': table}) for s in servers])
+
+            rf_change_fut = cql.run_async(f"ALTER KEYSPACE {keyspace} WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': {rf2_replication}}}")
+
+            if tablets:
+                await log0.wait_for("Initiating tablet streaming", from_mark=m, timeout=60)
+
+                # While RF++ is in progress, tombstone GC should already switch
+                # to proper repair mode, even though table still has RF=1
+                await check_tombstone_gc(table, 2, 1, True)
+
+                await asyncio.gather(*[manager.api.message_injection(s.ip_addr, f"block_tablet_streaming") for s in servers])
+
+            await rf_change_fut
+
+            await check_tombstone_gc(table, 3, 2, False)
