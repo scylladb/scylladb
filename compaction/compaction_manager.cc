@@ -1512,7 +1512,9 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction_g
             | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier))
             | std::ranges::to<std::unordered_set>());
     };
-    const auto threshold = size_t(std::max(schema->max_compaction_threshold(), 32));
+    const auto threshold = utils::get_local_injector().inject_parameter<size_t>("set_sstable_count_reduction_threshold")
+        .value_or(size_t(std::max(schema->max_compaction_threshold(), 32)));
+
     auto count = co_await num_runs_for_compaction();
     if (count <= threshold) {
         cmlog.trace("No need to wait for sstable count reduction in {}: {} <= {}",
@@ -1527,9 +1529,7 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction_g
     auto& cstate = get_compaction_state(&t);
     try {
         while (can_perform_regular_compaction(t) && co_await num_runs_for_compaction() > threshold) {
-            co_await cstate.compaction_done.wait([this, &t] {
-                return !can_perform_regular_compaction(t);
-            });
+            co_await cstate.compaction_done.wait();
         }
     } catch (const broken_condition_variable&) {
         co_return;
