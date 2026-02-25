@@ -1608,6 +1608,30 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
     }
 }
 
+void dump_if_user_type(const data_type& t) {
+    if (t->is_user_type()) {
+        const auto udt = dynamic_pointer_cast<const user_type_impl>(t);
+
+        for (const auto& field_udt : udt->get_all_referenced_user_types()) {
+            dump_if_user_type(field_udt);
+        }
+
+        const auto udt_desc = udt->describe(cql3::with_create_statement::yes);
+        fmt::print(std::cout, "{}\n", udt_desc.create_statement.value().linearize());
+    } else if (t->is_collection()) {
+        const auto collection = dynamic_pointer_cast<const collection_type_impl>(t);
+
+        dump_if_user_type(collection->name_comparator());
+        dump_if_user_type(collection->value_comparator());
+    } else if (t->is_tuple()) {
+        const auto tuple = dynamic_pointer_cast<const tuple_type_impl>(t);
+
+        for (const auto& elem_type : tuple->all_types()) {
+            dump_if_user_type(elem_type);
+        }
+    }
+}
+
 future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr sstable_schema) {
     auto& db = env.local_db();
 
@@ -2207,30 +2231,6 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
                 sst->get_encoding_stats_for_compaction()).get();
 
         fmt::print(std::cout, "Upgraded sstable {} to {}.\n", sst->get_filename(), new_sst->get_filename());
-    }
-}
-
-void dump_if_user_type(const data_type& t) {
-    if (t->is_user_type()) {
-        const auto udt = dynamic_pointer_cast<const user_type_impl>(t);
-
-        for (const auto& field_udt : udt->get_all_referenced_user_types()) {
-            dump_if_user_type(field_udt);
-        }
-
-        const auto udt_desc = udt->describe(cql3::with_create_statement::yes);
-        fmt::print(std::cout, "{}\n", udt_desc.create_statement.value().linearize());
-    } else if (t->is_collection()) {
-        const auto collection = dynamic_pointer_cast<const collection_type_impl>(t);
-
-        dump_if_user_type(collection->name_comparator());
-        dump_if_user_type(collection->value_comparator());
-    } else if (t->is_tuple()) {
-        const auto tuple = dynamic_pointer_cast<const tuple_type_impl>(t);
-
-        for (const auto& elem_type : tuple->all_types()) {
-            dump_if_user_type(elem_type);
-        }
     }
 }
 
