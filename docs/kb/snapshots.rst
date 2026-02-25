@@ -34,6 +34,7 @@ If snapshots (hard links) were created to existing SSTables on disk they are pre
 Apart from *planned backup* procedure described above, and as a safeguard from *accidental* loss of data, the ScyllaDB database includes an optional creation of an automatic snapshot every time a table is dropped or truncated.  As dropping a keyspace involves dropping tables within that keyspace, these actions will invoke auto snapshots as well. This option is enabled out of the box and is controlled by the auto_snapshot flag in the ``/etc/scylla/scylla.yaml`` configuration file. Note that a keyspace cannot be truncated. It can only be dropped. A table, on the other hand, can  be either truncated or dropped. The data in a table can also be deleted, which is different from being truncated.
 
 The default setting for the ``auto_snapshot`` flag in ``/etc/scylla/scylla.yaml`` file is ``true``. It is **not** recommended to set it to ``false``, unless there is a good backup and recovery strategy in place.
+The default setting for the ``auto_snapshot_ttl`` flag in ``/etc/scylla/scylla.yaml`` file is ``86400``. It is recommended to set it to a reasonable time allowing backup of the auto-snapshot, yet have a safety net that will automatically clean up stale snapshots to reclaim their disk space.
 
 Snapshot Creation
 -----------------

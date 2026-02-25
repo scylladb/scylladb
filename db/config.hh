@@ -267,6 +267,7 @@ public:
     named_value<sstring> partitioner;
     named_value<uint16_t> storage_port;
     named_value<bool> auto_snapshot;
+    named_value<uint32_t> auto_snapshot_ttl;
     named_value<uint32_t> key_cache_keys_to_save;
     named_value<uint32_t> key_cache_save_period;
     named_value<uint32_t> key_cache_size_in_mb;

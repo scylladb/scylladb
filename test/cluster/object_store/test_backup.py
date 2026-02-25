@@ -9,6 +9,7 @@ import tempfile
 import pytest
 import time
 import random
+import glob
 
 from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import format_tuples
@@ -985,3 +986,30 @@ async def test_restore_primary_replica_different_domain(manager: ManagerClient, 
         streamed_to = set([ r[1].group(1) for r in res ])
         logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}')
         assert len(streamed_to) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ttl", [0, 1])
+async def test_snapshot_ttl(manager: ManagerClient, ttl: int):
+    servers = [await manager.server_add(cmdline=['--logger-log-level', 'snapshots=debug'])]
+    await manager.disable_tablet_balancing()
+
+    cql = manager.get_cql()
+    n_tablets = 1
+    n_partitions = 1000
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk) VALUES ({k});") for k in range(n_partitions)])
+
+        snapshot_name = "test_snapshot"
+        table_dir = glob.glob(os.path.join(await manager.server_get_workdir(servers[0].server_id), "data", ks, "test-*"))
+        assert len(table_dir) == 1, f"Expected single table directory, got {table_dir}"
+        snapshot_dir = os.path.join(table_dir[0], "snapshots", snapshot_name)
+        await manager.api.take_snapshot(servers[0].ip_addr, ks, snapshot_name, ttl=f"{ttl}s" if ttl else None)
+        assert os.path.exists(snapshot_dir), "Snapshots directory does not exist"
+
+        time.sleep(ttl + 1)
+        if ttl:
+            assert not os.path.exists(snapshot_dir), "Snapshots directory still exists after TTL expiration"
+        else:
+            assert os.path.exists(snapshot_dir), "Snapshots directory does not exist without TTL"

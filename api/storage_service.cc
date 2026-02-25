@@ -180,6 +180,52 @@ std::pair<sstring, std::vector<table_info>> parse_table_infos(const http_context
     return std::make_pair(std::move(keyspace), std::move(tis));
 }
 
+std::optional<std::chrono::seconds> validate_ttl(std::string_view raw_value) {
+    std::string value;
+    std::ranges::copy_if(raw_value, std::back_inserter(value), [](char c) { return !std::isspace(c); });
+    if (value.empty()) {
+        return std::nullopt;
+    }
+
+    int64_t res = 0;
+    auto [endptr, ec] = std::from_chars(value.c_str(), value.c_str() + value.size(), res);
+
+    if (ec != std::errc()) {
+        switch (ec) {
+        case std::errc::invalid_argument:
+            throw bad_param_exception(fmt::format("TTL value '{}' is not a valid number", raw_value));
+        case std::errc::result_out_of_range:
+            throw bad_param_exception(fmt::format("TTL value '{}' is out of range", raw_value));
+        default:
+            throw bad_param_exception(fmt::format("Could not parse TTL value '{}'", raw_value));
+        }
+    }
+
+    if (res < 0) {
+        throw bad_param_exception("TTL value cannot be negative");
+    }
+
+    switch (*endptr) {
+    case '\0':
+    case 's':
+    case 'S':
+        return res * 1s;
+    case 'm':
+    case 'M':
+        return res * 1min;
+    case 'h':
+    case 'H':
+        return res * 1h;
+    case 'd':
+    case 'D':
+        return res * 24h;
+    default:
+        throw bad_param_exception(fmt::format("TTL value '{}' has unsupported TTL suffix", raw_value));
+    }
+
+    std::unreachable();
+}
+
 static ss::token_range token_range_endpoints_to_json(const dht::token_range_endpoints& d) {
     ss::token_range r;
     r.start_token = d._start_token;
@@ -2028,6 +2074,10 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         db::snapshot_options opts = {
             .skip_flush = strcasecmp(sfopt.c_str(), "true") == 0,
         };
+        auto ttl = validate_ttl(req->get_query_param("ttl"));
+        if (ttl && *ttl > 0s) {
+            opts.expires_at = opts.created_at + std::chrono::seconds(*ttl);
+        }
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
         try {
