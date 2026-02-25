@@ -58,6 +58,7 @@ public:
     future<raft::add_entry_reply> send_modify_config(raft::server_id id,
         const std::vector<raft::config_member>& add,
         const std::vector<raft::server_id>& del) override;
+    future<> send_read_barrier(raft::server_id id) override;
 
     future<> abort() override;
 
@@ -70,6 +71,7 @@ public:
     void read_quorum_request(raft::server_id from, raft::read_quorum check_quorum);
     void read_quorum_reply(raft::server_id from, raft::read_quorum_reply check_quorum_reply);
     future<raft::read_barrier_reply> execute_read_barrier(raft::server_id);
+
 
     future<raft::snapshot_reply> apply_snapshot(raft::server_id from, raft::install_snapshot snp);
     future<raft::add_entry_reply> execute_add_entry(raft::server_id from, raft::command cmd);

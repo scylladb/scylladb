@@ -11,8 +11,10 @@
 #include <optional>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_any.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include "raft_group0_client.hh"
 #include "raft_group_registry.hh"
+#include "raft_rpc.hh"
 
 #include "schema/frozen_schema.hh"
 #include "schema/schema_mutations.hh"
@@ -27,6 +29,7 @@
 #include "utils/to_string.hh"
 #include "db/system_keyspace.hh"
 #include "replica/tablets.hh"
+#include "gms/gossiper.hh"
 
 
 namespace service {
@@ -367,8 +370,9 @@ group0_command raft_group0_client::prepare_command(Command change, std::string_v
     return group0_cmd;
 }
 
-raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db::system_keyspace& sys_ks, locator::shared_token_metadata& tm, maintenance_mode_enabled maintenance_mode)
-        : _raft_gr(raft_gr), _sys_ks(sys_ks), _token_metadata(tm), _maintenance_mode(maintenance_mode) {
+raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, gms::gossiper& gossiper,
+        db::system_keyspace& sys_ks, locator::shared_token_metadata& tm, maintenance_mode_enabled maintenance_mode)
+        : _raft_gr(raft_gr), _gossiper(gossiper), _sys_ks(sys_ks), _token_metadata(tm), _maintenance_mode(maintenance_mode) {
 }
 
 size_t raft_group0_client::max_command_size() const {
@@ -525,6 +529,30 @@ template group0_command raft_group0_client::prepare_command(broadcast_table_quer
 template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);
 template group0_command raft_group0_client::prepare_command(mixed_change change, group0_guard& guard, std::string_view description);
 
+future<> raft_group0_client::broadcast_group0_read_barrier() {
+    auto my_id = _raft_gr.get_my_raft_id();
+    auto live_members = _gossiper.get_live_members();
+
+    logger.debug("broadcast_group0_read_barrier: sending read barrier to {} live node(s)", live_members.size());
+
+    auto& rpc = _raft_gr.group0_rpc();
+
+    co_await coroutine::parallel_for_each(live_members, [&] (locator::host_id host) -> future<> {
+        if (host.uuid() == my_id.uuid()) {
+            co_return; // skip self, already applied locally
+        }
+        try {
+            auto dst = raft::server_id{host.uuid()};
+            co_await rpc.send_read_barrier(dst);
+        } catch (...) {
+            static thread_local logger::rate_limit rate_limit{std::chrono::seconds(5)};
+            logger.log(log_level::warn, rate_limit,
+                "broadcast_group0_read_barrier: failed to complete read barrier on node {}: {}",
+                host, std::current_exception());
+        }
+    });
+}
+
 group0_batch::group0_batch(::service::group0_guard&& g)
         : _guard(std::move(g)) {
 }
@@ -601,7 +629,8 @@ future<> group0_batch::materialize_mutations() {
     }
 }
 
-future<> group0_batch::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
+future<> group0_batch::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as,
+        std::optional<::service::raft_timeout> timeout, barrier barrier) && {
     if (_muts.size() == 0 && _generators.size() == 0) {
         co_return;
     }
@@ -613,16 +642,21 @@ future<> group0_batch::commit(::service::raft_group0_client& group0_client, seas
     // when producer expects substantial number or size of mutations it should use generator
     if (_generators.size() == 0) {
         utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
-        co_return co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
+        co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
+    } else {
+        // raft doesn't support streaming so we need to materialize all mutations in memory
+        co_await materialize_mutations();
+        if (_muts.empty()) {
+            co_return;
+        }
+        utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
+        _muts.clear();
+        co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
     }
-    // raft doesn't support streaming so we need to materialize all mutations in memory
-    co_await materialize_mutations();
-    if (_muts.empty()) {
-        co_return;
+
+    if (barrier == barrier::global) {
+        co_await group0_client.broadcast_group0_read_barrier();
     }
-    utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
-    _muts.clear();
-    co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
 }
 
 future<std::pair<utils::chunked_vector<mutation>, ::service::group0_guard>> group0_batch::extract() && {

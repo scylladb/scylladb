@@ -65,15 +65,14 @@ auto
 raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
         Verb&& verb, Args&&... args) {
     using Fut = decltype(verb(&_messaging, locator::host_id{}, db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...));
-    using Ret = typename Fut::value_type;
     if (!_failure_detector->is_alive(id)) {
-        return make_exception_future<Ret>(raft::destination_not_alive_error(id, loc));
+        return futurize<Fut>::make_exception_future(raft::destination_not_alive_error(id, loc));
     }
     return verb(&_messaging, locator::host_id{id.uuid()}, db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...)
-        .handle_exception_type([loc= std::move(loc), id] (const seastar::rpc::closed_error& e) {;
+        .handle_exception_type([loc= std::move(loc), id] (const seastar::rpc::closed_error& e) {
             const auto msg = fmt::format("Failed to execute {}, destination {}: {}", loc.function_name(), id, e);
             rlogger.trace("{}", msg);
-            return make_exception_future<Ret>(raft::transport_error(msg));
+            return futurize<Fut>::make_exception_future(raft::transport_error(msg));
     });
 }
 
@@ -146,6 +145,11 @@ future<raft::add_entry_reply> raft_rpc::send_modify_config(raft::server_id id,
 
 future<raft::read_barrier_reply> raft_rpc::execute_read_barrier_on_leader(raft::server_id id) {
     auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_execute_read_barrier_on_leader(std::forward<decltype(args)>(args)...); };
+    return two_way_rpc(sloc::current(), id, std::move(l));
+}
+
+future<> raft_rpc::send_read_barrier(raft::server_id id) {
+    auto l = [] (auto&&...args) -> decltype(auto) { return ser::raft_rpc_verbs::send_raft_read_barrier(std::forward<decltype(args)>(args)...); };
     return two_way_rpc(sloc::current(), id, std::move(l));
 }
 
