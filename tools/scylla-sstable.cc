@@ -1651,9 +1651,9 @@ future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr ss
             builder.with_column(col.name(), col.type, col_kind, col.view_virtual());
 
             // Register any user types, so they are known by the time we create the table.
-            if (col.type->is_user_type()) {
-                keyspace.add_user_type(dynamic_pointer_cast<const user_type_impl>(col.type));
-            }
+            invoke_on_user_type(col.type, [&keyspace] (const user_type_impl& udt) {
+                keyspace.add_user_type(dynamic_pointer_cast<const user_type_impl>(udt.shared_from_this()));
+            });
         }
     }
     auto schema = builder.build();
