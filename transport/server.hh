@@ -41,6 +41,7 @@
 #include "db/operation_type.hh"
 #include "service/maintenance_mode.hh"
 #include "service/client_routes.hh"
+#include "utils/estimated_histogram.hh"
 
 namespace cql3 {
 
@@ -130,9 +131,8 @@ struct cql_server_config {
  */
 struct cql_sg_stats {
     struct request_kind_stats {
-        uint64_t count = 0;
-        uint64_t request_size = 0;
-        uint64_t response_size = 0;
+        utils::bytes_histogram request_size;
+        utils::bytes_histogram response_size;
     };
 
     cql_sg_stats(maintenance_socket_enabled);
