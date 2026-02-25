@@ -19,8 +19,10 @@
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
 #include "exceptions/coordinator_result.hh"
+#include "locator/host_id.hh"
 #include "types/types.hh"
 
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 
@@ -64,7 +66,7 @@ public:
     virtual void visit(const result_message::prepared::cql&) = 0;
     virtual void visit(const result_message::schema_change&) = 0;
     virtual void visit(const result_message::rows&) = 0;
-    virtual void visit(const result_message::bounce_to_shard&) = 0;
+    virtual void visit(const result_message::bounce&) = 0;
     virtual void visit(const result_message::exception&) = 0;
 };
 
@@ -75,7 +77,7 @@ public:
     void visit(const result_message::prepared::cql&) override {};
     void visit(const result_message::schema_change&) override {};
     void visit(const result_message::rows&) override {};
-    void visit(const result_message::bounce_to_shard&) override { SCYLLA_ASSERT(false); };
+    void visit(const result_message::bounce&) override { SCYLLA_ASSERT(false); };
     void visit(const result_message::exception&) override;
 };
 
@@ -91,26 +93,54 @@ std::ostream& operator<<(std::ostream& os, const result_message::void_message& m
 // This result is handled internally and should never be returned
 // to a client. Any visitor should abort while handling it since
 // it is a sure sign of a error.
-class result_message::bounce_to_shard : public result_message {
-    unsigned _shard;
-    cql3::computed_function_values _cached_fn_calls;
+class result_message::bounce : public result_message {
 public:
-    bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls)
-        : _shard(shard), _cached_fn_calls(std::move(cached_fn_calls))
+  struct bounce_to_shard {
+    unsigned shard;
+    cql3::computed_function_values cached_fn_calls;
+  };
+  struct bounce_to_node {
+    locator::host_id host;
+    unsigned shard;
+    seastar::lowres_clock::time_point timeout;
+    cql3::computed_function_values cached_fn_calls;
+  };
+
+private:
+  std::variant<bounce_to_shard, bounce_to_node> _target;
+
+public:
+    bounce(unsigned shard, cql3::computed_function_values cached_fn_calls)
+        : _target(bounce_to_shard{shard, std::move(cached_fn_calls)})
+    {}
+    bounce(locator::host_id host, unsigned shard, seastar::lowres_clock::time_point timeout, cql3::computed_function_values cached_fn_calls)
+        : _target(bounce_to_node{host, shard, timeout, std::move(cached_fn_calls)})
     {}
     virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
     virtual std::optional<unsigned> move_to_shard() const override {
-        return _shard;
+        if (auto bounce_to_shard_ptr = std::get_if<bounce_to_shard>(&_target)) {
+            return bounce_to_shard_ptr->shard;
+        }
+        return std::nullopt;
+    }
+
+    bounce_to_node move_to_node() const {
+        if (auto bounce_to_node_ptr = std::get_if<bounce_to_node>(&_target)) {
+            return *bounce_to_node_ptr;
+        }
+        throw std::runtime_error("Can't get target node from bounce_to_shard");
     }
 
     cql3::computed_function_values&& take_cached_pk_function_calls() {
-        return std::move(_cached_fn_calls);
+        return std::visit([] (auto& target) -> cql3::computed_function_values&& {
+            return std::move(target.cached_fn_calls);
+        }, _target);
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const result_message::bounce_to_shard& msg);
+std::ostream& operator<<(std::ostream& os, const result_message::bounce& msg);
 
 // This result is handled internally. It can be used to indicate an exception
 // which needs to be handled without involving the C++ exception machinery,

@@ -20,6 +20,7 @@
 #include "gms/gossiper.hh"
 #include "utils/log.hh"
 #include "cql3/query_processor.hh"
+#include "message/messaging_service.hh"
 
 using namespace seastar;
 
@@ -30,6 +31,7 @@ static logging::logger logger("cql_server_controller");
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
         sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
+        sharded<netw::messaging_service>& ms,
         const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
         seastar::scheduling_group sg)
     : protocol_server(sg)
@@ -42,6 +44,7 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
     , _qp(qp)
     , _mem_limiter(ml)
     , _sl_controller(sl_controller)
+    , _messaging(ms)
     , _config(cfg)
     , _cql_opcode_stats_key(cql_opcode_stats_key)
     , _used_by_maintenance_socket(used_by_maintenance_socket)
@@ -267,7 +270,7 @@ future<> controller::do_start_server() {
             };
         });
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket, std::ref(_messaging)).get();
         auto on_error = defer([&cserver] { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();

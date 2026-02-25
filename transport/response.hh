@@ -88,6 +88,23 @@ public:
     size_t size() const {
         return _body.size();
     }
+    uint8_t flags() const {
+        return _flags;
+    }
+
+    // Extract the body as bytes (linearizes if needed)
+    bytes extract_body() && {
+        return linearized(std::move(_body));
+    }
+
+    // Construct a response with pre-serialized body
+    static std::unique_ptr<response> make_from_body(int16_t stream, cql_binary_opcode opcode, uint8_t flags, bytes body) {
+        // Use an empty tracing state ptr since the body already contains tracing info if any.
+        auto resp = std::make_unique<response>(stream, opcode, tracing::trace_state_ptr{});
+        resp->_flags = flags;
+        resp->_body.write(bytes_view(body));
+        return resp;
+    }
 private:
     void compress(cql_compression compression);
     void compress_lz4();

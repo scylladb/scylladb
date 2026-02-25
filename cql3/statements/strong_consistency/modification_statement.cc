@@ -8,10 +8,13 @@
 
 #include "modification_statement.hh"
 
+#include "db/timeout_clock.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "exceptions/exceptions.hh"
+#include "utils/error_injection.hh"
 
 namespace cql3::statements::strong_consistency {
 static logging::logger logger("sc_modification_statement");
@@ -35,6 +38,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         query_processor& qp, service::query_state& qs, const query_options& options,
         std::optional<service::group0_guard> guard) const
 {
+    auto timeout = db::timeout_clock::now() + _statement->get_timeout(qs.get_client_state(), options);
     auto json_cache = base_statement::json_cache_opt{};
     const auto keys = _statement->build_partition_keys(options, json_cache);
     if (keys.size() != 1 || !query::is_single_partition(keys[0])) {
@@ -62,8 +66,21 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
 
     using namespace service::strong_consistency;
     if (const auto* redirect = get_if<need_redirect>(&mutate_result)) {
-        co_return co_await redirect_statement(qp, options, redirect->target);
+        if (db::timeout_clock::now() >= timeout) {
+            // FIXME: as of writing this, we can only execute SIMPLE strongly consistent writes, but eventually we may want to forward other types as well
+            co_return coroutine::exception(std::make_exception_ptr(exceptions::mutation_write_timeout_exception(
+                _statement->column_family(),
+                _statement->keyspace(),
+                options.get_consistency(),
+                0,
+                1,
+                db::write_type::SIMPLE)));
+        }
+        co_return co_await redirect_statement(qp, options, redirect->target, timeout);
     }
+    utils::get_local_injector().inject("sc_modification_statement_timeout", [&] {
+        throw exceptions::mutation_write_timeout_exception{"", "", options.get_consistency(), 0, 0, db::write_type::SIMPLE};
+    });
 
     co_return seastar::make_shared<result_message::void_message>();
 }
