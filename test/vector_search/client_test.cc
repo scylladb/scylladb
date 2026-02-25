@@ -8,6 +8,8 @@
 
 #include <seastar/http/common.hh>
 #include "vector_search/client.hh"
+#include "vector_search/clients.hh"
+#include "vector_search/truststore.hh"
 #include "vector_search/utils.hh"
 #include "vs_mock_server.hh"
 #include "unavailable_server.hh"
@@ -15,7 +17,10 @@
 #include "utils/rjson.hh"
 #include <boost/test/tools/old/interface.hpp>
 #include <seastar/testing/test_case.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <optional>
+#include <variant>
 
 using namespace seastar;
 using namespace vector_search;
@@ -41,6 +46,14 @@ future<std::unique_ptr<vs_mock_server>> make_available(std::unique_ptr<unavailab
     auto server = std::make_unique<vs_mock_server>();
     co_await server->start(co_await down_server->take_socket());
     co_return server;
+}
+
+/// Create a truststore with empty options (sufficient for HTTP-only tests).
+truststore make_test_truststore() {
+    return truststore(
+            client_test_logger,
+            utils::updateable_value(std::unordered_map<sstring, sstring>{}),
+            [](auto) { return make_ready_future<>(); });
 }
 
 } // namespace
@@ -242,4 +255,138 @@ BOOST_AUTO_TEST_CASE(test_get_keepalive_parameters) {
     BOOST_CHECK_EQUAL(params2.idle.count(), 2);
     BOOST_CHECK_EQUAL(params2.interval.count(), 1);
     BOOST_CHECK_EQUAL(params2.count, 3);
+}
+
+/// Validates fix for SCYLLADB-802: handle_changed() must not disrupt ongoing
+/// client availability.
+///
+/// Before the fix, handle_changed() called clear() (emptying _clients) and then
+/// created new clients one-by-one with co_await. During this async gap, any
+/// concurrent call to get_clients() would observe an empty _clients and return
+/// addr_unavailable_error after timing out.
+///
+/// The fix builds the new client list into a local vector and then swaps it in
+/// atomically.
+///
+/// This test verifies that after initial population, repeated handle_changed()
+/// calls never leave get_clients() returning addr_unavailable_error.
+SEASTAR_TEST_CASE(handle_changed_does_not_empty_clients) {
+    auto ts = make_test_truststore();
+
+    // Create the mock server before clients so that on stack destruction,
+    // clients (with their HTTP connections) are destroyed before the server.
+    auto server = co_await make_vs_mock_server();
+    auto host = server->host();
+    auto port = server->port();
+    auto addr = net::inet_address(host);
+
+    auto request_timeout = utils::updateable_value<uint32_t>(100);
+    clients c(client_test_logger, [] {}, request_timeout, ts);
+    c.timeout(100ms);
+
+    uri u{uri::schema_type::http, host, port};
+    dns::host_address_map addrs{{host, {addr}}};
+
+    abort_source as;
+
+    // Initial population — after this, _clients has one entry.
+    co_await c.handle_changed({u}, addrs);
+
+    // Verify clients are available after initial population.
+    auto result = co_await c.get_clients(as);
+    BOOST_REQUIRE(result.has_value());
+    BOOST_CHECK_EQUAL(result->size(), 1u);
+
+    // Repeatedly call handle_changed() and verify that get_clients() still
+    // returns clients each time. Before the fix, clear() inside handle_changed()
+    // would transiently empty _clients; after the fix the swap is atomic so
+    // get_clients() always sees a populated vector.
+    for (int i = 0; i < 10; ++i) {
+        co_await c.handle_changed({u}, addrs);
+        result = co_await c.get_clients(as);
+        BOOST_CHECK_MESSAGE(result.has_value(),
+                "get_clients() returned error after handle_changed() iteration " + std::to_string(i));
+        if (result) {
+            BOOST_CHECK_EQUAL(result->size(), 1u);
+        }
+    }
+
+    co_await c.stop();
+    co_await server->stop();
+    co_await ts.stop();
+}
+
+/// Validates fix for SCYLLADB-802: request() must retry when get_clients()
+/// returns addr_unavailable_error.
+///
+/// Before the fix, addr_unavailable_error from get_clients() (e.g. because TLS
+/// credential initialization via truststore::get() hadn't completed within the
+/// wait_for_client_timeout) caused request() to fail immediately.
+///
+/// The fix makes request() trigger a DNS refresh and retry, giving the async
+/// setup time to complete.
+SEASTAR_TEST_CASE(request_retries_on_addr_unavailable) {
+    auto ts = make_test_truststore();
+    int refresh_count = 0;
+    auto request_timeout = utils::updateable_value<uint32_t>(1000);
+    auto server = co_await make_vs_mock_server();
+    auto host = server->host();
+    auto port = server->port();
+    auto addr = net::inet_address(host);
+
+    uri u{uri::schema_type::http, host, port};
+    dns::host_address_map addrs{{host, {addr}}};
+
+    // Supply clients on the 2nd refresh trigger (simulating the TLS setup delay).
+    std::optional<future<>> pending_handle_changed;
+    clients* clients_ptr = nullptr;
+    clients c(client_test_logger, [&] {
+        refresh_count++;
+        // On the 2nd trigger, populate the clients (simulating DNS/TLS readiness).
+        if (refresh_count == 2 && clients_ptr) {
+            pending_handle_changed = clients_ptr->handle_changed({u}, addrs);
+        }
+    }, request_timeout, ts);
+    clients_ptr = &c;
+    c.timeout(50ms);
+
+    abort_source as;
+
+    // Initially _clients is empty, so get_clients() will return addr_unavailable_error.
+    // The first trigger fires from the producer factory (sequential_producer).
+    // Before the fix, request() would immediately return the error.
+    // After the fix, it retries and the 2nd refresh populates clients.
+    auto result = co_await c.request(httpd::operation_type::POST, "/api/v1/indexes/ks/idx/ann", CONTENT, as);
+
+    // The request should succeed because the retry logic gives the clients time
+    // to become available.
+    BOOST_CHECK(result.has_value());
+    BOOST_CHECK(refresh_count >= 2);
+
+    if (pending_handle_changed) {
+        co_await std::move(*pending_handle_changed);
+    }
+    co_await c.stop();
+    co_await server->stop();
+    co_await ts.stop();
+}
+
+/// Validates that request() returns addr_unavailable_error (not
+/// service_unavailable_error) when all retries are exhausted due to no clients
+/// being available.
+SEASTAR_TEST_CASE(request_returns_addr_unavailable_after_retries_exhausted) {
+    auto ts = make_test_truststore();
+    auto request_timeout = utils::updateable_value<uint32_t>(100);
+    clients c(client_test_logger, [] {}, request_timeout, ts);
+    c.timeout(50ms);
+
+    abort_source as;
+
+    auto result = co_await c.request(httpd::operation_type::POST, "/api/v1/indexes/ks/idx/ann", "{}", as);
+
+    BOOST_REQUIRE(!result.has_value());
+    BOOST_CHECK(std::holds_alternative<addr_unavailable_error>(result.error()));
+
+    co_await c.stop();
+    co_await ts.stop();
 }
