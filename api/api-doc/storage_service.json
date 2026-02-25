@@ -3227,6 +3227,38 @@
          ]
       },
       {
+         "path":"/storage_service/logstor_info",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Logstor segment information for one table",
+               "type":"table_logstor_info",
+               "nickname":"logstor_info",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"table name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/retrain_dict",
          "operations":[
             {
@@ -3634,6 +3666,47 @@
             }
         }
       },
+        "logstor_hist_bucket":{
+         "id":"logstor_hist_bucket",
+         "properties":{
+            "bucket":{
+               "type":"long"
+            },
+            "count":{
+               "type":"long"
+            },
+            "min_data_size":{
+               "type":"long"
+            },
+            "max_data_size":{
+               "type":"long"
+            }
+         }
+        },
+        "table_logstor_info":{
+         "id":"table_logstor_info",
+         "description":"Per-table logstor segment distribution",
+         "properties":{
+            "keyspace":{
+               "type":"string"
+            },
+            "table":{
+               "type":"string"
+            },
+            "compaction_groups":{
+               "type":"long"
+            },
+            "segments":{
+               "type":"long"
+            },
+            "data_size_histogram":{
+               "type":"array",
+               "items":{
+                  "$ref":"logstor_hist_bucket"
+               }
+            }
+         }
+        },
       "tablet_repair_result":{
         "id":"tablet_repair_result",
         "description":"Tablet repair result",

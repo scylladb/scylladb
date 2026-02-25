@@ -2881,6 +2881,13 @@ future<> database::trigger_logstor_barrier() {
     return make_ready_future<>();
 }
 
+future<logstor::table_segment_stats> database::get_logstor_table_segment_stats(table_id table) const {
+    if (!_logstor) {
+        return make_ready_future<logstor::table_segment_stats>(logstor::table_segment_stats{});
+    }
+    return _logstor->get_table_segment_stats(table);
+}
+
 future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id uuid, sstring tag, db::snapshot_options opts) {
     if (!opts.skip_flush) {
         co_await flush_table_on_all_shards(sharded_db, uuid);

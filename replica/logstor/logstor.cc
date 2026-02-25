@@ -76,6 +76,10 @@ future<> logstor::truncate_table(table_id tid) {
     return _segment_manager.truncate_table(tid);
 }
 
+future<table_segment_stats> logstor::get_table_segment_stats(table_id tid) const {
+    return _segment_manager.get_table_segment_stats(tid);
+}
+
 future<> logstor::write(const mutation& m, group_id group) {
     auto key = calculate_key(*m.schema(), m.decorated_key());
 

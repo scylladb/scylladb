@@ -682,6 +682,8 @@ public:
 
     const stats& get_stats() const noexcept { return _stats; }
 
+    future<table_segment_stats> get_table_segment_stats(table_id table) const;
+
     // compaction group must be set.
     void add_segment(segment_descriptor& desc) {
         _compaction_groups[*desc.gid].segment_hist.push(desc);
@@ -946,6 +948,10 @@ public:
     future<> do_barrier();
 
     future<> truncate_table(table_id table);
+
+    future<table_segment_stats> get_table_segment_stats(table_id table) const {
+        return _compaction_mgr.get_table_segment_stats(table);
+    }
 
 private:
 
@@ -2080,6 +2086,55 @@ future<> compaction_manager::abort_separator(separator& sep) {
     }
 }
 
+future<table_segment_stats> compaction_manager::get_table_segment_stats(table_id table) const {
+    table_segment_stats result;
+    std::map<size_t, table_segment_histogram_bucket> histogram_by_bucket;
+
+    auto it = _compaction_groups.lower_bound(group_id{table, 0});
+    while (it != _compaction_groups.end() && it->first.table == table) {
+        ++result.compaction_group_count;
+
+        const auto& buckets = it->second.segment_hist.buckets();
+        for (const auto& bucket : buckets) {
+            co_await coroutine::maybe_yield();
+
+            if (bucket.empty()) {
+                continue;
+            }
+
+            for (const auto& desc : bucket) {
+                co_await coroutine::maybe_yield();
+
+                auto data_size = desc.net_data_size(_sm._cfg.segment_size);
+                auto bucket = segment_descriptor_hist_options.bucket_of(data_size);
+
+                auto [hist_it, inserted] = histogram_by_bucket.try_emplace(bucket, table_segment_histogram_bucket{
+                    .bucket = bucket,
+                    .count = 0,
+                    .min_data_size = data_size,
+                    .max_data_size = data_size,
+                });
+
+                auto& hist = hist_it->second;
+                ++hist.count;
+                hist.min_data_size = std::min(hist.min_data_size, data_size);
+                hist.max_data_size = std::max(hist.max_data_size, data_size);
+                ++result.segment_count;
+            }
+        }
+
+        ++it;
+    }
+
+    result.histogram.reserve(histogram_by_bucket.size());
+    for (const auto& [_, bucket] : histogram_by_bucket) {
+        co_await coroutine::maybe_yield();
+        result.histogram.push_back(bucket);
+    }
+
+    co_return std::move(result);
+}
+
 std::chrono::microseconds segment_manager_impl::calculate_separator_delay() const {
     size_t min_debt = _separator_flush_threshold * _cfg.segment_size;
     size_t debt_target = separator_debt_target * _separator_flush_threshold * _cfg.segment_size;
@@ -2338,6 +2393,10 @@ future<> segment_manager::do_barrier() {
 
 future<> segment_manager::truncate_table(table_id table) {
     return _impl->truncate_table(table);
+}
+
+future<table_segment_stats> segment_manager::get_table_segment_stats(table_id table) const {
+    return _impl->get_table_segment_stats(table);
 }
 
 }

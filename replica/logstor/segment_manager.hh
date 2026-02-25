@@ -38,6 +38,19 @@ struct segment_manager_config {
     size_t max_separator_memory = 1 * 1024 * 1024;
 };
 
+struct table_segment_histogram_bucket {
+    size_t bucket;
+    size_t count;
+    size_t min_data_size;
+    size_t max_data_size;
+};
+
+struct table_segment_stats {
+    size_t compaction_group_count{0};
+    size_t segment_count{0};
+    std::vector<table_segment_histogram_bucket> histogram;
+};
+
 class segment_manager_impl;
 class log_index;
 
@@ -82,6 +95,8 @@ public:
     future<> do_barrier();
 
     future<> truncate_table(table_id);
+
+    future<table_segment_stats> get_table_segment_stats(table_id) const;
 
     friend class segment_manager_impl;
 

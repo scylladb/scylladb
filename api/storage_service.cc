@@ -1586,6 +1586,76 @@ rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
 
 static
 future<json::json_return_type>
+rest_logstor_info(http_context& ctx, std::unique_ptr<http::request> req) {
+        auto keyspace = api::req_param<sstring>(*req, "keyspace", {}).value;
+        auto table = api::req_param<sstring>(*req, "table", {}).value;
+        if (table.empty()) {
+            table = api::req_param<sstring>(*req, "cf", {}).value;
+        }
+
+        if (keyspace.empty()) {
+            throw bad_param_exception("The query parameter 'keyspace' is required");
+        }
+        if (table.empty()) {
+            throw bad_param_exception("The query parameter 'table' is required");
+        }
+
+        keyspace = validate_keyspace(ctx, keyspace);
+        auto tid = validate_table(ctx.db.local(), keyspace, table);
+
+        auto& cf = ctx.db.local().find_column_family(tid);
+        if (!cf.uses_kv_storage()) {
+            throw bad_param_exception(fmt::format("Table {}.{} does not use logstor", keyspace, table));
+        }
+
+        return do_with(replica::logstor::table_segment_stats{}, [keyspace = std::move(keyspace), table = std::move(table), tid, &ctx] (replica::logstor::table_segment_stats& merged_stats) {
+            return ctx.db.map_reduce([&merged_stats](replica::logstor::table_segment_stats&& shard_stats) {
+                merged_stats.compaction_group_count += shard_stats.compaction_group_count;
+                merged_stats.segment_count += shard_stats.segment_count;
+
+                for (auto& bucket : shard_stats.histogram) {
+                    auto bucket_it = std::find_if(merged_stats.histogram.begin(), merged_stats.histogram.end(), [&bucket] (const replica::logstor::table_segment_histogram_bucket& existing) {
+                        return existing.bucket == bucket.bucket;
+                    });
+
+                    if (bucket_it == merged_stats.histogram.end()) {
+                        merged_stats.histogram.push_back(std::move(bucket));
+                        continue;
+                    }
+
+                    bucket_it->count += bucket.count;
+                    bucket_it->min_data_size = std::min(bucket_it->min_data_size, bucket.min_data_size);
+                    bucket_it->max_data_size = std::max(bucket_it->max_data_size, bucket.max_data_size);
+                }
+            }, [tid](const replica::database& db) {
+                return db.get_logstor_table_segment_stats(tid);
+            }).then([&merged_stats, keyspace = std::move(keyspace), table = std::move(table)] {
+                std::ranges::sort(merged_stats.histogram, [] (const replica::logstor::table_segment_histogram_bucket& left, const replica::logstor::table_segment_histogram_bucket& right) {
+                    return left.bucket < right.bucket;
+                });
+
+                ss::table_logstor_info result;
+                result.keyspace = keyspace;
+                result.table = table;
+                result.compaction_groups = merged_stats.compaction_group_count;
+                result.segments = merged_stats.segment_count;
+
+                for (const auto& bucket : merged_stats.histogram) {
+                    ss::logstor_hist_bucket hist;
+                    hist.bucket = bucket.bucket;
+                    hist.count = bucket.count;
+                    hist.min_data_size = bucket.min_data_size;
+                    hist.max_data_size = bucket.max_data_size;
+                    result.data_size_histogram.push(std::move(hist));
+                }
+
+                return make_ready_future<json::json_return_type>(stream_object(result));
+            });
+        });
+}
+
+static
+future<json::json_return_type>
 rest_reload_raft_topology_state(sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
         co_await ss.invoke_on(0, [&group0_client] (service::storage_service& ss) -> future<> {
             return ss.reload_raft_topology_state(group0_client);
@@ -1893,6 +1963,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::retrain_dict.set(r, rest_bind(rest_retrain_dict, ctx, ss, group0_client));
     ss::estimate_compression_ratios.set(r, rest_bind(rest_estimate_compression_ratios, ctx, ss));
     ss::sstable_info.set(r, rest_bind(rest_sstable_info, ctx));
+    ss::logstor_info.set(r, rest_bind(rest_logstor_info, ctx));
     ss::reload_raft_topology_state.set(r, rest_bind(rest_reload_raft_topology_state, ss, group0_client));
     ss::upgrade_to_raft_topology.set(r, rest_bind(rest_upgrade_to_raft_topology, ss));
     ss::raft_topology_upgrade_status.set(r, rest_bind(rest_raft_topology_upgrade_status, ss));
@@ -1972,6 +2043,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_ownership.unset(r);
     ss::get_effective_ownership.unset(r);
     ss::sstable_info.unset(r);
+    ss::logstor_info.unset(r);
     ss::reload_raft_topology_state.unset(r);
     ss::upgrade_to_raft_topology.unset(r);
     ss::raft_topology_upgrade_status.unset(r);

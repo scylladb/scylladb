@@ -60,6 +60,8 @@ public:
 
     future<> truncate_table(table_id);
 
+    future<table_segment_stats> get_table_segment_stats(table_id) const;
+
     static index_key calculate_key(const schema&, const dht::decorated_key&);
 
     future<> write(const mutation&, group_id);
