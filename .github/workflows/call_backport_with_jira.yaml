@@ -1,0 +1,53 @@
+name: Backport with Jira Integration
+
+on:
+  push:
+    branches:
+      - master
+      - next-*.*
+      - branch-*.*
+  pull_request_target:
+    types: [labeled, closed]
+    branches: 
+      - master
+      - next
+      - next-*.*
+      - branch-*.*
+
+jobs:
+  backport-on-push:
+    if: github.event_name == 'push'
+    uses: scylladb/github-automation/.github/workflows/backport-with-jira.yaml@main
+    with:
+      event_type: 'push'
+      base_branch: ${{ github.ref }}
+      commits: ${{ github.event.before }}..${{ github.sha }}
+    secrets:
+      gh_token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+      jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+
+  backport-on-label:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'labeled'
+    uses: scylladb/github-automation/.github/workflows/backport-with-jira.yaml@main
+    with:
+      event_type: 'labeled'
+      base_branch: refs/heads/${{ github.event.pull_request.base.ref }}
+      pull_request_number: ${{ github.event.pull_request.number }}
+      head_commit: ${{ github.event.pull_request.base.sha }}
+      label_name: ${{ github.event.label.name }}
+      pr_state: ${{ github.event.pull_request.state }}
+    secrets:
+      gh_token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+      jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+
+  backport-chain:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    uses: scylladb/github-automation/.github/workflows/backport-with-jira.yaml@main
+    with:
+      event_type: 'chain'
+      base_branch: refs/heads/${{ github.event.pull_request.base.ref }}
+      pull_request_number: ${{ github.event.pull_request.number }}
+      pr_body: ${{ github.event.pull_request.body }}
+    secrets:
+      gh_token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+      jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
