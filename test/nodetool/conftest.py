@@ -44,7 +44,7 @@ class ServerAddress(NamedTuple):
 async def server_address(request, testpy_test: None|Test):
     # unshare(1) -rn drops us in a new network namespace in which the "lo" is
     # not up yet, so let's set it up first.
-    if request.config.getoption('--run-within-unshare'):
+    if request.config.getoption('--run-within-unshare', default=False):
         try:
             args = "ip link set lo up".split()
             subprocess.run(args, check=True)
