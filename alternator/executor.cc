@@ -2554,16 +2554,16 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         validate_value(it->value, "PutItem");
         const column_definition* cdef = find_attribute(*schema, column_name);
         validate_attr_name_length("", column_name.size(), cdef && cdef->is_primary_key());
-        // If this is the timestamp attribute with a valid numeric value, use it
-        // as the write timestamp and do not store it in the item data.
-        // If the value is non-numeric, treat the attribute normally (store it).
+        // If this is the timestamp attribute, it must be a valid numeric value
+        // (microseconds since epoch). Use it as the write timestamp and do not
+        // store it in the item data. Reject the write if the value is non-numeric.
         if (timestamp_attribute && column_name == *timestamp_attribute) {
             if (auto t = try_get_timestamp(it->value)) {
                 _custom_timestamp = t;
                 // The attribute is consumed as timestamp, not stored in _cells.
                 continue;
             }
-            // Non-numeric value: fall through to store it normally.
+            throw api_error::validation(fmt::format("The '{}' attribute used as a write timestamp must be a positive number (microseconds since epoch)", to_string_view(*timestamp_attribute)));
         }
         _length_in_bytes += column_name.size();
         if (!cdef) {
@@ -4274,6 +4274,7 @@ update_item_operation::has_custom_timestamp() const noexcept {
     // We can't check the actual value type without resolving the expression
     // (which requires previous_item), so we conservatively return true if the
     // attribute appears in a SET action, and handle the non-numeric case in apply().
+    // A non-numeric value will cause apply() to throw a ValidationException.
     if (!_update_expression.empty()) {
         std::string ts_attr(to_string_view(*_timestamp_attribute));
         auto it = _update_expression.find(ts_attr);
@@ -4560,13 +4561,15 @@ inline void update_item_operation::apply_attribute_updates(const std::unique_ptr
             throw api_error::validation(format("UpdateItem cannot update key column {}", rjson::to_string_view(it->name)));
         }
         std::string action = rjson::to_string((it->value)["Action"]);
-        // If this is the timestamp attribute being PUT with a valid numeric value,
-        // skip it - it was already used to compute the write timestamp and should
-        // not be stored in the item. If the value is non-numeric, the attribute is
-        // stored normally.
+        // If this is the timestamp attribute being PUT, it must be a valid
+        // numeric value (microseconds since epoch). Use it as the write
+        // timestamp and skip storing it. Reject if the value is non-numeric.
         if (_timestamp_attribute && column_name == *_timestamp_attribute && action == "PUT") {
-            if (it->value.HasMember("Value") && try_get_timestamp((it->value)["Value"])) {
-                continue;
+            if (it->value.HasMember("Value")) {
+                if (try_get_timestamp((it->value)["Value"])) {
+                    continue;
+                }
+                throw api_error::validation(fmt::format("The '{}' attribute used as a write timestamp must be a positive number (microseconds since epoch)", to_string_view(*_timestamp_attribute)));
             }
         }
         if (action == "DELETE") {
@@ -4672,18 +4675,19 @@ inline void update_item_operation::apply_update_expression(const std::unique_ptr
         if (cdef && cdef->is_primary_key()) {
             throw api_error::validation(fmt::format("UpdateItem cannot update key column {}", column_name));
         }
-        // If this is the timestamp attribute being set via UpdateExpression SET
-        // with a valid numeric value, skip it - it was already used to compute
-        // the write timestamp and should not be stored in the item.
-        // If the value is non-numeric, the attribute is stored normally.
+        // If this is the timestamp attribute being set via UpdateExpression SET,
+        // it must be a valid numeric value (microseconds since epoch). Use it as
+        // the write timestamp and skip storing it. Reject if non-numeric.
         if (_timestamp_attribute && to_bytes(column_name) == *_timestamp_attribute &&
                 actions.second.has_value() &&
                 std::holds_alternative<parsed::update_expression::action::set>(actions.second.get_value()._action)) {
             std::optional<rjson::value> result = action_result(actions.second.get_value(), previous_item.get());
-            if (result && try_get_timestamp(*result)) {
-                continue;  // Skip - already used as timestamp
+            if (result) {
+                if (try_get_timestamp(*result)) {
+                    continue;  // Skip - already used as timestamp
+                }
+                throw api_error::validation(fmt::format("The '{}' attribute used as a write timestamp must be a positive number (microseconds since epoch)", to_string_view(*_timestamp_attribute)));
             }
-            // Non-numeric result: fall through to store normally
         }
         if (actions.second.has_value()) {
             // An action on a top-level attribute column_name. The single

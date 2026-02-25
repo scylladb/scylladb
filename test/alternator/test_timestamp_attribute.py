@@ -12,11 +12,10 @@
 #
 # This is a Scylla-specific feature and is not tested on DynamoDB.
 
+import time
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-
-from test.pylib.runner import testpy_test_fixture_scope
 
 from .util import create_test_table, random_string
 
@@ -30,9 +29,11 @@ SMALL_TS = Decimal('100000000000000')
 # Fixtures for tables with the system:timestamp_attribute tag. The tables
 # are created once per module and shared between all tests that use them,
 # to avoid the overhead of creating and deleting tables for each test.
+# Because system:timestamp_attribute is a Scylla-only feature, all tests
+# using these fixtures are implicitly Scylla-only (via scylla_only parameter).
 
 # A table with only a hash key and system:timestamp_attribute='ts' tag.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_table_ts(scylla_only, dynamodb):
     table = create_test_table(dynamodb,
         Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'}],
@@ -41,9 +42,9 @@ def test_table_ts(scylla_only, dynamodb):
     yield table
     table.delete()
 
-# A table with hash and range keys and system:timestamp_attribute='ts' tag.
-@pytest.fixture(scope=testpy_test_fixture_scope)
-def test_table_ts_sc(scylla_only, dynamodb):
+# A table with hash (string) and range (string) keys and system:timestamp_attribute='ts' tag.
+@pytest.fixture(scope="module")
+def test_table_ts_ss(scylla_only, dynamodb):
     table = create_test_table(dynamodb,
         Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'}],
         KeySchema=[
@@ -54,18 +55,6 @@ def test_table_ts_sc(scylla_only, dynamodb):
             {'AttributeName': 'p', 'AttributeType': 'S'},
             {'AttributeName': 'c', 'AttributeType': 'S'},
         ])
-    yield table
-    table.delete()
-
-# A table with only a hash key, system:timestamp_attribute='ts' tag, and
-# system:write_isolation='only_rmw_uses_lwt' for testing LWT rejection.
-@pytest.fixture(scope=testpy_test_fixture_scope)
-def test_table_ts_lwt(scylla_only, dynamodb):
-    table = create_test_table(dynamodb,
-        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'},
-              {'Key': 'system:write_isolation', 'Value': 'only_rmw_uses_lwt'}],
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
     yield table
     table.delete()
 
@@ -170,41 +159,63 @@ def test_timestamp_attribute_absent(test_table_ts):
 
 # Test that using a condition expression (which requires LWT) together with
 # the timestamp attribute is rejected.
-def test_timestamp_attribute_with_condition_rejected(test_table_ts_lwt):
+def test_timestamp_attribute_with_condition_rejected(test_table_ts):
     p = random_string()
     # Put an initial item (no timestamp attribute, so LWT is ok)
-    test_table_ts_lwt.put_item(Item={'p': p, 'val': 'initial'})
+    test_table_ts.put_item(Item={'p': p, 'val': 'initial'})
     # Try to put with a ConditionExpression and a timestamp - should be rejected
     with pytest.raises(ClientError, match='ValidationException'):
-        test_table_ts_lwt.put_item(
+        test_table_ts.put_item(
             Item={'p': p, 'val': 'updated', 'ts': LARGE_TS},
             ConditionExpression='attribute_exists(p)'
         )
 
-# Test that when the timestamp attribute has a non-numeric value, it is
-# treated as if the timestamp attribute is absent (use current timestamp),
-# and the non-numeric attribute IS stored in the item normally.
+# Test that when the timestamp attribute has a non-numeric value, the write
+# is rejected with a ValidationException.
 def test_timestamp_attribute_non_numeric(test_table_ts):
     p = random_string()
-    # Put item with the timestamp attribute as a string (non-numeric)
-    test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': 'not_a_number'})
-    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
-    assert item['val'] == 'hello'
-    # When the timestamp attribute has a non-numeric value, it should
-    # be stored normally (not used as a timestamp and not omitted)
-    assert item['ts'] == 'not_a_number'
+    # Put item with the timestamp attribute as a string (non-numeric) - should fail
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': 'not_a_number'})
 
 # Test that the timestamp attribute tag can be set on a table with a sort key.
-def test_timestamp_attribute_with_range_key(test_table_ts_sc):
+def test_timestamp_attribute_with_range_key(test_table_ts_ss):
     p = random_string()
     c = random_string()
     # Write with a large timestamp
-    test_table_ts_sc.put_item(Item={'p': p, 'c': c, 'val': 'large', 'ts': LARGE_TS})
+    test_table_ts_ss.put_item(Item={'p': p, 'c': c, 'val': 'large', 'ts': LARGE_TS})
     # Write with a small timestamp (should lose)
-    test_table_ts_sc.put_item(Item={'p': p, 'c': c, 'val': 'small', 'ts': SMALL_TS})
-    item = test_table_ts_sc.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
+    test_table_ts_ss.put_item(Item={'p': p, 'c': c, 'val': 'small', 'ts': SMALL_TS})
+    item = test_table_ts_ss.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
     assert item['val'] == 'large'
     assert 'ts' not in item
+
+# Test that the timestamp attribute value is interpreted in microseconds since
+# the Unix epoch, and that writes with and without explicit timestamps interact
+# correctly.
+def test_timestamp_attribute_microseconds(test_table_ts):
+    # Get current time in microseconds from the Python client side.
+    now_us = int(time.time() * 1_000_000)
+    one_hour_us = 3600 * 1_000_000
+
+    # Part 1: write with the current time as the explicit timestamp, then
+    # overwrite without an explicit timestamp.  The second write uses the
+    # server's current time (which is >= now_us), so it should win.
+    p = random_string()
+    test_table_ts.put_item(Item={'p': p, 'val': 'old', 'ts': Decimal(str(now_us))})
+    test_table_ts.put_item(Item={'p': p, 'val': 'new'})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'new'
+
+    # Part 2: write with a timestamp one hour in the future, then overwrite
+    # without an explicit timestamp.  The server's current time (≈ now_us) is
+    # much less than now_us + one_hour_us, so the first write should win.
+    p = random_string()
+    future_us = now_us + one_hour_us
+    test_table_ts.put_item(Item={'p': p, 'val': 'future', 'ts': Decimal(str(future_us))})
+    test_table_ts.put_item(Item={'p': p, 'val': 'now'})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'future'
 
 # Test that BatchWriteItem also respects the timestamp attribute.
 def test_timestamp_attribute_batch_write(test_table_ts):
