@@ -2025,6 +2025,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
         auto sfopt = req->get_query_param("sf");
+        auto tcopt = req->get_query_param("tc");
+
         db::snapshot_options opts = {
             .skip_flush = strcasecmp(sfopt.c_str(), "true") == 0,
         };
@@ -2045,6 +2047,27 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             co_return json_void();
         } catch (...) {
             apilog.error("take_snapshot failed: {}", std::current_exception());
+            throw;
+        }
+    });
+
+    ss::take_cluster_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        apilog.info("take_cluster_snapshot: {}", req->get_query_params());
+        auto tag = req->get_query_param("tag");
+        auto column_families = split(req->get_query_param("table"), ",");
+        // Note: not published/active. Retain as internal option, but...
+        auto sfopt = req->get_query_param("skip_flush");
+
+        db::snapshot_options opts = {
+            .skip_flush = strcasecmp(sfopt.c_str(), "true") == 0,
+        };
+
+        std::vector<sstring> keynames = split(req->get_query_param("keyspace"), ",");
+        try {
+            co_await snap_ctl.local().take_cluster_column_family_snapshot(keynames, column_families, tag, opts);
+            co_return json_void();
+        } catch (...) {
+            apilog.error("take_cluster_snapshot failed: {}", std::current_exception());
             throw;
         }
     });

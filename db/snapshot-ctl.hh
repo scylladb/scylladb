@@ -24,6 +24,7 @@
 using namespace seastar;
 
 namespace sstables { class storage_manager; }
+namespace service { class storage_proxy; }
 
 namespace db {
 
@@ -63,7 +64,7 @@ public:
 
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;
 
-    snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
+    snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>&, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg);
 
     future<> stop();
 
@@ -96,6 +97,17 @@ public:
     future<> take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
 
     /**
+     * Takes the snapshot of multiple tables or a whole keyspace, or all keyspaces,
+     * using global, clusterwide topology coordinated op.
+     * A snapshot name must be specified.
+     *
+     * @param ks_names the keyspaces to snapshot
+     * @param tables optional - a vector of tables names to snapshot
+     * @param tag the tag given to the snapshot; may not be null or empty
+     */
+    future<> take_cluster_column_family_snapshot(std::vector<sstring>  ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+
+    /**
      * Remove the snapshot with the given name from the given keyspaces.
      * If no tag is specified we will remove all snapshots.
      * If a cf_name is specified, only that table will be deleted
@@ -111,6 +123,7 @@ public:
 private:
     config _config;
     sharded<replica::database>& _db;
+    sharded<service::storage_proxy>& _sp;
     seastar::rwlock _lock;
     seastar::named_gate _ops;
     shared_ptr<snapshot::task_manager_module> _task_manager_module;
@@ -133,6 +146,7 @@ private:
 
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {}  );
     future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+    future<> do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
 };
 
 }

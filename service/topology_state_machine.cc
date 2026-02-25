@@ -145,6 +145,7 @@ static std::unordered_map<topology::transition_state, sstring> transition_state_
     {topology::transition_state::left_token_ring, "left token ring"},
     {topology::transition_state::rollback_to_normal, "rollback to normal"},
     {topology::transition_state::truncate_table, "truncate table"},
+    {topology::transition_state::snapshot_tables, "snapshot tables"},
     {topology::transition_state::lock, "lock"},
 };
 
@@ -207,6 +208,7 @@ static std::unordered_map<global_topology_request, sstring> global_topology_requ
     {global_topology_request::cleanup, "cleanup"},
     {global_topology_request::keyspace_rf_change, "keyspace_rf_change"},
     {global_topology_request::truncate_table, "truncate_table"},
+    {global_topology_request::snapshot_tables, "snapshot_tables"},
     {global_topology_request::noop_request, "noop_request"},
 };
 

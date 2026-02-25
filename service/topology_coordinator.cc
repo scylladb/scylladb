@@ -1158,6 +1158,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await update_topology_state(std::move(guard), std::move(updates), "no-op request completed");
         }
         break;
+        case global_topology_request::snapshot_tables: {
+            rtlogger.info("SNAPSHOT TABLES requested");
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.set_transition_state(topology::transition_state::snapshot_tables)
+                   .set_global_topology_request(req)
+                   .set_global_topology_request_id(req_id)
+                   .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                   .set_session(session_id(req_id));
+            co_await update_topology_state(std::move(guard), {builder.build()}, "SNAPSHOT TABLES requested");
+        }
+        break;
         }
     }
 
@@ -2225,7 +2236,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
-    future<> handle_truncate_table(group0_guard guard) {
+    using get_table_ids_func = std::function<std::unordered_set<table_id>(const db::system_keyspace::topology_requests_entry&)>;
+    using send_rpc_func = std::function<future<>(locator::host_id, const service::frozen_topology_guard&)>;
+    using desc_func = std::function<std::string()>;
+
+    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what) {
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
         // TODO: Exclude nodes which don't contain replicas of the table we are truncating
@@ -2237,46 +2252,44 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
         if (_topo_sm._topology.session) {
             const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(global_request_id);
-            const table_id& table_id = topology_requests_entry.truncate_table_id;
-            lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(table_id);
-
-            if (table) {
-                const sstring& ks_name = table->schema()->ks_name();
-                const sstring& cf_name = table->schema()->cf_name();
-
-                rtlogger.info("Performing TRUNCATE TABLE for {}.{}", ks_name, cf_name);
-
+            std::unordered_set<table_id> tables;
+            try {
+                tables = get_table_ids(topology_requests_entry);
+            } catch (std::exception& e) {
+                error = e.what();
+            }
+            if (!tables.empty()) {
                 // Collect the IDs of the hosts with replicas, but ignore excluded nodes
                 std::unordered_set<locator::host_id> replica_hosts;
-                const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-                co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                    for (const locator::tablet_replica& replica: tinfo.replicas) {
-                        if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
-                            replica_hosts.insert(replica.host);
+                for (auto table_id : tables) {
+                    const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+                    co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
+                        for (const locator::tablet_replica& replica: tinfo.replicas) {
+                            if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
+                                replica_hosts.insert(replica.host);
+                            }
                         }
-                    }
-                    return make_ready_future<>();
-                });
+                        return make_ready_future<>();
+                    });
+                }
 
                 // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
                 release_guard(std::move(guard));
 
-                co_await utils::get_local_injector().inject("truncate_table_wait", utils::wait_for_message(std::chrono::minutes(2)));
+                co_await utils::get_local_injector().inject(fmt::format("{}_table_wait", what), utils::wait_for_message(std::chrono::minutes(2)));
 
                 // Check if all the nodes with replicas are alive
                 for (const locator::host_id& replica_host: replica_hosts) {
                     if (!_gossiper.is_alive(replica_host)) {
-                        throw std::runtime_error(::format("Cannot perform TRUNCATE on table {}.{} because host {} is down", ks_name, cf_name, replica_host));
+                        throw std::runtime_error(::format("Cannot perform {} because host {} is down", desc(), replica_host));
                     }
                 }
 
                 // Send the RPC to all replicas
                 const service::frozen_topology_guard frozen_guard { _topo_sm._topology.session };
                 co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
-                    co_await ser::storage_proxy_rpc_verbs::send_truncate_with_tablets(&_messaging, host_id, ks_name, cf_name, frozen_guard);
+                    co_await send_rpc(host_id, frozen_guard);
                 });
-            } else {
-                error = ::format("Cannot TRUNCATE table with UUID {} because it does not exist.", table_id);
             }
 
             // Clear the session and save the error message
@@ -2296,15 +2309,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
 
                 try {
-                    co_await update_topology_state(std::move(guard), std::move(updates), "Clear truncate session");
+                    co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("Clear {} session", what));
                     break;
                 } catch (group0_concurrent_modification&) {
                 }
             }
         }
 
-        utils::get_local_injector().inject("truncate_crash_after_session_clear", [] {
-            rtlogger.info("truncate_crash_after_session_clear hit, killing the node");
+        utils::get_local_injector().inject(fmt::format("{}_crash_after_session_clear", what), [what] {
+            rtlogger.info("{}_crash_after_session_clear hit, killing the node", what);
             _exit(1);
         });
 
@@ -2330,11 +2343,74 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .build());
 
             try {
-                co_await update_topology_state(std::move(guard), std::move(updates), "Truncate has completed");
+                co_await update_topology_state(std::move(guard), std::move(updates), fmt::format("{}{} has completed", ::toupper(what[0]), what.substr(1)));
                 break;
             } catch (group0_concurrent_modification&) {
             }
         }
+    }
+
+    future<> handle_truncate_table(group0_guard guard) {
+        std::string ks_name, cf_name;
+
+        co_await handle_topology_ordered_op(std::move(guard)
+            , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
+                const table_id& id = topology_requests_entry.truncate_table_id;
+                lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(id);
+
+                if (table) {
+                    ks_name = table->schema()->ks_name();
+                    cf_name = table->schema()->cf_name();
+
+                    rtlogger.info("Performing TRUNCATE TABLE for {}.{}", ks_name, cf_name);
+
+                    return std::unordered_set<table_id>({ id });
+                }
+                throw std::invalid_argument(fmt::format("Cannot TRUNCATE table with UUID {} because it does not exist.", id));
+            }
+            , [&](locator::host_id host_id, const service::frozen_topology_guard& frozen_guard) {
+                return ser::storage_proxy_rpc_verbs::send_truncate_with_tablets(&_messaging, host_id, ks_name, cf_name, frozen_guard);
+            }
+            , [&] { 
+                return fmt::format("TRUNCATE on table {}.{}", ks_name, cf_name);
+            }
+            , "truncate"
+        );
+    }
+
+    future<> handle_snapshot_tables(group0_guard guard) {
+        utils::chunked_vector<table_id> ids;
+        sstring tag;
+        bool skip_flush;
+        gc_clock::time_point t;
+        std::optional<gc_clock::time_point> expiry;
+
+        co_await handle_topology_ordered_op(std::move(guard)
+            , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
+                tag = *topology_requests_entry.snapshot_tag;
+                skip_flush = topology_requests_entry.snapshot_skip_flush;
+                t = gc_clock::from_time_t(db_clock::to_time_t(topology_requests_entry.start_time));
+                if (topology_requests_entry.snapshot_expiry) {
+                    expiry = gc_clock::from_time_t(db_clock::to_time_t(*topology_requests_entry.snapshot_expiry));
+                }
+                for (auto& id : *topology_requests_entry.snapshot_table_ids) {
+                    lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(id);
+                    if (!table) {
+                        throw std::invalid_argument(fmt::format("Cannot SNAPSHOT table with UUID {} because it does not exist.", id));
+                    }
+                    ids.emplace_back(id);
+                }
+                rtlogger.info("Performing SNAPSHOT TABLES for {}", ids);
+                return *topology_requests_entry.snapshot_table_ids;
+            }
+            , [&](locator::host_id host_id, const service::frozen_topology_guard& frozen_guard) {
+                return ser::storage_proxy_rpc_verbs::send_snapshot_with_tablets(&_messaging, host_id, ids, tag, t, skip_flush, expiry, frozen_guard);
+            }
+            , [&] { 
+                return fmt::format("SNAPSHOT on tables {}", ids);
+            }
+            , "snapshot"
+        );
     }
 
     // This function must not release and reacquire the guard, callers rely
@@ -3212,6 +3288,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 break;
             case topology::transition_state::truncate_table:
                 co_await handle_truncate_table(std::move(guard));
+                break;
+            case topology::transition_state::snapshot_tables:
+                co_await handle_snapshot_tables(std::move(guard));
                 break;
         }
         co_return true;

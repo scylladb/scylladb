@@ -87,6 +87,7 @@ enum class global_topology_request: uint16_t {
     // Used to synchronize API calls with topology coordinator.
     // Ensures that all later requests and tablet scheduler will see prior updates to group0.
     noop_request,
+    snapshot_tables,
 };
 
 struct ring_slice {
@@ -131,6 +132,7 @@ struct topology {
         rollback_to_normal,
         truncate_table,
         lock,
+        snapshot_tables,
     };
 
     std::optional<transition_state> tstate;

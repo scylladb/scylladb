@@ -242,7 +242,10 @@ class storage_proxy::remote {
     const db::view::view_building_state_machine& _vb_state_machine;
     abort_source _group0_as;
 
+    // These two could probably share, but nice to
+    // have named separations...
     seastar::named_gate _truncate_gate;
+    seastar::named_gate _snapshot_gate;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -254,6 +257,7 @@ public:
                 sharded<paxos::paxos_store>& paxos_store, raft_group0_client& group0_client, topology_state_machine& tsm, const db::view::view_building_state_machine& vbsm)
         : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _paxos_store(paxos_store), _group0_client(group0_client), _topology_state_machine(tsm), _vb_state_machine(vbsm)
         , _truncate_gate("storage_proxy::remote::truncate_gate")
+        , _snapshot_gate("storage_proxy::remote::snapshot_gate")
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
     {
@@ -268,6 +272,7 @@ public:
         ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&remote::handle_read_digest, this));
         ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&remote::handle_truncate, this));
         ser::storage_proxy_rpc_verbs::register_truncate_with_tablets(&_ms, std::bind_front(&remote::handle_truncate_with_tablets, this));
+        ser::storage_proxy_rpc_verbs::register_snapshot_with_tablets(&_ms, std::bind_front(&remote::handle_snapshot_with_tablets, this));
         // Register PAXOS verb handlers
         ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&remote::handle_paxos_prepare, this));
         ser::storage_proxy_rpc_verbs::register_paxos_accept(&_ms, std::bind_front(&remote::handle_paxos_accept, this));
@@ -282,6 +287,7 @@ public:
     future<> stop() {
         _group0_as.request_abort();
         co_await _truncate_gate.close();
+        co_await _snapshot_gate.close();
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
         _stopped = true;
     }
@@ -472,6 +478,12 @@ public:
             slogger.warn("Timeout during TRUNCATE TABLE of {}.{}", ks_name, cf_name);
             throw std::runtime_error(format("Timeout during TRUNCATE TABLE of {}.{}", ks_name, cf_name));
         }
+    }
+
+    future<> snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>>& ks_cf_names, sstring tag, const db::snapshot_options& opts) {
+        co_await seastar::with_gate(_snapshot_gate, [&] () -> future<> {
+            co_await request_snapshot_with_tablets(ks_cf_names, tag, opts);
+        });
     }
 
     future<> send_truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms) {
@@ -971,6 +983,18 @@ private:
         co_await replica::database::truncate_table_on_all_shards(_sp._db, _sys_ks, ksname, cfname);
     }
 
+    future<> handle_snapshot_with_tablets(utils::chunked_vector<table_id> ids, sstring tag, gc_clock::time_point ts, bool skip_flush, std::optional<gc_clock::time_point> expiry, service::frozen_topology_guard frozen_guard) {
+        topology_guard guard(frozen_guard);
+        db::snapshot_options opts {
+            .skip_flush = skip_flush,
+            .created_at = ts,
+            .expires_at = expiry
+        };
+        co_await coroutine::parallel_for_each(ids, [&] (const table_id& id) -> future<> {
+            co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts);
+        });
+    }
+
     future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>
     handle_paxos_prepare(
             const rpc::client_info& cinfo, rpc::opt_time_point timeout,
@@ -1113,11 +1137,15 @@ private:
         }
     }
 
-    future<> request_truncate_with_tablets(sstring ks_name, sstring cf_name) {
+    using begin_op_func = std::function<std::string()>;
+    using can_replace_op_with_ongoing_func = std::function<bool(const db::system_keyspace::topology_requests_entry&, const service::global_topology_request&)>;
+    using create_op_mutations_func = std::function<global_topology_request(topology_request_tracking_mutation_builder&)>;
+
+    future<> do_topology_request(std::string_view reason, begin_op_func begin, can_replace_op_with_ongoing_func can_replace_op, create_op_mutations_func create_mutations, std::string_view origin) {
         if (this_shard_id() != 0) {
             // group0 is only set on shard 0
             co_return co_await _sp.container().invoke_on(0, [&] (storage_proxy& sp) {
-                return sp.remote().request_truncate_with_tablets(ks_name, cf_name);
+                return sp.remote().do_topology_request(reason, begin, can_replace_op, create_mutations, origin);
             });
         }
 
@@ -1126,10 +1154,10 @@ private:
         while (true) {
             group0_guard guard = co_await _group0_client.start_operation(_group0_as, raft_timeout{});
 
-            const table_id table_id = _sp.local_db().find_uuid(ks_name, cf_name);
+            auto desc = begin();
 
             if (!_sp._features.topology_global_request_queue) {
-                // Check if we already have a truncate queued for the same table. This can happen when a truncate has timed out
+                // Check if we already have a similar op for the same table. This can happen when a, say, truncate has timed out
                 // and the client retried by issuing the same truncate again. In this case, instead of failing the request with
                 // an "Another global topology request is ongoing" error, we can wait for the already queued request to complete.
                 // Note that we can not do this for a truncate which the topology coordinator has already started processing,
@@ -1138,21 +1166,15 @@ private:
                     utils::UUID ongoing_global_request_id = _topology_state_machine._topology.global_request_id.value();
                     const auto topology_requests_entry = co_await _sys_ks.local().get_topology_request_entry(ongoing_global_request_id);
                     auto global_request = std::get<service::global_topology_request>(topology_requests_entry.request_type);
-                    if (global_request == global_topology_request::truncate_table) {
-                        std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
-                        if (!tstate || *tstate != topology::transition_state::truncate_table) {
-                            if (topology_requests_entry.truncate_table_id == table_id) {
-                                global_request_id = ongoing_global_request_id;
-                                slogger.info("Ongoing TRUNCATE for table {}.{} (global request ID {}) detected; waiting for it to complete",
-                                                    ks_name, cf_name, global_request_id);
-                                break;
-                            }
-                        }
+
+                    if (can_replace_op(topology_requests_entry, global_request)) {
+                        global_request_id = ongoing_global_request_id;
+                        slogger.info("Ongoing {} (global request ID {}) detected; waiting for it to complete", desc, global_request_id);
+                        break;
                     }
-                    slogger.warn("Another global topology request ({}) is ongoing during attempt to TRUNCATE table {}.{}",
-                                    global_request, ks_name, cf_name);
-                    throw exceptions::invalid_request_exception(::format("Another global topology request is ongoing during attempt to TRUNCATE table {}.{}, please retry.",
-                                                                            ks_name, cf_name));
+
+                    slogger.warn("Another global topology request ({}) is ongoing during attempt to {}", global_request, desc);
+                    throw exceptions::invalid_request_exception(::format("Another global topology request is ongoing during attempt to {}, please retry.", desc));
                 }
             }
 
@@ -1160,28 +1182,24 @@ private:
 
             topology_mutation_builder builder(guard.write_timestamp());
             topology_request_tracking_mutation_builder trbuilder(global_request_id, _sp._features.topology_requests_type_column);
-            trbuilder.set_truncate_table_data(table_id)
-                     .set("done", false)
-                     .set("start_time", db_clock::now());
+
+            auto req = create_mutations(trbuilder);
 
             if (!_sp._features.topology_global_request_queue) {
-                builder.set_global_topology_request(global_topology_request::truncate_table)
+                builder.set_global_topology_request(req)
                        .set_global_topology_request_id(global_request_id);
             } else {
                 builder.queue_global_topology_request_id(global_request_id);
-                trbuilder.set("request_type", global_topology_request::truncate_table);
+                trbuilder.set("request_type", req);
             }
 
-            slogger.info("Creating TRUNCATE global topology request for table {}.{}", ks_name, cf_name);
-
             topology_change change{{builder.build(), trbuilder.build()}};
-            sstring reason = "Truncating table";
             group0_command g0_cmd = _group0_client.prepare_command(std::move(change), guard, reason);
             try {
                 co_await _group0_client.add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
                 break;
             } catch (group0_concurrent_modification&) {
-                slogger.debug("request_truncate_with_tablets: concurrent modification, retrying");
+                slogger.debug("{}: concurrent modification, retrying", origin);
             }
         }
 
@@ -1191,6 +1209,74 @@ private:
             throw std::runtime_error(error);
         }
     }
+
+    future<> request_truncate_with_tablets(sstring ks_name, sstring cf_name) {
+        table_id id;
+
+        co_await do_topology_request("Truncating table"
+            , [&] {
+                id = _sp.local_db().find_uuid(ks_name, cf_name);
+                return fmt::format("TRUNCATE table {}.{}", ks_name, cf_name);
+            }
+            , [&](const db::system_keyspace::topology_requests_entry& entry, const service::global_topology_request& global_request) {
+                if (global_request == global_topology_request::truncate_table) {
+                    const std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
+                    if (!tstate || *tstate != topology::transition_state::truncate_table) {
+                        return entry.truncate_table_id == id;
+                    }
+                }
+                return false;
+            }
+            , [&](topology_request_tracking_mutation_builder& trbuilder) {
+                trbuilder.set_truncate_table_data(id)
+                         .set("done", false)
+                         .set("start_time", db_clock::now());
+                slogger.info("Creating TRUNCATE global topology request for table {}.{}", ks_name, cf_name);
+                return global_topology_request::truncate_table;
+            }
+            , "request_truncate_with_tablets"
+        );
+    }
+
+    future<> request_snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>> ks_cf_names, sstring tag, const db::snapshot_options& opts) {
+        std::unordered_set<table_id> ids;
+        co_await do_topology_request("Snapshot table"
+            , [&] {
+                auto& db = _sp.local_db();
+                for (auto& [ks_name, cf_name] : ks_cf_names) {
+                    if (cf_name.empty()) {
+                        auto& ks = db.find_keyspace(ks_name);
+                        auto id_range = ks.metadata()->cf_meta_data() | std::views::values | std::views::transform(std::mem_fn(&schema::id));
+                        ids.insert(id_range.begin(), id_range.end());
+                    } else {
+                        ids.insert(db.find_uuid(ks_name, cf_name));
+                    }
+                }
+                return fmt::format("SNAPSHOT tables {}", ks_cf_names);
+            }
+            , [&](const db::system_keyspace::topology_requests_entry& entry, const service::global_topology_request& global_request) {
+                if (global_request == global_topology_request::snapshot_tables) {
+                    const std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
+                    if (!tstate || *tstate != topology::transition_state::snapshot_tables) {
+                        return entry.snapshot_table_ids == ids && entry.snapshot_tag == tag;
+                    }
+                }
+                return false;
+            }
+            , [&](topology_request_tracking_mutation_builder& trbuilder) {
+                trbuilder.set_snapshot_tables_data(ids, tag, opts.skip_flush)
+                         .set("done", false)
+                         .set("start_time", db_clock::now());
+                if (opts.expires_at) {
+                    trbuilder.set("snapshot_expiry", db_clock::from_time_t(gc_clock::to_time_t(*opts.expires_at)));
+                }
+                slogger.info("Creating SNAPSHOT global topology request for tables {}", ks_cf_names);
+                return global_topology_request::snapshot_tables;
+            }
+            , "request_snapshot_with_tablets"
+        );
+    }
+
 };
 
 using namespace exceptions;
@@ -7068,6 +7154,29 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     } else {
         co_await remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
     }
+}
+
+future<> storage_proxy::snapshot_keyspace(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, const db::snapshot_options& opts) {
+    if (!features().snapshot_as_topology_operation) {
+        throw std::runtime_error("Cannot do cluster wide snapshot. Feature 'snapshot_as_topology_operation' is not available in cluster");
+    }
+
+    for (auto& [ksname, _] : ks_tables) {
+        const replica::keyspace& ks = local_db().find_keyspace(ksname);
+        if (ks.get_replication_strategy().is_local()) {
+            throw std::invalid_argument(fmt::format("Keyspace {} uses local replication", ksname));
+        }
+        if (!ks.uses_tablets()) {
+            throw std::invalid_argument(fmt::format("Keyspace {} does not use tablets", ksname));
+        }
+    }
+
+    slogger.debug("Starting a blocking snapshot operation on keyspaces {}", ks_tables);
+
+    auto table_pairs = ks_tables | std::views::transform([](auto& p) { return std::pair<sstring, sstring>(p.first, p.second); }) 
+        | std::ranges::to<std::vector>()
+        ;
+    co_await remote().snapshot_with_tablets(table_pairs, tag, opts);
 }
 
 db::system_keyspace& storage_proxy::system_keyspace() {
