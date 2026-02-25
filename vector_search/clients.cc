@@ -117,15 +117,21 @@ future<clients::get_clients_result> clients::get_clients(abort_source& as) {
 }
 
 future<> clients::handle_changed(const std::vector<uri>& uris, const dns::host_address_map& addrs) {
-    clear();
+    // Build the new client list before swapping, so that _clients is never
+    // empty while new clients are being created. This avoids a race where
+    // the producer factory times out and returns _clients during construction.
+    clients_vec new_clients;
     for (const auto& uri : uris) {
         auto it = addrs.find(uri.host);
         if (it != addrs.end()) {
             for (const auto& addr : it->second) {
-                _clients.push_back(co_await make_client(uri, addr));
+                new_clients.push_back(co_await make_client(uri, addr));
             }
         }
     }
+
+    _old_clients.insert(_old_clients.end(), std::make_move_iterator(_clients.begin()), std::make_move_iterator(_clients.end()));
+    _clients = std::move(new_clients);
 
     _refresh_cv.broadcast();
     co_await close_old_clients();
