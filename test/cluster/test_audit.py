@@ -8,6 +8,7 @@ import asyncio
 import copy
 import datetime
 import enum
+import functools
 import itertools
 import logging
 import os.path
@@ -1138,6 +1139,8 @@ class TestCQLAudit(AuditTester):
         with self.assert_entries_were_added(session, [expected_entry]):
             assert_invalid(session, stmt, expected=InvalidRequest)
 
+        session.execute("DROP ROLE IF EXISTS test_role")
+
     async def test_negative_audit_records_ddl(self):
         """
         Test that failed DDL statements are audited.
@@ -1253,6 +1256,8 @@ class TestCQLAudit(AuditTester):
             servers = await self.manager.running_servers()
             test_auth = PlainTextAuthProvider(username="test", password="test")
             await self.manager.get_cql_exclusive(servers[0], auth_provider=test_auth)
+
+        session.execute("DROP USER IF EXISTS test")
 
     async def test_cassandra_login(self):
         """
@@ -1492,6 +1497,8 @@ class TestCQLAudit(AuditTester):
                 table="test1",
                 expected_error=Unauthorized,
             )
+
+            session.execute("DROP USER IF EXISTS test")
 
     async def test_batch(self, helper_class):
         """
@@ -1735,168 +1742,185 @@ class TestCQLAudit(AuditTester):
                 session.execute("DROP KEYSPACE IF EXISTS kss")
 
 
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_using_non_existent_keyspace(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_using_non_existent_keyspace(helper_class=helper_class)
-    await manager.mark_clean()
+# AuditBackendTable, no auth, rf=1d
 
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_audit_keyspace(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_audit_keyspace(helper_class=helper_class)
-    await manager.mark_clean()
+async def test_audit_table_noauth(manager: ManagerClient):
+    """Table backend, no auth, single node — groups all tests that share this config."""
+    t = TestCQLAudit(manager)
+    await t.test_using_non_existent_keyspace(AuditBackendTable)
+    await t.test_audit_keyspace(AuditBackendTable)
+    await t.test_audit_keyspace_extra_parameter(AuditBackendTable)
+    await t.test_audit_keyspace_many_ks(AuditBackendTable)
+    await t.test_audit_keyspace_table_not_exists(AuditBackendTable)
+    await t.test_audit_audit_ks()
+    await t.test_audit_table()
+    await t.test_audit_table_extra_parameter()
+    await t.test_audit_table_audit_keyspaces_empty()
+    await t.test_audit_table_no_ks()
+    await t.test_audit_categories_part1()
+    await t.test_audit_categories_part2(AuditBackendTable)
+    await t.test_audit_categories_part3(AuditBackendTable)
+    await t.test_categories()
+    await t.test_negative_audit_records_query()
+    await t.test_prepare(AuditBackendTable)
+    await t.test_batch(AuditBackendTable)
+    await t.test_config_no_liveupdate(AuditBackendTable, TestCQLAudit.AuditSighupConfigChanger)
+    await t.test_config_no_liveupdate(AuditBackendTable, TestCQLAudit.AuditCqlConfigChanger)
 
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_audit_keyspace_extra_parameter(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_audit_keyspace_extra_parameter(helper_class)
-    await manager.mark_clean()
 
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_audit_keyspace_many_ks(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_audit_keyspace_many_ks(helper_class)
-    await manager.mark_clean()
+# AuditBackendTable, no auth, rf=3d
 
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_audit_keyspace_table_not_exists(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_audit_keyspace_table_not_exists(helper_class)
-    await manager.mark_clean()
+async def test_audit_table_noauth_multinode(manager: ManagerClient):
+    """Table backend, no auth, multi-node (rf=3)."""
+    t = TestCQLAudit(manager)
+    await t.test_config_liveupdate(AuditBackendTable, TestCQLAudit.AuditSighupConfigChanger)
+    await t.test_config_liveupdate(AuditBackendTable, TestCQLAudit.AuditCqlConfigChanger)
+    await t.test_parallel_syslog_audit(AuditBackendTable)
 
-async def test_audit_type_none(manager: ManagerClient):
+
+# AuditBackendTable, auth (cassandra), rf=1d
+
+async def test_audit_table_auth(manager: ManagerClient):
+    """Table backend, auth enabled, single node."""
+    t = TestCQLAudit(manager)
+    await t.test_user_password_masking(AuditBackendTable)
+    await t.test_negative_audit_records_auth()
+    await t.test_negative_audit_records_admin()
+    await t.test_negative_audit_records_dml()
+    await t.test_negative_audit_records_dcl()
+    await t.test_role_password_masking(AuditBackendTable)
+    await t.test_login()
+    await t.test_cassandra_login()
+    await t.test_permissions(AuditBackendTable)
+
+
+# AuditBackendTable, auth (cassandra), rf=3d
+
+async def test_audit_table_auth_multinode(manager: ManagerClient):
+    """Table backend, auth enabled, multi-node (rf=3)."""
+    t = TestCQLAudit(manager)
+    await t.test_negative_audit_records_ddl()
+
+
+# AuditBackendTable, standalone / special configd
+
+async def test_audit_type_none_standalone(manager: ManagerClient):
+    """audit=None — verify no auditing occurs."""
     await TestCQLAudit(manager).test_audit_type_none()
-    await manager.mark_clean()
 
-async def test_audit_type_invalid(manager: ManagerClient):
+
+async def test_audit_type_invalid_standalone(manager: ManagerClient):
+    """audit=invalid — server should fail to start."""
     await TestCQLAudit(manager).test_audit_type_invalid()
 
-async def test_composite_audit_type_invalid(manager: ManagerClient):
+
+async def test_composite_audit_type_invalid_standalone(manager: ManagerClient):
+    """audit=table,syslog,invalid — server should fail to start."""
     await TestCQLAudit(manager).test_composite_audit_type_invalid()
 
-async def test_audit_empty_settings(manager: ManagerClient):
+
+async def test_audit_empty_settings_standalone(manager: ManagerClient):
+    """audit=none — verify no auditing occurs."""
     await TestCQLAudit(manager).test_audit_empty_settings()
-    await manager.mark_clean()
 
-async def test_composite_audit_empty_settings(manager: ManagerClient):
+
+async def test_composite_audit_empty_settings_standalone(manager: ManagerClient):
+    """audit=table,syslog,none — verify no auditing occurs."""
     await TestCQLAudit(manager).test_composite_audit_empty_settings()
-    await manager.mark_clean()
 
-async def test_audit_audit_ks(manager: ManagerClient):
-    await TestCQLAudit(manager).test_audit_audit_ks()
-    await manager.mark_clean()
 
-async def test_audit_categories_invalid(manager: ManagerClient):
+async def test_audit_categories_invalid_standalone(manager: ManagerClient):
+    """Invalid audit_categories — server should fail to start."""
     await TestCQLAudit(manager).test_audit_categories_invalid()
 
-async def test_audit_table(manager: ManagerClient):
-    await TestCQLAudit(manager).test_audit_table()
-    await manager.mark_clean()
 
-async def test_audit_table_extra_parameter(manager: ManagerClient):
-    await TestCQLAudit(manager).test_audit_table_extra_parameter()
-    await manager.mark_clean()
-
-async def test_audit_table_audit_keyspaces_empty(manager: ManagerClient):
-    await TestCQLAudit(manager).test_audit_table_audit_keyspaces_empty()
-    await manager.mark_clean()
-
-async def test_audit_table_no_ks(manager: ManagerClient):
-    await TestCQLAudit(manager).test_audit_table_no_ks()
-    await manager.mark_clean()
-
-async def test_audit_categories_part1(manager: ManagerClient):
-    await TestCQLAudit(manager).test_audit_categories_part1()
-    await manager.mark_clean()
-
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_audit_categories_part2(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_audit_categories_part2(helper_class)
-    await manager.mark_clean()
-
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_audit_categories_part3(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_audit_categories_part3(helper_class)
-    await manager.mark_clean()
-
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_user_password_masking(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_user_password_masking(helper_class)
-    await manager.mark_dirty()
-
-async def test_negative_audit_records_auth(manager: ManagerClient):
-    await TestCQLAudit(manager).test_negative_audit_records_auth()
-    await manager.mark_dirty()
-
-async def test_negative_audit_records_admin(manager: ManagerClient):
-    await TestCQLAudit(manager).test_negative_audit_records_admin()
-    await manager.mark_dirty()
-
-async def test_negative_audit_records_ddl(manager: ManagerClient):
-    await TestCQLAudit(manager).test_negative_audit_records_ddl()
-    await manager.mark_dirty()
-
-async def test_negative_audit_records_dml(manager: ManagerClient):
-    await TestCQLAudit(manager).test_negative_audit_records_dml()
-    await manager.mark_dirty()
-
-async def test_negative_audit_records_dcl(manager: ManagerClient):
-    await TestCQLAudit(manager).test_negative_audit_records_dcl()
-    await manager.mark_dirty()
-
-async def test_negative_audit_records_query(manager: ManagerClient):
-    await TestCQLAudit(manager).test_negative_audit_records_query()
-
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_role_password_masking(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_role_password_masking(helper_class)
-    await manager.mark_dirty()
-
-async def test_login(manager: ManagerClient):
-    await TestCQLAudit(manager).test_login()
-    await manager.mark_dirty()
-
-async def test_cassandra_login(manager: ManagerClient):
-    await TestCQLAudit(manager).test_cassandra_login()
-    await manager.mark_dirty()
-
-async def test_categories(manager: ManagerClient):
-    await TestCQLAudit(manager).test_categories()
-    await manager.mark_clean()
-
-async def test_insert_failure_doesnt_report_success(manager: ManagerClient):
+async def test_insert_failure_standalone(manager: ManagerClient):
+    """7-node topology, audit=table, no auth — standalone due to unique topology."""
     await TestCQLAudit(manager).test_insert_failure_doesnt_report_success()
-    await manager.mark_dirty()
 
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_prepare(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_prepare(helper_class)
-    await manager.mark_clean()
 
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_permissions(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_permissions(helper_class)
-    await manager.mark_dirty()
-
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_batch(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_batch(helper_class)
-    await manager.mark_clean()
-
-async def test_service_level_statements(manager: ManagerClient):
+async def test_service_level_statements_standalone(manager: ManagerClient):
+    """audit=table, auth, cmdline=--smp 1 — standalone due to special cmdline."""
     await TestCQLAudit(manager).test_service_level_statements()
-    await manager.mark_dirty()
 
-@pytest.mark.parametrize("audit_config_changer", [TestCQLAudit.AuditSighupConfigChanger, TestCQLAudit.AuditCqlConfigChanger])
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_config_liveupdate(manager: ManagerClient, helper_class, audit_config_changer):
-    await TestCQLAudit(manager).test_config_liveupdate(helper_class, audit_config_changer)
-    await manager.mark_clean()
 
-@pytest.mark.parametrize("audit_config_changer", [TestCQLAudit.AuditSighupConfigChanger, TestCQLAudit.AuditCqlConfigChanger])
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_config_no_liveupdate(manager: ManagerClient, helper_class, audit_config_changer):
-    await TestCQLAudit(manager).test_config_no_liveupdate(helper_class, audit_config_changer)
-    await manager.mark_clean()
+# AuditBackendSyslog, no auth, rf=1d
 
-@pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
-async def test_parallel_syslog_audit(manager: ManagerClient, helper_class):
-    await TestCQLAudit(manager).test_parallel_syslog_audit(helper_class)
-    await manager.mark_clean()
+async def test_audit_syslog_noauth(manager: ManagerClient):
+    """Syslog backend, no auth, single node."""
+    t = TestCQLAudit(manager)
+    Syslog = functools.partial(AuditBackendSyslog, socket_path=_syslog_socket_path)
+    await t.test_using_non_existent_keyspace(Syslog)
+    await t.test_audit_keyspace(Syslog)
+    await t.test_audit_keyspace_extra_parameter(Syslog)
+    await t.test_audit_keyspace_many_ks(Syslog)
+    await t.test_audit_keyspace_table_not_exists(Syslog)
+    await t.test_audit_categories_part2(Syslog)
+    await t.test_audit_categories_part3(Syslog)
+    await t.test_prepare(Syslog)
+    await t.test_batch(Syslog)
+    await t.test_config_no_liveupdate(Syslog, TestCQLAudit.AuditSighupConfigChanger)
+    await t.test_config_no_liveupdate(Syslog, TestCQLAudit.AuditCqlConfigChanger)
 
+
+# AuditBackendSyslog, no auth, rf=3d
+
+async def test_audit_syslog_noauth_multinode(manager: ManagerClient):
+    """Syslog backend, no auth, multi-node (rf=3)."""
+    t = TestCQLAudit(manager)
+    Syslog = functools.partial(AuditBackendSyslog, socket_path=_syslog_socket_path)
+    await t.test_config_liveupdate(Syslog, TestCQLAudit.AuditSighupConfigChanger)
+    await t.test_config_liveupdate(Syslog, TestCQLAudit.AuditCqlConfigChanger)
+    await t.test_parallel_syslog_audit(Syslog)
+
+
+# AuditBackendSyslog, auth, rf=1d
+
+async def test_audit_syslog_auth(manager: ManagerClient):
+    """Syslog backend, auth enabled, single node."""
+    t = TestCQLAudit(manager)
+    Syslog = functools.partial(AuditBackendSyslog, socket_path=_syslog_socket_path)
+    await t.test_user_password_masking(Syslog)
+    await t.test_role_password_masking(Syslog)
+    await t.test_permissions(Syslog)
+
+
+# AuditBackendComposite, no auth, rf=1d
+
+async def test_audit_composite_noauth(manager: ManagerClient):
+    """Composite backend (table+syslog), no auth, single node."""
+    t = TestCQLAudit(manager)
+    Composite = functools.partial(AuditBackendComposite, socket_path=_syslog_socket_path)
+    await t.test_using_non_existent_keyspace(Composite)
+    await t.test_audit_keyspace(Composite)
+    await t.test_audit_keyspace_extra_parameter(Composite)
+    await t.test_audit_keyspace_many_ks(Composite)
+    await t.test_audit_keyspace_table_not_exists(Composite)
+    await t.test_audit_categories_part2(Composite)
+    await t.test_audit_categories_part3(Composite)
+    await t.test_prepare(Composite)
+    await t.test_batch(Composite)
+    await t.test_config_no_liveupdate(Composite, TestCQLAudit.AuditSighupConfigChanger)
+    await t.test_config_no_liveupdate(Composite, TestCQLAudit.AuditCqlConfigChanger)
+
+
+# AuditBackendComposite, no auth, rf=3d
+
+async def test_audit_composite_noauth_multinode(manager: ManagerClient):
+    """Composite backend (table+syslog), no auth, multi-node (rf=3)."""
+    t = TestCQLAudit(manager)
+    Composite = functools.partial(AuditBackendComposite, socket_path=_syslog_socket_path)
+    await t.test_config_liveupdate(Composite, TestCQLAudit.AuditSighupConfigChanger)
+    await t.test_config_liveupdate(Composite, TestCQLAudit.AuditCqlConfigChanger)
+    await t.test_parallel_syslog_audit(Composite)
+
+
+# AuditBackendComposite, auth, rf=1
+
+async def test_audit_composite_auth(manager: ManagerClient):
+    """Composite backend (table+syslog), auth enabled, single node."""
+    t = TestCQLAudit(manager)
+    Composite = functools.partial(AuditBackendComposite, socket_path=_syslog_socket_path)
+    await t.test_user_password_masking(Composite)
+    await t.test_role_password_masking(Composite)
+    await t.test_permissions(Composite)
