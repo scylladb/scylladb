@@ -58,6 +58,20 @@ def test_table_ts_ss(scylla_only, dynamodb):
     yield table
     table.delete()
 
+# A table with hash key, system:timestamp_attribute='ts' tag, and
+# system:write_isolation='always' to test rejection in LWT_ALWAYS mode.
+# In always_use_lwt mode, every write uses LWT, so the timestamp attribute
+# feature cannot be used at all.
+@pytest.fixture(scope="module")
+def test_table_ts_lwt(scylla_only, dynamodb):
+    table = create_test_table(dynamodb,
+        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'},
+              {'Key': 'system:write_isolation', 'Value': 'always'}],
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    yield table
+    table.delete()
+
 # Test that PutItem with the timestamp attribute uses the given numeric
 # value as the write timestamp, and the timestamp attribute is NOT stored
 # in the item.
@@ -169,6 +183,15 @@ def test_timestamp_attribute_with_condition_rejected(test_table_ts):
             Item={'p': p, 'val': 'updated', 'ts': LARGE_TS},
             ConditionExpression='attribute_exists(p)'
         )
+
+# Test that using the timestamp attribute with the 'always' write isolation
+# policy is rejected, because in always_use_lwt mode every write uses LWT
+# (including unconditional ones), which is incompatible with custom timestamps.
+def test_timestamp_attribute_lwt_always_rejected(test_table_ts_lwt):
+    p = random_string()
+    # Even a plain PutItem with a timestamp is rejected in LWT_ALWAYS mode
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts_lwt.put_item(Item={'p': p, 'val': 'hello', 'ts': LARGE_TS})
 
 # Test that when the timestamp attribute has a non-numeric value, the write
 # is rejected with a ValidationException.

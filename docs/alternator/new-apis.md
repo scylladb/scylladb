@@ -238,22 +238,23 @@ UpdateItem request. To use this feature:
    controls the write timestamp. If you also want to record the timestamp
    as data, use a separate attribute for that purpose.
 
-4. If the named attribute is absent or has a non-numeric value, the write
-   proceeds normally using the current time as the timestamp.
+4. If the named attribute is absent, the write proceeds normally using the
+   current server time as the timestamp. If the named attribute is present
+   but has a non-numeric value, the write is rejected with a ValidationException.
 
 ### Limitations
 
-- **Incompatible with conditions**: If the write would require LWT
-  (lightweight transactions) - either because it includes a
-  ConditionExpression, or because the `always` write isolation policy is
-  in effect - the operation is rejected with a ValidationException. This
-  is because LWT requires the write timestamp to be set by the Paxos
-  protocol, not by the client.
+- **Incompatible with conditions**: If the write includes a ConditionExpression
+  (or uses the `Expected` legacy condition), LWT is needed and the operation
+  is rejected with a ValidationException, because LWT requires the write
+  timestamp to be set by the Paxos protocol, not by the client.
 
-- **Not supported in UpdateItem with LWT_ALWAYS isolation**: Tables using
-  the `always` write isolation policy cannot use the timestamp attribute
-  feature at all. Consider switching to `only_rmw_uses_lwt` or `forbid_rmw`
-  mode if you need custom timestamps.
+- **Incompatible with `always` write isolation**: Tables using the `always`
+  (or `always_use_lwt`) write isolation policy cannot use the timestamp
+  attribute feature at all, because every write uses LWT in that mode.
+  When using `system:timestamp_attribute`, consider tagging the table with
+  `system:write_isolation=only_rmw_uses_lwt` (or `forbid_rmw`) so that
+  unconditional writes do not use LWT.
 
 ### Example use case
 
