@@ -78,6 +78,7 @@ schema_ptr make_tablets_schema() {
             .with_column("session", uuid_type)
             .with_column("resize_type", utf8_type, column_kind::static_column)
             .with_column("resize_seq_number", long_type, column_kind::static_column)
+            .with_column("isolated_tablet_for_merge", long_type, column_kind::static_column)
             .with_column("repair_time", timestamp_type)
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
@@ -160,6 +161,12 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
     m.set_static_cell("table_name", data_value(table_name), ts);
     m.set_static_cell("resize_type", data_value(tablets.resize_decision().type_name()), ts);
     m.set_static_cell("resize_seq_number", data_value(int64_t(tablets.resize_decision().sequence_number)), ts);
+    if (tablets.resize_decision().is_merge()) {
+        auto& merge = std::get<resize_decision::merge>(tablets.resize_decision().way);
+        if (merge.isolated_tablet) {
+            m.set_static_cell("isolated_tablet_for_merge", data_value(int64_t(size_t(*merge.isolated_tablet))), ts);
+        }
+    }
     if (features.tablet_resize_virtual_task && tablets.resize_task_info().is_valid()) {
         m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(tablets.resize_task_info()), ts);
     }
@@ -293,6 +300,12 @@ tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_dec
     _m.set_static_cell("resize_type", data_value(resize_decision.type_name()), _ts);
     _m.set_static_cell("resize_seq_number", data_value(int64_t(resize_decision.sequence_number)), _ts);
     if (resize_decision.split_or_merge()) {
+        if (resize_decision.is_merge()) {
+            auto& merge = std::get<resize_decision::merge>(resize_decision.way);
+            if (merge.isolated_tablet) {
+                _m.set_static_cell("isolated_tablet_for_merge", data_value(int64_t(size_t(*merge.isolated_tablet))), _ts);
+            }
+        }
         auto resize_task_info = std::holds_alternative<resize_decision::split>(resize_decision.way)
             ? locator::tablet_task_info::make_split_request()
             : locator::tablet_task_info::make_merge_request();
@@ -598,7 +611,12 @@ void update_tablet_metadata_change_hint(locator::tablet_metadata_change_hint& hi
 
 namespace {
 
-tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid, const cql3::untyped_result_set_row& row) {
+using updating = bool_class<struct updating_tag>;
+
+// is_updating == updating::yes means we're making random updates of an already populated tablet_map.
+// Otherwise, we're populating a tablet_map constructed with tablet_map::initialized_later.
+tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid,
+                          const cql3::untyped_result_set_row& row, updating is_updating) {
     tablet_replica_set tablet_replicas;
     if (row.has("replicas")) {
         tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
@@ -657,7 +675,20 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     }
 
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at});
+
+    auto last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
+    auto info = tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at};
+    if (is_updating) {
+        auto old_last_token = map.get_last_token(tid);
+        if (last_token != old_last_token) {
+            // Boundary changes require a full tablet_map refresh.
+            on_internal_error(tablet_logger, format("Inconsistent last_token for table {} tablet {}: {} != {}",
+                    table, tid, last_token, old_last_token));
+        }
+        map.set_tablet(tid, std::move(info));
+    } else {
+        map.emplace_tablet(tid, last_token, std::move(info));
+    }
 
     if (row.has("raft_group_id")) {
         if (!map.has_raft_info()) {
@@ -685,14 +716,6 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
                 break;
             }
         }
-    }
-
-    auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
-    auto current_last_token = map.get_last_token(tid);
-    if (current_last_token != persisted_last_token) {
-        tablet_logger.debug("current tablet_map: {}", map);
-        throw std::runtime_error(format("last_token mismatch between on-disk ({}) and in-memory ({}) tablet map for table {} tablet {}",
-                                        persisted_last_token, current_last_token, table, tid));
     }
 
     return *map.next_tablet(tid);
@@ -727,7 +750,7 @@ struct tablet_metadata_builder {
             } else {
                 auto tablet_count = row.get_as<int>("tablet_count");
                 auto with_raft_info = db->features().strongly_consistent_tables && row.has("raft_group_id");
-                auto tmap = tablet_map(tablet_count, with_raft_info);
+                auto tmap = tablet_map(tablet_count, with_raft_info, tablet_map::initialized_later());
                 auto first_tablet = tmap.first_tablet();
                 current = active_tablet_map{table, std::move(tmap), first_tablet};
             }
@@ -736,8 +759,20 @@ struct tablet_metadata_builder {
             if (row.has("resize_type") && row.has("resize_seq_number")) {
                 auto resize_type_name = row.get_as<sstring>("resize_type");
                 int64_t resize_seq_number = row.get_as<int64_t>("resize_seq_number");
-
-                locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
+                locator::resize_decision resize_decision = std::invoke([&] {
+                    if (resize_type_name == "none") {
+                        return locator::resize_decision(resize_seq_number);
+                    } else if (resize_type_name == "split") {
+                        return locator::resize_decision(locator::resize_decision::split(), resize_seq_number);
+                    } else if (resize_type_name == "merge") {
+                        return locator::resize_decision(locator::resize_decision::merge {
+                            .isolated_tablet = row.get_opt<int64_t>("isolated_tablet_for_merge")
+                                    .transform([] (int64_t v) { return tablet_id(v); })
+                        }, resize_seq_number);
+                    } else {
+                        throw std::runtime_error(format("Unknown resize_type '{}' for table {}", resize_type_name, table));
+                    }
+                });
                 current->map.set_resize_decision(std::move(resize_decision));
             }
             if (row.has("resize_task_info")) {
@@ -751,7 +786,7 @@ struct tablet_metadata_builder {
         }
 
         if (row.has("last_token")) {
-            current->tid = process_one_row(db, current->table, current->map, current->tid, row);
+            current->tid = process_one_row(db, current->table, current->map, current->tid, row, updating::no);
         }
     }
 
@@ -860,7 +895,7 @@ do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp,
             throw std::runtime_error("Failed to update tablet metadata: updated row is empty");
         } else {
             tmap.clear_tablet_transition_info(tid);
-            process_one_row(&db, hint.table_id, tmap, tid, res->one());
+            process_one_row(&db, hint.table_id, tmap, tid, res->one(), updating::yes);
         }
     }
 }

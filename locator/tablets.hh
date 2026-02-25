@@ -57,6 +57,33 @@ struct tablet_id {
     auto operator<=>(const tablet_id&) const = default;
 };
 
+/// Determines properties of tablet layout in a given table (tablet_map).
+enum class tablet_layout {
+    // Tablet count is a power of 2.
+    // Tablet boundaries start and end at whole tokens.
+    // Every token is owned by exactly one tablet.
+    //
+    // Tablet token ranges are adjacent, with subsequent tablets owning higher tokens.
+    // Tablet of index i covers the range (a, b], where:
+    //
+    //    a = i == 0 ? dht::minimum_token() : last_token[i-1]
+    //    b = last_token[i]
+    //
+    // Boundary tokens are evenly distributed in token space:
+    //
+    //     last_token[i] = i < tablet_count - 1 ? dht::bias((uint64_t(i + 1) << (64 - log2ceil(tablet_count))) - 1)
+    //                                          : dht::maximum_token()
+    pow_of_2,
+
+    // Tablet count can be any integer greater than 0.
+    // Tablet boundaries end and start at whole tokens.
+    // Each tablet owns at least one token.
+    // Every token is owned by exactly one tablet.
+    // Tablet token ranges are adjacent, with subsequent tablets owning higher tokens.
+    // As long as the above holds, boundary tokens can be arbitrary.
+    arbitrary
+};
+
 /// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
 struct global_tablet_id {
     table_id table;
@@ -400,6 +427,9 @@ struct resize_decision {
         auto operator<=>(const split&) const = default;
     };
     struct merge {
+        // In case the current tablet count is odd, this is the id of the tablet
+        // which will not be merged.
+        std::optional<tablet_id> isolated_tablet;
         auto operator<=>(const merge&) const = default;
     };
     using way_type = std::variant<none, split, merge>;
@@ -415,7 +445,22 @@ struct resize_decision {
     seq_number_t sequence_number = 0;
 
     resize_decision() = default;
-    resize_decision(sstring decision, uint64_t seq_number);
+
+    resize_decision(uint64_t seq_number)
+        : way(none{})
+        , sequence_number(seq_number)
+    {}
+
+    resize_decision(merge m, uint64_t seq_number)
+        : way(std::move(m))
+        , sequence_number(seq_number)
+    {}
+
+    resize_decision(split s, uint64_t seq_number)
+        : way(std::move(s))
+        , sequence_number(seq_number)
+    {}
+
     bool is_none() const {
         return std::holds_alternative<resize_decision::none>(way);
     }
@@ -436,6 +481,7 @@ struct resize_decision {
 using resize_decision_way = resize_decision::way_type;
 
 struct table_load_stats {
+    // Total size of the table if it had RF=1.
     uint64_t size_in_bytes = 0;
     // Stores the minimum seq number among all replicas, as coordinator wants to know if
     // all replicas have completed splitting, which happens when they all store the
@@ -495,6 +541,9 @@ struct load_stats {
 
     std::optional<uint64_t> get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const;
 
+    // Returns average size of tablet replica of a given tablet, or nullopt if information is incomplete.
+    std::optional<uint64_t> get_avg_tablet_size(const tablet_map&, global_tablet_id) const;
+
     // Returns the tablet size on the given host. If the tablet size is not found on the host, we will search for it on
     // other hosts based on the tablet transition info:
     // - if the tablet is in migration, and the given host is pending, the tablet size will be searched on the leaving replica
@@ -540,6 +589,69 @@ public:
     no_such_tablet_map(const table_id& id);
 };
 
+/// Allows looking up tablet_id of the tablet which owns a given token.
+///
+/// Conceptually like std::map<dht::token, tablet_id>, where the token
+/// is the split point (last token) for a given tablet,
+/// and get_tablet_id(token) is like lower_bound(token)->second.
+///
+/// Optimized for the typical case where tokens are more or less evenly
+/// spaced in the token space, in which case lookup will be constant time.
+class tablet_id_map {
+    // log2 of intended number of _buckets post-population.
+    uint8_t _log2_tablets;
+
+    // Covers the whole token space with assignment of tablet_id to token ranges.
+    // The elements describe a token range corresponding to the i-th range in the
+    // uniformly split token space, split into 2^_log2_tablets ranges.
+    //
+    // The tablet_id assigned to the range means that this tablet owns the first
+    // token in that range. There could be other tablets overlapping with the
+    // bucket's range, but only the lowest tablet_id is kept.
+    //
+    // If tablet count is a power-of-two and tablet boundaries align with the uniform token
+    // distribution then _buckets[i] == tablet_id(i).
+    utils::chunked_vector<tablet_id> _buckets;
+
+    // Determines tablet boundaries in token space.
+    // One entry per tablet.
+    // Tablet i owns the range (a, b], where:
+    //   a = i == 0 ? minimum_token() : _last_tokens[i-1]
+    //   b = _last_tokens[i]
+    utils::chunked_vector<dht::raw_token> _last_tokens;
+public:
+    /// Prepares an empty tablet_id_map for population with a given tablet count.
+    /// Must call push_back() tablet_count times to populate the map.
+    explicit tablet_id_map(size_t tablet_count);
+
+    /// Builds a map according to given tablet boundaries.
+    tablet_id_map(const utils::chunked_vector<dht::raw_token>& last_tokens);
+
+    [[nodiscard]] size_t log2_count() const { return _log2_tablets; }
+    [[nodiscard]] size_t tablet_count() const { return _last_tokens.size(); }
+    [[nodiscard]] dht::raw_token get_last_token(tablet_id id) const { return _last_tokens[id.value()]; }
+    [[nodiscard]] tablet_layout get_layout() const;
+
+    static tablet_layout get_layout(const utils::chunked_vector<dht::raw_token>& last_tokens);
+
+    /// Adds a new mapping for the next tablet whose range will be recorded to start
+    /// after the last token of the previously added entry and end at last_token (inclusive).
+    /// last_token in subsequent calls must increase.
+    void push_back(dht::token last_token, tablet_id id);
+
+    /// Returns tablet_id of a tablet which owns a given token.
+    [[nodiscard]] tablet_id get_tablet_id(dht::token t) const;
+    [[nodiscard]] tablet_id get_tablet_id(dht::raw_token t) const;
+
+    bool operator==(const tablet_id_map&) const = default;
+    bool operator!=(const tablet_id_map&) const = default;
+
+    [[nodiscard]] size_t external_memory_usage() const;
+
+    [[nodiscard]] future<tablet_id_map> clone_gently() const;
+    future<> clear_gently();
+};
+
 /// Stores information about tablets of a single table.
 ///
 /// The map contains a constant number of tablets, tablet_count().
@@ -559,14 +671,11 @@ class tablet_map {
 public:
     using tablet_container = utils::chunked_vector<tablet_info>;
     using raft_info_container = utils::chunked_vector<tablet_raft_info>;
+    struct initialized_later {};
 private:
     using transitions_map = std::unordered_map<tablet_id, tablet_transition_info>;
-    // The implementation assumes that _tablets.size() is a power of 2:
-    //
-    //   _tablets.size() == 1 << _log2_tablets
-    //
+    tablet_id_map _tablet_ids;
     tablet_container _tablets;
-    size_t _log2_tablets; // log_2(_tablets.size())
     transitions_map _transitions;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
@@ -574,30 +683,46 @@ private:
     raft_info_container _raft_info;
 
     // Internal constructor, used by clone() and clone_gently().
-    tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions,
-        resize_decision resize_decision, tablet_task_info resize_task_info,
-        std::optional<repair_scheduler_config> repair_scheduler_config,
-        raft_info_container raft_info)
-        : _tablets(std::move(tablets))
-        , _log2_tablets(log2_tablets)
+    tablet_map(tablet_id_map ids,
+               tablet_container tablets,
+               transitions_map transitions,
+               resize_decision resize_decision,
+               tablet_task_info resize_task_info,
+               std::optional<repair_scheduler_config> repair_scheduler_config,
+               raft_info_container raft_info)
+        : _tablet_ids(std::move(ids))
+        , _tablets(std::move(tablets))
         , _transitions(std::move(transitions))
         , _resize_decision(resize_decision)
         , _resize_task_info(std::move(resize_task_info))
         , _repair_scheduler_config(std::move(repair_scheduler_config))
         , _raft_info(std::move(raft_info))
     {}
-
-    /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
-    dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
-
-    /// Returns token_range which contains all tokens owned by the specified tablet
-    /// when the tablet_count is `1 << log2_tablets`.
-    dht::token_range get_token_range(tablet_id id, size_t log2_tablets) const;
 public:
     /// Constructs a tablet map.
+    /// Tablet boundaries will be uniformly distributed in token space.
     ///
-    /// \param tablet_count The desired tablets to allocate. Must be a power of two.
+    /// \param tablet_count The desired tablets to allocate.
     explicit tablet_map(size_t tablet_count, bool with_raft_info = false);
+
+    /// Constructs a tablet map.
+    /// Tablet boundaries are determined by the last_tokens parameter.
+    /// last_tokens[i] is the last token (inclusive) of tablet_id(i), where i == 0 refers to the first tablet.
+    ///
+    /// \param last_tokens The token boundaries of tablets.
+    explicit tablet_map(utils::chunked_vector<dht::raw_token> last_tokens, bool with_raft_info = false);
+
+    /// Constructs a tablet map without initializing its contents, for incremental population.
+    /// Prepared to hold tablet_count tablets.
+    ///
+    /// It must be populated by calling emplace_tablet() tablet_count times, for every tablet.
+    /// The tablet_map is considered populated after the whole token space is covered by tablets,
+    /// no extra call is needed to seal it.
+    ///
+    /// Methods which are valid until populated:
+    ///  first_tablet(), last_tablet(), next_tablet(), emplace_tablet(), tablet_count(), transitions()
+    /// Other methods should not be used, as they may not work correctly with unpopulated state.
+    tablet_map(size_t tablet_count, bool with_raft_info, initialized_later);
 
     tablet_map(tablet_map&&) = default;
     tablet_map(const tablet_map&) = delete;
@@ -678,9 +803,9 @@ public:
     }
 
     // Returns the pair of sibling tablets for a given tablet id.
-    // For example, if id 1 is provided, a pair of 0 and 1 is returned.
-    // Returns disengaged optional when sibling pair cannot be found.
-    std::optional<std::pair<tablet_id, tablet_id>> sibling_tablets(tablet_id t) const;
+    // If the tablet count is odd, the last tablet does not have a sibling and
+    // the second element of the pair will be disengaged.
+    std::pair<tablet_id, std::optional<tablet_id>> sibling_tablets(tablet_id t) const;
 
     /// Returns true iff tablet has a given replica.
     /// If tablet is in transition, considers both previous and next replica set.
@@ -694,7 +819,7 @@ public:
     future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const;
 
     /// Calls a given function for each sibling tablet in the map in token ownership order.
-    /// If tablet count == 1, then there will be only one call and 2nd tablet_desc is disengaged.
+    /// If tablet count is odd, the last call will have the 2nd tablet_desc disengaged.
     future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const;
 
     const auto& transitions() const {
@@ -731,10 +856,20 @@ public:
     /// Returns the token_range in which the given token will belong to after a tablet split
     dht::token_range get_token_range_after_split(const token& t) const noexcept;
 
+    /// Returns the token which will become the last token of the lower sibling post-split.
+    /// The higher sibling will own (get_split_token(id), get_last_token(id)].
+    dht::token get_split_token(tablet_id id) const;
+
+    /// Returns tablet_layout of this tablet_map.
+    tablet_layout get_layout() const;
+
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
     const std::optional<locator::repair_scheduler_config> get_repair_scheduler_config() const;
 public:
+    /// Use only on tablet_map constructed with initialized_later tag to populate its contents.
+    /// Must be called for consecutive tablet ids and with increasing last_token.
+    void emplace_tablet(tablet_id, dht::token last_token, tablet_info);
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);

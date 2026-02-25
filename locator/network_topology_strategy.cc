@@ -306,13 +306,12 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
 }
 
 future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count) const {
-    auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
-    if (tablet_count != aligned_tablet_count) {
-        rslogger.info("Rounding up tablet count from {} to {} for table {}.{}", tablet_count, aligned_tablet_count, s->ks_name(), s->cf_name());
-        tablet_count = aligned_tablet_count;
+    // Make odd counts a bit less likely. Table merge with odd tablet count creates imbalance.
+    if (tablet_count > 1 && tablet_count & 1) {
+        rslogger.info("Rounding up odd tablet count {} to {} for {}.{}", tablet_count, tablet_count + 1, s->ks_name(), s->cf_name());
+        ++tablet_count;
     }
-    co_return co_await reallocate_tablets(std::move(s), std::move(tm), 
-        tablet_map(tablet_count, get_consistency() != data_dictionary::consistency_config_option::eventual));
+    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count, get_consistency() != data_dictionary::consistency_config_option::eventual));
 }
 
 future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {
