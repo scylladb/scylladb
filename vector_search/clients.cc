@@ -70,9 +70,18 @@ clients::clients(
 future<clients::request_result> clients::request(
         seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as) {
 
+    auto last_error = request_error{service_unavailable_error{}};
+
     for (auto retries = 0; retries < REQUEST_RETRIES; ++retries) {
         auto clients = co_await get_clients(as);
         if (!clients) {
+            if (std::holds_alternative<addr_unavailable_error>(clients.error())) {
+                // No clients available yet (e.g. DNS refresh or TLS credential initialization still in progress).
+                // Trigger a refresh and retry — the addresses may become available on the next attempt.
+                last_error = addr_unavailable_error{};
+                _trigger_refresh();
+                continue;
+            }
             co_return make_unexpected<clients::request_error>(clients.error());
         }
 
@@ -88,10 +97,11 @@ future<clients::request_result> clients::request(
             }
             co_return make_unexpected<clients::request_error>(result.error());
         }
+        last_error = service_unavailable_error{};
         _trigger_refresh();
     }
 
-    co_return std::unexpected{service_unavailable_error{}};
+    co_return std::unexpected{last_error};
 }
 
 /// Get the current http client or wait for a new one to be available.
