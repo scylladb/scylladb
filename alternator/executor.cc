@@ -7,6 +7,7 @@
  */
 
 #include <fmt/ranges.h>
+#include <cstdlib>
 #include <seastar/core/on_internal_error.hh>
 #include "alternator/executor.hh"
 #include "alternator/consumed_capacity.hh"
@@ -1347,13 +1348,14 @@ void rmw_operation::set_default_write_isolation(std::string_view value) {
 // Alternator uses tags whose keys start with the "system:" prefix for
 // internal purposes. Those should not be readable by ListTagsOfResource,
 // nor writable with TagResource or UntagResource (see #24098).
-// Only a few specific system tags, currently only "system:write_isolation"
-// and "system:initial_tablets", are deliberately intended to be set and read
-// by the user, so are not considered "internal".
+// Only a few specific system tags, currently only "system:write_isolation",
+// "system:initial_tablets", and "system:timestamp_attribute", are deliberately
+// intended to be set and read by the user, so are not considered "internal".
 static bool tag_key_is_internal(std::string_view tag_key) {
     return tag_key.starts_with("system:")
         && tag_key != rmw_operation::WRITE_ISOLATION_TAG_KEY
-        && tag_key != INITIAL_TABLETS_TAG_KEY;
+        && tag_key != INITIAL_TABLETS_TAG_KEY
+        && tag_key != TIMESTAMP_TAG_KEY;
 }
 
 enum class update_tags_action { add_tags, delete_tags };
@@ -2552,12 +2554,16 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         validate_value(it->value, "PutItem");
         const column_definition* cdef = find_attribute(*schema, column_name);
         validate_attr_name_length("", column_name.size(), cdef && cdef->is_primary_key());
-        // If this is the timestamp attribute, extract the timestamp value and
-        // do not store it in the item data.
+        // If this is the timestamp attribute with a valid numeric value, use it
+        // as the write timestamp and do not store it in the item data.
+        // If the value is non-numeric, treat the attribute normally (store it).
         if (timestamp_attribute && column_name == *timestamp_attribute) {
-            _custom_timestamp = try_get_timestamp(it->value);
-            // The attribute is consumed as timestamp, not stored in _cells.
-            continue;
+            if (auto t = try_get_timestamp(it->value)) {
+                _custom_timestamp = t;
+                // The attribute is consumed as timestamp, not stored in _cells.
+                continue;
+            }
+            // Non-numeric value: fall through to store it normally.
         }
         _length_in_bytes += column_name.size();
         if (!cdef) {
@@ -4247,19 +4253,27 @@ update_item_operation::has_custom_timestamp() const noexcept {
     if (!_timestamp_attribute) {
         return false;
     }
-    // Check if the timestamp attribute is being set via AttributeUpdates
+    // Check if the timestamp attribute is being set via AttributeUpdates PUT
+    // with a valid numeric value.
     if (_attribute_updates) {
         std::string_view ts_attr = to_string_view(*_timestamp_attribute);
         for (auto it = _attribute_updates->MemberBegin(); it != _attribute_updates->MemberEnd(); ++it) {
             if (rjson::to_string_view(it->name) == ts_attr) {
                 const rjson::value* action = rjson::find(it->value, "Action");
-                if (action && rjson::to_string_view(*action) == "PUT") {
-                    return true;
+                if (action && rjson::to_string_view(*action) == "PUT" && it->value.HasMember("Value")) {
+                    // Only consider it a custom timestamp if the value is numeric
+                    if (try_get_timestamp((it->value)["Value"])) {
+                        return true;
+                    }
                 }
+                break;
             }
         }
     }
-    // Check if the timestamp attribute is being set via UpdateExpression SET
+    // Check if the timestamp attribute is being set via UpdateExpression SET.
+    // We can't check the actual value type without resolving the expression
+    // (which requires previous_item), so we conservatively return true if the
+    // attribute appears in a SET action, and handle the non-numeric case in apply().
     if (!_update_expression.empty()) {
         std::string ts_attr(to_string_view(*_timestamp_attribute));
         auto it = _update_expression.find(ts_attr);
@@ -4546,10 +4560,14 @@ inline void update_item_operation::apply_attribute_updates(const std::unique_ptr
             throw api_error::validation(format("UpdateItem cannot update key column {}", rjson::to_string_view(it->name)));
         }
         std::string action = rjson::to_string((it->value)["Action"]);
-        // If this is the timestamp attribute being PUT, skip it - it was already
-        // used to compute the write timestamp and should not be stored in the item.
+        // If this is the timestamp attribute being PUT with a valid numeric value,
+        // skip it - it was already used to compute the write timestamp and should
+        // not be stored in the item. If the value is non-numeric, the attribute is
+        // stored normally.
         if (_timestamp_attribute && column_name == *_timestamp_attribute && action == "PUT") {
-            continue;
+            if (it->value.HasMember("Value") && try_get_timestamp((it->value)["Value"])) {
+                continue;
+            }
         }
         if (action == "DELETE") {
             // The DELETE operation can do two unrelated tasks. Without a
@@ -4654,12 +4672,18 @@ inline void update_item_operation::apply_update_expression(const std::unique_ptr
         if (cdef && cdef->is_primary_key()) {
             throw api_error::validation(fmt::format("UpdateItem cannot update key column {}", column_name));
         }
-        // If this is the timestamp attribute being set via UpdateExpression SET,
-        // skip it - it was already used to compute the write timestamp.
+        // If this is the timestamp attribute being set via UpdateExpression SET
+        // with a valid numeric value, skip it - it was already used to compute
+        // the write timestamp and should not be stored in the item.
+        // If the value is non-numeric, the attribute is stored normally.
         if (_timestamp_attribute && to_bytes(column_name) == *_timestamp_attribute &&
                 actions.second.has_value() &&
                 std::holds_alternative<parsed::update_expression::action::set>(actions.second.get_value()._action)) {
-            continue;
+            std::optional<rjson::value> result = action_result(actions.second.get_value(), previous_item.get());
+            if (result && try_get_timestamp(*result)) {
+                continue;  // Skip - already used as timestamp
+            }
+            // Non-numeric result: fall through to store normally
         }
         if (actions.second.has_value()) {
             // An action on a top-level attribute column_name. The single
