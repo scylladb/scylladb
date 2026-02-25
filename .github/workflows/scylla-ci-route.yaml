@@ -1,0 +1,392 @@
+name: Scylla CI Route
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+jobs:
+  route-ci:
+    # Skip draft PRs
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 30
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_REPO: ${{ github.repository }}
+      BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+      PR_USER: ${{ github.event.pull_request.user.login }}
+      PR_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      JENKINS_URL: "https://jenkins.scylladb.com"
+
+    steps:
+      - name: Check for code changes on synchronize
+        if: github.event.action == 'synchronize'
+        id: code-changes
+        run: |
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.event.after }}"
+          if [ -z "$BEFORE" ] || [ -z "$AFTER" ]; then
+            echo "has_code_changes=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TREE_BEFORE=$(git ls-remote "${{ github.event.pull_request.head.repo.clone_url }}" "$BEFORE" 2>/dev/null | cut -f1 || true)
+          # Use the GitHub API to compare trees
+          BEFORE_TREE=$(gh api "repos/$PR_REPO/git/commits/$BEFORE" --jq '.tree.sha' 2>/dev/null || true)
+          AFTER_TREE=$(gh api "repos/$PR_REPO/git/commits/$AFTER" --jq '.tree.sha' 2>/dev/null || true)
+
+          if [ -n "$BEFORE_TREE" ] && [ -n "$AFTER_TREE" ] && [ "$BEFORE_TREE" = "$AFTER_TREE" ]; then
+            echo "No code changes detected (commit message edit only), skipping CI"
+            echo "has_code_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Code changes detected"
+            echo "has_code_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if docs-only PR
+        if: steps.code-changes.outputs.has_code_changes != 'false'
+        id: docs-check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching PR #$PR_NUMBER files from $PR_REPO..."
+          ALL_DOCS=true
+          TRIGGER_DOCS_CI=false
+          HAS_DOC_FILES=false
+
+          # Fetch all pages of PR files
+          PAGE=1
+          while true; do
+            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
+            if [ -z "$FILES" ]; then
+              break
+            fi
+
+            while IFS= read -r FILE; do
+              # Check for docs files that DON'T need Sphinx build
+              # (.github/*, docs/dev/*, README.md, docs/*.py, top-level *.md)
+              if echo "$FILE" | grep -qE '^docs/dev/|(/)?README\.md$|^docs/.*\.py$|^\.github|^[a-zA-Z0-9]+\.md$'; then
+                HAS_DOC_FILES=true
+              # Check for docs files that DO need Sphinx build
+              elif echo "$FILE" | grep -qE '^docs/'; then
+                HAS_DOC_FILES=true
+                TRIGGER_DOCS_CI=true
+              else
+                ALL_DOCS=false
+              fi
+            done <<< "$FILES"
+
+            PAGE=$((PAGE + 1))
+          done
+
+          if [ "$HAS_DOC_FILES" = "true" ] && [ "$ALL_DOCS" = "true" ]; then
+            echo "is_docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "PR contains only documentation files, scylla-ci is not required"
+          else
+            echo "is_docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "trigger_docs_ci=$TRIGGER_DOCS_CI" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger docs-CI
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.trigger_docs_ci == 'true'
+        env:
+          JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
+          JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+        run: |
+          DOCS_CI_JOB="releng/job/scylladb-docs-CI"
+          JOB_URL="$JENKINS_URL/job/$DOCS_CI_JOB/api/json"
+
+          # Check if docs-CI job exists
+          if curl --silent --fail --user "$JENKINS_USER:$JENKINS_API_TOKEN" "$JOB_URL" > /dev/null 2>&1; then
+            echo "Triggering docs-CI for PR #$PR_NUMBER"
+            curl -X POST "$JENKINS_URL/job/$DOCS_CI_JOB/buildWithParameters" \
+              --fail --user "$JENKINS_USER:$JENKINS_API_TOKEN" \
+              --data-urlencode "REPO_NAME=$PR_REPO" \
+              --data-urlencode "PR_NUMBER=$PR_NUMBER" \
+              --data-urlencode "POST_PR_COMMENT=true"
+          else
+            echo "docs-CI job not found, skipping"
+          fi
+
+      - name: Get PR details
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.is_docs_only != 'true'
+        id: pr-details
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching PR #$PR_NUMBER details..."
+          PR_JSON=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER")
+
+          MERGEABLE_STATE=$(echo "$PR_JSON" | jq -r '.mergeable_state')
+          LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
+
+          HAS_CONFLICTS=false
+          RUN_ARTIFACTS=false
+          SKIP_UNITTEST_CUSTOM=false
+          FORCE_ON_CLOUD=false
+
+          # Check labels
+          if echo "$LABELS" | grep -q "conflicts"; then
+            HAS_CONFLICTS=true
+          fi
+          if echo "$LABELS" | grep -q "ci/requires_artifact_tests"; then
+            RUN_ARTIFACTS=true
+          fi
+          if echo "$LABELS" | grep -q "ci/skip_unit-tests_custom"; then
+            SKIP_UNITTEST_CUSTOM=true
+          fi
+          if echo "$LABELS" | grep -q "ci/force_on_cloud"; then
+            FORCE_ON_CLOUD=true
+          fi
+
+          # Check conflict state
+          if [ "$MERGEABLE_STATE" = "dirty" ] || [ "$HAS_CONFLICTS" = "true" ]; then
+            HAS_CONFLICTS=true
+            echo "::warning::CI will not be triggered since $PR_URL has conflicts"
+          fi
+
+          echo "has_conflicts=$HAS_CONFLICTS" >> "$GITHUB_OUTPUT"
+          echo "run_artifacts=$RUN_ARTIFACTS" >> "$GITHUB_OUTPUT"
+          echo "skip_unittest_custom=$SKIP_UNITTEST_CUSTOM" >> "$GITHUB_OUTPUT"
+          echo "force_on_cloud=$FORCE_ON_CLOUD" >> "$GITHUB_OUTPUT"
+
+      - name: Determine target folder
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.is_docs_only != 'true'
+        id: target-folder
+        run: |
+          FOLDER=""
+          if [ "$BASE_BRANCH" = "master" ] || [ "$BASE_BRANCH" = "next" ]; then
+            FOLDER="scylla-master"
+          elif [ "$BASE_BRANCH" = "enterprise" ] || [ "$BASE_BRANCH" = "next-enterprise" ]; then
+            FOLDER="scylla-enterprise"
+          elif echo "$BASE_BRANCH" | grep -qE '^(next|branch)-'; then
+            VERSION=$(echo "$BASE_BRANCH" | sed -E 's/^(next|branch)-//')
+            if echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+$'; then
+              MAJOR=$(echo "$VERSION" | cut -d. -f1)
+              if [ "$MAJOR" -ge 2023 ] && [ "$MAJOR" -lt 2025 ]; then
+                FOLDER="enterprise-$VERSION"
+              else
+                FOLDER="scylla-$VERSION"
+              fi
+            fi
+          else
+            echo "::warning::Not supported base branch: $BASE_BRANCH"
+          fi
+
+          echo "folder=$FOLDER" >> "$GITHUB_OUTPUT"
+          echo "Target folder: $FOLDER"
+
+      - name: Check required CI types
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.is_docs_only != 'true'
+        id: required-checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch all PR files for pattern matching
+          ALL_FILES=""
+          PAGE=1
+          while true; do
+            FILES=$(gh api "repos/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE" --jq '.[].filename')
+            if [ -z "$FILES" ]; then
+              break
+            fi
+            if [ -n "$ALL_FILES" ]; then
+              ALL_FILES="$ALL_FILES"$'\n'"$FILES"
+            else
+              ALL_FILES="$FILES"
+            fi
+            PAGE=$((PAGE + 1))
+          done
+
+          # build: required if any file does NOT match scripts/pull_github_pr.sh
+          BUILD_REQUIRED=false
+          while IFS= read -r FILE; do
+            if [ "$FILE" != "scripts/pull_github_pr.sh" ]; then
+              BUILD_REQUIRED=true
+              break
+            fi
+          done <<< "$ALL_FILES"
+
+          # dtest: required if any file does NOT match test*, dist/docker/*, dist/common/scripts/*
+          DTEST_REQUIRED=false
+          while IFS= read -r FILE; do
+            if ! echo "$FILE" | grep -qE '^(test(\.py|/)|dist/docker/|dist/common/scripts/)'; then
+              DTEST_REQUIRED=true
+              break
+            fi
+          done <<< "$ALL_FILES"
+
+          # unittest: required if any file does NOT match dist/docker/*, dist/common/scripts*
+          UNITTEST_REQUIRED=false
+          while IFS= read -r FILE; do
+            if ! echo "$FILE" | grep -qE '^(dist/docker/|dist/common/scripts)'; then
+              UNITTEST_REQUIRED=true
+              break
+            fi
+          done <<< "$ALL_FILES"
+
+          # artifacts: required if any file matches dist/* or tools/toolchain*
+          ARTIFACTS_REQUIRED=false
+          while IFS= read -r FILE; do
+            if echo "$FILE" | grep -qE '^(dist|tools/toolchain)'; then
+              ARTIFACTS_REQUIRED=true
+              break
+            fi
+          done <<< "$ALL_FILES"
+
+          # Artifacts label override
+          if [ "${{ steps.pr-details.outputs.run_artifacts }}" = "true" ]; then
+            ARTIFACTS_REQUIRED=true
+          fi
+
+          # No artifact tests for scylla-enterprise
+          if [ "${{ steps.target-folder.outputs.folder }}" = "scylla-enterprise" ]; then
+            ARTIFACTS_REQUIRED=false
+          fi
+
+          # scylla_gdb: required if any file matches scylla-gdb.py or test/scylla_gdb/*
+          GDB_REQUIRED=false
+          while IFS= read -r FILE; do
+            if echo "$FILE" | grep -qE '^(scylla-gdb\.py|test/scylla_gdb/)'; then
+              GDB_REQUIRED=true
+              break
+            fi
+          done <<< "$ALL_FILES"
+
+          echo "build_required=$BUILD_REQUIRED" >> "$GITHUB_OUTPUT"
+          echo "dtest_required=$DTEST_REQUIRED" >> "$GITHUB_OUTPUT"
+          echo "unittest_required=$UNITTEST_REQUIRED" >> "$GITHUB_OUTPUT"
+          echo "artifacts_required=$ARTIFACTS_REQUIRED" >> "$GITHUB_OUTPUT"
+          echo "gdb_required=$GDB_REQUIRED" >> "$GITHUB_OUTPUT"
+
+          echo "Required checks: build=$BUILD_REQUIRED dtest=$DTEST_REQUIRED unittest=$UNITTEST_REQUIRED artifacts=$ARTIFACTS_REQUIRED gdb=$GDB_REQUIRED"
+
+      - name: Check trusted contributor
+        if: steps.code-changes.outputs.has_code_changes != 'false' && steps.docs-check.outputs.is_docs_only != 'true'
+        id: trust-check
+        env:
+          GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: |
+          TRUSTED=false
+
+          # Check if user is a ScyllaDB org member
+          HTTP_CODE=$(gh api "orgs/scylladb/members/$PR_USER" --silent 2>/dev/null && echo "204" || echo "other")
+          if [ "$HTTP_CODE" = "204" ]; then
+            TRUSTED=true
+          else
+            # Check if user is in the external-contributors team
+            TEAM_STATE=$(gh api "orgs/scylladb/teams/external-contributors/memberships/$PR_USER" --jq '.state' 2>/dev/null || echo "none")
+            if [ "$TEAM_STATE" = "active" ]; then
+              TRUSTED=true
+            fi
+          fi
+
+          if [ "$TRUSTED" = "false" ]; then
+            echo "::warning::PR submitted by external contributor ($PR_USER), CI will not trigger automatically"
+            TARGET_FOLDER="${{ steps.target-folder.outputs.folder }}"
+            gh api "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
+              -f body="@scylladb/scylla-maint please review and trigger CI for this pull request
+          **CI Build:** https://jenkins.scylladb.com/job/${TARGET_FOLDER}/job/scylla-ci/parambuild/?PR_NUMBER=${PR_NUMBER}"
+          fi
+
+          echo "trusted=$TRUSTED" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger scylla-ci
+        if: |
+          steps.code-changes.outputs.has_code_changes != 'false' &&
+          steps.docs-check.outputs.is_docs_only != 'true' &&
+          steps.trust-check.outputs.trusted == 'true' &&
+          steps.pr-details.outputs.has_conflicts != 'true' &&
+          steps.required-checks.outputs.build_required == 'true' &&
+          steps.target-folder.outputs.folder != ''
+        env:
+          JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
+          JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TARGET_FOLDER="${{ steps.target-folder.outputs.folder }}"
+          RUN_DTEST="${{ steps.required-checks.outputs.dtest_required }}"
+          RUN_UNITTEST="${{ steps.required-checks.outputs.unittest_required }}"
+          RUN_ARTIFACTS="${{ steps.required-checks.outputs.artifacts_required }}"
+          SKIP_UNITTEST_CUSTOM="${{ steps.pr-details.outputs.skip_unittest_custom }}"
+          FORCE_ON_CLOUD="${{ steps.pr-details.outputs.force_on_cloud }}"
+          RUN_GDB_ONLY="${{ steps.required-checks.outputs.gdb_required }}"
+
+          echo "Routing to $TARGET_FOLDER/scylla-ci with:"
+          echo "  PR_NUMBER=$PR_NUMBER"
+          echo "  RUN_DTEST=$RUN_DTEST"
+          echo "  RUN_UNIT_TEST=$RUN_UNITTEST"
+          echo "  RUN_ARTIFACT_TESTS=$RUN_ARTIFACTS"
+          echo "  SKIP_UNIT_TEST_CUSTOM=$SKIP_UNITTEST_CUSTOM"
+          echo "  FORCE_ON_CLOUD=$FORCE_ON_CLOUD"
+          echo "  RUN_ONLY_SCYLLA_GDB=$RUN_GDB_ONLY"
+
+          JOB_PATH="$TARGET_FOLDER/job/scylla-ci"
+
+          # Trigger the Jenkins job and capture the queue location
+          RESPONSE=$(curl -s -i -X POST \
+            "$JENKINS_URL/job/$JOB_PATH/buildWithParameters" \
+            --user "$JENKINS_USER:$JENKINS_API_TOKEN" \
+            --data-urlencode "PR_NUMBER=$PR_NUMBER" \
+            --data-urlencode "RUN_DTEST=$RUN_DTEST" \
+            --data-urlencode "RUN_UNIT_TEST=$RUN_UNITTEST" \
+            --data-urlencode "RUN_ARTIFACT_TESTS=$RUN_ARTIFACTS" \
+            --data-urlencode "SKIP_UNIT_TEST_CUSTOM=$SKIP_UNITTEST_CUSTOM" \
+            --data-urlencode "FORCE_ON_CLOUD=$FORCE_ON_CLOUD" \
+            --data-urlencode "RUN_ONLY_SCYLLA_GDB=$RUN_GDB_ONLY" \
+            -w "\n%{http_code}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Failed to trigger Jenkins job (HTTP $HTTP_CODE)"
+            echo "$RESPONSE"
+            exit 1
+          fi
+
+          # Extract queue URL from Location header
+          QUEUE_URL=$(echo "$RESPONSE" | grep -i "^Location:" | sed 's/Location: //;s/\r//')
+          echo "Jenkins queue URL: $QUEUE_URL"
+
+          # Poll queue to get the build URL
+          BUILD_URL=""
+          for i in $(seq 1 30); do
+            sleep 5
+            QUEUE_JSON=$(curl -s --user "$JENKINS_USER:$JENKINS_API_TOKEN" "${QUEUE_URL}api/json" 2>/dev/null || true)
+            BUILD_URL=$(echo "$QUEUE_JSON" | jq -r '.executable.url // empty' 2>/dev/null || true)
+            if [ -n "$BUILD_URL" ]; then
+              break
+            fi
+            echo "Waiting for build to start... (attempt $i/30)"
+          done
+
+          if [ -n "$BUILD_URL" ]; then
+            echo "Jenkins build URL: $BUILD_URL"
+          else
+            echo "::warning::Could not determine Jenkins build URL from queue, using job URL"
+            BUILD_URL="$JENKINS_URL/job/$JOB_PATH/"
+          fi
+
+          # Set pending commit status
+          gh api "repos/$PR_REPO/statuses/$PR_SHA" \
+            -f state="pending" \
+            -f context="Checkout" \
+            -f description="Waiting for CI to start" \
+            -f target_url="$BUILD_URL"
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          # Send Slack notification
+          curl -X POST -H 'Content-type: application/json' \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            --data "{
+              \"channel\": \"#releng-team\",
+              \"text\": \":rotating_light: Scylla-CI-Route GitHub Action failed for PR #$PR_NUMBER ($PR_URL)\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+              \"icon_emoji\": \":warning:\"
+            }" \
+            https://slack.com/api/chat.postMessage
