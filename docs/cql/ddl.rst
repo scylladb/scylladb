@@ -1123,6 +1123,13 @@ if its data size, or performance requirements are known in advance.
                                                 function of the tablet count, the replication factor in the datacenter, and the number
                                                 of nodes and shards in the datacenter.  It is recommended to use higher-level options
                                                 such as ``expected_data_size_in_gb`` or ``min_per_shard_tablet_count`` instead.
+ ``max_tablet_count``           0               Sets the maximum number of tablets for the table. When set, the tablet count
+                                                will not exceed this value, even if the table grows large enough to normally
+                                                trigger tablet splits. This option is mainly intended for use during restore
+                                                operations, to ensure that each SSTable fits entirely within a single tablet.
+                                                This enables efficient file-based streaming during restore. Setting both
+                                                ``min_tablet_count`` and ``max_tablet_count`` to the same value fixes the
+                                                tablet count for the table.
 =============================== =============== ===================================================================================
 
 When allocating tablets for a new table, ScyllaDB uses the maximum of the ``initial`` tablets configured for the keyspace
