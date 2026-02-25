@@ -18,6 +18,7 @@
 #include "executor.hh"
 #include "tracing/trace_state.hh"
 #include "keys/keys.hh"
+#include "bytes.hh"
 
 namespace alternator {
 
@@ -72,6 +73,11 @@ protected:
     clustering_key _ck = clustering_key::make_empty();
     write_isolation _write_isolation;
     mutable wcu_consumed_capacity_counter _consumed_capacity;
+    // If the table has a "system:timestamp_attribute" tag, this holds the
+    // name of the attribute (converted to bytes) whose numeric value should
+    // be used as the write timestamp instead of the current time. The
+    // attribute itself is NOT stored in the item data.
+    std::optional<bytes> _timestamp_attribute;
     // All RMW operations can have a ReturnValues parameter from the following
     // choices. But note that only UpdateItem actually supports all of them:
     enum class returnvalues {
@@ -113,6 +119,9 @@ public:
     // Convert the above apply() into the signature needed by cas_request:
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options& cdc_opts) override;
     virtual ~rmw_operation() = default;
+    // Returns true if the operation will use a custom write timestamp (from the
+    // system:timestamp_attribute tag). Subclasses override this as needed.
+    virtual bool has_custom_timestamp() const noexcept { return false; }
     const wcu_consumed_capacity_counter& consumed_capacity() const noexcept { return _consumed_capacity; }
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }

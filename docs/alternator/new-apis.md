@@ -213,3 +213,67 @@ Alternator table, the following features will not work for this table:
 * Enabling Streams with CreateTable or UpdateTable doesn't work
   (results in an error).
   See <https://github.com/scylladb/scylla/issues/23838>.
+
+## Custom write timestamps
+
+DynamoDB doesn't allow clients to set the write timestamp of updates. All
+updates use the current server time as their timestamp, and ScyllaDB uses
+these timestamps for last-write-wins conflict resolution when concurrent
+writes reach different replicas.
+
+ScyllaDB Alternator extends this with the `system:timestamp_attribute` tag,
+which allows specifying a custom write timestamp for each PutItem or
+UpdateItem request. To use this feature:
+
+1. Tag the table (at CreateTable time or using TagResource) with
+   `system:timestamp_attribute` set to the name of an attribute that will
+   hold the custom write timestamp.
+
+2. When performing a PutItem or UpdateItem, include the named attribute
+   in the request with a numeric value. The value represents the write
+   timestamp in **microseconds since the Unix epoch** (this is the same
+   unit used internally by ScyllaDB for timestamps).
+
+3. The named attribute is **not stored** in the item data - it only
+   controls the write timestamp. If you also want to record the timestamp
+   as data, use a separate attribute for that purpose.
+
+4. If the named attribute is absent or has a non-numeric value, the write
+   proceeds normally using the current time as the timestamp.
+
+### Limitations
+
+- **Incompatible with conditions**: If the write would require LWT
+  (lightweight transactions) - either because it includes a
+  ConditionExpression, or because the `always` write isolation policy is
+  in effect - the operation is rejected with a ValidationException. This
+  is because LWT requires the write timestamp to be set by the Paxos
+  protocol, not by the client.
+
+- **Not supported in UpdateItem with LWT_ALWAYS isolation**: Tables using
+  the `always` write isolation policy cannot use the timestamp attribute
+  feature at all. Consider switching to `only_rmw_uses_lwt` or `forbid_rmw`
+  mode if you need custom timestamps.
+
+### Example use case
+
+This feature is useful for ingesting data from multiple sources where each
+record has a known logical timestamp. By setting the `system:timestamp_attribute`
+tag, you can ensure that the record with the highest logical timestamp always
+wins, regardless of ingestion order:
+
+```python
+# Create table with timestamp attribute
+dynamodb.create_table(
+    TableName='my_table',
+    ...
+    Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'write_ts'}]
+)
+
+# Write a record with a specific timestamp (in microseconds since epoch)
+table.put_item(Item={
+    'pk': 'my_key',
+    'data': 'new_value',
+    'write_ts': Decimal('1700000000000000'),  # Nov 14, 2023 in microseconds
+})
+```
