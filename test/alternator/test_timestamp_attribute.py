@@ -33,20 +33,26 @@ SMALL_TS = Decimal('100000000000000')
 # using these fixtures are implicitly Scylla-only (via scylla_only parameter).
 
 # A table with only a hash key and system:timestamp_attribute='ts' tag.
+# We explicitly set write isolation to only_rmw_uses_lwt so the tests remain
+# correct even if the server default changes to always_use_lwt in the future.
 @pytest.fixture(scope="module")
 def test_table_ts(scylla_only, dynamodb):
     table = create_test_table(dynamodb,
-        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'}],
+        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'},
+              {'Key': 'system:write_isolation', 'Value': 'only_rmw_uses_lwt'}],
         KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
         AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
     yield table
     table.delete()
 
 # A table with hash (string) and range (string) keys and system:timestamp_attribute='ts' tag.
+# We explicitly set write isolation to only_rmw_uses_lwt so the tests remain
+# correct even if the server default changes to always_use_lwt in the future.
 @pytest.fixture(scope="module")
 def test_table_ts_ss(scylla_only, dynamodb):
     table = create_test_table(dynamodb,
-        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'}],
+        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'},
+              {'Key': 'system:write_isolation', 'Value': 'only_rmw_uses_lwt'}],
         KeySchema=[
             {'AttributeName': 'p', 'KeyType': 'HASH'},
             {'AttributeName': 'c', 'KeyType': 'RANGE'},
