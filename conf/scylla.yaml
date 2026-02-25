@@ -675,7 +675,12 @@ maintenance_socket: ignore
 #
 # Guardrail to enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.
 # enable_create_table_with_compact_storage: false
-
+#
+# Guardrails to limit usage of selected consistency levels for writes.
+# Adding a warning to a CQL query response can significantly increase network
+# traffic and decrease overall throughput.
+# write_consistency_levels_warned: []
+# write_consistency_levels_disallowed: []
 
 #
 # System information encryption settings
