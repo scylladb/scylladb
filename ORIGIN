@@ -1,0 +1,77 @@
+http://git-wip-us.apache.org/repos/asf/cassandra.git trunk (bf599fb5b062cbcc652da78b7d699e7a01b949ad)
+
+import = bf599fb5b062cbcc652da78b7d699e7a01b949ad
+Y      = Already in scylla
+
+$ git log --oneline import..cassandra-2.1.11 -- gms/
+Y  484e645 Mark node as dead even if already left
+   d0c166f Add trampled commit back
+   ba5837e Merge branch 'cassandra-2.0' into cassandra-2.1
+   718e47f Forgot a damn c/r
+   a7282e4 Merge branch 'cassandra-2.0' into cassandra-2.1
+Y  ae4cd69 Print versions for gossip states in gossipinfo.
+Y  7fba3d2 Don't mark nodes down before the max local pause interval once paused.
+   c2142e6 Merge branch 'cassandra-2.0' into cassandra-2.1
+   ba9a69e checkForEndpointCollision fails for legitimate collisions, finalized list of statuses and nits, CASSANDRA-9765
+   54470a2 checkForEndpointCollision fails for legitimate collisions, improved version after CR, CASSANDRA-9765
+   2c9b490 checkForEndpointCollision fails for legitimate collisions, CASSANDRA-9765
+   4c15970 Merge branch 'cassandra-2.0' into cassandra-2.1
+   ad8047a ArrivalWindow should use primitives
+Y  4012134 Failure detector detects and ignores local pauses
+   9bcdd0f Merge branch 'cassandra-2.0' into cassandra-2.1
+   cefaa4e Close incoming connections when MessagingService is stopped
+   ea1beda Merge branch 'cassandra-2.0' into cassandra-2.1
+   08dbbd6 Ignore gossip SYNs after shutdown
+   3c17ac6 Merge branch 'cassandra-2.0' into cassandra-2.1
+   a64bc43 lists work better when you initialize them
+   543a899 change list to arraylist
+   730d4d4 Merge branch 'cassandra-2.0' into cassandra-2.1
+   e3e2de0 change list to arraylist
+   f7884c5 Merge branch 'cassandra-2.0' into cassandra-2.1
+Y  84b2846 remove redundant state
+   4f2c372 Merge branch 'cassandra-2.0' into cassandra-2.1
+Y  b2c62bb Add shutdown gossip state to prevent timeouts during rolling restarts
+Y  def4835 Add missing follow on fix for 7816 only applied to cassandra-2.1 branch in 763130bdbde2f4cec2e8973bcd5203caf51cc89f
+Y  763130b Followup commit for 7816
+   1376b8e Merge branch 'cassandra-2.0' into cassandra-2.1
+Y  2199a87 Fix duplicate up/down messages sent to native clients
+   136042e Merge branch 'cassandra-2.0' into cassandra-2.1
+Y  eb9c5bb Improve FD logging when the arrival time is ignored.
+
+$ git log --oneline import..cassandra-2.1.11 -- service/StorageService.java
+   92c5787 Keep StorageServiceMBean interface stable
+   6039d0e Fix DC and Rack in nodetool info
+   a2f0da0 Merge branch 'cassandra-2.0' into cassandra-2.1
+   c4de752 Follow-up to CASSANDRA-10238
+   e889ee4 2i key cache load fails
+   4b1d59e Merge branch 'cassandra-2.0' into cassandra-2.1
+   257cdaa Fix consolidating racks violating the RF contract
+Y  27754c0 refuse to decomission if not in state NORMAL patch by Jan Karlsson and Stefania for CASSANDRA-8741
+Y  5bc56c3 refuse to decomission if not in state NORMAL patch by Jan Karlsson and Stefania for CASSANDRA-8741
+Y  8f9ca07 Cannot replace token does not exist - DN node removed as Fat Client
+   c2142e6 Merge branch 'cassandra-2.0' into cassandra-2.1
+   54470a2 checkForEndpointCollision fails for legitimate collisions, improved version after CR, CASSANDRA-9765
+   1eccced Handle corrupt files on startup
+   2c9b490 checkForEndpointCollision fails for legitimate collisions, CASSANDRA-9765
+   c4b5260 Merge branch 'cassandra-2.0' into cassandra-2.1
+Y  52dbc3f Can't transition from write survey to normal mode
+   9966419 Make rebuild only run one at a time
+   d693ca1 Merge branch 'cassandra-2.0' into cassandra-2.1
+   be9eff5 Add option to not validate atoms during scrub
+   2a4daaf followup fix for 8564
+   93478ab Wait for anticompaction to finish
+   9e9846e Fix for harmless exceptions being logged as ERROR
+   6d06f32 Fix anticompaction blocking ANTI_ENTROPY stage
+   4f2c372 Merge branch 'cassandra-2.0' into cassandra-2.1
+Y  b2c62bb Add shutdown gossip state to prevent timeouts during rolling restarts
+Y  cba1b68 Fix failed bootstrap/replace attempts being persisted in system.peers
+   f59df28 Allow takeColumnFamilySnapshot to take a list of tables patch by Sachin Jarin; reviewed by Nick Bailey for CASSANDRA-8348
+Y  ac46747 Fix failed bootstrap/replace attempts being persisted in system.peers
+   5abab57 Merge branch 'cassandra-2.0' into cassandra-2.1
+   0ff9c3c Allow reusing snapshot tags across different column families.
+   f9c57a5 Merge branch 'cassandra-2.0' into cassandra-2.1
+Y  b296c55 Fix MOVED_NODE client event
+   bbb3fc7 Merge branch 'cassandra-2.0' into cassandra-2.1
+   37eb2a0 Fix NPE in nodetool getendpoints with bad ks/cf
+   f8b43d4 Merge branch 'cassandra-2.0' into cassandra-2.1
+   e20810c Remove C* specific class from JMX API

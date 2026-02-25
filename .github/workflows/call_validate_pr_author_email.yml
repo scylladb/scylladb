@@ -1,0 +1,13 @@
+name: validate_pr_author_email
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+jobs:
+  validate_pr_author_email:
+    uses: scylladb/github-automation/.github/workflows/validate_pr_author_email.yml@main
+

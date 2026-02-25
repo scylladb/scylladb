@@ -1,0 +1,524 @@
+========================================================
+Cloud Instance Recommendations for AWS, GCP, and Azure
+========================================================
+
+.. meta::
+   :title:
+   :description: Cloud Instance Recommendations for AWS, GCP, and Azure
+   :keywords: ScyllaDB Cloud deloyment, AWS, GCE, Azure, ScyllaDB image, cloud instance, cloud support
+
+You can run your ScyllaDB workloads on AWS, GCE, and Azure using a ScyllaDB image. This page includes the recommended instance types to be used with ScyllaDB.
+
+.. TO DO: Add a link to the installation section for cloud deployments - when the page is added.
+
+.. note:: 
+
+    The following recommendations apply to self-managed deployments. See the `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/>`_ to learn about ScyllaDB's fully managed database-as-a-service.
+
+.. _system-requirements-aws:
+
+Amazon Web Services (AWS)
+-----------------------------
+
+The recommended instance types are :ref:`i3en <system-requirements-i3en-instances>`,
+:ref:`i4i <system-requirements-i4i-instances>`, :ref:`i7i <system-requirements-i7i-instances>`,
+:ref:`i7ie <system-requirements-i7ie-instances>`, :ref:`i8g<system-requirements-i8g-instances>`,
+and :ref:`i8ge <system-requirements-i8ge-instances>`.
+
+.. note::
+
+  Some of the ScyllaDB configuration features rely on querying instance metadata. 
+  Disabling access to instance metadata will impact using Ec2 Snitches and tuning performance.
+  See `AWS - Configure the instance metadata options <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-options.html>`_ for more information.
+
+.. _system-requirements-i3en-instances:
+
+i3en instances
+^^^^^^^^^^^^^^
+i3en instances have up to 4x the networking bandwidth of i3 instances, enabling up to 100 Gbps of sustained network bandwidth. 
+
+===========================  ===========  ============  =====================
+Model	                     vCPU         Mem (GB)      Storage (NVMe SSD)
+===========================  ===========  ============  =====================
+i3en.large	             2	          16	        1 x 1,250 GB
+---------------------------  -----------  ------------  ---------------------
+i3en.xlarge	             4	          32	        1 x 2,500 GB
+---------------------------  -----------  ------------  ---------------------
+i3en.2xlarge	             8	          64	        2 x 2,500 GB
+---------------------------  -----------  ------------  ---------------------
+i3en.3xlarge	             12	          96            1 x 7,500 GB
+---------------------------  -----------  ------------  ---------------------
+i3en.6xlarge	             24	          192           2 x 7,500 GB
+---------------------------  -----------  ------------  ---------------------
+i3en.12xlarge	             48	          384	        4 x 7,500 GB
+---------------------------  -----------  ------------  ---------------------
+i3en.24xlarge	             96	          768	        8 x 7,500 GB
+===========================  ===========  ============  =====================
+
+All i3en instances have the following specs:
+
+* 3.1 GHz all-core turbo Intel® Xeon® Scalable (Skylake) processors
+* Intel AVX†, Intel AVX2†, Intel AVX-512†, Intel Turbo 
+* EBS Optimized
+* Enhanced Networking
+
+See `Amazon EC2 I3en Instances <https://aws.amazon.com/ec2/instance-types/i3en/>`_ for details. 
+
+
+.. _system-requirements-i4i-instances:
+
+i4i instances
+^^^^^^^^^^^^^^
+===========================  ===========  ============  =====================
+Model	                     vCPU         Mem (GB)      Storage (NVMe SSD)
+===========================  ===========  ============  =====================
+i4i.large	  	             2	          16	        1 x 468 GB
+---------------------------  -----------  ------------  ---------------------
+i4i.xlarge	             4	          32	        1 x 937 GB
+---------------------------  -----------  ------------  ---------------------
+i4i.2xlarge	 	             8	          64	        1 x 1,875 GB
+---------------------------  -----------  ------------  ---------------------
+i4i.4xlarge	             16	          128           1 x 3,750 GB
+---------------------------  -----------  ------------  ---------------------
+i4i.8xlarge	             32	          256           2 x 3,750 GB
+---------------------------  -----------  ------------  ---------------------
+i4i.16xlarge	             64	          512	        4 x 3,750 GB
+---------------------------  -----------  ------------  ---------------------
+i4i.32xlarge	             128	        1,024	      8 x 3,750 GB
+---------------------------  -----------  ------------  ---------------------
+i4i.metal	             128	         1,024	      8 x 3,750 GB
+===========================  ===========  ============  =====================
+
+All i4i instances have the following specs:
+
+* 3.5 GHz all-core turbo Intel® Xeon® Scalable (Ice Lake) processors
+* 40 Gbps bandwidth to EBS in the largest size and up to 10 Gbps in the four smallest sizes (twice that of i3 instances. Up to 75 Gbps networking bandwidth (three times more than I3 instances).
+* AWS Nitro SSD storage
+
+
+See  `Amazon EC2 I4i Instances <https://aws.amazon.com/ec2/instance-types/i4i/>`_ for specification details. 
+
+See `ScyllaDB on the New AWS EC2 I4i Instances: Twice the Throughput & Lower Latency <https://www.scylladb.com/2022/05/09/scylladb-on-the-new-aws-ec2-i4i-instances-twice-the-throughput-lower-latency/>`_ to 
+learn more about using ScyllaDB with i4i instances.
+
+.. _system-requirements-i7i-instances:
+
+i7i instances
+^^^^^^^^^^^^^^
+
+The following i7i instances are supported. Larger i7i instances will be
+supported in upcoming releases.
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GiB)
+     - Storage (GB)
+   * - i7i.large
+     - 2
+     - 16
+     - 1 x 468 GB
+   * - i7i.xlarge
+     - 4
+     - 32
+     - 1 x 937.5 GB
+   * - i7i.2xlarge
+     - 8
+     - 64
+     - 1 x 1875 GB
+
+All i7i instances have the following specs:
+
+* 3.2 GHz all-core turbo Intel® Xeon® Scalable (Emerald Rapids) processors.
+* Up to 100 Gbps of networking bandwidth and 60 Gbps bandwidth to Amazon Elastic Block Store (EBS).
+* Advanced Matrix Extensions (AMX) for accelerating CPU-based machine learning.
+
+See `Amazon EC2 I7i Instances <https://aws.amazon.com/ec2/instance-types/i7i/>`_ for details.
+
+.. _system-requirements-i7ie-instances:
+
+i7ie instances
+^^^^^^^^^^^^^^
+
+The following i7ie instances are supported.
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GiB)
+     - Storage (GB)
+   * - i7ie.large
+     - 2
+     - 16
+     - 1 x 1,250 GB
+   * - i7ie.xlarge
+     - 4
+     - 32
+     - 1 x 2,500 GB
+   * - i7ie.2xlarge
+     - 8
+     - 64
+     - 2 x 2,500 GB
+   * - i7ie.3xlarge
+     - 12
+     - 96
+     - 1 x 7,500 GB
+   * - i7ie.6xlarge
+     - 24
+     - 192
+     - 2 x 7,500 GB
+   * - i7ie.12xlarge
+     - 48
+     - 384
+     - 4 x 7,500 GB
+   * - i7ie.18xlarge
+     - 72
+     - 576
+     - 6 x 7,500 GB
+   * - i7ie.24xlarge
+     - 96
+     - 768
+     - 8 x 7,500 GB
+   * - i7ie.48xlarge
+     - 192
+     - 1,536
+     - 16 x 7,500 GB
+
+All i7i instances have the following specs:
+
+* 3.2 GHz all-core turbo Intel® Xeon® Scalable (Emerald Rapids) processors.
+* Up to 100 Gbps of networking bandwidth and 60 Gbps bandwidth to Amazon Elastic Block Store (EBS).
+* Advanced Matrix Extensions (AMX) for accelerating CPU-based machine learning.
+
+See `Amazon EC2 I7i Instances <https://aws.amazon.com/ec2/instance-types/i7i/>`_ for details.
+
+
+.. _system-requirements-i8g-instances:
+
+i8g instances
+^^^^^^^^^^^^^^
+
+The following i8g instances are supported.
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GiB)
+     - Storage (GB)
+   * - i8g.large
+     - 2
+     - 16
+     - 1 x 468 GB
+   * - i8g.xlarge
+     - 4
+     - 32
+     - 1 x 937 GB
+   * - i8g.2xlarge
+     - 8
+     - 64
+     - 1 x 1,875 GB
+   * - i8g.4xlarge
+     - 16
+     - 128
+     - 1 x 3,750 GB
+   * - i8g.8xlarge
+     - 32
+     - 256
+     - 2 x 3,750 GB
+   * - i8g.12xlarge
+     - 48
+     - 384
+     - 3 x 3,750 GB
+   * - i8g.16xlarge
+     - 64
+     - 512
+     - 4 x 3,750 GB
+
+All i8g instances have the following specs:
+
+* Powered by AWS Graviton4 processors
+* 3rd generation AWS Nitro SSD storage
+* DDR5-5600 memory for improved throughput
+* Up to 100 Gbps of networking bandwidth and up to 60 Gbps of bandwidth to
+  Amazon Elastic Block Store (EBS)
+* Instance sizes offer up to 45 TB of total local NVMe instance storage
+
+See `Amazon EC2 I8g Instances <https://aws.amazon.com/ec2/instance-types/i8g/>`_ for details.
+
+.. _system-requirements-i8ge-instances:
+
+i8ge instances
+^^^^^^^^^^^^^^
+
+The following i8ge instances are supported.
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GiB)
+     - Storage (GB)
+   * - i8ge.large
+     - 2
+     - 16
+     - 1 x 1,250 GB
+   * - i8ge.xlarge
+     - 4
+     - 32
+     - 1 x 2,500 GB
+   * - i8ge.2xlarge
+     - 8
+     - 64
+     - 2 x 2,500 GB
+   * - i8ge.3xlarge
+     - 12
+     - 96
+     - 1 x 7,500 GB
+   * - i8ge.6xlarge
+     - 24
+     - 192
+     - 2 x 7,500 GB
+   * - i8ge.12xlarge
+     - 48
+     - 384
+     - 4 x 7,500 GB
+   * - i8ge.18xlarge
+     - 72
+     - 576
+     - 6 x 7,500 GB
+
+All i8ge instances have the following specs:
+
+* Powered by AWS Graviton4 processors
+* 3rd generation AWS Nitro SSD storage
+* DDR5-5600 memory for improved throughput
+* Up to 300 Gbps of networking bandwidth and up to 60 Gbps of bandwidth to
+  Amazon Elastic Block Store (EBS)
+* Instance sizes offer up to 120 TB of total local NVMe instance storage
+
+See `Amazon EC2 I8g Instances <https://aws.amazon.com/ec2/instance-types/i8g/>`_ for details.
+
+
+Im4gn and Is4gen instances
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ScyllaDB supports Arm-based Im4gn and Is4gen instances. See  `Amazon EC2 Im4gn and Is4gen instances <https://aws.amazon.com/ec2/instance-types/i4g/>`_ for specification details. 
+
+.. _system-requirements-gcp:
+
+Google Compute Engine (GCE)
+-----------------------------------
+
+Pick a zone where Haswell CPUs are found. Local SSD performance offers, according to Google, less than 1 ms of latency and up to 680,000 read IOPS and 360,000 write IOPS.
+Image with NVMe disk interface is recommended.
+(`More info <https://cloud.google.com/compute/docs/disks/local-ssd>`_)
+
+Recommended instances types are `z3-highmem-highlssd, z3-highmem-standardlssd <https://cloud.google.com/compute/docs/storage-optimized-machines#z3_machine_types>`_,
+and `n2-highmem <https://cloud.google.com/compute/docs/general-purpose-machines#n2_series>`_.
+
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GB)
+     - Storage (GB)
+   * - z3-highmem-8-highlssd
+     - 8
+     - 64
+     - 3,000
+   * - z3-highmem-16-highlssd
+     - 16
+     - 128
+     - 6,000
+   * - z3-highmem-22-highlssd	
+     - 22
+     - 176
+     - 9,000
+   * - z3-highmem-32-highlssd	
+     - 32
+     - 256
+     - 12,000
+   * - z3-highmem-44-highlssd	
+     - 44
+     - 352
+     - 18,000
+   * - z3-highmem-88-highlssd
+     - 88
+     - 704
+     - 36,000	  
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GB)
+     - Storage (GB)
+   * - z3-highmem-14-standardlssd
+     - 14
+     - 112
+     - 3,000
+   * - z3-highmem-22-standardlssd
+     - 22
+     - 176
+     - 6,000
+   * - z3-highmem-44-standardlssd 
+     - 44
+     - 352
+     - 9,000
+   * - z3-highmem-88-standardlssd
+     - 88
+     - 704
+     - 18,000
+   * - z3-highmem-176-standardlssd
+     - 176
+     - 1,406
+     - 36,000 
+
+* Storage: Each Z3 instance supports up to 36,000 GiB (~36 TiB) of local
+  Titanium SSD (or up to 72,000 GiB on bare-metal).
+* Z3 Processor: Sapphire Rapids
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GB)
+     - Storage (GB)
+   * - n2-highmem-2
+     - 2
+     - 16
+     - 375
+   * - n2-highmem-4
+     - 4
+     - 32
+     - 750
+   * - n2-highmem-8
+     - 8
+     - 64
+     - 1500
+   * - n2-highmem-16
+     - 16
+     - 128
+     - 3,000
+   * - n2-highmem-32
+     - 32
+     - 256
+     - 9,000
+   * - n2-highmem-48
+     - 48
+     - 384
+     - 9,000
+   * - n2-highmem-64
+     - 64
+     - 512
+     - 9,000
+   * - n2-highmem-80
+     - 80
+     - 640
+     - 9,000
+   * - n2-highmem-96
+     - 96
+     - 768
+     - 9,000
+
+* Storage: Each instance can support  maximum of 24 local SSD of 375 GB
+  partitions each for a total of `9 TB per instance <https://cloud.google.com/compute/docs/disks>`_.
+* Processors: Ice Lake (the default for larger machine types) and Cascade Lake
+  (the default for machine types up to 80 vCPUs).
+
+.. _system-requirements-azure:
+
+Microsoft Azure
+---------------
+
+The `Lsv3-series <https://learn.microsoft.com/en-us/azure/virtual-machines/lsv3-series/>`_  of Azure Virtual Machines (Azure VMs) features high-throughput, low latency, directly mapped local NVMe storage. These VMs run on the 3rd Generation Intel® Xeon® Platinum 8370C (Ice Lake) processor in a hyper-threaded configuration.
+
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GB)
+     - Storage
+   * - Standard_L8s_v3
+     - 8
+     - 64
+     - 1 x 1.92 TB
+   * - Standard_L16s_v3
+     - 16
+     - 128
+     - 2 x 1.92 TB
+   * - Standard_L32s_v3
+     - 32
+     - 256
+     - 4 x 1.92 TB
+   * - Standard_L48s_v3
+     - 48
+     - 384
+     - 6 x 1.92 TB     
+   * - Standard_L64s_v3
+     - 64
+     - 512
+     - 8 x  1.92 TB
+   * - Standard_L80s_v3
+     - 80
+     - 640
+     - 10 x 1.92 TB
+       
+More on Azure Lsv3 instances `here <https://learn.microsoft.com/en-us/azure/virtual-machines/lsv3-series/>`_
+
+Oracle Cloud Infrastructure (OCI)
+----------------------------------------
+
+An OCPU is defined as the CPU capacity equivalent of one physical core of an Intel Xeon processor with hyperthreading enabled. 
+For Intel Xeon processors, each OCPU corresponds to two hardware execution threads, known as vCPUs.
+
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - OCPU
+     - Mem (GB)
+     - Storage
+   * - VM.DenseIO2.8
+     - 8
+     - 120
+     - 6.4 TB
+   * - VM.DenseIO2.16
+     - 16
+     - 240
+     - 12.8 TB
+   * - VM.DenseIO2.24
+     - 24
+     - 320 
+     - 25.6 TB
+   * - BM.DenseIO2.52 
+     - 52 
+     - 768 
+     - 51.2 TB
+   * - BM.HPC2.36 
+     - 36 
+     - 384 
+     - 6.7 TB
+

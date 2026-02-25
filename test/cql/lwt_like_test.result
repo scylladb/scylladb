@@ -1,0 +1,95 @@
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> USE ks;
+OK
+> 
+> create table t (pk int primary key, c text);
+OK
+> insert into  t (pk, c) values (1, 'abc');
+OK
+> insert into  t (pk, c) values (2, 'bcd');
+OK
+> insert into  t (pk, c) values (3, 'cde');
+OK
+> -- match
+> update t set c = 'chg' where pk = 1 if c like 'a%';
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| True        | abc |
++-------------+-----+
+> update t set c = 'chg' where pk = 2 if c like 'b%';
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| True        | bcd |
++-------------+-----+
+> update t set c = 'chg' where pk = 3 if c like 'c%';
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| True        | cde |
++-------------+-----+
+> -- null value
+> insert into  t (pk, c) values (3, null);
+OK
+> update t set c = 'error' where pk = 3 if c like 'a%';
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> -- unset value
+> insert into  t json '{ "pk": 4 }' default unset;
+OK
+> update t set c = 'err' where pk = 4 if c like 'a%';
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> -- empty pattern
+> update t set c = 'err' where pk = 1 if c like '';
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| False       | chg |
++-------------+-----+
+> -- invalid pattern type
+> update t set c = 'err' where pk = 1 if c like 1;
+Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "c" of type text"
+> update t set c = 'err' where pk = 1 if c like null;
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| False       | chg |
++-------------+-----+
+> update t set c = 'err' where pk = 1 if c like bigintAsBlob(1);
+Error from server: code=2200 [Invalid query] message="Type error: cannot assign result of function system.bigintasblob (type blob) to c (type text)"
+> -- int column
+> create table ti (pk int primary key, c int);
+OK
+> insert into  ti (pk, c) values (1, 1);
+OK
+> update ti set c = 2 where pk = 1 if c like 'a%';
+Error from server: code=2200 [Invalid query] message="LIKE is allowed only on string types, which c is not"
+> -- map column
+> create table tm (pk int primary key, m map<int, text>);
+OK
+> insert into  tm (pk, m) values (1, { 1: 'abc' });
+OK
+> update tm set m = { 2: 'error' } where pk = 1 if m like 'a%';
+Error from server: code=2200 [Invalid query] message="LIKE is allowed only on string types, which m is not"
+> -- blob column
+> create table tb (pk int primary key, b blob);
+OK
+> insert into  tb (pk, b) values (1, bigintAsBlob(1));
+OK
+> update tb set b = bigintAsBlob(2) where pk = 1 if b like 'a%';
+Error from server: code=2200 [Invalid query] message="LIKE is allowed only on string types, which b is not"
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK

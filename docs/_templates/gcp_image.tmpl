@@ -1,0 +1,17 @@
+.. -*- mode: rst -*-
+
+{{version}}
+{{ '-' * version|length }}
+
+.. collapse:: View image details
+  {% if latest %}:open:{% endif %}
+
+  .. list-table::
+    :header-rows: 1
+
+    * - Image Name
+      - Image ID
+  {% for row in data[1:] %}
+    * - {{ row[0] }}
+      - {{ row[1] }}
+  {% endfor %}

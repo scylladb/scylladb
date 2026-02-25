@@ -1,0 +1,47 @@
+# choose following mode: virtio, dpdk, posix
+NETWORK_MODE=posix
+
+# tap device name(virtio)
+TAP=tap0
+
+# bridge device name (virtio)
+BRIDGE=virbr0
+
+# ethernet device name
+IFNAME=eth0
+
+# setup NIC's and disks' interrupts, RPS, XPS, nomerges and I/O scheduler (posix)
+SET_NIC_AND_DISKS=no
+
+# tune clocksource
+SET_CLOCKSOURCE=no
+
+# ethernet device driver (dpdk)
+ETHDRV=
+
+# ethernet device PCI ID (dpdk)
+ETHPCIID=
+
+# number of hugepages
+NR_HUGEPAGES=64
+
+# user for process (must be root for dpdk)
+USER=scylla
+
+# group for process
+GROUP=scylla
+
+# scylla home dir
+SCYLLA_HOME=/var/lib/scylla
+
+# scylla config dir
+SCYLLA_CONF=/etc/scylla
+
+# scylla arguments (for posix mode)
+SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --network-stack posix"
+
+## scylla arguments (for dpdk mode)
+#SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --network-stack native --dpdk-pmd"
+
+# Disable disk writeback cache
+DISABLE_WRITEBACK_CACHE=no

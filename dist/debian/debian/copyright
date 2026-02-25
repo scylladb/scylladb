@@ -1,0 +1,18 @@
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Scylla DB
+Upstream-Contact: http://www.scylladb.com/
+Source: https://github.com/scylladb/scylla
+
+Files: *
+Copyright: Copyright (C) 2015-present ScyllaDB
+License: ScyllaDB-Source-Available-1.0
+
+Files: seastar/*
+Copyright: Copyright (C) 2015-present ScyllaDB
+License: Apache-2.0
+
+Files: seastar/dpdk/*
+Copyright: Copyright(c) 2015 Intel Corporation. All rights reserved.
+License: BSD-3-clause
+
+License: ScyllaDB-Source-Available-1.0

@@ -1,0 +1,41 @@
+name: Sync Jira Based on PR Events
+
+on:
+  pull_request_target:
+    types: [opened, ready_for_review, review_requested, labeled, unlabeled, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  jira-sync-pr-opened:
+    if: github.event.action == 'opened'
+    uses: scylladb/github-automation/.github/workflows/main_jira_sync_pr_opened.yml@main
+    secrets:
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+
+  jira-sync-in-review:
+    if: github.event.action == 'ready_for_review' || github.event.action == 'review_requested'
+    uses: scylladb/github-automation/.github/workflows/main_jira_sync_in_review.yml@main
+    secrets:
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+
+  jira-sync-add-label:
+    if: github.event.action == 'labeled'
+    uses: scylladb/github-automation/.github/workflows/main_jira_sync_add_label.yml@main
+    secrets:
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+
+  jira-status-remove-label:
+    if: github.event.action == 'unlabeled'
+    uses: scylladb/github-automation/.github/workflows/main_jira_sync_remove_label.yml@main
+    secrets:
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+
+  jira-status-pr-closed:
+    if: github.event.action == 'closed' 
+    uses: scylladb/github-automation/.github/workflows/main_jira_sync_pr_closed.yml@main
+    secrets:
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}

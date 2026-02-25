@@ -1,0 +1,26 @@
+add_library(schema STATIC)
+target_sources(schema
+  PRIVATE
+    caching_options.cc
+    frozen_schema.cc
+    schema.cc
+    schema_mutations.cc
+    schema_registry.cc)
+target_include_directories(schema
+  PUBLIC
+    ${CMAKE_SOURCE_DIR})
+target_link_libraries(schema
+  PUBLIC
+    cql3
+    idl
+    Seastar::seastar
+    xxHash::xxhash
+    absl::headers
+  PRIVATE
+    alternator)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(schema REUSE_FROM scylla-precompiled-header)
+endif()
+
+check_headers(check-headers schema
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

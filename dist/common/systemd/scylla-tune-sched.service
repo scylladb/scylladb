@@ -1,0 +1,11 @@
+[Unit]
+Description=Kernel scheduler tuning script for Scylla
+RequiresMountsFor=/proc
+RequiresMountsFor=/sys/kernel/debug
+
+[Service]
+Type=simple
+ExecStart=/opt/scylladb/kernel_conf/scylla_tune_sched
+
+[Install]
+WantedBy=multi-user.target

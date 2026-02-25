@@ -1,0 +1,342 @@
+/*
+ * Copyright (C) 2015-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#pragma once
+
+#include "schema.hh"
+#include "replica/database_fwd.hh"
+#include "cdc/log.hh"
+#include "mutation/timestamp.hh"
+#include "tombstone_gc_options.hh"
+#include "db/view/base_info.hh"
+
+namespace db {
+class per_partition_rate_limit_options;
+}
+
+struct schema_builder {
+public:
+    enum class compact_storage { no, yes };
+    // "schema initializer" - Configures default values for schema properties.
+    using schema_initializer = noncopyable_function<void(schema_builder&)>;
+    struct schema_initializers_checkpoint {
+        size_t size;
+    };
+private:
+    struct from_hash {};
+    struct from_time {};
+    schema::raw_schema _raw;
+    std::optional<compact_storage> _compact_storage;
+    std::variant<from_time, from_hash, table_schema_version> _version = from_time{};
+    std::optional<raw_view_info> _view_info;
+    std::optional<schema_ptr> _base_schema;
+    std::optional<db::view::base_dependent_view_info> _base_info;
+    std::optional<schema_ptr> _cdc_schema;
+    schema_static_props _static_props;
+    schema_builder(const schema::raw_schema&);
+    static std::vector<schema_initializer>& schema_initializers();
+public:
+    schema_builder(std::string_view ks_name, std::string_view cf_name,
+            std::optional<table_id> = { },
+            data_type regular_column_name_type = utf8_type);
+    schema_builder(
+            std::optional<table_id> id,
+            std::string_view ks_name,
+            std::string_view cf_name,
+            std::vector<schema::column> partition_key,
+            std::vector<schema::column> clustering_key,
+            std::vector<schema::column> regular_columns,
+            std::vector<schema::column> static_columns,
+            data_type regular_column_name_type,
+            sstring comment = "");
+    schema_builder(const schema_ptr);
+
+    // Registration is not thread-safe (modifies a global static vector).
+    // Call only during init, before starting any services that use `schema_builder`.
+    static int register_schema_initializer(schema_initializer&& initializer);
+    // (For unit testing)
+    // Checkpoint/Restore for the global schema-initializer list.
+    // Captures the current list size; restoring truncates the list back to
+    // that size. Useful when some initializer depends on runtime state that
+    // needs to be reset for the purposes of a test.
+    // Typical usage:
+    //   auto cp = capture_schema_initializers_checkpoint();
+    //   register_schema_initializer(...);
+    //   restore_schema_initializers_checkpoint(cp);
+    static schema_initializers_checkpoint capture_schema_initializers_checkpoint();
+    static void restore_schema_initializers_checkpoint(schema_initializers_checkpoint checkpoint);
+
+    void set_properties(schema::user_properties);
+
+    schema_builder& set_uuid(const table_id& id) {
+        _raw._id = id;
+        return *this;
+    }
+    const table_id& uuid() const {
+        return _raw._id;
+    }
+    schema_builder& set_regular_column_name_type(const data_type& t) {
+        _raw._regular_column_name_type = t;
+        return *this;
+    }
+    schema_builder& set_default_validation_class(const data_type& t) {
+        _raw._default_validation_class = t;
+        return *this;
+    }
+    const data_type& regular_column_name_type() const {
+        return _raw._regular_column_name_type;
+    }
+    const sstring& ks_name() const {
+        return _raw._ks_name;
+    }
+    const sstring& cf_name() const {
+        return _raw._cf_name;
+    }
+    schema_builder& set_comment(const sstring& s) {
+        _raw._props.comment = s;
+        return *this;
+    }
+    const sstring& comment() const {
+        return _raw._props.comment;
+    }
+    schema_builder& set_default_time_to_live(gc_clock::duration t) {
+        _raw._props.default_time_to_live = t;
+        return *this;
+    }
+    gc_clock::duration default_time_to_live() const {
+        return _raw._props.default_time_to_live;
+    }
+
+    schema_builder& set_gc_grace_seconds(int32_t gc_grace_seconds) {
+        _raw._props.gc_grace_seconds = gc_grace_seconds;
+        return *this;
+    }
+
+    int32_t get_gc_grace_seconds() const {
+        return _raw._props.gc_grace_seconds;
+    }
+
+    schema_builder& set_paxos_grace_seconds(int32_t seconds);
+
+    schema_builder& set_crc_check_chance(double chance) {
+        _raw._props.crc_check_chance = chance;
+        return *this;
+    }
+
+    double get_crc_check_chance() const {
+        return _raw._props.crc_check_chance;
+    }
+
+    schema_builder& set_min_compaction_threshold(int32_t t) {
+        _raw._props.min_compaction_threshold = t;
+        return *this;
+    }
+
+    int32_t get_min_compaction_threshold() const {
+        return _raw._props.min_compaction_threshold;
+    }
+
+    schema_builder& set_max_compaction_threshold(int32_t t) {
+        _raw._props.max_compaction_threshold = t;
+        return *this;
+    }
+
+    int32_t get_max_compaction_threshold() const {
+        return _raw._props.max_compaction_threshold;
+    }
+
+    schema_builder& set_compaction_enabled(bool enabled) {
+        _raw._props.compaction_enabled = enabled;
+        return *this;
+    }
+
+    bool compaction_enabled() const {
+        return _raw._props.compaction_enabled;
+    }
+
+    schema_builder& set_min_index_interval(int32_t t) {
+        _raw._props.min_index_interval = t;
+        return *this;
+    }
+
+    int32_t get_min_index_interval() const {
+        return _raw._props.min_index_interval;
+    }
+
+    schema_builder& set_max_index_interval(int32_t t) {
+        _raw._props.max_index_interval = t;
+        return *this;
+    }
+
+    int32_t get_max_index_interval() const {
+        return _raw._props.max_index_interval;
+    }
+
+    schema_builder& set_memtable_flush_period(int32_t t) {
+        _raw._props.memtable_flush_period = t;
+        return *this;
+    }
+
+    int32_t get_memtable_flush_period() const {
+        return _raw._props.memtable_flush_period;
+    }
+
+    schema_builder& set_speculative_retry(sstring retry_sstring) {
+        _raw._props.speculative_retry = speculative_retry::from_sstring(retry_sstring);
+        return *this;
+    }
+
+    const speculative_retry& get_speculative_retry() const {
+        return _raw._props.speculative_retry;
+    }
+
+    schema_builder& set_bloom_filter_fp_chance(double fp) {
+        _raw._props.bloom_filter_fp_chance = fp;
+        return *this;
+    }
+    double get_bloom_filter_fp_chance() const {
+        return _raw._props.bloom_filter_fp_chance;
+    }
+    schema_builder& set_compressor_params(const compression_parameters& cp) {
+        _raw._props.compressor_params = cp;
+        return *this;
+    }
+    schema_builder& set_extensions(schema::extensions_map exts) {
+        _raw._props.extensions = std::move(exts);
+        return *this;
+    }
+    schema_builder& add_extension(const sstring& name, ::shared_ptr<schema_extension> ext) {
+        _raw._props.extensions[name] = std::move(ext);
+        return *this;
+    }
+    const schema::extensions_map& get_extensions() const {
+        return _raw._props.extensions;
+    }
+    schema_builder& set_compaction_strategy(compaction::compaction_strategy_type type) {
+        _raw._props.compaction_strategy = type;
+        return *this;
+    }
+
+    schema_builder& set_compaction_strategy_options(std::map<sstring, sstring>&& options);
+
+    schema_builder& set_caching_options(caching_options c) {
+        _raw._props.caching_options = std::move(c);
+        return *this;
+    }
+
+    schema_builder& set_is_dense(bool is_dense) {
+        _raw._is_dense = is_dense;
+        return *this;
+    }
+
+    schema_builder& set_is_compound(bool is_compound) {
+        _raw._is_compound = is_compound;
+        return *this;
+    }
+
+    schema_builder& set_is_counter(bool is_counter) {
+        _raw._is_counter = is_counter;
+        return *this;
+    }
+
+    schema_builder& with_partitioner(sstring name);
+    schema_builder& with_sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits);
+    schema_builder& set_in_memory(bool in_memory) {
+        _raw._in_memory = in_memory;
+        return *this;
+    }
+
+    schema_builder& set_tablet_options(std::map<sstring, sstring>&& hints);
+
+    // Setters for static properties.
+    void set_use_null_sharder(bool enabled = true) {
+        _static_props.use_null_sharder = enabled;
+    }
+    void set_wait_for_sync_to_commitlog(bool enabled = true) {
+        _static_props.wait_for_sync_to_commitlog = enabled;
+    }
+    void enable_schema_commitlog() {
+        _static_props.enable_schema_commitlog();
+    }
+    void set_is_group0_table(bool enabled = true) {
+        _static_props.is_group0_table = enabled;
+    }
+
+    class default_names {
+    public:
+        default_names(const schema_builder&);
+        default_names(const schema::raw_schema&);
+
+        sstring partition_key_name();
+        sstring clustering_name();
+        sstring compact_value_name();
+    private:
+        sstring unique_name(const sstring&, size_t&, size_t) const;
+        const schema::raw_schema& _raw;
+        size_t _partition_index, _clustering_index, _compact_index;
+    };
+
+    column_definition& find_column(const cql3::column_identifier&);
+    bool has_column(const cql3::column_identifier&);
+    schema_builder& with_column_ordered(const column_definition& c);
+    schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column, column_view_virtual view_virtual = column_view_virtual::no);
+    schema_builder& with_computed_column(bytes name, data_type type, column_kind kind, column_computation_ptr computation);
+    schema_builder& remove_column(bytes name, std::optional<api::timestamp_type> timestamp = std::nullopt);
+    schema_builder& without_column(sstring name, api::timestamp_type timestamp);
+    schema_builder& without_column(sstring name, data_type, api::timestamp_type timestamp);
+    schema_builder& rename_column(bytes from, bytes to);
+    schema_builder& alter_column_type(bytes name, data_type new_type);
+    schema_builder& mark_column_computed(bytes name, column_computation_ptr computation);
+
+    // Adds information about collection that existed in the past but the column
+    // has since been removed. For adding colllections that are still alive
+    // use with_column().
+    schema_builder& with_collection(bytes name, data_type type);
+
+    schema_builder& with(compact_storage);
+    schema_builder& with_version(table_schema_version);
+
+    // Will cause the schema to be created with a version which is computed
+    // from the definition of the schema. Same schema definition
+    // will give the same version at different times of building and on
+    // different nodes.
+    //
+    // By default, the schema version generated by schema_builder is
+    // a unique time-UUID, which preserves monotonicity requirements
+    // of table_schema_version (even in ABA changes).
+    schema_builder& with_hash_version();
+
+    schema_builder& with_view_info(schema_ptr base_schema, bool include_all_columns, sstring where_clause);
+    schema_builder& with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause, db::view::base_dependent_view_info base);
+
+    schema_builder& with_cdc_schema(schema_ptr cdc_schema);
+
+    schema_builder& with_index(const index_metadata& im);
+    schema_builder& without_index(const sstring& name);
+    schema_builder& without_indexes();
+
+    schema_builder& with_cdc_options(const cdc::options&);
+    schema_builder& with_tombstone_gc_options(const tombstone_gc_options& opts);
+    schema_builder& with_per_partition_rate_limit_options(const db::per_partition_rate_limit_options&);
+
+    default_names get_default_names() const {
+        return default_names(_raw);
+    }
+
+    // Equivalent to with(cp).build()
+    schema_ptr build(compact_storage cp);
+
+    schema_ptr build() &;
+    schema_ptr build() &&;
+private:
+    schema_ptr build(schema::raw_schema& raw);
+    friend class default_names;
+    void prepare_dense_schema(schema::raw_schema& raw);
+
+    schema_builder& with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual view_virtual = column_view_virtual::no, column_computation_ptr computation = nullptr);
+};

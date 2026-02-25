@@ -1,0 +1,56 @@
+{
+    "apiVersion":"0.0.1",
+    "swaggerVersion":"1.2",
+    "basePath":"{{Protocol}}://{{Host}}",
+    "resourcePath":"/service_levels",
+    "produces":[
+        "application/json"
+    ],
+    "apis":[
+        {
+            "path":"/service_levels/switch_tenants",
+            "operations":[
+                {
+                    "method":"POST",
+                    "summary":"Switch tenants on all opened connections if needed",
+                    "type":"void",
+                    "nickname":"do_switch_tenants",
+                    "produces":[
+                        "application/json"
+                    ],
+                    "parameters":[]
+                }
+            ]
+        },
+        {
+            "path":"/service_levels/count_connections",
+            "operations":[
+                {
+                    "method":"GET",
+                    "summary":"Count opened CQL connections per scheduling group per user",
+                    "type":"connections_count_map",
+                    "nickname":"count_connections",
+                    "produces":[
+                        "application/json"
+                    ],
+                    "parameters":[]
+                }
+            ]
+        }
+    ],
+    "models":{},
+    "components": {
+        "schemas": {
+          "connections_count_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+
+}

@@ -1,0 +1,69 @@
+name: clang-tidy
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths-ignore:
+      - '**/*.rst'
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/**'
+  workflow_dispatch:
+  issue_comment:
+    types:
+      - created
+
+env:
+  BUILD_TYPE: RelWithDebInfo
+  BUILD_DIR: build
+  CLANG_TIDY_CHECKS: '-*,bugprone-use-after-move'
+
+permissions: {}
+
+# cancel the in-progress run upon a repush
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  read-toolchain:
+    if: github.event_name == 'pull_request' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/clang-tidy'))
+    uses: ./.github/workflows/read-toolchain.yaml
+  clang-tidy:
+    name: Run clang-tidy
+    needs:
+      - read-toolchain
+    if: "${{ needs.read-toolchain.result == 'success' }}"
+    runs-on: ubuntu-latest
+    container: ${{ needs.read-toolchain.outputs.image }}
+    steps:
+      - env:
+          IMAGE: ${{ needs.read-toolchain.image }}
+        run: |
+          echo ${{ needs.read-toolchain.image }}
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: |
+          sudo dnf -y install clang-tools-extra
+      - name: Generate the building system
+        run: |
+          cmake                                         \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE              \
+            -DCMAKE_C_COMPILER=clang                    \
+            -DScylla_USE_LINKER=ld.lld                  \
+            -DCMAKE_CXX_COMPILER=clang++                \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON          \
+            -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--checks=$CLANG_TIDY_CHECKS" \
+            -G Ninja                                    \
+            -B $BUILD_DIR                               \
+            -S .
+      # see https://github.com/actions/toolkit/blob/main/docs/problem-matchers.md
+      - run: |
+          echo "::add-matcher::.github/clang-matcher.json"
+      - name: Build with clang-tidy enabled
+        run: |
+          cmake --build $BUILD_DIR --target scylla
+      - run: |
+          echo "::remove-matcher owner=clang::"

@@ -1,0 +1,16 @@
+#!/bin/bash -e
+#
+# Copyright (C) 2024-present ScyllaDB
+#
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+#
+
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
+SCRIPT_PATH=$(dirname $(realpath "$0"))
+
+INSTALLED_SCYLLA_PATH="${SCRIPT_PATH}/scylla"
+
+# Allow plugging scylla path for local testing
+exec ${SCYLLA:-${INSTALLED_SCYLLA_PATH}} nodetool $@

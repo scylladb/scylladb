@@ -1,0 +1,5 @@
+*.cc diff=cpp
+*.hh diff=cpp
+*.svg binary
+docs/_static/api/js/* binary
+pgo/profiles/** filter=lfs diff=lfs merge=lfs -text

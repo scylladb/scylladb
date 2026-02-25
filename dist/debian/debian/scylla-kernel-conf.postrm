@@ -1,0 +1,17 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    purge|remove)
+        if [ "$1" = "purge" ]; then
+            rm -f /etc/sysctl.d/99-scylla-perfevent.conf
+        fi
+        ;;
+esac
+
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi
+
+#DEBHELPER#

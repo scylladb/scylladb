@@ -1,0 +1,344 @@
+/*
+ * Copyright (C) 2020-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#pragma once
+
+#include <list>
+#include <algorithm>
+#include <seastar/core/thread.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/sharded.hh>
+#include <seastar/core/do_with.hh>
+#include "utils/collection-concepts.hh"
+
+using namespace seastar;
+
+namespace utils {
+
+
+// Similar to std::merge but it does not stall. Must run inside a seastar
+// thread. It merges items from list2 into list1. Items from list2 can only be copied.
+template<class T, class Compare>
+requires LessComparable<T, T, Compare>
+void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare comp) {
+    auto first1 = list1.begin();
+    auto first2 = list2.begin();
+    auto last1 = list1.end();
+    auto last2 = list2.end();
+    while (first2 != last2) {
+        seastar::thread::maybe_yield();
+        if (first1 == last1) {
+            // Copy remaining items of list2 into list1
+            list1.insert(last1, *first2);
+            ++first2;
+            continue;
+        }
+        if (comp(*first2, *first1)) {
+            list1.insert(first1, *first2);
+            ++first2;
+        } else {
+            ++first1;
+        }
+    }
+}
+
+// The clear_gently functions are meant for
+// gently destroying the contents of containers and smart pointers.
+// The containers can be reused after clear_gently
+// or may be destroyed.  But unlike e.g. std::vector::clear(),
+// clear_gently will not necessarily keep the object allocation.
+//
+// Note that for any type of shared pointer (foreign or not), clear_gently
+// just reduces the reference count if it's greater than 1 and then returns.
+// In other words, it behaves like a normal reset().
+// But if clear_gently is called on the very last copy, the clear_gently() function
+// is recursively called on that last copy before destroying the object
+// to avoid stall in that destruction.
+
+template <typename T>
+concept HasClearGentlyMethod = requires (T x) {
+    { x.clear_gently() } -> std::same_as<future<>>;
+};
+
+template <typename T>
+concept SmartPointer = requires (T x) {
+    { x.get() } -> std::same_as<typename T::element_type*>;
+    { *x } -> std::same_as<typename T::element_type&>;
+};
+
+template <typename T>
+concept SharedPointer = SmartPointer<T> && requires (T x) {
+    { x.use_count() } -> std::convertible_to<long>;
+};
+
+template <typename T>
+concept StringLike = requires (T x) {
+    std::is_same_v<typename T::traits_type, std::char_traits<typename T::value_type>>;
+};
+
+template <typename T>
+concept Iterable = requires (T x) {
+    { x.empty() } -> std::same_as<bool>;
+    { x.begin() } -> std::same_as<typename T::iterator>;
+    { x.end() } -> std::same_as<typename T::iterator>;
+};
+
+template <typename T>
+concept Sequence = Iterable<T> && requires (T x, size_t n) {
+    { x.back() } -> std::same_as<typename T::value_type&>;
+    { x.pop_back() } -> std::same_as<void>;
+};
+
+template <typename T>
+concept TriviallyClearableSequence =
+    Sequence<T> && std::is_trivially_destructible_v<typename T::value_type> && !HasClearGentlyMethod<typename T::value_type> && requires (T s) {
+        { s.clear() } -> std::same_as<void>;
+    };
+
+template <typename T>
+concept Container = Iterable<T> && requires (T x, typename T::iterator it) {
+    x.erase(it);
+};
+
+template <typename T>
+concept Extractable = Iterable<T> && requires (T x, typename T::iterator it) {
+    x.extract(it);
+};
+
+template <typename T>
+concept MapLike = Container<T> && requires (T x) {
+    std::is_same_v<typename T::value_type, std::pair<const typename T::key_type, typename T::mapped_type>>;
+};
+
+template <HasClearGentlyMethod T>
+future<> clear_gently(T& o) noexcept;
+
+template <typename T>
+requires (SmartPointer<T> || SharedPointer<T>)
+future<> clear_gently(foreign_ptr<T>& o) noexcept;
+
+template <SharedPointer T>
+future<> clear_gently(T& o) noexcept;
+
+template <SmartPointer T>
+future<> clear_gently(T& o) noexcept;
+
+template <typename T, std::size_t N>
+future<> clear_gently(std::array<T, N>&a) noexcept;
+
+template <typename T>
+requires (StringLike<T> || TriviallyClearableSequence<T>)
+future<> clear_gently(T& s) noexcept;
+
+template <Sequence T>
+requires (!StringLike<T> && !TriviallyClearableSequence<T>)
+future<> clear_gently(T& v) noexcept;
+
+template <MapLike T>
+future<> clear_gently(T& c) noexcept;
+
+template <Extractable T>
+requires (!StringLike<T> && !Sequence<T> && !MapLike<T>)
+future<> clear_gently(T& c) noexcept;
+
+template <Container T>
+requires (!StringLike<T> && !Sequence<T> && !MapLike<T> && !Extractable<T>)
+future<> clear_gently(T& c) noexcept;
+
+template <typename T>
+future<> clear_gently(std::optional<T>& opt) noexcept;
+
+template <typename T>
+future<> clear_gently(seastar::optimized_optional<T>& opt) noexcept;
+
+namespace internal {
+
+template <typename T>
+concept HasClearGentlyImpl = requires (T x) {
+    { clear_gently(x) } -> std::same_as<future<>>;
+};
+
+template <typename T>
+requires HasClearGentlyImpl<T>
+future<> clear_gently(T& x) noexcept {
+    return utils::clear_gently(x);
+}
+
+// This default implementation of clear_gently
+// is required to "terminate" recursive clear_gently calls
+// at trivial objects
+template <typename T>
+future<> clear_gently(T&) noexcept {
+    return make_ready_future<>();
+}
+
+} // namespace internal
+
+template <HasClearGentlyMethod T>
+future<> clear_gently(T& o) noexcept {
+    return futurize_invoke(std::bind(&T::clear_gently, &o));
+}
+
+template <typename T>
+requires (SmartPointer<T> || SharedPointer<T>)
+future<> clear_gently(foreign_ptr<T>& o) noexcept {
+    return smp::submit_to(o.get_owner_shard(), [&o] {
+        auto wrapped = o.release();
+        return internal::clear_gently(wrapped).then([wrapped = std::move(wrapped)] {});
+    });
+}
+
+template <SharedPointer T>
+future<> clear_gently(T& ptr) noexcept {
+    auto o = std::exchange(ptr, nullptr);
+    if (o.use_count() == 1) {
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*o)).then([o = std::move(o)] {});
+    }
+    return make_ready_future<>();
+}
+
+template <SmartPointer T>
+future<> clear_gently(T& ptr) noexcept {
+    if (auto o = std::exchange(ptr, nullptr)) {
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*o)).then([o = std::move(o)] {});
+    } else {
+        return make_ready_future<>();
+    }
+}
+
+template <typename T, std::size_t N>
+future<> clear_gently(std::array<T, N>& a) noexcept {
+    return do_for_each(a, [] (T& o) {
+        return internal::clear_gently(const_cast<std::remove_const_t<T>&>(o));
+    });
+}
+
+// Trivially destructible elements can be safely cleared in bulk
+template <typename T>
+requires (StringLike<T> || TriviallyClearableSequence<T>)
+future<> clear_gently(T& s) noexcept {
+    // Note: clear() is pointless in this case since it keeps the allocation
+    // and since the values are trivially destructible it achieves nothing.
+    // `s = {}` will free the vector/string allocation.
+    s = {};
+    return make_ready_future<>();
+}
+
+// Clear the elements gently and destroy them one-by-one
+// in reverse order, to avoid copying.
+template <Sequence T>
+requires (!StringLike<T> && !TriviallyClearableSequence<T>)
+future<> clear_gently(T& v) noexcept {
+    return do_until([&v] { return v.empty(); }, [&v] {
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::value_type>&>(v.back())).then([&v] {
+            v.pop_back();
+        });
+    });
+    return make_ready_future<>();
+}
+
+template <MapLike T>
+future<> clear_gently(T& c) noexcept {
+    return do_until([&c] { return c.empty(); }, [&c] {
+        auto it = c.begin();
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::mapped_type>&>(it->second)).then([&c, it = std::move(it)] () mutable {
+            c.erase(it);
+        });
+    });
+}
+
+template <Extractable T>
+requires (!StringLike<T> && !Sequence<T> && !MapLike<T>)
+future<> clear_gently(T& c) noexcept {
+    return do_until([&c] { return c.empty(); }, [&c] {
+        auto node = c.extract(c.begin());
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::value_type>&>(node.value())).finally([node = std::move(node)] {});
+    });
+}
+
+template <Container T>
+requires (!StringLike<T> && !Sequence<T> && !MapLike<T> && !Extractable<T>)
+future<> clear_gently(T& c) noexcept {
+    return do_until([&c] { return c.empty(); }, [&c] {
+        auto it = c.begin();
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::value_type>&>(*it)).then([&c, it = std::move(it)] () mutable {
+            c.erase(it);
+        });
+    });
+}
+
+template <typename T>
+future<> clear_gently(std::optional<T>& opt) noexcept {
+    if (opt) {
+        return utils::clear_gently(const_cast<std::remove_const_t<T>&>(*opt));
+    } else {
+        return make_ready_future<>();
+    }
+}
+
+template <typename T>
+future<> clear_gently(seastar::optimized_optional<T>& opt) noexcept {
+    if (opt) {
+        return utils::clear_gently(*opt);
+    } else {
+        return make_ready_future<>();
+    }
+}
+
+template <SmartPointer T>
+future<> dispose_gently(T&& o) noexcept {
+    // No need to extend the smart pointer's lifetime because
+    // the lower-level clear_gently implementation captures it in
+    // a continuation, if needed.
+    return clear_gently(o);
+}
+
+// Note that dispose_gently needs to extend the object's lifetime so
+// clear_gently can yield.
+// If the caller can hold on to the object while it's being cleared
+// e.g. in the coroutine frame, seastar thread, or when the containing
+// object is held by the top-most caller, it is advised to do so.
+template <typename... T>
+requires (std::is_rvalue_reference_v<T&&> && ...)
+future<> dispose_gently(T&&... o) noexcept {
+    return do_with(std::move(o)..., [] (auto&... objs) mutable {
+        static auto clear_step = [] (auto& obj) {
+            return clear_gently(obj).then_wrapped([] (future<> f) {
+                // Ignore exceptions because there's nothing we can do about them here
+                // and the objects are destroyed anyway.
+                f.ignore_ready_future();
+            });
+        };
+        auto f = make_ready_future<>();
+        // Chain clearing of the objects to avoid excessive task creation
+        (..., (f = f.then([&objs] mutable { return clear_step(objs); })));
+        return f;
+    });
+}
+
+namespace internal {
+
+template <typename T>
+concept gently_reservable = requires(T x) {
+    { x.capacity() } -> std::same_as<size_t>;
+    { x.reserve_partial(10) } -> std::same_as<void>;
+
+};
+
+} // namespace internal
+
+// reserve_gently gently reserves memory in containers which support partial reserve.
+future<> reserve_gently(internal::gently_reservable auto& container, size_t size) {
+    return seastar::do_until([&container, size] { return container.capacity() == size; }, [&container, size]() {
+        container.reserve_partial(size);
+        return seastar::make_ready_future();
+    });
+}
+
+}
+

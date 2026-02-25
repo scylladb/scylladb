@@ -1,0 +1,4 @@
+token: <token>
+enable_services:
+- fips
+- fips-updates

@@ -1,0 +1,2 @@
+usr/lib/sysctl.d/*.conf
+opt/scylladb/kernel_conf/*

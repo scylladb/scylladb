@@ -1,0 +1,18 @@
+echo > /dev/stderr
+echo '   _____            _ _       _____  ____  ' > /dev/stderr
+echo '  / ____|          | | |     |  __ \|  _ \ ' > /dev/stderr
+echo ' | (___   ___ _   _| | | __ _| |  | | |_) |' > /dev/stderr
+echo '  \___ \ / __| | | | | |/ _` | |  | |  _ < ' > /dev/stderr
+echo '  ____) | (__| |_| | | | (_| | |__| | |_) |' > /dev/stderr
+echo ' |_____/ \___|\__, |_|_|\__,_|_____/|____/ ' > /dev/stderr
+echo '               __/ |                       ' > /dev/stderr
+echo '              |___/                        ' > /dev/stderr
+echo '' > /dev/stderr
+echo '' > /dev/stderr
+echo 'Nodetool:' > /dev/stderr
+echo '	nodetool help' > /dev/stderr
+echo 'CQL Shell:' > /dev/stderr
+echo '	cqlsh' > /dev/stderr
+echo 'More documentation available at: ' > /dev/stderr
+echo '	http://www.scylladb.com/doc/' > /dev/stderr
+echo > /dev/stderr

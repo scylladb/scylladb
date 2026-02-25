@@ -1,0 +1,24 @@
+name: PR require backport label
+on:
+  pull_request:
+    types: [opened, labeled, unlabeled, synchronize]
+    branches:
+      - master
+      - next
+jobs:
+  label:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Wait for label to be added
+        run: sleep 1m
+      - uses: mheap/github-action-required-labels@v5
+        with:
+          mode: minimum
+          count: 1
+          labels: "backport/none\nbackport/\\d{4}\\.\\d+\nbackport/\\d+\\.\\d+"
+          use_regex: true
+          add_comment: false

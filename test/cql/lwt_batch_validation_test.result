@@ -1,0 +1,20 @@
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> 
+> USE ks;
+OK
+> CREATE TABLE t1 (userid int PRIMARY KEY);
+OK
+> CREATE TABLE t2 (userid int PRIMARY KEY);
+OK
+> BEGIN BATCH
+> INSERT INTO t1 (userid) VALUES (1) IF NOT EXISTS
+> INSERT INTO t2 (userid) VALUES (1) IF NOT EXISTS
+> APPLY BATCH;
+Error from server: code=2200 [Invalid query] message="BATCH with conditions cannot span multiple tables"
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK

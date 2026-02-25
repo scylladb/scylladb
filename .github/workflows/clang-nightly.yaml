@@ -1,0 +1,66 @@
+name: clang-nightly
+
+on:
+  schedule:
+    # only at 5AM Saturday
+    - cron: '0 5 * * SAT'
+
+env:
+  # use the development branch explicitly
+  CLANG_VERSION: 21
+  BUILD_DIR: build
+
+permissions: {}
+
+# cancel the in-progress run upon a repush
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-dev:
+    name: Build with clang nightly
+    if: github.repository == 'scylladb/scylladb'
+    runs-on: ubuntu-latest
+    container: fedora:40
+    strategy:
+      matrix:
+        build_type:
+          - Debug
+          - RelWithDebInfo
+          - Dev
+    steps:
+      - run: |
+          sudo dnf -y install git
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install build dependencies
+        run: |
+          # use the copr repo for llvm snapshot builds, see
+          # https://copr.fedorainfracloud.org/coprs/g/fedora-llvm-team/llvm-snapshots/
+          sudo dnf -y install 'dnf-command(copr)'
+          sudo dnf copr enable -y @fedora-llvm-team/llvm-snapshots
+          # do not install java dependencies, which is not only not used here
+          sed -i.orig \
+            -e '/tools\/.*\/install-dependencies.sh/d' \
+            -e 's/(minio_download_jobs)/(true)/' \
+            ./install-dependencies.sh
+          sudo ./install-dependencies.sh
+          sudo dnf -y install lld
+      - name: Generate the building system
+        run: |
+          cmake                                         \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_C_COMPILER=clang-$CLANG_VERSION     \
+            -DCMAKE_CXX_COMPILER=clang++-$CLANG_VERSION \
+            -G Ninja                                    \
+            -B $BUILD_DIR                               \
+            -S .
+      # see https://github.com/actions/toolkit/blob/main/docs/problem-matchers.md
+      - run: |
+          echo "::add-matcher::.github/clang-matcher.json"
+      - run: |
+          cmake --build $BUILD_DIR --target scylla
+      - run: |
+          echo "::remove-matcher owner=clang::"

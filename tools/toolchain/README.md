@@ -1,0 +1,180 @@
+# Official toolchain for ScyllaDB
+
+While we aim to build out-of-the-box on recent distributions, this isn't
+always possible and not everyone runs a recent distribution. For this reason
+a version-controlled toolchain is provided as a docker image.
+
+## Quick start
+
+If your workstation supports docker (without requiring sudo), you can build and
+run Scylla easily without setting up the build dependencies beforehand:
+
+    ./tools/toolchain/dbuild ./configure.py
+    ./tools/toolchain/dbuild ninja build/release/scylla
+    ./tools/toolchain/dbuild ./build/release/scylla --developer-mode 1
+
+## The `dbuild` script
+
+The script `dbuild` allows you to run any command in that toolchain with
+the working directory mounted:
+
+    ./tools/toolchain/dbuild ./configure.py
+    ./tools/toolchain/dbuild ninja
+
+The script will bind-mount ~/.cache and ~/.config so sccache within the
+container will access a cache directory on the host, so the cache
+is persistent across runs.
+
+You can adjust the `docker run` command by adding more flags before the
+command to be executed, separating the flags and the command with `--`.
+This can be useful to attach more volumes (say, for /var/lib/scylla) and to
+set environment variables. For example, to mount /var/lib/scylla:
+
+    ./tools/toolchain/dbuild -e MYVAR=foo -v $HOME/data:/var/lib/scylla:z -- ninja
+
+To pass the same options to every run of dbuild, put them in the file
+~/.config/scylladb/dbuild, which should contain a bash array assignment:
+
+SCYLLADB_DBUILD=(-e PATH=/usr/lib64/ccache:/usr/bin:/usr/local/bin -v $HOME/.ccache:$HOME/.ccache:z)
+
+The script also works from other directories, so if you have `scylla-ccm` checked
+out alongside scylla, you can write
+
+
+    ../scylla/tools/toolchain/dbuild ./ccm ...
+
+You will have access to both scylla and scylla-ccm in the container.
+
+Interactive mode is also supported: running `dbuild` with no arguments
+will drop you into a shell, with all of the toolchain accessible.
+
+## Obtaining the current toolchain
+
+The toolchain is stored in a file called `tools/toolchain/image`. Normally,
+`dbuild` will fetch the toolchain automatically. If you want to access
+the toolchain explicitly, pull that image:
+
+    docker pull $(<tools/toolchain/image)
+
+## Building the toolchain
+
+If you add dependencies (to `install-dependencies.sh` or
+`seastar/install-dependencies.sh`) you should update the toolchain.
+
+Run the command
+
+    podman build --no-cache --pull -f tools/toolchain/Dockerfile .
+
+and use the resulting image.
+
+## Publishing an image
+
+If you're a maintainer, you can tag the image and push it
+using `podman push`. Tags follow the format
+`scylladb/scylla-toolchain:fedora-29-[branch-3.0-]20181128`.
+
+For master toolchains, the branch designation is omitted. In a branch, if
+there is a need to update a toolchain, the branch designation is added to
+the tag to avoid ambiguity.
+
+Publishing an image is complicated since multiple architectures are supported.
+There are two procedures, one using emulation (can run on any x86 machine) and
+another using native systems, which requires access to aarch64 and s390x machines.
+
+The sources for the toolchain are Internet builds of open-source projects,
+based on the current Fedora release for most packages, with supplements from
+pip (Python), cargo (Rust) and other binary repositories for projects not
+packaged by Fedora. We also package a ScyllaDB build of clang that is optimized
+for faster compilation, see tools/toolchain/optimized_clang.sh.
+
+Because the clang binary is self-packaged, there are different procedures depending
+on whether the clang version changed since the last toolchain generation or not.
+
+To obtain the clang version, use `./tools/toolchain/dbuild clang --version` for the
+current toolchain, and `podman run --rm docker.io/fedora:<version> dnf info clang`
+for the to-be-packaged version. If they are different, you must use the procedure
+that also regenerates clang.
+
+## Emulated publishing procedure (slow, no clang regeneration)
+
+1. Pick a new name for the image (in `tools/toolchain/image`) and
+   commit it. The commit updating install-dependencies.sh should
+   include the toolchain change, for atomicity. Do not push the commit
+   to `next` yet.
+2. Run `tools/toolchain/prepare --clang-build-mode INSTALL_FROM --clang-archive-x86_64 <filename to the archive> --clang-archive-aarch64 <filename to the archive>` and wait.
+   The clang archive needs to be downloaded prior to build.
+   It requires `buildah` and `qemu-user-static` to be installed
+   (and will complain if they are not).
+   The clang archive is recorded in each commit that changes the toolchain (`git log -1 tools/toolchain/image`).
+   The URLs point to an object storage bucket we maintain.
+3. Publish the image using the instructions printed by the previous step.
+4. Push the `next` branch that refers to the new toolchain.
+
+## Native publishing procedure (complicated, no clang regeneration)
+
+1. Pick a new name for the image (in `tools/toolchain/image`) and
+   commit it. The commit updating install-dependencies.sh should
+   include the toolchain change, for atomicity. Do not push the commit
+   to `next` yet.
+2. Push the commit to a personal repository/branch.
+3. Perform the following on an x86 and an ARM machine:
+    1. check out the branch containing the new toolchain name
+    2. Run `git submodule update --init --recursive` to make sure
+       all the submodules are synchronized
+    3. Run `tools/toolchain/prepare --clang-build-mode INSTALL_FROM  --clang-archive-x86_64 <filename to the archive> --clang-archive-aarch64 <filename to the archive> --disable-multiarch`. This should complete relatively quickly.
+       The clang archive is recorded in each commit that changes the toolchain (`git log -1 tools/toolchain/image`).
+       The URLs point to an object storage bucket we maintain.
+4. Now, create a multiarch image with the following:
+    1. Push one of the images using the `podman manifest push` command suggested by `tools/toolchain/prepare`.
+    2. For the other image, first merge the other image into it. This is done by using the command from step 1, but replacing `push` with `add`. For example, if in step 1 you pushed the x86_64 image, in step 2 you add the x86_64 image to the local aarch64 image. This creates a local image supporting the two architectures.
+    3. Push the combined image using the `podman manifest push` command suggested by `tools/toolchain/prepare`. This replaces the single-architecture image with a two-architecture image.
+5. Now push the commit that updated the toolchain with `git push`.
+
+## Native publishing procedure (complicated, with clang regeneration)
+
+1. Pick a new name for the image (in `tools/toolchain/image`) and
+   commit it. The commit updating install-dependencies.sh should
+   include the toolchain change, for atomicity. Do not push the commit
+   to `next` yet.
+2. In tools/toolchain/optimized_clang.sh, adjust the variable LLVM_CLANG_TAG
+   to point to the version of clang you want to build. It should match what
+   is available in Fedora at this point in time. Amend the commit with this,
+   but don't push it to `next` yet.
+3. Push the commit to a personal repository/branch.
+4. Perform the following on an x86 and an ARM machine:
+    1. check out the branch containing the new toolchain name
+    2. Run `git submodule update --init --recursive` to make sure
+       all the submodules are synchronized
+    3. Make sure the clang generation directories are removed: ./build_profile and ./clang_build
+    4. Run `tools/toolchain/prepare --clang-build-mode INSTALL --clang-archive-x86_64 <filename to the archive> --clang-archive-aarch64 <filename to the archive>`. This will be quite slow as clang and scylla are built multiple times.
+       Pick a new name for the clang archive based on previous names. The names are recorded in each commit that
+       changes the toolchain (`git log -1 tools/toolchain/image`). The names include the Fedora version this is built on,
+       the clang version, and the architecture. The new name must be unique.
+       The URLs point to an object storage bucket we maintain.
+    5. Upload the generated clang image to its URL. Use `gsutil cp <filename> <GSURL>` where `GSURL` is the same
+       as `URL` except the protocol is `gs` instead of `https`.
+5. Now, create a multiarch image with the following:
+    1. Push one of the images using the `podman manifest push` command suggested by `tools/toolchain/prepare`.
+    2. For the other image, first merge the other image into it. This is done by using the command from step 1, but replacing `push` with `add`. For example, if in step 1 you pushed the x86_64 image, in step 2 you add the x86_64 image to the local aarch64 image. This creates a local image supporting the two architectures.
+    3. Push the combined image using the `podman manifest push` command suggested by `tools/toolchain/prepare`. This replaces the single-architecture image with a two-architecture image.
+6. Now push the commit that updated the toolchain with `git push`. Remember to record the clang archive URLs for future reference.
+
+## Troubleshooting
+
+When running `sudo` inside the container fails like this:
+```
+$ tools/toolchain/dbuild /bin/bash
+bash-4.4$ sudo dnf install gdb
+sudo: unknown uid 1000: who are you?
+```
+
+You can work it around by disabling SELinux on the host before running `dbuild`:
+```
+$ sudo setenforce 0
+```
+
+## The future toolchain
+
+To prevent surprises when new Fedora/libstdc++/clang are made available,
+a spec for a "future" toolchain is available in tools/toolchain/future.dockerfile.
+See that file for details.

@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2024-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+import os
+import sys
+import argparse
+import psutil
+from scylla_util import *
+
+if __name__ == '__main__':
+    if not is_nonroot() and os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='LimitNOFILE setup script for Scylla.')
+    parser.add_argument('--limitnofile', type=int,
+                        help='Specify LimitNOFILE size (default: auto-configure)')
+    args = parser.parse_args()
+
+    if args.limitnofile:
+        limitnofile = args.limitnofile
+    else:
+        cpu = psutil.cpu_count()
+        mem_gb = int(psutil.virtual_memory().total/1024/1024/1024)
+        limitnofile = 10000 + (1200 * mem_gb) + (10000 * cpu)
+    if limitnofile < 800000:
+        print('No need to enlarge LimitNOFILE, skipping setup.')
+        sys.exit(0)
+    else:
+        print(f'Set LimitNOFILE to {limitnofile}')
+    unit_data = f'''
+[Service]
+LimitNOFILE={limitnofile}
+'''[1:-1]
+    os.makedirs('/etc/systemd/system/scylla-server.service.d/', exist_ok=True)
+    with open('/etc/systemd/system/scylla-server.service.d/limitnofile.conf', 'w') as f:
+        f.write(unit_data)
+    systemd_unit.reload()

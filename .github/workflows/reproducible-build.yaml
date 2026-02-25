@@ -1,0 +1,35 @@
+name: Check Reproducible Build
+
+on:
+  schedule:
+    # 5AM every friday
+    - cron: '0 5 * * FRI'
+
+permissions: {}
+
+env:
+  BUILD_MODE: release
+jobs:
+  build-a:
+    uses: ./.github/workflows/build-scylla.yaml
+    with:
+      build_mode: release
+  build-b:
+    uses: ./.github/workflows/build-scylla.yaml
+    with:
+      build_mode: release
+  compare-checksum:
+    if: github.repository == 'scylladb/scylladb'
+    runs-on: ubuntu-latest
+    needs:
+      - build-a
+      - build-b
+    steps:
+      - env:
+          CHECKSUM_A: ${{needs.build-a.outputs.md5sum}}
+          CHECKSUM_B: ${{needs.build-b.outputs.md5sum}}
+        run: |
+          if [ $CHECKSUM_A != $CHECKSUM_B ]; then                             \
+            echo "::error::mismatched checksums: $CHECKSUM_A != $CHECKSUM_B"; \
+            exit 1;                                                           \
+          fi

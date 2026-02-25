@@ -1,0 +1,34 @@
+> -- Error messages contain a keyspace name. Make the output stable.
+> CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+OK
+> -- setup
+> create table ks.my_table (key int primary key);
+OK
+> insert into ks.my_table (key) values (1);
+OK
+> 
+> -- test list<varint>
+> create function ks.my_func(val int) called on null input returns list<varint> language lua as 'return {1,2,3}';
+OK
+> select ks.my_func(key) from ks.my_table;
++-------------------+
+| ks.my_func(key)   |
+|-------------------|
+| [1, 2, 3]         |
++-------------------+
+> drop function ks.my_func;
+OK
+> 
+> -- test list<decimal>
+> create function ks.my_func(val int) called on null input returns list<decimal> language lua as 'return {1,2,3}';
+OK
+> select ks.my_func(key) from ks.my_table;
++--------------------------------------------+
+| ks.my_func(key)                            |
+|--------------------------------------------|
+| [Decimal('1'), Decimal('2'), Decimal('3')] |
++--------------------------------------------+
+> drop function ks.my_func;
+OK
+> DROP KEYSPACE ks;
+OK

@@ -1,0 +1,2 @@
+.. note:: By default, when a table or a keyspace is removed, a snapshot is taken so that you can restore it later. As a result, the disk space remains the same and is not immediately reclaimed.
+   Refer to :doc:`this article </troubleshooting/drop-table-space-up/>` or this :ref:`FAQ entry<reclaim-space>`.

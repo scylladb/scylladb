@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2018-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+#
+
+# Guess and print out a good number of compiler jobs to
+# run. Note that on an interactive desktop you will want
+# to reduce this to allow more memory for your desktop,
+# to avoid swapping. This is oriented at continuous
+# integration machines that do not serve an interactive
+# load as well.
+
+import os
+
+procs = os.sysconf('SC_NPROCESSORS_ONLN')
+mem = os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGESIZE')
+
+mem_reserve = 1000000000
+job_mem = 4000000000
+
+jobs = min(procs, (mem-mem_reserve) // job_mem)
+jobs = max(jobs, 1)
+
+print(jobs)
