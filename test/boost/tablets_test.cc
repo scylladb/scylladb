@@ -6096,4 +6096,83 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_on) {
     do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
 }
 
+// Test for tablet_map::get_secondary_replica() and specifically how it
+// relates to get_primary_replica().
+// We never officially documented given a list of replicas, which replica
+// is to be considered the "primary" - it's not simply the first replica in
+// the list but the first in some reshuffling of the list, reshuffling whose
+// details changed in commits like 817fdad and d88036d. So this patch doesn't
+// enshrine what get_primary_replica() or get_secondary_replica() should
+// return. It just verifies that get_secondary_replica() returns a *different*
+// replica than get_primary_replica() if there are 2 or more replicas, or
+// throws an error when there's just one replica.
+// Reproduces SCYLLADB-777.
+SEASTAR_THREAD_TEST_CASE(test_get_secondary_replica) {
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+    auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+    locator::topology::config cfg = {
+        .this_endpoint = inet_address("127.0.0.1"),
+        .this_host_id = h1,
+        .local_dc_rack = endpoint_dc_rack::default_location,
+    };
+    auto topo = locator::topology(cfg);
+    topo.add_or_update_endpoint(h1, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_or_update_endpoint(h2, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_or_update_endpoint(h3, endpoint_dc_rack::default_location, node::state::normal);
+
+    // With 1 replica, get_secondary_replica should throw.
+    {
+        tablet_map tmap(1);
+        auto tid = tmap.first_tablet();
+        tmap.set_tablet(tid, tablet_info {
+            tablet_replica_set {
+                tablet_replica {h1, 0},
+            }
+        });
+        BOOST_REQUIRE_THROW(tmap.get_secondary_replica(tid, topo), std::runtime_error);
+    }
+
+    // With 2 replicas, get_secondary_replica should return a different replica
+    // than get_primary_replica for every tablet.
+    {
+        tablet_map tmap(4);
+        for (auto tid : tmap.tablet_ids()) {
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 0},
+                }
+            });
+        }
+        for (auto tid : tmap.tablet_ids()) {
+            auto primary = tmap.get_primary_replica(tid, topo);
+            auto secondary = tmap.get_secondary_replica(tid, topo);
+            BOOST_REQUIRE(primary != secondary);
+        }
+    }
+
+    // With 3 replicas, same check.
+    {
+        tablet_map tmap(4);
+        for (auto tid : tmap.tablet_ids()) {
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 0},
+                    tablet_replica {h3, 0},
+                }
+            });
+        }
+        for (auto tid : tmap.tablet_ids()) {
+            auto primary = tmap.get_primary_replica(tid, topo);
+            auto secondary = tmap.get_secondary_replica(tid, topo);
+            BOOST_REQUIRE(primary != secondary);
+        }
+    }
+
+    topo.clear_gently().get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
