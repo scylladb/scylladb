@@ -748,6 +748,10 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
     }
     _stats.add_command++;
 
+    if (_aborted.has_value()) {
+        throw stopped_error(*_aborted);
+    }
+
     logger.trace("[{}] an entry is submitted", id());
     if (!_config.enable_forwarding) {
         if (const auto leader = _fsm->current_leader(); leader != _id) {
