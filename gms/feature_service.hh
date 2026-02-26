@@ -141,6 +141,7 @@ public:
     // have it or none, otherwise we can get partial failures on writes.
     gms::feature fragmented_commitlog_entries { *this, "FRAGMENTED_COMMITLOG_ENTRIES"sv };
     gms::feature maintenance_tenant { *this, "MAINTENANCE_TENANT"sv };
+    gms::feature snapshot_rpc_v2 { *this, "SNAPSHOT_RPC_V2"sv };
 
     gms::feature tablet_incremental_repair { *this, "TABLET_INCREMENTAL_REPAIR"sv };
     gms::feature tablet_repair_scheduler { *this, "TABLET_REPAIR_SCHEDULER"sv };

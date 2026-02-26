@@ -481,7 +481,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     auto holder = _gate.hold();
 
-    slogger.trace("transfer snapshot from {} index {} snp id {}", hid, snp.idx, snp.id);
+    slogger.info("transfer snapshot from {} index {} snp id {}", hid, snp.idx, snp.id);
     auto& as = _abort_source;
 
     // (Ab)use MIGRATION_REQUEST to also transfer group0 history table mutation besides schema tables mutations.
@@ -496,26 +496,77 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     std::optional<service::raft_snapshot> raft_snp;
 
     if (_topology_change_enabled) {
-        auto auth_tables = db::system_keyspace::auth_tables();
-        std::vector<table_id> tables;
-        tables.reserve(3);
-        tables.push_back(db::system_keyspace::topology()->id());
-        tables.push_back(db::system_keyspace::topology_requests()->id());
-        tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
+        auto split_into_topology_and_raft_snapshot = [] (service::raft_snapshot&& snp) -> std::pair<service::raft_snapshot, service::raft_snapshot> {
+            auto it = std::partition(snp.mutations.begin(), snp.mutations.end(), [] (const canonical_mutation& m) {
+                    return m.column_family_id() == db::system_keyspace::topology()->id()
+                            || m.column_family_id() == db::system_keyspace::topology_requests()->id()
+                            || m.column_family_id() == db::system_keyspace::cdc_generations_v3()->id()
+                            || m.column_family_id() == db::system_keyspace::scylla_local()->id();
+            });
 
-        topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+            service::raft_snapshot topology_snp;
+            service::raft_snapshot raft_snp;
 
-        tables = std::vector<table_id>();
-        tables.reserve(auth_tables.size() + 1);
+            std::move(snp.mutations.begin(), it, std::back_inserter(topology_snp.mutations));
+            std::move(it, snp.mutations.end(), std::back_inserter(raft_snp.mutations));
 
-        for (const auto& schema : auth_tables) {
-            tables.push_back(schema->id());
+            return {std::move(topology_snp), std::move(raft_snp)};
+        };
+
+        // we don't know if the snapshot rpc operates in the new mode or old mode, so first
+        // request topology tables as in the old mode.
+        // if the handler operates in the new mode, it ignores the parameter and sends all tables in the
+        // response, topology and non-topology, and we don't need a second RPC.
+        // if the handler operates in the old mode, we will get only topology tables and scylla_local mutations
+        // in the response, and raft_snp will be empty. then we issue a second RPC to get the remaining non-topology tables.
+        // in the future when the old mode is no longer possible, we should send a single RPC with an empty parameter
+        // to get all tables.
+
+        slogger.info("transfer snapshot: first round: requesting the topology tables via legacy RPC");
+
+        auto snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{
+                std::vector<table_id>{
+                    db::system_keyspace::topology()->id(),
+                    db::system_keyspace::topology_requests()->id(),
+                    db::system_keyspace::cdc_generations_v3()->id()
+                }
+            });
+
+        std::tie(topology_snp, raft_snp) = split_into_topology_and_raft_snapshot(std::move(snp));
+
+        // if raft_snp is not empty, it means we got additional tables from what we requested because
+        // the handler operates in the new mode, where it sends us all tables in a single RPC, therefore
+        // we have all we need in raft_snp.
+        // Otherwise, we need to request the raft snapshot as in the old mode.
+        if (raft_snp->mutations.empty()) {
+            slogger.info("transfer snapshot: second round: requesting others (auth, SLs, view build status)");
+
+            while (utils::get_local_injector().enter("raft_pull_snapshot_sender_pause_between_rpcs")) {
+                co_await sleep_abortable(std::chrono::milliseconds(10), as);
+            }
+
+            // get the non-topology snapshot. it's possible we also get topology tables again (for example,
+            // the second RPC may operate in the new mode), so split and combine them with the topology snapshot.
+
+            auto auth_tables = db::system_keyspace::auth_tables();
+
+            std::vector<table_id> tables;
+            for (const auto& schema : auth_tables) {
+                tables.push_back(schema->id());
+            }
+            tables.push_back(db::system_keyspace::service_levels_v2()->id());
+
+            auto snp2 = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+                &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+
+            slogger.info("transfer snapshot: second round: combining both snapshots and then applying");
+
+            raft_snapshot topology_snp2;
+            std::tie(topology_snp2, raft_snp) = split_into_topology_and_raft_snapshot(std::move(snp2));
+
+            std::move(topology_snp2.mutations.begin(), topology_snp2.mutations.end(), std::back_inserter(topology_snp->mutations));
         }
-        tables.push_back(db::system_keyspace::service_levels_v2()->id());
-
-        raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
     }
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
