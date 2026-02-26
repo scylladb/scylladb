@@ -754,6 +754,13 @@ public:
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
         return get_compaction_group().make_sstable_set();
     }
+
+    future<seastar::rwlock::holder> get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason) override {
+        co_return seastar::rwlock::holder();
+    }
+    future<seastar::rwlock::holder> get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason) override {
+        co_return seastar::rwlock::holder();
+    }
 };
 
 class tablet_storage_group_manager final : public storage_group_manager {
@@ -913,6 +920,13 @@ public:
         // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
         return make_tablet_sstable_set(schema(), *this, *_tablet_map);
     }
+
+    future<seastar::rwlock::holder> get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason) override {
+        co_return co_await _t.get_compaction_manager().get_incremental_repair_read_lock(t, reason);
+    }
+    future<seastar::rwlock::holder> get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason) override {
+        co_return co_await _t.get_compaction_manager().get_incremental_repair_write_lock(t, reason);
+    }
 };
 
 bool table::uses_tablets() const {
@@ -1031,7 +1045,7 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
     auto& cm = get_compaction_manager();
 
     for (auto view : all_views()) {
-        auto lock_holder = co_await cm.get_incremental_repair_read_lock(*view, "storage_group_split");
+        auto lock_holder = co_await _t.get_incremental_repair_read_lock(*view, "storage_group_split");
         // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
         co_await cm.perform_offstrategy(*view, tablet_split_task_info);
         co_await cm.perform_split_compaction(*view, opt, tablet_split_task_info);
@@ -2141,7 +2155,7 @@ future<compaction_reenablers_and_lock_holders> table::get_compaction_reenablers_
         // This lock prevents the unrepaired compaction started by major compaction to run in parallel with repair.
         // The unrepaired compaction started by minor compaction does not need to take the lock since it ignores
         // sstables being repaired, so it can run in parallel with repair.
-        auto lock_holder = co_await db.get_compaction_manager().get_incremental_repair_write_lock(*view, "row_level_repair");
+        auto lock_holder = co_await get_incremental_repair_write_lock(*view, "row_level_repair");
         tlogger.info("Got unrepaired compaction and repair lock for range={} session_id={} for incremental repair", range, guard);
         ret.lock_holders.push_back(std::move(lock_holder));
     }
@@ -2163,6 +2177,14 @@ future<> table::clear_being_repaired_for_range(dht::token_range range) {
             }
         }
     }
+}
+
+future<seastar::rwlock::holder> table::get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason) {
+    co_return co_await _sg_manager->get_incremental_repair_read_lock(t, reason);
+}
+
+future<seastar::rwlock::holder> table::get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason) {
+    co_return co_await _sg_manager->get_incremental_repair_write_lock(t, reason);
 }
 
 future<>
@@ -2312,7 +2334,7 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
     // in the compaction's input set, to provide same semantics as before maintenance set came into existence.
     co_await perform_offstrategy_compaction(info);
     co_await parallel_foreach_compaction_group_view([this, info, consider_only_existing_data] (compaction::compaction_group_view& view) -> future<> {
-        auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(view, "compact_all_sstables");
+        auto lock_holder = co_await get_incremental_repair_read_lock(view, "compact_all_sstables");
         co_await _compaction_manager.perform_major_compaction(view, info, consider_only_existing_data);
     });
 }
@@ -2363,7 +2385,7 @@ future<bool> table::perform_offstrategy_compaction(tasks::task_info info) {
     _off_strategy_trigger.cancel();
     bool performed = false;
     co_await parallel_foreach_compaction_group_view([this, &performed, info] (compaction::compaction_group_view& view) -> future<> {
-        auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(view, "compact_all_sstables");
+        auto lock_holder = co_await get_incremental_repair_read_lock(view, "compact_all_sstables");
         performed |= co_await _compaction_manager.perform_offstrategy(view, info);
     });
     co_return performed;
@@ -2381,7 +2403,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
         co_await flush();
     }
 
-    auto lock_holder = co_await get_compaction_manager().get_incremental_repair_read_lock(cg->as_view_for_static_sharding(), "perform_cleanup_compaction");
+    auto lock_holder = co_await get_incremental_repair_read_lock(cg->as_view_for_static_sharding(), "perform_cleanup_compaction");
     co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg->as_view_for_static_sharding(), info);
 }
 

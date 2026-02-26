@@ -449,6 +449,9 @@ public:
     virtual future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) = 0;
     virtual dht::token_range get_token_range_after_split(const dht::token&) const noexcept = 0;
 
+    virtual future<seastar::rwlock::holder> get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason) = 0;
+    virtual future<seastar::rwlock::holder> get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason) = 0;
+
     virtual lw_shared_ptr<sstables::sstable_set> make_sstable_set() const = 0;
 };
 
