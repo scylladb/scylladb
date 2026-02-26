@@ -878,6 +878,10 @@ class segment_manager_impl {
     sep_ptr _active_separator;
     size_t _separator_flush_threshold;
     debt_counter _separator_debt;
+
+    std::vector<write_buffer> _compaction_buffer_pool;
+    std::vector<write_buffer*> _available_compaction_buffers;
+
     std::vector<write_buffer> _separator_buffer_pool;
     std::vector<write_buffer*> _available_separator_buffers;
 
@@ -1067,6 +1071,16 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config, log_in
     {
 
     _free_segments.reserve(_max_segments);
+
+    // pre-allocate write buffers for compaction
+    // currently there is only a single compaction running at a time
+    size_t compaction_buffer_count = 1;
+    _available_compaction_buffers.reserve(compaction_buffer_count);
+    _compaction_buffer_pool.reserve(compaction_buffer_count);
+    for (size_t i = 0; i < compaction_buffer_count; ++i) {
+        _compaction_buffer_pool.emplace_back(config.segment_size, false);
+        _available_compaction_buffers.push_back(&_compaction_buffer_pool.back());
+    }
 
     // pre-allocate write buffers for separator
     size_t separator_buffer_count = _cfg.max_separator_memory / _cfg.segment_size;
@@ -1761,28 +1775,50 @@ future<> compaction_manager::start_compaction() {
 future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segment_id> segments) {
     struct compaction_buffer {
         segment_manager_impl& sm;
-        write_buffer buf;
+        write_buffer* buf = nullptr;
         group_id gid;
         std::vector<future<>> pending_updates;
         size_t flush_count{0};
 
-        explicit compaction_buffer(segment_manager_impl& sm, size_t buffer_size, group_id gid)
-            : sm(sm), buf(buffer_size, false), gid(gid) {}
+        explicit compaction_buffer(segment_manager_impl& sm, group_id gid)
+            : sm(sm), gid(gid)
+        {
+            if (sm._available_compaction_buffers.empty()) {
+                throw std::runtime_error("No available compaction buffers");
+            }
+            buf = sm._available_compaction_buffers.back();
+            sm._available_compaction_buffers.pop_back();
+        }
+
+        ~compaction_buffer() {
+            if (buf) {
+                (void)buf->close().then([sm = &this->sm, buf = this->buf] {
+                    buf->reset();
+                    sm->_available_compaction_buffers.push_back(buf);
+                });
+            }
+        }
 
         future<> flush() {
-            if (buf.has_data()) {
+            if (buf->has_data()) {
                 flush_count++;
-                auto base_location = co_await sm.write_full_segment(buf, gid, write_source::compaction);
+                auto base_location = co_await sm.write_full_segment(*buf, gid, write_source::compaction);
                 co_await when_all_succeed(pending_updates.begin(), pending_updates.end());
-                logstor_logger.trace("Compaction buffer flushed to {} with {} bytes", base_location, buf.get_net_data_size());
+                logstor_logger.trace("Compaction buffer flushed to {} with {} bytes", base_location, buf->get_net_data_size());
             }
-            co_await buf.close();
-            buf.reset();
+            co_await buf->close();
+            buf->reset();
             pending_updates.clear();
+        }
+
+        future<> close() {
+            co_await flush();
+            sm._available_compaction_buffers.push_back(buf);
+            buf = nullptr;
         }
     };
 
-    compaction_buffer cb(_sm, _sm.get_segment_size(), gid);
+    compaction_buffer cb(_sm, gid);
 
     size_t records_rewritten = 0;
     size_t records_skipped = 0;
@@ -1805,12 +1841,12 @@ future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segm
         auto key = record.key;
         log_record_writer writer(std::move(record));
 
-        if (!cb.buf.can_fit(writer)) {
+        if (!cb.buf->can_fit(writer)) {
             co_await cb.flush();
         }
 
         // write the record and then update the index with the new location
-        auto write_and_update_index = cb.buf.write_with_holder(std::move(writer)).then_unpack(
+        auto write_and_update_index = cb.buf->write_with_holder(std::move(writer)).then_unpack(
                 [this, key = std::move(key), read_location, &records_rewritten, &records_skipped]
                 (log_location new_location, seastar::gate::holder op) {
 
@@ -1826,7 +1862,7 @@ future<> compaction_manager::compact_segments(group_id gid, std::vector<log_segm
         cb.pending_updates.push_back(std::move(write_and_update_index));
     });
 
-    co_await cb.flush();
+    co_await cb.close();
 
     logstor_logger.debug("Compaction complete: {} records rewritten, {} skipped from {} segments, flushed {} times",
                        records_rewritten, records_skipped, segments.size(), cb.flush_count);
