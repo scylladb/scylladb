@@ -772,32 +772,6 @@ future<> compaction_manager::await_ongoing_compactions(compaction_group_view* t)
     }
 }
 
-future<seastar::rwlock::holder>
-compaction_manager::get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason) {
-    if (!reason.empty()) {
-        cmlog.debug("Get get_incremental_repair_read_lock for {} started", reason);
-    }
-    compaction::compaction_state& cs = get_compaction_state(&t);
-    auto ret = co_await cs.incremental_repair_lock.hold_read_lock();
-    if (!reason.empty()) {
-        cmlog.debug("Get get_incremental_repair_read_lock for {} done", reason);
-    }
-    co_return ret;
-}
-
-future<seastar::rwlock::holder>
-compaction_manager::get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason) {
-    if (!reason.empty()) {
-        cmlog.debug("Get get_incremental_repair_write_lock for {} started", reason);
-    }
-    compaction::compaction_state& cs = get_compaction_state(&t);
-    auto ret = co_await cs.incremental_repair_lock.hold_write_lock();
-    if (!reason.empty()) {
-        cmlog.debug("Get get_incremental_repair_write_lock for {} done", reason);
-    }
-    co_return ret;
-}
-
 future<compaction_reenabler>
 compaction_manager::await_and_disable_compaction(compaction_group_view& t) {
     compaction_reenabler cre(*this, t);
