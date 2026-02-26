@@ -37,7 +37,7 @@ Please check if the aborted repair stays in RUNNING forever before forcing a sto
 
 .. code-block:: sh
 
-   curl -X POST "http://127.0.0.2:10000/storage_service/force_terminate_repair"
+   curl -X POST "http://127.0.0.1:10000/storage_service/force_terminate_repair"
 
 
 **NOTE:** If you are using `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ for repairs, a simple stop command via sctool already implements all the needed logic to gracefully stop a repair.
