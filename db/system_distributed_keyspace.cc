@@ -183,12 +183,12 @@ schema_ptr snapshot_sstables() {
                 .with_column("datacenter", utf8_type, column_kind::partition_key)
                 // Rack where this SSTable is located
                 .with_column("rack", utf8_type, column_kind::partition_key)
-                // Unique identifier for the SSTable (UUID)
-                .with_column("sstable_id", uuid_type, column_kind::clustering_key)
                 // First token in the token range covered by this SSTable
                 .with_column("first_token", long_type, column_kind::clustering_key)
                 // Last token in the token range covered by this SSTable
                 .with_column("last_token", long_type)
+                // Unique identifier for the SSTable (UUID)
+                .with_column("sstable_id", uuid_type)
                 // TOC filename of the SSTable
                 .with_column("toc_name", utf8_type)
                 // Prefix path in object storage where the SSTable was backed up
