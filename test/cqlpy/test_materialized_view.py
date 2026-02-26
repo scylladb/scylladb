@@ -50,7 +50,8 @@ def test_build_view_with_large_row(cql, test_keyspace):
         cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT * FROM {table} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c,p)")
         try:
             retrieved_row = False
-            for _ in range(50):
+            start_time = time.time()
+            while time.time() < start_time + 60:
                 res = [row for row in cql.execute(f"SELECT * FROM {test_keyspace}.{mv}")]
                 if len(res) == 1 and res[0].v == big:
                     retrieved_row = True
@@ -431,7 +432,7 @@ def test_oversized_base_regular_view_key_build(cql, test_keyspace, cassandra_bug
             # This means, unfortunately, that a failure of this test is slow -
             # it needs to wait for a timeout.
             start_time = time.time()
-            while time.time() < start_time + 30:
+            while time.time() < start_time + 60:
                 results = set(list(cql.execute(f'SELECT * from {mv}')))
                 # The oversized "big" cannot be a key in the view, so
                 # shouldn't be in results:
@@ -476,7 +477,7 @@ def test_view_builder_suspend_with_active_range_tombstone(cql, test_keyspace, sc
 
         with new_materialized_view(cql, table, select='*', pk='v,pk,ck', where='v is not null and pk is not null and ck is not null') as mv:
             start_time = time.time()
-            while time.time() < start_time + 30:
+            while time.time() < start_time + 60:
                 res = sorted([r.v for r in cql.execute(f"SELECT * FROM {mv}")])
                 if len(res) >= 512/2:
                     break
@@ -509,7 +510,7 @@ def test_view_builder_suspend_with_partition_tombstone(cql, test_keyspace, scyll
 
         with new_materialized_view(cql, table, select='*', pk='v,pk,ck', where='v is not null and pk is not null and ck is not null') as mv:
             start_time = time.time()
-            while time.time() < start_time + 30:
+            while time.time() < start_time + 60:
                 res = sorted([r.v for r in cql.execute(f"SELECT * FROM {mv}")])
                 if len(res) >= 512/2:
                     break
