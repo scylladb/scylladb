@@ -200,6 +200,12 @@ mutation reverse(mutation mut) {
     return *std::move(mut).consume(reverse_rebuilder, consume_in_reverse::yes).result;
 }
 
+mutation reverse_with_load(mutation mut) {
+    auto reverse_schema = mut.schema()->get_reversed();
+    mutation_rebuilder_v2 reverse_rebuilder(reverse_schema);
+    return *std::move(mut).consume(reverse_rebuilder, consume_in_reverse::yes).result;
+}
+
 namespace {
 class mutation_by_size_splitter {
     struct partition_state {
