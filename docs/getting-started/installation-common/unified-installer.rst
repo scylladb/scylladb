@@ -37,7 +37,7 @@ Download and Install
 
    .. code:: console
 
-    ./install.sh --nonroot --python3 ~/scylladb/python3/bin/python3
+    ./install.sh --nonroot
 
 Configure and Run ScyllaDB
 ----------------------------
@@ -67,7 +67,7 @@ Run nodetool:
 
 .. code:: console
 
-    ~/scylladb/share/cassandra/bin/nodetool status
+    ~/scylladb/bin/scylla nodetool status
 
 Run cqlsh:
 
