@@ -10,6 +10,7 @@
 
 #include "cdc/log.hh"
 #include "index/vector_index.hh"
+#include "types/types.hh"
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include "cql3/query_options.hh"
@@ -30,6 +31,9 @@
 #include "cql3/query_processor.hh"
 #include "cdc/cdc_extension.hh"
 #include "cdc/cdc_partitioner.hh"
+#include "db/tags/extension.hh"
+#include "db/tags/utils.hh"
+#include "alternator/ttl_tag.hh"
 
 namespace cql3 {
 
@@ -43,7 +47,8 @@ alter_table_statement::alter_table_statement(uint32_t bound_terms,
                                              std::vector<column_change> column_changes,
                                              std::optional<cf_prop_defs> properties,
                                              renames_type renames,
-                                             std::unique_ptr<attributes> attrs)
+                                             std::unique_ptr<attributes> attrs,
+                                             shared_ptr<column_identifier::raw> ttl_change)
     : schema_altering_statement(std::move(name))
     , _bound_terms(bound_terms)
     , _type(t)
@@ -51,6 +56,7 @@ alter_table_statement::alter_table_statement(uint32_t bound_terms,
     , _properties(std::move(properties))
     , _renames(std::move(renames))
     , _attrs(std::move(attrs))
+    , _ttl_change(std::move(ttl_change))
 {
 }
 
@@ -380,6 +386,21 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
             throw exceptions::invalid_request_exception("Cannot drop columns from a non-CQL3 table");
         }
         invoke_column_change_fn(std::mem_fn(&alter_table_statement::drop_column));
+
+        // If we dropped the column used for per-row TTL, we need to remove the tag.
+        if (std::optional<std::string> ttl_column = db::find_tag(*s, TTL_TAG_KEY)) {
+            for (auto& [raw_name, raw_validator, is_static] : _column_changes) {
+                if (*ttl_column == raw_name->text()) {
+                    const std::map<sstring, sstring>* tags_ptr = db::get_tags_of_table(s);
+                    if (tags_ptr) {
+                        std::map<sstring, sstring> tags_map = *tags_ptr;
+                        tags_map.erase(TTL_TAG_KEY);
+                        cfm.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags_map)));
+                    }
+                    break;
+                }
+            }
+        }
         break;
 
     case alter_table_statement::type::opts:
@@ -434,6 +455,7 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
         break;
 
     case alter_table_statement::type::rename:
+    {
         for (auto&& entry : _renames) {
             auto from = entry.first->prepare_column_identifier(*s);
             auto to = entry.second->prepare_column_identifier(*s);
@@ -469,6 +491,53 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
             }
         }
         return make_pair(std::move(new_base_schema), std::move(view_updates));
+    }
+    case alter_table_statement::type::ttl:
+        if (!db.features().cql_row_ttl) {
+            throw exceptions::invalid_request_exception("The CQL per-row TTL feature is not yet supported by this cluster. Upgrade all nodes to use it.");
+        }
+        if (_ttl_change) {
+            // Enable per-row TTL with chosen column for expiration time
+            const column_definition *cdef = 
+                s->get_column_definition(to_bytes(_ttl_change->text()));
+            if (!cdef) {
+                throw exceptions::invalid_request_exception(fmt::format("Column '{}' does not exist in table {}.{}", _ttl_change->text(), keyspace(), column_family()));
+            }
+            if (cdef->type != timestamp_type && cdef->type != long_type && cdef->type != int32_type) {
+                throw exceptions::invalid_request_exception(fmt::format("TTL column {} must be of type timestamp, bigint or int, can't be {}", _ttl_change->text(), cdef->type->as_cql3_type().to_string()));
+            }
+            if (cdef->is_primary_key()) {
+                throw exceptions::invalid_request_exception(fmt::format("Cannot use a primary key column {} as a TTL column", _ttl_change->text()));
+            }
+            if (cdef->is_static()) {
+                throw exceptions::invalid_request_exception(fmt::format("Cannot use a static column {} as a TTL column", _ttl_change->text()));
+            }
+            std::optional<std::string> old_ttl_column = db::find_tag(*s, TTL_TAG_KEY);
+            if (old_ttl_column) {
+                throw exceptions::invalid_request_exception(fmt::format("Cannot set TTL column, table {}.{} already has a TTL column defined: {}", keyspace(), column_family(), *old_ttl_column));
+            }
+            const std::map<sstring, sstring>* old_tags_ptr = db::get_tags_of_table(s);
+            std::map<sstring, sstring> tags_map;
+            if (old_tags_ptr) {
+                // tags_ptr is a constant pointer to schema data. To modify
+                // it, we must make a copy.
+                tags_map = *old_tags_ptr;
+            }
+            tags_map[TTL_TAG_KEY] = _ttl_change->text();
+            cfm.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags_map)));
+        } else {
+            // Disable per-row TTL
+            const std::map<sstring, sstring>* tags_ptr = db::get_tags_of_table(s);
+            if (!tags_ptr || tags_ptr->find(TTL_TAG_KEY) == tags_ptr->end()) {
+                throw exceptions::invalid_request_exception(fmt::format("Cannot unset TTL column, table {}.{} does not have a TTL column set", keyspace(), column_family()));
+            }
+            // tags_ptr is a constant pointer to schema data. To modify it, we
+            // must make a copy.
+            std::map<sstring, sstring> tags_map = *tags_ptr;
+            tags_map.erase(TTL_TAG_KEY);
+            cfm.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags_map)));
+        }
+        break;
     }
 
     return make_pair(cfm.build(), std::move(view_updates));
@@ -508,13 +577,15 @@ alter_table_statement::raw_statement::raw_statement(cf_name name,
                                                     std::vector<column_change> column_changes,
                                                     std::optional<cf_prop_defs> properties,
                                                     renames_type renames,
-                                                    std::unique_ptr<attributes::raw> attrs)
+                                                    std::unique_ptr<attributes::raw> attrs,
+                                                    shared_ptr<column_identifier::raw> ttl_change)
     : cf_statement(std::move(name))
     , _type(t)
     , _column_changes(std::move(column_changes))
     , _properties(std::move(properties))
     , _renames(std::move(renames))
     , _attrs(std::move(attrs))
+    , _ttl_change(std::move(ttl_change))
     {}
 
 std::unique_ptr<cql3::statements::prepared_statement>
@@ -539,7 +610,8 @@ alter_table_statement::raw_statement::prepare(data_dictionary::database db, cql_
                 _column_changes,
                 _properties,
                 _renames,
-                std::move(prepared_attrs)
+                std::move(prepared_attrs),
+                _ttl_change
             ),
             ctx,
             // since alter table is `cql_statement_no_metadata` (it doesn't return any metadata when preparing)

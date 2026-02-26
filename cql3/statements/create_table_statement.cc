@@ -30,6 +30,9 @@
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
 #include "compaction/time_window_compaction_strategy.hh"
+#include "db/tags/extension.hh"
+#include "db/tags/utils.hh"
+#include "alternator/ttl_tag.hh"
 
 namespace cql3 {
 
@@ -41,10 +44,12 @@ create_table_statement::create_table_statement(cf_name name,
                                                ::shared_ptr<cf_prop_defs> properties,
                                                bool if_not_exists,
                                                column_set_type static_columns,
+                                               ::shared_ptr<column_identifier> ttl_column,
                                                const std::optional<table_id>& id)
     : schema_altering_statement{name}
     , _use_compact_storage(false)
     , _static_columns{static_columns}
+    , _ttl_column{ttl_column}
     , _properties{properties}
     , _if_not_exists{if_not_exists}
     , _id(id)
@@ -123,6 +128,13 @@ void create_table_statement::apply_properties_to(schema_builder& builder, const 
 #endif
 
     _properties->apply_to_builder(builder, _properties->make_schema_extensions(db.extensions()), db, keyspace(), true);
+    // Remembering which column was designated as the TTL column for row-based
+    // TTL column is done using a "tag" extension. If there is no TTL column,
+    // we don't need this extension at all.
+    if (_ttl_column) {
+        std::map<sstring, sstring> tags_map = {{TTL_TAG_KEY, _ttl_column->text()}};
+        builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags_map)));
+    }
 }
 
 void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind) const
@@ -198,7 +210,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     }
     const bool has_default_ttl = _properties.properties()->get_default_time_to_live() > 0;
 
-    auto stmt = ::make_shared<create_table_statement>(*_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
+    auto stmt = ::make_shared<create_table_statement>(*_cf_name, _properties.properties(), _if_not_exists, _static_columns, _ttl_column, _properties.properties()->get_id());
 
     bool ks_uses_tablets;
     try {
@@ -403,6 +415,27 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         }
     }
 
+    // If a TTL column is defined, it must be a regular column - not a static
+    // column or part of the primary key.
+    if (_ttl_column) {
+        if (!db.features().cql_row_ttl) {
+            throw exceptions::invalid_request_exception("The CQL per-row TTL feature is not yet supported by this cluster. Upgrade all nodes to use it.");
+        }
+        for (const auto& alias : key_aliases) {
+            if (alias->text() == _ttl_column->text()) {
+                throw exceptions::invalid_request_exception(format("TTL column {} cannot be part of the PRIMARY KEY", alias->text()));
+            }
+        }
+        for (const auto& alias : _column_aliases) {
+            if (alias->text() == _ttl_column->text()) {
+                throw exceptions::invalid_request_exception(format("TTL column {} cannot be part of the PRIMARY KEY", alias->text()));
+            }
+        }
+        if (_static_columns.contains(_ttl_column)) {
+            throw exceptions::invalid_request_exception(format("TTL column {} cannot be a static column", _ttl_column->text()));
+        }
+    }
+
     return std::make_unique<prepared_statement>(audit_info(), stmt, std::move(stmt_warnings));
 }
 
@@ -425,11 +458,22 @@ data_type create_table_statement::raw_statement::get_type_and_remove(column_map_
     return _properties.get_reversable_type(*t, type);
 }
 
-void create_table_statement::raw_statement::add_definition(::shared_ptr<column_identifier> def, ::shared_ptr<cql3_type::raw> type, bool is_static) {
+void create_table_statement::raw_statement::add_definition(::shared_ptr<column_identifier> def, ::shared_ptr<cql3_type::raw> type, bool is_static, bool is_ttl) {
     _defined_names.emplace(def);
     _definitions.emplace(def, type);
     if (is_static) {
         _static_columns.emplace(def);
+    }
+    if (is_ttl) {
+        if (_ttl_column) {
+            throw exceptions::invalid_request_exception(fmt::format("Cannot have more than one TTL column in a table. Saw {} and {}", _ttl_column->text(), def->text()));
+        }
+        // FIXME: find a way to check cql3_type::raw without fmt::format
+        auto type_name = fmt::format("{}", type);
+        if (type_name != "timestamp" && type_name != "bigint" && type_name != "int") {
+            throw exceptions::invalid_request_exception(fmt::format("TTL column '{}' must be of type timestamp, bigint or int, can't be {}", def->text(), type_name));
+        }
+        _ttl_column = def;
     }
 }
 

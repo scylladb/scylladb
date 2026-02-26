@@ -57,6 +57,7 @@ class create_table_statement : public schema_altering_statement {
                            shared_ptr_equal_by_value<column_identifier>>;
     column_map_type _columns;
     column_set_type _static_columns;
+    ::shared_ptr<column_identifier> _ttl_column; // for row-based TTL
     const ::shared_ptr<cf_prop_defs> _properties;
     const bool _if_not_exists;
     std::optional<table_id> _id;
@@ -65,6 +66,7 @@ public:
                            ::shared_ptr<cf_prop_defs> properties,
                            bool if_not_exists,
                            column_set_type static_columns,
+                           ::shared_ptr<column_identifier> ttl_column,
                            const std::optional<table_id>& id);
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
@@ -100,6 +102,7 @@ private:
     std::vector<std::vector<::shared_ptr<column_identifier>>> _key_aliases;
     std::vector<::shared_ptr<column_identifier>> _column_aliases;
     create_table_statement::column_set_type _static_columns;
+    ::shared_ptr<column_identifier> _ttl_column; // for row-based TTL
 
     std::multiset<::shared_ptr<column_identifier>,
             indirect_less<::shared_ptr<column_identifier>, column_identifier::text_comparator>> _defined_names;
@@ -116,7 +119,7 @@ public:
 
     data_type get_type_and_remove(column_map_type& columns, ::shared_ptr<column_identifier> t);
 
-    void add_definition(::shared_ptr<column_identifier> def, ::shared_ptr<cql3_type::raw> type, bool is_static);
+    void add_definition(::shared_ptr<column_identifier> def, ::shared_ptr<cql3_type::raw> type, bool is_static, bool is_ttl);
 
     void add_key_aliases(const std::vector<::shared_ptr<column_identifier>> aliases);
 

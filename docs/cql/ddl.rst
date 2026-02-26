@@ -476,7 +476,7 @@ Creating a new table uses the ``CREATE TABLE`` statement:
                          :     [ ',' PRIMARY KEY '(' `primary_key` ')' ]
                          : ')' [ WITH `table_options` ]
    
-   column_definition: `column_name` `cql_type` [ STATIC ] [ PRIMARY KEY]
+   column_definition: `column_name` `cql_type` [ TTL ] [ STATIC ] [ PRIMARY KEY]
    
    primary_key: `partition_key` [ ',' `clustering_columns` ]
    
@@ -571,6 +571,11 @@ using an :ref:`alter statement<alter-table-statement>`).
 A :token:`column_definition` is primarily comprised of the name of the column defined and its :ref:`type <data-types>`,
 which restricts which values are accepted for that column. Additionally, a column definition can have the following
 modifiers:
+
+``TTL``
+    declares the column as being the expiration-time column for the
+    `per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_
+    feature.
 
 ``STATIC``
     declares the column as being a :ref:`static column <static-columns>`.
@@ -1172,6 +1177,7 @@ Altering an existing table uses the ``ALTER TABLE`` statement:
                           : | DROP '(' `column_name` ( ',' `column_name` )* ')' [ USING TIMESTAMP `timestamp` ]
                           : | ALTER `column_name` TYPE `cql_type`
                           : | WITH `options`
+                          : | TTL (`column_name` | NULL)
                           : | scylla_encryption_options: '=' '{'[`cipher_algorithm` : <hash>]','[`secret_key_strength` : <len>]','[`key_provider`: <provider>]'}'
 
 For instance:
@@ -1215,6 +1221,11 @@ The ``ALTER TABLE`` statement can:
 - Change or add any of the ``Encryption options`` above.
 - Change or add any of the :ref:`CDC options <cdc-options>` above.
 - Change or add per-partition rate limits. See :ref:`Limiting the rate of requests per partition <ddl-per-parition-rate-limit>`.
+- Enable `per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_
+  using the given column as the expiration-time column, or disable per-row
+  TTL on this table. If per-row TTL is already enabled, to change the choice
+  of expiration-time column you must first disable per-row TTL and then
+  re-enable it using the chosen column.
 
 .. warning:: Dropping a column assumes that the timestamps used for the value of this column are "real" timestamp in
    microseconds. Using "real" timestamps in microseconds is the default is and is **strongly** recommended, but as
