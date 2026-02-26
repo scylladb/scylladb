@@ -38,7 +38,7 @@ class table_for_tests::compaction_group_view : public compaction::compaction_gro
     tombstone_gc_state _tombstone_gc_state;
     mutable compaction::compaction_backlog_tracker _backlog_tracker;
     compaction::compaction_strategy_state _compaction_strategy_state;
-    std::string _group_id;
+    size_t _group_id;
     seastar::condition_variable _staging_condition;
 private:
     replica::table& table() const noexcept {
@@ -51,7 +51,7 @@ public:
             , _tombstone_gc_state(nullptr)
             , _backlog_tracker(get_compaction_strategy().make_backlog_tracker())
             , _compaction_strategy_state(compaction::compaction_strategy_state::make(get_compaction_strategy()))
-            , _group_id("table_for_tests::compaction_group_view")
+            , _group_id(0)
     {
     }
     dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
@@ -123,7 +123,7 @@ public:
     compaction::compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }
-    const std::string get_group_id() const noexcept override {
+    size_t get_group_id() const noexcept override {
         return _group_id;
     }
     seastar::condition_variable& get_staging_done_condition() noexcept override {

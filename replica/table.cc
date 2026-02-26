@@ -2775,8 +2775,8 @@ public:
     compaction::compaction_backlog_tracker& get_backlog_tracker() override {
         return _cg.get_backlog_tracker();
     }
-    const std::string get_group_id() const noexcept override {
-        return fmt::to_string(_cg.group_id());
+    size_t get_group_id() const noexcept override {
+        return _cg.group_id();
     }
 
     seastar::condition_variable& get_staging_done_condition() noexcept override {

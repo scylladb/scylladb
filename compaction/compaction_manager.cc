@@ -2434,7 +2434,7 @@ bool compaction_manager::compaction_disabled(compaction_group_view& t) const {
     if (auto it = _compaction_state.find(&t); it != _compaction_state.end()) {
         return it->second.compaction_disabled();
     } else {
-        cmlog.debug("compaction_disabled: {}:{} not in compaction_state", t.schema()->id(), t.get_group_id());
+        cmlog.debug("compaction_disabled: {}:{} not in compaction_state", t.schema()->id(), fmt::to_string(t.get_group_id()));
         // Compaction is not strictly disabled, but it is not enabled either.
         // The callers actually care about if it's enabled or not, not about the actual state of
         // compaction_state::compaction_disabled()
