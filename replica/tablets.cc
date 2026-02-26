@@ -9,10 +9,12 @@
 #include <fmt/ranges.h>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "replica/schema_describe_helper.hh"
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "types/list.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "schema/schema_builder.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -25,6 +27,8 @@
 #include "dht/token.hh"
 #include "mutation/async_utils.hh"
 #include "compaction/compaction_manager.hh"
+#include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 
 namespace replica {
 
@@ -1220,5 +1224,63 @@ tablet_sstable_set::create_single_key_sstable_reader(
 sstables::sstable_set_impl::selector_and_schema_t tablet_sstable_set::make_incremental_selector() const {
     return std::make_tuple(std::make_unique<tablet_incremental_selector>(*this), *_schema);
 }
+
+future<> recreate_table_with_fixed_tablet_count(const sstring& snapshot_name, const sstring& ks, const table_id& tid, replica::database& db,
+                                                db::system_distributed_keyspace& sys_dis_ks,
+                                                service::storage_proxy& sp,
+                                                service::migration_manager& mm,
+                                                db::consistency_level cl) {
+    if (this_shard_id() != 0) {
+        co_return;
+    }
+
+    auto schema = db.find_schema(tid);
+    auto schema_desc = schema->describe(make_schema_describe_helper(schema, db.as_data_dictionary()), cql3::describe_option::STMTS);
+    auto create_stmt = schema_desc.create_statement.value().linearize();
+
+    auto token_metadata = db.get_token_metadata_ptr();
+    auto& tmap = token_metadata->tablets().get_tablet_map(tid);
+    auto desired_count = tmap.tablet_count();
+
+    co_await sys_dis_ks.insert_snapshot_cql_table(snapshot_name, ks, schema->cf_name(), schema->is_view(), create_stmt, cl);
+
+    schema_builder builder(schema);
+    builder.set_tablet_options({
+        {"min_tablet_count", to_sstring(desired_count)},
+        // {"max_tablet_count", to_sstring(desired_count)}, TODO: enabled after https://github.com/scylladb/scylladb/pull/28450
+    });
+    auto modified_schema = builder.build();
+
+    enum class ddl_operation { drop, create };
+    auto execute_ddl = [&] (ddl_operation op) -> future<> {
+        while (true) {
+            auto group0_guard = co_await mm.start_group0_operation();
+            auto ts = group0_guard.write_timestamp();
+            sstring description = format("Dropping and recreating table {}.{} with tablet count hints min_tablet_count={} max_tablet_count={}", ks, schema->cf_name(), desired_count, desired_count);
+
+            utils::chunked_vector<mutation> mutations;
+            if (op == ddl_operation::drop) {
+                mutations = co_await service::prepare_column_family_drop_announcement(sp, ks, schema->cf_name(), ts, service::drop_views::yes); // drop_views = true ?
+            } else {
+                mutations = co_await service::prepare_new_column_family_announcement(sp, modified_schema, ts);
+            }
+
+            if (!mutations.empty()) {
+                try {
+                    co_await mm.announce(std::move(mutations), std::move(group0_guard), description);
+                } catch (service::group0_concurrent_modification&) {
+                    tablet_logger.info("Concurrent operation is detected while starting, retrying.");
+                    continue;
+                }
+            }
+
+            co_return;
+        }
+    };
+
+    co_await execute_ddl(ddl_operation::drop);
+    co_await execute_ddl(ddl_operation::create);
+}
+
 
 } // namespace replica
