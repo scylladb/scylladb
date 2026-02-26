@@ -10,3 +10,4 @@ class restore_result {
 };
 
 verb [[with_client_info]] restore_tablet (locator::global_tablet_id gid, sstring snap_name, sstring endpoint, sstring bucket) -> restore_result;
+verb [[with_client_info]] abort_restore_tablet (locator::global_tablet_id gid)

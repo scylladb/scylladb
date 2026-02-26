@@ -1987,10 +1987,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto replicas = tinfo.replicas;
 
                         rtlogger.info("Restoring tablet={} from {} on {}", gid, config.snapshot_name, replicas);
-                        co_await coroutine::parallel_for_each(replicas, [this, gid, cfg = std::move(config)] (locator::tablet_replica r) -> future<> {
+                        co_await coroutine::parallel_for_each(replicas, [this, gid, cfg = std::move(config), replicas] (locator::tablet_replica r) -> future<> {
                             if (!is_excluded(raft::server_id(r.host.uuid()))) {
-                                co_await ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, gid, cfg.snapshot_name, cfg.endpoint, cfg.bucket);
-                                rtlogger.debug("Tablet {} restored on {}", gid, r.host);
+                                std::exception_ptr ex;
+                                try {
+                                    co_await ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, gid, cfg.snapshot_name, cfg.endpoint, cfg.bucket);
+                                    rtlogger.debug("Tablet {} restored on {}", gid, r.host);
+                                } catch (...) {
+                                    ex = std::current_exception();
+                                }
+                                if (ex) {
+                                    rtlogger.warn("Restoring tablet {} failed on {}: {}", gid, r, ex);
+                                    co_await coroutine::parallel_for_each(replicas, [this, gid, xr = r] (locator::tablet_replica r) -> future<> {
+                                        if (!is_excluded(raft::server_id(r.host.uuid())) && r != xr) {
+                                            co_await ser::sstables_loader_rpc_verbs::send_abort_restore_tablet(&_messaging, r.host, gid);
+                                        }
+                                    });
+                                    std::rethrow_exception(std::move(ex));
+                                }
                             }
                         });
                     })) {

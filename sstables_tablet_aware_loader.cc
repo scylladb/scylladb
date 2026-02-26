@@ -233,3 +233,7 @@ future<> sstables_loader::load_snapshot_sstables(locator::global_tablet_id tid, 
         throw;
     }
 }
+
+future<> sstables_loader::abort_loading_sstables(locator::global_tablet_id tid) {
+    co_return; // FIXME -- implement
+}

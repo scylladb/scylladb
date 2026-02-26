@@ -732,6 +732,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::WORK_ON_VIEW_BUILDING_TASKS:
     case messaging_verb::SNAPSHOT_WITH_TABLETS:
     case messaging_verb::RESTORE_TABLET:
+    case messaging_verb::ABORT_RESTORE_TABLET:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:

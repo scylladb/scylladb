@@ -965,6 +965,9 @@ sstables_loader::sstables_loader(sharded<replica::database>& db,
         llog.debug("Finished loading sstables for tablet {}", gid);
         co_return restore_result{};
     });
+    ser::sstables_loader_rpc_verbs::register_abort_restore_tablet(&_messaging, [this] (const rpc::client_info& cinfo, locator::global_tablet_id gid) -> future<> {
+        co_await abort_loading_sstables(gid);
+    });
 }
 
 future<> sstables_loader::stop() {
