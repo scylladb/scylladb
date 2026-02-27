@@ -8,6 +8,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
+print("1")
 import argparse
 import copy
 import os
