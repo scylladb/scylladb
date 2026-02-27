@@ -50,7 +50,6 @@ target_link_libraries(service
   PRIVATE
     cql3
     mutation
-    node_ops
     raft
     repair
     streaming

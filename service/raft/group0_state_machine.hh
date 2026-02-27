@@ -108,10 +108,8 @@ class group0_state_machine : public raft_state_machine {
     storage_service& _ss;
     seastar::named_gate _gate;
     abort_source _abort_source;
-    bool _topology_change_enabled;
     group0_state_id_handler _state_id_handler;
     gms::feature_service& _feature_service;
-    gms::feature::listener_registration _topology_on_raft_support_listener;
 
     // This boolean controls whether the in-memory data structures should be updated
     // after snapshot transfer / command application.
@@ -142,7 +140,7 @@ class group0_state_machine : public raft_state_machine {
     future<> reload_state();
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-            gms::gossiper& gossiper, gms::feature_service& feat, bool topology_change_enabled);
+            gms::gossiper& gossiper, gms::feature_service& feat);
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;

@@ -190,7 +190,6 @@ public:
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
 
     static std::set<sstring> to_feature_set(sstring features_string);
-    future<> enable_features_on_join(gossiper&, db::system_keyspace&, service::storage_service&);
     future<> on_system_tables_loaded(db::system_keyspace& sys_ks);
 
     // Performs the feature check.
