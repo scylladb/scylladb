@@ -52,6 +52,7 @@ set(idl_headers
   group0.idl.hh
   hinted_handoff.idl.hh
   sstables.idl.hh
+  sstables_loader.idl.hh
   storage_proxy.idl.hh
   storage_service.idl.hh
   strong_consistency/state_machine.idl.hh

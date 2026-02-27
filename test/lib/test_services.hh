@@ -69,3 +69,9 @@ struct table_for_tests {
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
     void set_repair_sstable_classifier(replica::repair_classifier_func repair_sstable_classifier);
 };
+
+namespace sstables {
+
+std::vector<db::object_storage_endpoint_param> make_storage_options_config(const data_dictionary::storage_options& so);
+
+}

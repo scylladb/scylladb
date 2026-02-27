@@ -62,6 +62,7 @@
 #include "utils/stall_free.hh"
 #include "utils/to_string.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
+#include "sstables_loader.hh"
 
 #include "idl/join_node.dist.hh"
 #include "idl/storage_service.dist.hh"
@@ -71,12 +72,18 @@
 #include "utils/updateable_value.hh"
 #include "repair/repair.hh"
 #include "idl/repair.dist.hh"
+#include "idl/sstables_loader.dist.hh"
 
 #include "service/topology_coordinator.hh"
 
 #include <boost/range/join.hpp>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/util/short_streams.hh>
 #include "utils/labels.hh"
+
+#include "sstables/sstables_manager.hh"
+#include "sstables/object_storage_client.hh"
+#include "utils/rjson.hh"
 
 using token = dht::token;
 using inet_address = gms::inet_address;
@@ -1306,6 +1313,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         background_action_holder cleanup;
         background_action_holder repair;
         background_action_holder repair_update_compaction_ctrl;
+        background_action_holder restore;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
         // Record the repair_time returned by the repair_tablet rpc call
         db_clock::time_point repair_time;
@@ -1966,6 +1974,45 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                 }
                     break;
+                case locator::tablet_transition_stage::restore: {
+                    if (action_failed(tablet_state.restore)) {
+                        if (do_barrier()) {
+                            updates.emplace_back(get_mutation_builder().del_transition(last_token).build());
+                        }
+                        break;
+                    }
+                    if (advance_in_background(gid, tablet_state.restore, "restore", [this, gid, &tmap] () -> future<> {
+                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                        auto config = tinfo.restore_cfg;
+                        auto replicas = tinfo.replicas;
+
+                        rtlogger.info("Restoring tablet={} from {} on {}", gid, config.snapshot_name, replicas);
+                        co_await coroutine::parallel_for_each(replicas, [this, gid, cfg = std::move(config), replicas] (locator::tablet_replica r) -> future<> {
+                            if (!is_excluded(raft::server_id(r.host.uuid()))) {
+                                std::exception_ptr ex;
+                                try {
+                                    co_await ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, gid, cfg.snapshot_name, cfg.endpoint, cfg.bucket);
+                                    rtlogger.debug("Tablet {} restored on {}", gid, r.host);
+                                } catch (...) {
+                                    ex = std::current_exception();
+                                }
+                                if (ex) {
+                                    rtlogger.warn("Restoring tablet {} failed on {}: {}", gid, r, ex);
+                                    co_await coroutine::parallel_for_each(replicas, [this, gid, xr = r] (locator::tablet_replica r) -> future<> {
+                                        if (!is_excluded(raft::server_id(r.host.uuid())) && r != xr) {
+                                            co_await ser::sstables_loader_rpc_verbs::send_abort_restore_tablet(&_messaging, r.host, gid);
+                                        }
+                                    });
+                                    std::rethrow_exception(std::move(ex));
+                                }
+                            }
+                        });
+                    })) {
+                        rtlogger.debug("Clearing restore transition for {}", gid);
+                        updates.emplace_back(get_mutation_builder().del_transition(last_token).build());
+                    }
+                }
+                    break;
                 case locator::tablet_transition_stage::end_repair: {
                     if (do_barrier()) {
                         if (tablet_state.session_id.uuid().is_null()) {
@@ -2144,6 +2191,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                 break;
             case locator::tablet_transition_kind::repair:
+                [[fallthrough]];
+            case locator::tablet_transition_kind::restore:
                 [[fallthrough]];
             case locator::tablet_transition_kind::intranode_migration:
                 break;
@@ -4494,6 +4543,49 @@ future<> topology_coordinator::stop() {
         co_await stop_background_action(tablet_state.cleanup, gid, [] { return "during cleanup"; });
         co_await stop_background_action(tablet_state.rebuild_repair, gid, [] { return "during rebuild_repair"; });
         co_await stop_background_action(tablet_state.repair, gid, [] { return "during repair"; });
+    });
+}
+
+future<> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring endpoint, sstring bucket, utils::chunked_vector<std::filesystem::path> manifest_prefixes, db::consistency_level cl) {
+    // Download manifests in parallel and populate system_distributed.snapshot_sstables
+    // with the content extracted from each manifest
+    auto client = sm.get_endpoint_client(endpoint);
+    
+    co_await coroutine::parallel_for_each(manifest_prefixes, [&client, &bucket, &sys_dist_ks, cl] (const std::filesystem::path& manifest_prefix) -> future<> {
+        // Download the manifest JSON file
+        sstables::object_name name(bucket, manifest_prefix.string());
+        auto source = client->make_download_source(name);
+        auto is = input_stream<char>(std::move(source));
+        
+        // Read the entire JSON content
+        rjson::chunked_content content = co_await util::read_entire_stream(is);
+        co_await is.close();
+        
+        rjson::value parsed = rjson::parse(std::move(content));
+        
+        // Extract the necessary fields from the manifest
+        // Expected JSON structure documented in docs/dev/object_storage.md
+        auto snapshot_name = sstring(rjson::to_string_view(parsed["snapshot"]["name"]));
+        auto keyspace = sstring(rjson::to_string_view(parsed["table"]["keyspace_name"]));
+        auto table = sstring(rjson::to_string_view(parsed["table"]["table_name"]));
+        auto datacenter = sstring(rjson::to_string_view(parsed["node"]["datacenter"]));
+        auto rack = sstring(rjson::to_string_view(parsed["node"]["rack"]));
+        
+        // Process each sstable entry in the manifest
+        const auto& sstables_array = parsed["sstables"];
+        for (auto& sstable_entry : sstables_array.GetArray()) {
+            auto id = utils::UUID(rjson::to_string_view(sstable_entry["id"]));
+            auto first_token = dht::token::from_int64(sstable_entry["first_token"].GetInt64());
+            auto last_token = dht::token::from_int64(sstable_entry["last_token"].GetInt64());
+            auto toc_name = sstring(rjson::to_string_view(sstable_entry["toc_name"]));
+            auto prefix = manifest_prefix.parent_path().string();
+            // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
+            // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
+            co_await sys_dist_ks.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
+                                                         toc_name, prefix, cl);
+
+            co_await coroutine::maybe_yield();
+        }
     });
 }
 

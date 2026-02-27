@@ -24,6 +24,7 @@
 #include "service/storage_service.hh"
 #include "service/qos/service_level_controller.hh"
 #include "streaming/prepare_message.hh"
+#include "sstables_loader.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
@@ -135,6 +136,7 @@
 #include "idl/join_node.dist.impl.hh"
 #include "idl/tasks.dist.impl.hh"
 #include "gms/feature_service.hh"
+#include "idl/sstables_loader.dist.impl.hh"
 
 namespace netw {
 
@@ -729,6 +731,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::TABLE_LOAD_STATS:
     case messaging_verb::WORK_ON_VIEW_BUILDING_TASKS:
     case messaging_verb::SNAPSHOT_WITH_TABLETS:
+    case messaging_verb::RESTORE_TABLET:
+    case messaging_verb::ABORT_RESTORE_TABLET:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
