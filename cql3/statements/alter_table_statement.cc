@@ -296,7 +296,7 @@ void alter_table_statement::drop_column(const query_options& options, const sche
 std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_schema_update(data_dictionary::database db, const query_options& options) const {
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
-        throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
+        throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View. (Did you mean ALTER MATERIALIZED VIEW)?");
     }
 
     const bool is_cdc_log_table = cdc::is_log_for_some_table(db.real_database(), s->ks_name(), s->cf_name());
