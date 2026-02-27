@@ -394,9 +394,6 @@ public:
 
     future<compaction_reenabler> await_and_disable_compaction(compaction::compaction_group_view& t);
 
-    future<seastar::rwlock::holder> get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason);
-    future<seastar::rwlock::holder> get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason);
-
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(compaction::compaction_group_view& t, std::function<future<> ()> func, sstring reason = "custom operation");
 

@@ -1362,12 +1362,12 @@ public:
     future<> update_repaired_at_for_merge();
 
     future<> clear_being_repaired_for_range(dht::token_range range);
+    future<seastar::rwlock::holder> get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason);
+    future<seastar::rwlock::holder> get_incremental_repair_write_lock(locator::global_tablet_id, const sstring& reason);
 
     future<compaction_reenablers_and_lock_holders> get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
             const service::frozen_topology_guard& guard, dht::token_range range);
     future<uint64_t> estimated_partitions_in_range(dht::token_range tr) const;
-private:
-    future<std::vector<compaction::compaction_group_view*>> get_compaction_group_views_for_repair(dht::token_range range);
 };
 
 lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);

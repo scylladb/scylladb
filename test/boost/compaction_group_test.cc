@@ -125,7 +125,7 @@ public:
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
     virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
-    virtual const std::string get_group_id() const noexcept override { return "0"; }
+    virtual size_t get_group_id() const noexcept override { return 0; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }

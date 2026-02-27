@@ -755,7 +755,7 @@ private:
     compaction::compaction_strategy_state _compaction_strategy_state;
     tombstone_gc_state _tombstone_gc_state;
     compaction::compaction_backlog_tracker _backlog_tracker;
-    std::string _group_id;
+    size_t _group_id;
     condition_variable _staging_done_condition;
     mutable sstable_generation_generator _generation_generator;
 
@@ -787,7 +787,7 @@ public:
         , _compaction_strategy_state(compaction::compaction_strategy_state::make(_compaction_strategy))
         , _tombstone_gc_state(nullptr)
         , _backlog_tracker(std::make_unique<dummy_compaction_backlog_tracker>())
-        , _group_id("dummy-group")
+        , _group_id(0)
         , _generation_generator()
     { }
     virtual dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
@@ -814,7 +814,7 @@ public:
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
     virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
-    virtual const std::string get_group_id() const noexcept override { return _group_id; }
+    virtual size_t get_group_id() const noexcept override { return _group_id; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }
