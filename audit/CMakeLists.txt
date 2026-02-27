@@ -6,6 +6,7 @@ target_sources(scylla_audit
     audit.cc
     audit_cf_storage_helper.cc
     audit_composite_storage_helper.cc
+    audit_stdout_storage_helper.cc
     audit_syslog_storage_helper.cc)
 target_include_directories(scylla_audit
   PUBLIC

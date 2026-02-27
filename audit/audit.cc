@@ -15,6 +15,7 @@
 #include "storage_helper.hh"
 #include "audit_cf_storage_helper.hh"
 #include "audit_syslog_storage_helper.hh"
+#include "audit_stdout_storage_helper.hh"
 #include "audit_composite_storage_helper.hh"
 #include "audit.hh"
 #include "../db/config.hh"
@@ -41,7 +42,7 @@ static std::set<sstring> parse_audit_modes(const sstring& data) {
             if (audit_mode == "none") {
                 return {};
             }
-            if (audit_mode != "table" && audit_mode != "syslog") {
+            if (audit_mode != "table" && audit_mode != "syslog" && audit_mode != "stdout") {
                 throw audit_exception(fmt::format("Bad configuration: invalid 'audit': {}", audit_mode));
             }
             result.insert(std::move(audit_mode));
@@ -59,6 +60,8 @@ static std::unique_ptr<storage_helper> create_storage_helper(const std::set<sstr
             helpers.emplace_back(std::make_unique<audit_cf_storage_helper>(qp, mm));
         } else if (audit_mode == "syslog") {
             helpers.emplace_back(std::make_unique<audit_syslog_storage_helper>(qp, mm));
+        } else if (audit_mode == "stdout") {
+            helpers.emplace_back(std::make_unique<audit_stdout_storage_helper>(qp, mm));
         }
     }
 
