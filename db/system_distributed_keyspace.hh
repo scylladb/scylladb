@@ -12,6 +12,7 @@
 #include "service/qos/qos_common.hh"
 #include "utils/UUID.hh"
 #include "cdc/generation_id.hh"
+#include "db/consistency_level_type.hh"
 #include "locator/host_id.hh"
 
 #include <seastar/core/future.hh>
@@ -61,6 +62,10 @@ public:
      * We use it in the upgrade procedure to ensure that CDC generations appearing
      * in the old table also appear in the new table, if necessary. */
     static constexpr auto CDC_DESC_V1 = "cdc_streams_descriptions";
+
+    /* This table is used by the backup and restore code to store per-table CQL schema metadata.
+     * The data the coordinator node puts in this table comes from the snapshot manifests. */
+    static constexpr auto SNAPSHOT_CQL_TABLES = "snapshot_cql_tables";
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
     struct context {
@@ -118,6 +123,8 @@ public:
     future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const;
     future<> drop_service_level(sstring service_level_name) const;
     bool workload_prioritization_tables_exists();
+    future<> insert_snapshot_cql_table(sstring snapshot_name, sstring ks, sstring table, bool is_view, sstring schema, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<sstring> get_snapshot_cql_table_schema(sstring snapshot_name, sstring ks, sstring table, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM) const;
 
 private:
     future<> create_tables(std::vector<schema_ptr> tables);

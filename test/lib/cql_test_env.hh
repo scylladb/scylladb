@@ -37,6 +37,7 @@ class database;
 
 namespace db {
 class batchlog_manager;
+class system_distributed_keyspace;
 }
 
 namespace db::view {
@@ -188,6 +189,8 @@ public:
     virtual sharded<service::raft_group_registry>& get_raft_group_registry() = 0;
 
     virtual sharded<db::system_keyspace>& get_system_keyspace() = 0;
+
+    virtual sharded<db::system_distributed_keyspace>& get_system_distributed_keyspace() = 0;
 
     virtual sharded<service::tablet_allocator>& get_tablet_allocator() = 0;
 
