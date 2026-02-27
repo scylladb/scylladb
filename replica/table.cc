@@ -257,7 +257,7 @@ table::make_mutation_reader(schema_ptr s,
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     if (cache_enabled() && !bypass_cache) {
-        if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, &_compaction_manager.get_tombstone_gc_state(),
+        if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, get_tombstone_gc_state(),
                     get_max_purgeable_fn_for_cache_underlying_reader(), std::move(trace_state), fwd, fwd_mr)) {
             readers.emplace_back(std::move(*reader_opt));
         }
@@ -286,7 +286,7 @@ sstables::shared_sstable table::make_streaming_staging_sstable() {
     return newtab;
 }
 
-static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, const compaction::compaction_manager& cm,
+static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, tombstone_gc_state gc_state,
         gc_clock::time_point compaction_time, bool compaction_enabled, bool compaction_can_gc) {
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_enabled", fmt::to_string(compaction_enabled));
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_can_gc", fmt::to_string(compaction_can_gc));
@@ -297,7 +297,7 @@ static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, c
             std::move(underlying),
             compaction_time,
             compaction_can_gc ? can_always_purge : can_never_purge,
-            cm.get_tombstone_gc_state(),
+            gc_state,
             streamed_mutation::forwarding::no);
 }
 
@@ -320,7 +320,7 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
 
     return maybe_compact_for_streaming(
             make_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no),
-            get_compaction_manager(),
+            get_tombstone_gc_state(),
             compaction_time,
             _config.enable_compacting_data_for_streaming_and_repair(),
             _config.enable_tombstone_gc_for_streaming_and_repair());
@@ -339,7 +339,7 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
         std::move(trace_state), fwd, fwd_mr, sstables::default_sstable_predicate(), sstables::integrity_check::yes));
     return maybe_compact_for_streaming(
             make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr),
-            get_compaction_manager(),
+            get_tombstone_gc_state(),
             compaction_time,
             _config.enable_compacting_data_for_streaming_and_repair(),
             _config.enable_tombstone_gc_for_streaming_and_repair());
@@ -354,7 +354,7 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
     return maybe_compact_for_streaming(
             sstables->make_range_sstable_reader(std::move(schema), std::move(permit), range, slice,
                     std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), sstables::integrity_check::yes),
-            get_compaction_manager(),
+            get_tombstone_gc_state(),
             compaction_time,
             _config.enable_compacting_data_for_streaming_and_repair(),
             _config.enable_tombstone_gc_for_streaming_and_repair());
@@ -2747,8 +2747,8 @@ public:
     bool tombstone_gc_enabled() const noexcept override {
         return _t.tombstone_gc_enabled()  &&  _cg.tombstone_gc_enabled();
     }
-    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
-        return _t.get_compaction_manager().get_tombstone_gc_state();
+    tombstone_gc_state get_tombstone_gc_state() const noexcept override {
+        return _t.get_tombstone_gc_state();
     }
     compaction::compaction_backlog_tracker& get_backlog_tracker() override {
         return _cg.get_backlog_tracker();
@@ -2906,6 +2906,8 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
 
     recalculate_tablet_count_stats();
     set_metrics();
+
+    update_tombstone_gc_rf_one();
 }
 
 void table::on_flush_timer() {
@@ -3216,6 +3218,17 @@ void table::update_effective_replication_map(locator::effective_replication_map_
     }
 
     recalculate_tablet_count_stats();
+
+    update_tombstone_gc_rf_one();
+}
+
+void table::update_tombstone_gc_rf_one() {
+    auto& st = _compaction_manager.get_shared_tombstone_gc_state();
+    if (_erm && _erm->get_replication_factor() == 1) {
+        st.set_table_rf_one(_schema->id());
+    } else {
+        st.set_table_rf_n(_schema->id());
+    }
 }
 
 void table::recalculate_tablet_count_stats() {
@@ -3277,7 +3290,7 @@ table::sstables_as_snapshot_source() {
                 std::move(reader),
                 gc_clock::now(),
                 get_max_purgeable_fn_for_cache_underlying_reader(),
-                _compaction_manager.get_tombstone_gc_state().with_commitlog_check_disabled(),
+                get_tombstone_gc_state().with_commitlog_check_disabled(),
                 fwd);
         }, [this, sst_set] {
             return make_partition_presence_checker(sst_set);
@@ -3287,8 +3300,9 @@ table::sstables_as_snapshot_source() {
 
 // define in .cc, since sstable is forward-declared in .hh
 table::~table() {
+    auto& st = _compaction_manager.get_shared_tombstone_gc_state();
+    st.remove_table_from_rf_registry(_schema->id());
 }
-
 
 logalloc::occupancy_stats table::occupancy() const {
     logalloc::occupancy_stats res;
@@ -4468,7 +4482,7 @@ table::query(schema_ptr query_schema,
 
         if (!querier_opt) {
             querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_compaction_manager().get_tombstone_gc_state(), conf);
+            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_tombstone_gc_state(), conf);
         }
         auto& q = *querier_opt;
 
@@ -4520,7 +4534,7 @@ table::mutation_query(schema_ptr query_schema,
         querier_opt = std::move(*saved_querier);
     }
     if (!querier_opt) {
-        auto tombstone_gc_state = tombstone_gc_enabled ? get_compaction_manager().get_tombstone_gc_state() : tombstone_gc_state::no_gc();
+        auto tombstone_gc_state = tombstone_gc_enabled ? get_tombstone_gc_state() : tombstone_gc_state::no_gc();
         querier_base::querier_config conf(_config.tombstone_warn_threshold);
         querier_opt = querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, tombstone_gc_state, conf);
     }
@@ -5094,6 +5108,10 @@ future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const
         partition_count += co_await sst->estimated_keys_for_range(tr);
     });
     co_return partition_count;
+}
+
+tombstone_gc_state table::get_tombstone_gc_state() const {
+    return tombstone_gc_state(_compaction_manager.get_shared_tombstone_gc_state());
 }
 
 } // namespace replica

@@ -971,6 +971,8 @@ public:
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;
 private:
+    void update_tombstone_gc_rf_one();
+
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
     future<> stop_compaction_groups(storage_group& sg);
     future<> flush_compaction_groups(storage_group& sg);
@@ -1355,6 +1357,8 @@ public:
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
     // If leave_unsealead is set, all the destination sstables will be left unsealed.
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed);
+
+    tombstone_gc_state get_tombstone_gc_state() const;
 
     friend class compaction_group;
     friend class compaction::compaction_task_impl;

@@ -397,7 +397,7 @@ void do_test(const test_config& cfg) {
             return make_compacting_reader(std::move(r),
                 gc_clock::now(),
                 can_never_purge,
-                tombstone_gc_state(nullptr));
+                tombstone_gc_state::for_tests());
         };
         // We want to use Data.db size to validate that Cassandra imported
         // the Scylla-generated sstable without any unexpected compaction.

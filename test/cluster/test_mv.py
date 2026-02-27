@@ -60,10 +60,10 @@ async def test_mv_tombstone_gc_not_inherited(manager):
     """
     cql = manager.cql
     async with new_test_keyspace(manager, ksdef) as keyspace:
-        async with new_test_table(manager, keyspace, "p int primary key, x int", "WITH tombstone_gc = {'mode': 'repair'}") as table:
+        async with new_test_table(manager, keyspace, "p int primary key, x int", "WITH tombstone_gc = {'mode': 'immediate'}") as table:
             s = list(cql.execute(f"DESC {table}"))[0].create_statement
-            assert "'mode': 'repair'" in s
+            assert "'mode': 'immediate'" in s
             async with new_materialized_view(manager, table, "*", "p, x", "p is not null and x is not null") as mv:
                 s = list(cql.execute(f"DESC {mv}"))[0].create_statement
                 # Base's setting is NOT inherited to the view:
-                assert not "'mode': 'repair'" in s
+                assert not "'mode': 'immediate'" in s

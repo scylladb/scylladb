@@ -785,7 +785,7 @@ public:
         , _maintenance_set(sstables::make_partitioned_sstable_set(_schema, token_range()))
         , _compaction_strategy(compaction::make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
         , _compaction_strategy_state(compaction::compaction_strategy_state::make(_compaction_strategy))
-        , _tombstone_gc_state(nullptr)
+        , _tombstone_gc_state(tombstone_gc_state::no_gc())
         , _backlog_tracker(std::make_unique<dummy_compaction_backlog_tracker>())
         , _group_id("dummy-group")
         , _generation_generator()
@@ -812,7 +812,7 @@ public:
     virtual future<> on_compaction_completion(compaction::compaction_completion_desc desc, sstables::offstrategy offstrategy) override { return make_ready_future<>(); }
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
-    virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
+    virtual tombstone_gc_state get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
     virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return _group_id; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }

@@ -1460,7 +1460,7 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
+    const auto gc_state = _base.get_tombstone_gc_state();
     auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
@@ -1489,7 +1489,7 @@ void view_update_builder::generate_update(static_row&& update, const tombstone& 
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
+    const auto gc_state = _base.get_tombstone_gc_state();
     auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
@@ -3321,7 +3321,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
             step.pslice,
             batch_size,
             query::max_partitions,
-            tombstone_gc_state(nullptr));
+            tombstone_gc_state::no_gc());
     auto consumer = compact_for_query<view_builder::consumer>(compaction_state, view_builder::consumer{*this, _vug.shared_from_this(), step, now});
     auto built = step.reader.consume_in_thread(std::move(consumer));
     if (auto ds = std::move(*compaction_state).detach_state()) {
