@@ -94,6 +94,8 @@ async def test_full_shutdown_during_replace(manager: ManagerClient, reuse_ip: bo
             await leader_log.wait_for(
                 'topology_coordinator/write_both_read_old/before_global_token_metadata_barrier: waiting for message')
 
+            replacing_host_id = await manager.get_host_id(replacing_server.server_id)
+
             logger.info(f'Stopping {live_servers + [replacing_server]}')
             await gather_safely(*(manager.server_stop(srv.server_id) for srv in live_servers + [replacing_server]))
             replacing_task.cancel()
@@ -133,6 +135,13 @@ async def test_full_shutdown_during_replace(manager: ManagerClient, reuse_ip: bo
             for srv in live_servers:
                 await manager.api.message_injection(
                     srv.ip_addr, 'topology_coordinator/write_both_read_old/before_global_token_metadata_barrier')
+
+            logs = [await manager.server_open_log(srv.server_id) for srv in live_servers]
+            logger.info(f'Waiting for {replacing_server} to be removed from gossip after replace rollback')
+            await gather_safely(*[
+                log.wait_for(f'gossip - Finished to force remove node {replacing_host_id}')
+                for log in logs
+            ])
 
             logger.info(f'Retrying replace of {dead_server}')
             new_server = await manager.server_add(replace_cfg, property_file=dead_server.property_file())
