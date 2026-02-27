@@ -1,0 +1,1380 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             Functions | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/cql/functions.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                CQL Reference
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">Functions</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <span class="target" id="cql-functions"></span><section id="functions">
+<span id="native-functions"></span><h1>Functions<a class="headerlink" href="#functions" title="Link to this heading">¶</a></h1>
+<p>CQL supports two main categories of functions:</p>
+<ul class="simple">
+<li><p>The <a class="reference internal" href="#scalar-functions"><span class="std std-ref">scalar functions</span></a>, which simply take a number of values and produce an output with it.</p></li>
+<li><p>The <a class="reference internal" href="#aggregate-functions"><span class="std std-ref">aggregate functions</span></a>, which are used to aggregate multiple rows of results from a
+<code class="docutils literal notranslate"><span class="pre">SELECT</span></code> statement.</p></li>
+</ul>
+<p>In both cases, CQL provides a number of native “hard-coded” functions as well as the ability to create new user-defined
+functions.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Although user-defined functions are sandboxed, protecting the system from a “rogue” function, user-defined functions are disabled by default for extra security.
+See the <code class="docutils literal notranslate"><span class="pre">enable_user_defined_functions</span></code> in <code class="docutils literal notranslate"><span class="pre">scylla.yaml</span></code> to enable them.</p>
+<p>Additionally, user-defined functions are still experimental and need to be explicitly enabled by adding <code class="docutils literal notranslate"><span class="pre">udf</span></code> to the list of
+<code class="docutils literal notranslate"><span class="pre">experimental_features</span></code> configuration options in <code class="docutils literal notranslate"><span class="pre">scylla.yaml</span></code>, or turning on the <code class="docutils literal notranslate"><span class="pre">experimental</span></code> flag.
+See <a class="reference internal" href="../operating-scylla/admin.html#yaml-enabling-experimental-features"><span class="std std-ref">Enabling Experimental Features</span></a> for details.</p>
+</div>
+<section id="scalar-functions">
+<span id="id1"></span><h2>Scalar functions<a class="headerlink" href="#scalar-functions" title="Link to this heading">¶</a></h2>
+<section id="scalar-native-functions">
+<span id="id2"></span><h3>Native functions<a class="headerlink" href="#scalar-native-functions" title="Link to this heading">¶</a></h3>
+<section id="cast">
+<h4>Cast<a class="headerlink" href="#cast" title="Link to this heading">¶</a></h4>
+<p>Supported starting from ScyllaDB version 2.1</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">cast</span></code> function can be used to convert one native datatype to another.</p>
+<p>The following table describes the conversions supported by the <code class="docutils literal notranslate"><span class="pre">cast</span></code> function. ScyllaDB will silently ignore any cast converting a cast datatype into its own datatype.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>From</p></th>
+<th class="head"><p>To</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ascii</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">bigint</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">smallint</span></code>, <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">float</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">decimal</span></code>, <code class="docutils literal notranslate"><span class="pre">varint</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>,
+<code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">counter</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">smallint</span></code>, <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">float</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">decimal</span></code>, <code class="docutils literal notranslate"><span class="pre">varint</span></code>,
+<code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">date</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timestamp</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">decimal</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">smallint</span></code>, <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">float</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">varint</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>,
+<code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">double</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">smallint</span></code>, <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">float</span></code>, <code class="docutils literal notranslate"><span class="pre">decimal</span></code>, <code class="docutils literal notranslate"><span class="pre">varint</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>,
+<code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">float</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">smallint</span></code>, <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">decimal</span></code>, <code class="docutils literal notranslate"><span class="pre">varint</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>,
+<code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">inet</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">smallint</span></code>, <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">float</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">decimal</span></code>, <code class="docutils literal notranslate"><span class="pre">varint</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>,
+<code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">smallint</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">float</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">decimal</span></code>, <code class="docutils literal notranslate"><span class="pre">varint</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>,
+<code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">time</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">timestamp</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">date</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">timeuuid</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timestamp</span></code>, <code class="docutils literal notranslate"><span class="pre">date</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">smallint</span></code>, <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">float</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">decimal</span></code>, <code class="docutils literal notranslate"><span class="pre">varint</span></code>,
+<code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">uuid</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">varint</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tinyint</span></code>, <code class="docutils literal notranslate"><span class="pre">smallint</span></code>, <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">bigint</span></code>, <code class="docutils literal notranslate"><span class="pre">float</span></code>, <code class="docutils literal notranslate"><span class="pre">double</span></code>, <code class="docutils literal notranslate"><span class="pre">decimal</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>,
+<code class="docutils literal notranslate"><span class="pre">varchar</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<p>The conversions rely strictly on Java’s semantics. For example, the double value 1 will be converted to the text value
+‘1.0’. For instance:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">avg</span><span class="p">(</span><span class="k">cast</span><span class="p">(</span><span class="k">count</span> <span class="k">as</span> <span class="nb">double</span><span class="p">))</span> <span class="k">FROM</span> <span class="n">myTable</span>
+</pre></div>
+</div>
+</section>
+<section id="token">
+<h4>Token<a class="headerlink" href="#token" title="Link to this heading">¶</a></h4>
+<p>The <code class="docutils literal notranslate"><span class="pre">token</span></code> function computes a token for a given partition key. The exact signature of the token function
+depends on the table concerned and on the partitioner used by the cluster.</p>
+<p>The arguments of the <code class="docutils literal notranslate"><span class="pre">token</span></code> depend on the type of the partition key columns that are used. The return type depends on
+the partitioner in use:</p>
+<ul class="simple">
+<li><p>For Murmur3Partitioner, the return type is <code class="docutils literal notranslate"><span class="pre">bigint</span></code>.</p></li>
+</ul>
+<p>For instance, in a cluster using the default Murmur3Partitioner, if a table is defined by:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="k">users</span> <span class="p">(</span>
+    <span class="n">userid</span> <span class="nb">text</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span>
+    <span class="n">username</span> <span class="nb">text</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">token</span></code> function accepts single argument of type <code class="docutils literal notranslate"><span class="pre">text</span></code> (in that case, the partition key is <code class="docutils literal notranslate"><span class="pre">userid</span></code>
+(there are no clustering columns, so the partition key is the same as the primary key)), and the return type will be
+<code class="docutils literal notranslate"><span class="pre">bigint</span></code>.</p>
+</section>
+<section id="uuid">
+<h4>Uuid<a class="headerlink" href="#uuid" title="Link to this heading">¶</a></h4>
+<p>The <code class="docutils literal notranslate"><span class="pre">uuid</span></code> function takes no parameters and generates a random type 4 uuid suitable for use in <code class="docutils literal notranslate"><span class="pre">INSERT</span></code> or
+<code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> statements.</p>
+<span class="target" id="timeuuid-functions"></span><div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>We called the values generated by <code class="docutils literal notranslate"><span class="pre">minTimeuuid</span></code> and <code class="docutils literal notranslate"><span class="pre">maxTimeuuid</span></code> <em>fake</em> UUID because they do no respect
+the Time-Based UUID generation process specified by the <a class="reference external" href="http://www.ietf.org/rfc/rfc4122.txt">RFC 4122</a>. In
+particular, the value returned by these two methods will not be unique. This means you should only use those methods
+for querying (as in the example above). Inserting the result of those methods is almost certainly <em>a bad idea</em>.</p>
+</div>
+</section>
+<section id="datetime-functions">
+<h4>Datetime functions<a class="headerlink" href="#datetime-functions" title="Link to this heading">¶</a></h4>
+<section id="retrieving-the-current-date-time">
+<h5>Retrieving the current date/time<a class="headerlink" href="#retrieving-the-current-date-time" title="Link to this heading">¶</a></h5>
+<p>The following functions can be used to retrieve the date/time at the time where the function is invoked:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function name</p></th>
+<th class="head"><p>Output type</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">currentTimestamp</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timestamp</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">currentDate</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">date</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">currentTime</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">time</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">currentTimeUUID</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timeUUID</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<p>For example, to retrieve data up to today, run the following query:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">myTable</span> <span class="k">WHERE</span> <span class="nb">date</span> <span class="o">&gt;=</span> <span class="n">currentDate</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="time-conversion-functions">
+<h5>Time conversion functions<a class="headerlink" href="#time-conversion-functions" title="Link to this heading">¶</a></h5>
+<p>A number of functions are provided to “convert” a <code class="docutils literal notranslate"><span class="pre">timeuuid</span></code>, a <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>, or a <code class="docutils literal notranslate"><span class="pre">date</span></code> into another <code class="docutils literal notranslate"><span class="pre">native</span></code>
+type.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function name</p></th>
+<th class="head"><p>Input type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">toDate</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timeuuid</span></code></p></td>
+<td><p>Converts the <code class="docutils literal notranslate"><span class="pre">timeuuid</span></code> argument into a <code class="docutils literal notranslate"><span class="pre">date</span></code> type</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">toDate</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timestamp</span></code></p></td>
+<td><p>Converts the <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> argument into a <code class="docutils literal notranslate"><span class="pre">date</span></code> type</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">toTimestamp</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timeuuid</span></code></p></td>
+<td><p>Converts the <code class="docutils literal notranslate"><span class="pre">timeuuid</span></code> argument into a <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> type</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">toTimestamp</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">date</span></code></p></td>
+<td><p>Converts the <code class="docutils literal notranslate"><span class="pre">date</span></code> argument into a <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> type</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">toUnixTimestamp</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timeuuid</span></code></p></td>
+<td><p>Converts the <code class="docutils literal notranslate"><span class="pre">timeuuid</span></code> argument into a <code class="docutils literal notranslate"><span class="pre">bigInt</span></code> raw value</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">toUnixTimestamp</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timestamp</span></code></p></td>
+<td><p>Converts the <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> argument into a <code class="docutils literal notranslate"><span class="pre">bigInt</span></code> raw value</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">toUnixTimestamp</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">date</span></code></p></td>
+<td><p>Converts the <code class="docutils literal notranslate"><span class="pre">date</span></code> argument into a <code class="docutils literal notranslate"><span class="pre">bigInt</span></code> raw value</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">dateOf</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timeuuid</span></code></p></td>
+<td><p>Similar to <code class="docutils literal notranslate"><span class="pre">toTimestamp(timeuuid)</span></code> (DEPRECATED)</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">unixTimestampOf</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">timeuuid</span></code></p></td>
+<td><p>Similar to <code class="docutils literal notranslate"><span class="pre">toUnixTimestamp(timeuuid)</span></code> (DEPRECATED)</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="blob-conversion-functions">
+<h4>Blob conversion functions<a class="headerlink" href="#blob-conversion-functions" title="Link to this heading">¶</a></h4>
+<p>A number of functions are provided to “convert” the native types into binary data (<code class="docutils literal notranslate"><span class="pre">blob</span></code>). For every
+<code class="docutils literal notranslate"><span class="pre">&lt;native-type&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">type</span></code> supported by CQL (a notable exception is a <code class="docutils literal notranslate"><span class="pre">blob</span></code>, for obvious reasons), the function
+<code class="docutils literal notranslate"><span class="pre">typeAsBlob</span></code> takes an argument of type <code class="docutils literal notranslate"><span class="pre">type</span></code> and returns it as a <code class="docutils literal notranslate"><span class="pre">blob</span></code>. Conversely, the function <code class="docutils literal notranslate"><span class="pre">blobAsType</span></code>
+takes a 64-bit <code class="docutils literal notranslate"><span class="pre">blob</span></code> argument and converts it to a <code class="docutils literal notranslate"><span class="pre">bigint</span></code> value. For example, <code class="docutils literal notranslate"><span class="pre">bigintAsBlob(3)</span></code> is
+<code class="docutils literal notranslate"><span class="pre">0x0000000000000003</span></code> and <code class="docutils literal notranslate"><span class="pre">blobAsBigint(0x0000000000000003)</span></code> is <code class="docutils literal notranslate"><span class="pre">3</span></code>.</p>
+</section>
+</section>
+<section id="user-defined-functions-experimental">
+<span id="udfs"></span><h3>User-defined functions <span class="label label--caution">Experimental</span><a class="headerlink" href="#user-defined-functions-experimental" title="Link to this heading">¶</a></h3>
+<p>User-defined functions (UDFs) execute user-provided code in ScyllaDB. Supported languages are currently Lua and WebAssembly.</p>
+<p>UDFs are part of the ScyllaDB schema and are automatically propagated to all nodes in the cluster.
+UDFs can be overloaded, so that multiple UDFs with different argument types can have the same function name, for example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">FUNCTION</span> <span class="n">sample</span> <span class="p">(</span> <span class="n">arg</span> <span class="nb">int</span> <span class="p">)</span> <span class="mf">...</span><span class="p">;</span>
+<span class="k">CREATE</span> <span class="k">FUNCTION</span> <span class="n">sample</span> <span class="p">(</span> <span class="n">arg</span> <span class="nb">text</span> <span class="p">)</span> <span class="mf">...</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>When calling a user-defined function, arguments can be literals or terms. Prepared statement placeholders can be used, too.</p>
+<section id="create-function-statement">
+<h4>CREATE FUNCTION statement<a class="headerlink" href="#create-function-statement" title="Link to this heading">¶</a></h4>
+<p>Creating a new user-defined function uses the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span></code> statement. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">OR</span> <span class="k">REPLACE</span> <span class="k">FUNCTION</span> <span class="n">div</span><span class="p">(</span><span class="n">dividend</span> <span class="nb">double</span><span class="p">,</span> <span class="n">divisor</span> <span class="nb">double</span><span class="p">)</span>
+  <span class="k">RETURNS</span> <span class="k">NULL</span> <span class="k">ON</span> <span class="k">NULL</span> <span class="k">INPUT</span>
+  <span class="k">RETURNS</span> <span class="nb">double</span>
+  <span class="k">LANGUAGE</span> <span class="n">LUA</span>
+  <span class="k">AS</span> <span class="s1">&#39;return dividend/divisor;&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span></code> with the optional <code class="docutils literal notranslate"><span class="pre">OR</span> <span class="pre">REPLACE</span></code> keywords creates either a function
+or replaces an existing one with the same signature. A <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span></code> without <code class="docutils literal notranslate"><span class="pre">OR</span> <span class="pre">REPLACE</span></code>
+fails if a function with the same signature already exists. If the optional <code class="docutils literal notranslate"><span class="pre">IF</span> <span class="pre">NOT</span> <span class="pre">EXISTS</span></code>
+keywords are used, the function will only be created only if another function with the same
+signature does not exist. <code class="docutils literal notranslate"><span class="pre">OR</span> <span class="pre">REPLACE</span></code> and <code class="docutils literal notranslate"><span class="pre">IF</span> <span class="pre">NOT</span> <span class="pre">EXISTS</span></code> cannot be used together.</p>
+<p>Behavior for null input values must be defined for each function:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">RETURNS</span> <span class="pre">NULL</span> <span class="pre">ON</span> <span class="pre">NULL</span> <span class="pre">INPUT</span></code> declares that the function will always return null (without being executed) if any of the input arguments is null.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CALLED</span> <span class="pre">ON</span> <span class="pre">NULL</span> <span class="pre">INPUT</span></code> declares that the function will always be executed.</p></li>
+</ul>
+<p>The <code class="docutils literal notranslate"><span class="pre">LANGUAGE</span></code> clause specifies the language of the function, and the <code class="docutils literal notranslate"><span class="pre">AS</span></code> clause defines the function body:</p>
+<ul class="simple">
+<li><p>For Lua functions, the <code class="docutils literal notranslate"><span class="pre">LANGUAGE</span></code> is <code class="docutils literal notranslate"><span class="pre">lua</span></code> and the body is a string literal containing the Lua script.</p></li>
+<li><p>For Wasm functions, the <code class="docutils literal notranslate"><span class="pre">LANGUAGE</span></code> is <code class="docutils literal notranslate"><span class="pre">wasm</span></code> and the body is a string literal containing a WebAssembly module in WebAssembly text format, which exports a function with the same name as specified in the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span></code> statement. More details on generating the Wasm modules can be found <a class="reference internal" href="wasm.html"><span class="doc">here</span></a>.</p></li>
+</ul>
+<p>If the function code contains single quotes, they must be escaped by doubling them, for example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">FUNCTION</span> <span class="n">hworld</span> <span class="p">()</span> <span class="k">RETURNS</span> <span class="nb">text</span> <span class="k">LANGUAGE</span> <span class="n">LUA</span> <span class="k">AS</span> <span class="s1">&#39;return &#39;&#39;hello world&#39;&#39;;&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="function-signature">
+<h4>Function Signature<a class="headerlink" href="#function-signature" title="Link to this heading">¶</a></h4>
+<p>Signatures are used to distinguish individual functions. The signature consists of a fully-qualified function name of the &lt;keyspace&gt;.&lt;function_name&gt; and a concatenated list of all the argument types.</p>
+<p>Note that keyspace names, function names and argument types are subject to the default naming conventions and case-sensitivity rules.</p>
+<p>Functions belong to a keyspace; if no keyspace is specified, the current keyspace is used. User-defined functions are not allowed in the system keyspaces.</p>
+</section>
+<section id="drop-function-statement">
+<h4>DROP FUNCTION statement<a class="headerlink" href="#drop-function-statement" title="Link to this heading">¶</a></h4>
+<p>Dropping a function uses the <code class="docutils literal notranslate"><span class="pre">DROP</span> <span class="pre">FUNCTION</span></code> statement. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">DROP</span> <span class="k">FUNCTION</span> <span class="n">myfunction</span><span class="p">;</span>
+<span class="k">DROP</span> <span class="k">FUNCTION</span> <span class="n">mykeyspace</span><span class="mf">.</span><span class="n">afunction</span><span class="p">;</span>
+<span class="k">DROP</span> <span class="k">FUNCTION</span> <span class="n">afunction</span> <span class="p">(</span> <span class="nb">int</span> <span class="p">);</span>
+<span class="k">DROP</span> <span class="k">FUNCTION</span> <span class="n">afunction</span> <span class="p">(</span> <span class="nb">text</span> <span class="p">);</span>
+</pre></div>
+</div>
+<p>You must specify the argument types of the function, the arguments_signature, in the drop command if there are multiple overloaded functions with the same name but different signatures.
+<code class="docutils literal notranslate"><span class="pre">DROP</span> <span class="pre">FUNCTION</span></code> with the optional <code class="docutils literal notranslate"><span class="pre">IF</span> <span class="pre">EXISTS</span></code> keywords drops a function if it exists, but does not throw an error if it doesn’t.</p>
+</section>
+</section>
+</section>
+<section id="aggregate-functions">
+<span id="id3"></span><h2>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h2>
+<p>Aggregate functions work on a set of rows. They receive values for each row and return one value for the whole set.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">normal</span></code> columns, <code class="docutils literal notranslate"><span class="pre">scalar</span> <span class="pre">functions</span></code>, <code class="docutils literal notranslate"><span class="pre">UDT</span></code> fields, <code class="docutils literal notranslate"><span class="pre">writetime</span></code>, or <code class="docutils literal notranslate"><span class="pre">ttl</span></code> are selected together with
+aggregate functions, the values returned for them will be the ones of the first row matching the query.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">LIMIT</span></code> and <code class="docutils literal notranslate"><span class="pre">PER</span> <span class="pre">PARTITION</span> <span class="pre">LIMIT</span></code> used in the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> query will have no effect if the limit is greater
+than or equal to 1 because they are applied to the output of the aggregate functions (which return one value for
+the whole set of rows).</p>
+</div>
+<section id="native-aggregates">
+<h3>Native aggregates<a class="headerlink" href="#native-aggregates" title="Link to this heading">¶</a></h3>
+<section id="count">
+<span id="count-function"></span><h4>Count<a class="headerlink" href="#count" title="Link to this heading">¶</a></h4>
+<p>The <code class="docutils literal notranslate"><span class="pre">count</span></code> function can be used to count the rows returned by a query. Example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="k">COUNT</span> <span class="p">(</span><span class="o">*</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">plays</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="k">COUNT</span> <span class="p">(</span><span class="mf">1</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">plays</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>It also can be used to count the non-null value of a given column:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="k">COUNT</span> <span class="p">(</span><span class="n">scores</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">plays</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Counting all rows in a table may be time-consuming and exceed the default timeout. In such a case,
+see <a class="reference internal" href="../kb/count-all-rows.html"><span class="doc">Counting all rows in a table is slow</span></a> for instructions.</p>
+</div>
+</section>
+<section id="max-and-min">
+<h4>Max and Min<a class="headerlink" href="#max-and-min" title="Link to this heading">¶</a></h4>
+<p>The <code class="docutils literal notranslate"><span class="pre">max</span></code> and <code class="docutils literal notranslate"><span class="pre">min</span></code> functions can be used to compute the maximum and the minimum value returned by a query for a
+given column. For instance:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">MIN</span> <span class="p">(</span><span class="n">players</span><span class="p">),</span> <span class="n">MAX</span> <span class="p">(</span><span class="n">players</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">plays</span> <span class="k">WHERE</span> <span class="n">game</span> <span class="o">=</span> <span class="s1">&#39;quake&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="sum">
+<h4>Sum<a class="headerlink" href="#sum" title="Link to this heading">¶</a></h4>
+<p>The <code class="docutils literal notranslate"><span class="pre">sum</span></code> function can be used, to sum up all the values returned by a query for a given column. For instance:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">SUM</span> <span class="p">(</span><span class="n">players</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">plays</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="avg">
+<h4>Avg<a class="headerlink" href="#avg" title="Link to this heading">¶</a></h4>
+<p>The <code class="docutils literal notranslate"><span class="pre">avg</span></code> function can be used to compute the average of all the values returned by a query for a given column. For
+instance:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">AVG</span> <span class="p">(</span><span class="n">players</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">plays</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="user-defined-aggregates-udas-experimental">
+<span id="user-defined-aggregates-functions"></span><h3>User-defined aggregates (UDAs) <span class="label label--caution">Experimental</span><a class="headerlink" href="#user-defined-aggregates-udas-experimental" title="Link to this heading">¶</a></h3>
+<p>User-defined aggregates allow the creation of custom aggregate functions. User-defined aggregates can be used in SELECT statement.</p>
+<p>Each aggregate requires an initial state of type <code class="docutils literal notranslate"><span class="pre">STYPE</span></code> defined with the <code class="docutils literal notranslate"><span class="pre">INITCOND</span></code> value (default value: <code class="docutils literal notranslate"><span class="pre">null</span></code>). The first argument of the state function must have type STYPE. The remaining arguments of the state function must match the types of the user-defined aggregate arguments. The state function is called once for each row, and the value returned by the state function becomes the new state. After all rows are processed, the optional FINALFUNC is executed with the last state value as its argument.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">STYPE</span></code> value is mandatory in order to distinguish possibly overloaded versions of the state and/or final function, since the overload can appear after creation of the aggregate.</p>
+<p>A complete working example for user-defined aggregates (assuming that a keyspace has been selected using the <code class="docutils literal notranslate"><span class="pre">USE</span></code> statement):</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">FUNCTION</span> <span class="n">accumulate_len</span><span class="p">(</span><span class="n">acc</span> <span class="k">tuple</span><span class="o">&lt;</span><span class="nb">bigint</span><span class="p">,</span><span class="nb">bigint</span><span class="o">&gt;</span><span class="p">,</span> <span class="n">a</span> <span class="nb">text</span><span class="p">)</span>
+       <span class="k">RETURNS</span> <span class="k">NULL</span> <span class="k">ON</span> <span class="k">NULL</span> <span class="k">INPUT</span>
+       <span class="k">RETURNS</span> <span class="k">tuple</span><span class="o">&lt;</span><span class="nb">bigint</span><span class="p">,</span><span class="nb">bigint</span><span class="o">&gt;</span>
+       <span class="k">LANGUAGE</span> <span class="n">lua</span> <span class="k">as</span> <span class="s1">&#39;return {acc[1] + 1, acc[2] + #a}&#39;</span><span class="p">;</span>
+
+<span class="k">CREATE</span> <span class="k">OR</span> <span class="k">REPLACE</span> <span class="k">FUNCTION</span> <span class="n">present</span><span class="p">(</span><span class="n">res</span> <span class="k">tuple</span><span class="o">&lt;</span><span class="nb">bigint</span><span class="p">,</span><span class="nb">bigint</span><span class="o">&gt;</span><span class="p">)</span>
+       <span class="k">RETURNS</span> <span class="k">NULL</span> <span class="k">ON</span> <span class="k">NULL</span> <span class="k">INPUT</span>
+       <span class="k">RETURNS</span> <span class="nb">text</span>
+       <span class="k">LANGUAGE</span> <span class="n">lua</span> <span class="k">as</span>
+         <span class="s1">&#39;return &quot;The average string length is &quot; .. res[2]/res[1] .. &quot;!&quot;&#39;</span><span class="p">;</span>
+
+<span class="k">CREATE</span> <span class="k">OR</span> <span class="k">REPLACE</span> <span class="k">AGGREGATE</span> <span class="n">avg_length</span><span class="p">(</span><span class="nb">text</span><span class="p">)</span>
+   <span class="k">SFUNC</span> <span class="n">accumulate_len</span>
+   <span class="k">STYPE</span> <span class="k">tuple</span><span class="o">&lt;</span><span class="nb">bigint</span><span class="p">,</span><span class="nb">bigint</span><span class="o">&gt;</span>
+   <span class="k">FINALFUNC</span> <span class="n">present</span>
+   <span class="k">INITCOND</span> <span class="p">(</span><span class="mf">0</span><span class="p">,</span><span class="mf">0</span><span class="p">);</span>
+</pre></div>
+</div>
+<section id="create-aggregate-statement">
+<h4>CREATE AGGREGATE statement<a class="headerlink" href="#create-aggregate-statement" title="Link to this heading">¶</a></h4>
+<p>The <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">AGGREGATE</span></code> command with the optional <code class="docutils literal notranslate"><span class="pre">OR</span> <span class="pre">REPLACE</span></code> keywords creates either an aggregate or replaces an existing one with the same signature. A <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">AGGREGATE</span></code> without <code class="docutils literal notranslate"><span class="pre">OR</span> <span class="pre">REPLACE</span></code> fails if an aggregate with the same signature already exists. The <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">AGGREGATE</span></code> command with the optional <code class="docutils literal notranslate"><span class="pre">IF</span> <span class="pre">NOT</span> <span class="pre">EXISTS</span></code> keywords creates an aggregate if it does not already exist. The <code class="docutils literal notranslate"><span class="pre">OR</span> <span class="pre">REPLACE</span></code> and <code class="docutils literal notranslate"><span class="pre">IF</span> <span class="pre">NOT</span> <span class="pre">EXISTS</span></code> phrases cannot be used together.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">STYPE</span></code> value defines the type of the state value and must be specified. The optional <code class="docutils literal notranslate"><span class="pre">INITCOND</span></code> defines the initial state value for the aggregate; the default value is null. A non-null <code class="docutils literal notranslate"><span class="pre">INITCOND</span></code> must be specified for state functions that are declared with <code class="docutils literal notranslate"><span class="pre">RETURNS</span> <span class="pre">NULL</span> <span class="pre">ON</span> <span class="pre">NULL</span> <span class="pre">INPUT</span></code>.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">SFUNC</span></code> value references an existing function to use as the state-modifying function. The first argument of the state function must have type <code class="docutils literal notranslate"><span class="pre">STYPE</span></code>. The remaining arguments of the state function must match the types of the user-defined aggregate arguments. The state function is called once for each row, and the value returned by the state function becomes the new state. State is not updated for state functions declared with <code class="docutils literal notranslate"><span class="pre">RETURNS</span> <span class="pre">NULL</span> <span class="pre">ON</span> <span class="pre">NULL</span> <span class="pre">INPUT</span></code> and called with null. After all rows are processed, the optional <code class="docutils literal notranslate"><span class="pre">FINALFUNC</span></code> is executed with last state value as its argument. It must take only one argument with type <code class="docutils literal notranslate"><span class="pre">STYPE</span></code>, but the return type of the <code class="docutils literal notranslate"><span class="pre">FINALFUNC</span></code> may be a different type. A final function declared with <code class="docutils literal notranslate"><span class="pre">RETURNS</span> <span class="pre">NULL</span> <span class="pre">ON</span> <span class="pre">NULL</span> <span class="pre">INPUT</span></code> means that the aggregate’s return value will be null, if the last state is null.</p>
+<p>If no <code class="docutils literal notranslate"><span class="pre">FINALFUNC</span></code> is defined, the overall return type of the aggregate function is <code class="docutils literal notranslate"><span class="pre">STYPE</span></code>. If a <code class="docutils literal notranslate"><span class="pre">FINALFUNC</span></code> is defined, it is the return type of that function.</p>
+</section>
+<section id="drop-aggregate-statement">
+<h4>DROP AGGREGATE statement<a class="headerlink" href="#drop-aggregate-statement" title="Link to this heading">¶</a></h4>
+<p>Dropping an user-defined aggregate function uses the DROP AGGREGATE statement. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">DROP</span> <span class="k">AGGREGATE</span> <span class="n">myAggregate</span><span class="p">;</span>
+<span class="k">DROP</span> <span class="k">AGGREGATE</span> <span class="n">myKeyspace</span><span class="mf">.</span><span class="n">anAggregate</span><span class="p">;</span>
+<span class="k">DROP</span> <span class="k">AGGREGATE</span> <span class="n">someAggregate</span> <span class="p">(</span> <span class="nb">int</span> <span class="p">);</span>
+<span class="k">DROP</span> <span class="k">AGGREGATE</span> <span class="n">someAggregate</span> <span class="p">(</span> <span class="nb">text</span> <span class="p">);</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">DROP</span> <span class="pre">AGGREGATE</span></code> statement removes an aggregate created using <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">AGGREGATE</span></code>. You must specify the argument types of the aggregate to drop if there are multiple overloaded aggregates with the same name but a different signature.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">DROP</span> <span class="pre">AGGREGATE</span></code> command with the optional <code class="docutils literal notranslate"><span class="pre">IF</span> <span class="pre">EXISTS</span></code> keywords drops an aggregate if it exists, and does nothing if a function with the signature does not exist.</p>
+<p><a class="reference internal" href="index.html"><span class="doc">Apache Cassandra Query Language</span></a></p>
+<p>Copyright</p>
+<p>© 2016, The Apache Software Foundation.</p>
+<p>Apache®, Apache Cassandra®, Cassandra®, the Apache feather logo and the Apache Cassandra® Eye logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries. No endorsement by The Apache Software Foundation is implied by the use of these marks.</p>
+</section>
+</section>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Functions&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-6.2/cql/functions%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="time-to-live.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Expiring Data with Time to Live (TTL)
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="wasm.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />Wasm support for user-defined functions
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Functions&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-6.2/cql/functions%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/cql/functions.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">Functions</a><ul>
+<li><a class="reference internal" href="#scalar-functions">Scalar functions</a><ul>
+<li><a class="reference internal" href="#scalar-native-functions">Native functions</a><ul>
+<li><a class="reference internal" href="#cast">Cast</a></li>
+<li><a class="reference internal" href="#token">Token</a></li>
+<li><a class="reference internal" href="#uuid">Uuid</a></li>
+<li><a class="reference internal" href="#datetime-functions">Datetime functions</a><ul>
+<li><a class="reference internal" href="#retrieving-the-current-date-time">Retrieving the current date/time</a></li>
+<li><a class="reference internal" href="#time-conversion-functions">Time conversion functions</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#blob-conversion-functions">Blob conversion functions</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#user-defined-functions-experimental">User-defined functions <span class="label label--caution">Experimental</span></a><ul>
+<li><a class="reference internal" href="#create-function-statement">CREATE FUNCTION statement</a></li>
+<li><a class="reference internal" href="#function-signature">Function Signature</a></li>
+<li><a class="reference internal" href="#drop-function-statement">DROP FUNCTION statement</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#aggregate-functions">Aggregate functions</a><ul>
+<li><a class="reference internal" href="#native-aggregates">Native aggregates</a><ul>
+<li><a class="reference internal" href="#count">Count</a></li>
+<li><a class="reference internal" href="#max-and-min">Max and Min</a></li>
+<li><a class="reference internal" href="#sum">Sum</a></li>
+<li><a class="reference internal" href="#avg">Avg</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#user-defined-aggregates-udas-experimental">User-defined aggregates (UDAs) <span class="label label--caution">Experimental</span></a><ul>
+<li><a class="reference internal" href="#create-aggregate-statement">CREATE AGGREGATE statement</a></li>
+<li><a class="reference internal" href="#drop-aggregate-statement">DROP AGGREGATE statement</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                6.2
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="functions.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-6.1/cql/functions.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-6.0/cql/functions.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.4/cql/functions.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.2/cql/functions.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.1/cql/functions.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../getting-started/index.html">Getting Started</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../getting-started/install-scylla/index.html">Install ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/launch-on-aws.html">Launch ScyllaDB on AWS</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/launch-on-gcp.html">Launch ScyllaDB on GCP</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/launch-on-azure.html">Launch ScyllaDB on Azure</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/install-on-linux.html">Install ScyllaDB Linux Packages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/install-jmx.html">Install scylla-jmx Package</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/run-in-docker.html">Run ScyllaDB in Docker</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/unified-installer.html">Install ScyllaDB Without root Privileges</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/disable-housekeeping.html">ScyllaDB Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/dev-mod.html">ScyllaDB Developer Mode</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/configure.html">Configure ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/config-commands.html">ScyllaDB Configuration Reference</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/os-support.html">OS Support by Linux Distributions and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/cloud-instance-recommendations.html">Cloud Instance Recommendations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/scylla-in-a-shared-environment.html">ScyllaDB in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/migrate-scylla.html">Migrate to ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migration Process from Cassandra to ScyllaDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/cassandra-compatibility.html">ScyllaDB and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-spark.html">Integrate ScyllaDB with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-kairos.html">Integrate ScyllaDB with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-presto.html">Integrate ScyllaDB with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-elasticsearch.html">Integrate ScyllaDB with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-k8.html">Integrate ScyllaDB with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-janus.html">Integrate ScyllaDB with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-datadog.html">Integrate ScyllaDB with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-kafka.html">Integrate ScyllaDB with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-iota.html">Integrate ScyllaDB with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-spring.html">Integrate ScyllaDB with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for ScyllaDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-ansible.html">Install ScyllaDB with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-databricks.html">Integrate ScyllaDB with Databricks</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-jaeger.html">Integrate ScyllaDB with Jaeger Server</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-mindsdb.html">Integrate ScyllaDB with MindsDB</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../operating-scylla/index.html">ScyllaDB for Administrators</a><input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/admin.html">Administration Guide</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/procedures/index.html">Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migrate from Cassandra to ScyllaDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/security/index.html">Security</a><input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/security-checklist.html">ScyllaDB Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/create-superuser.html">Creating a Custom Superuser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/certificate-authentication.html">Certificate-based Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/saslauthd.html">Configure SaslauthdAuthenticator</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/rest.html">Admin REST API</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/scylla-sstable.html">ScyllaDB SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/scylla-types.html">ScyllaDB Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstablemetadata.html">SSTableMetadata</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/logging.html">ScyllaDB Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/virtual-tables.html">Virtual Tables</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/select-from-mutation-fragments.html">Reading mutation fragments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/maintenance-socket.html">Maintenance socket</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/maintenance-mode.html">Maintenance mode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/task-manager.html">Task manager</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/scylladb-versioning.html">ScyllaDB Versioning</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/upgrade-opensource/index.html">ScyllaDB Open Source Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/upgrade-to-enterprise/index.html">ScyllaDB Open Source to ScyllaDB Enterprise Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/ami-upgrade.html">ScyllaDB Image</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html">ScyllaDB Enterprise</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/system-configuration/snitch.html">ScyllaDB Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/diagnostics.html">ScyllaDB Diagnostic Tools</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../using-scylla/index.html">ScyllaDB for Developers</a><input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/index.html">Develop with ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">Tutorials and Example Projects</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/learn-resources/index.html">Learn to Use ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../using-scylla/alternator/index.html">ScyllaDB Alternator</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/drivers/index.html">ScyllaDB Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/drivers/cql-drivers/index.html">ScyllaDB CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/drivers/dynamo-drivers/index.html">ScyllaDB DynamoDB Drivers</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">CQL Reference</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ddl.html">Data Definition</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="dml.html">Data Manipulation</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="dml/select.html">SELECT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dml/insert.html">INSERT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dml/update.html">UPDATE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dml/delete.html">DELETE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="dml/batch.html">BATCH</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="wasm.html">Wasm support for user-defined functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="service-levels.html">Service Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/compatibility.html">ScyllaDB Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../features/index.html">Features</a><input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../features/lwt.html">Lightweight Transactions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../features/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../features/local-secondary-indexes.html">Local Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../features/materialized-views.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../features/counters.html">Counters</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../features/cdc/index.html">Change Data Capture</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-intro.html">CDC Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-log-table.html">The CDC Log Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-basic-operations.html">Basic operations in CDC</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-streams.html">CDC Streams</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-stream-generations.html">CDC Stream Generations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-querying-streams.html">Querying CDC Streams</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-advanced-types.html">Advanced column types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-preimages.html">Preimages and postimages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-consistency.html">Data Consistency in CDC</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../features/workload-attributes.html">Workload Attributes</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../architecture/index.html">ScyllaDB Architecture</a><input class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/tablets.html">Data Distribution with Tablets</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/ringarchitecture/index.html">ScyllaDB Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/architecture-fault-tolerance.html">ScyllaDB Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../architecture/anti-entropy/index.html">ScyllaDB Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/anti-entropy/hinted-handoff.html">ScyllaDB Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/anti-entropy/read-repair.html">ScyllaDB Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/maintenance/repair.html">ScyllaDB Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../architecture/sstable/index.html">SSTable</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/sstable/sstable2/index.html">ScyllaDB SSTable - 2.x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/sstable/sstable3/index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/zero-token-nodes.html">Zero-token Nodes</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../troubleshooting/index.html">Troubleshooting ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/report-scylla-problem.html">Report a ScyllaDB problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/startup/index.html">ScyllaDB Startup</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/scylla-wont-start.html">ScyllaDB will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/python-error-no-module-named-yaml.html">ScyllaDB Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/upgrade/index.html">Upgrade</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/missing-dotmount-files.html">Inaccessible configuration files after ScyllaDB upgrade</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/handling-node-failures.html">Handling Node Failures</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-add-remove-replace.html">Failure to Add, Remove, or Replace a Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-schema-sync.html">Failed Schema Sync</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/large-partition-table.html">ScyllaDB Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/large-rows-large-cells-tables.html">ScyllaDB Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-update-schema.html">Failure to Update the Schema</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/monitor/index.html">ScyllaDB Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-30" name="toctree-checkbox-30" type="checkbox"/><label for="toctree-checkbox-30"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/install-remove/index.html">Installation and Removal</a><input class="toctree-checkbox" id="toctree-checkbox-31" name="toctree-checkbox-31" type="checkbox"/><label for="toctree-checkbox-31"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/autoremove-ubuntu.html">Removing ScyllaDB on Ubuntu breaks system packages</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../kb/index.html">Knowledge Base</a><input class="toctree-checkbox" id="toctree-checkbox-32" name="toctree-checkbox-32" type="checkbox"/><label for="toctree-checkbox-32"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../kb/cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/consistency.html">Consistency in ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/custom-user.html">Run ScyllaDB and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/customizing-cpuset.html">Customizing CPUSET</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/gossip.html">Gossip in ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/lwt-differences.html">How does ScyllaDB LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/map-cpu.html">Map CPUs to ScyllaDB Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/memory-usage.html">ScyllaDB Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/ntp.html">NTP Configuration for ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/posix.html">POSIX networking for ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/quiz-administrators.html">ScyllaDB consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/scylla-and-spark-integration.html">ScyllaDB and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/scylla-limits-systemd.html">Increase ScyllaDB resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/seed-nodes.html">ScyllaDB Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/snapshots.html">ScyllaDB Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/static-columns.html">ScyllaDB payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/unresponsive-nodes.html">ScyllaDB Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/use-perf.html">Using the perf utility with ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/yaml-address.html">Configure ScyllaDB Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../reference/index.html">Reference</a><input class="toctree-checkbox" id="toctree-checkbox-33" name="toctree-checkbox-33" type="checkbox"/><label for="toctree-checkbox-33"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../reference/aws-images.html">AWS Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/azure-images.html">Azure Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/gcp-images.html">GCP Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/configuration-parameters.html">Configuration Parameters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/glossary.html">Glossary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/limits.html">Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/api-reference.html">API Reference (BETA)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/metrics.html">Metrics (BETA)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">ScyllaDB FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contribute.html">Contribute to ScyllaDB</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

@@ -1,0 +1,1304 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             Apache Cassandra to Scylla Migration Process | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/operating-scylla/procedures/cassandra-to-scylla-migration-process.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../../getting-started/index.html" class="bread__highlight">
+                Getting Started
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="../../using-scylla/migrate-scylla.html" class="bread__highlight">
+                Migrate to ScyllaDB
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">Apache Cassandra to Scylla Migration Process</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <section id="apache-cassandra-to-scylla-migration-process">
+<h1>Apache Cassandra to Scylla Migration Process<a class="headerlink" href="#apache-cassandra-to-scylla-migration-process" title="Link to this heading">¶</a></h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The following instructions apply to migrating from Apache Cassandra and <strong>not</strong> from DataStax Enterprise.
+The DataStax Enterprise SSTable format is incompatible with Apache Cassandra or Scylla SSTable Loader and may not migrate properly.</p>
+</div>
+<p>Migrating data from Apache Cassandra to an eventually consistent data store such as Scylla for a high volume, low latency application and verifying its consistency is a multi-step process.</p>
+<p>It involves the following high-level steps:</p>
+<ol class="arabic simple">
+<li><p>Creating the same schema from Apache Cassandra in Scylla, though there can be some variation</p></li>
+<li><p>Configuring your application/s to perform dual writes (still reading only from Apache Cassandra)</p></li>
+<li><p>Taking a snapshot of all to-be-migrated data from Apache Cassandra</p></li>
+<li><p>Loading the SSTable files to Scylla using the Scylla sstableloader tool + Data validation</p></li>
+<li><p>Verification period: dual writes and reads, Scylla serves reads. Logging mismatches, until a minimal data mismatch threshold is reached</p></li>
+<li><p>Apache Cassandra End Of Life: Scylla only for reads and writes</p></li>
+</ol>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>steps 2 and 5 are required for Live migration only (meaning with ongoing traffic and no downtime).</p>
+</div>
+<img alt="../../_images/cassandra-to-scylla-1.png" src="../../_images/cassandra-to-scylla-1.png" />
+<p><strong>Dual Writes:</strong> Application logic is updated to write to both DBs</p>
+<img alt="../../_images/cassandra-to-scylla-2.png" src="../../_images/cassandra-to-scylla-2.png" />
+<p><strong>Forklifting:</strong> Migrate historical data from Apache Cassandra SSTables to Scylla</p>
+<img alt="../../_images/cassandra-to-scylla-3.png" src="../../_images/cassandra-to-scylla-3.png" />
+<p><strong>Dual Reads:</strong> Ongoing validation of data sync between the two DBs</p>
+<img alt="../../_images/live_migration_timeline.PNG" src="../../_images/live_migration_timeline.PNG" />
+<p><strong>Live Migration:</strong> Migrating from DB-OLD to DB-NEW timeline</p>
+<section id="procedure">
+<span id="cassandra-to-scylla-procedure"></span><h2>Procedure<a class="headerlink" href="#procedure" title="Link to this heading">¶</a></h2>
+<ol class="arabic simple">
+<li><p>Create manually / Migrate your schema (keyspaces, tables, and user-defined type, if used) on/to your Scylla cluster. When migrating from Apache Cassandra 3.x some schema updates are required (see <a class="reference external" href="#notes-limitations-and-known-issues">limitations and known issues section</a>).</p>
+<ul class="simple">
+<li><p>Export schema from Apache Cassandra: <code class="docutils literal notranslate"><span class="pre">cqlsh</span> <span class="pre">[IP]</span> <span class="pre">&quot;-e</span> <span class="pre">DESC</span> <span class="pre">SCHEMA&quot;</span> <span class="pre">&gt;</span> <span class="pre">orig_schema.cql</span></code></p></li>
+<li><p>Import schema to Scylla: <code class="docutils literal notranslate"><span class="pre">cqlsh</span> <span class="pre">[IP]</span> <span class="pre">--file</span> <span class="pre">'adjusted_schema.cql'</span></code></p></li>
+</ul>
+</li>
+</ol>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>It is recommended to alter the schema of tables you plan to migrate as follows:</p>
+<ul class="simple">
+<li><p>set compaction <code class="docutils literal notranslate"><span class="pre">min_threshold</span></code> to 2, allowing compactions to get rid of duplication faster. Migrating using the sstableloader may create a lot of temporary duplication of the disk.</p></li>
+<li><p>Increase <code class="docutils literal notranslate"><span class="pre">gc_grace_seconds</span></code> (default ten days) to a higher value, ensuring you will not lose tombstones during the migration process. The recommended value is 315360000 (10 years).</p></li>
+</ul>
+<p>Make sure to change both parameters back to the original value once the migration is done (using ALTER TABLE).</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Scylla Open Source 3.0 and later and Scylla Enterprise 2019.1 and later support <a class="reference internal" href="../../using-scylla/materialized-views.html"><span class="doc">Materialized View(MV)</span></a> and <a class="reference internal" href="../../using-scylla/secondary-indexes.html"><span class="doc">Secondary Index(SI)</span></a>.</p>
+<p>When migrating data from Apache Cassandra with MV or SI, you can either:</p>
+<ul class="simple">
+<li><p>Create the MV and SI as part of the schema so that each new insert will be indexed.</p></li>
+<li><p>Upload all the data with sstableloader first, and only then <a class="reference internal" href="../../cql/secondary-indexes.html#create-index-statement"><span class="std std-ref">create the secondary indexes</span></a> and <a class="reference internal" href="../../cql/mv.html#create-materialized-view-statement"><span class="std std-ref">MVs</span></a>.</p></li>
+</ul>
+<p>In either case, only use the sstableloader to load the base table SSTable. Do <strong>not</strong> load the index and view data - let Scylla index for you.</p>
+</div>
+<ol class="arabic" start="2">
+<li><p>If you wish to perform the migration process without any downtime, please configure your application/s to perform dual writes to both data stores, Apache Cassandra and Scylla (see below code snippet for dual writes). Before doing that, and as general guidance, make sure to use the client-generated timestamp (writetime). If you do not, the data on Scylla and Apache Cassandra can be considered different, while it is the same.</p>
+<p>Note: your application/s should continue reading and writing from Apache Cassandra until the entire migration process is completed, data integrity validated, and dual writes and reads verification period performed to your satisfaction.</p>
+</li>
+</ol>
+<p><strong>Dual writes and client-generated timestamp Python code snippet</strong></p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="c1"># put both writes (cluster 1 and cluster 2) into a list</span>
+<span class="w">    </span><span class="nv">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">[]</span>
+<span class="w">    </span><span class="c1">#insert 1st statement into db1 session, table 1</span>
+<span class="w">    </span>writes.append<span class="o">(</span>db1.execute_async<span class="o">(</span>insert_statement_prepared<span class="o">[</span><span class="m">0</span><span class="o">]</span>,<span class="w"> </span>values<span class="o">))</span>
+<span class="w">    </span><span class="c1">#insert 2nd statement into db2 session, table 2</span>
+<span class="w">    </span>writes.append<span class="o">(</span>db2.execute_async<span class="o">(</span>insert_statement_prepared<span class="o">[</span><span class="m">1</span><span class="o">]</span>,<span class="w"> </span>values<span class="o">))</span>
+
+<span class="w">    </span><span class="c1"># loop over futures and output success/fail</span>
+<span class="w">    </span><span class="nv">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">[]</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span>i<span class="w"> </span><span class="k">in</span><span class="w"> </span>range<span class="o">(</span><span class="m">0</span>,len<span class="o">(</span>writes<span class="o">))</span>:
+<span class="w">        </span>try:
+<span class="w">            </span><span class="nv">row</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>writes<span class="o">[</span>i<span class="o">]</span>.result<span class="o">()</span>
+<span class="w">            </span>results.append<span class="o">(</span><span class="m">1</span><span class="o">)</span>
+<span class="w">        </span>except<span class="w"> </span>Exception:
+<span class="w">            </span>results.append<span class="o">(</span><span class="m">0</span><span class="o">)</span>
+<span class="w">            </span><span class="c1">#log exception if you like</span>
+<span class="w">            </span><span class="c1">#logging.exception(&#39;Failed write: %s&#39;, (&#39;Cluster 1&#39; if (i==0) else &#39;Cluster 2&#39;))</span>
+
+<span class="w">    </span>results.append<span class="o">(</span>values<span class="o">)</span>
+<span class="w">    </span>log<span class="o">(</span>results<span class="o">)</span>
+
+<span class="w">    </span><span class="c1">#did we have failures?</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">(</span>results<span class="o">[</span><span class="m">0</span><span class="o">]==</span><span class="m">0</span><span class="o">)</span>:
+<span class="w">        </span><span class="c1">#do something, like re-write to cluster 1</span>
+<span class="w">        </span>log<span class="o">(</span><span class="s1">&#39;Write to cluster 1 failed&#39;</span><span class="o">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">(</span>results<span class="o">[</span><span class="m">1</span><span class="o">]==</span><span class="m">0</span><span class="o">)</span>:
+<span class="w">        </span><span class="c1">#do something, like re-write to cluster 2</span>
+<span class="w">        </span>log<span class="o">(</span><span class="s1">&#39;Write to cluster 2 failed&#39;</span><span class="o">)</span>
+
+<span class="k">for</span><span class="w"> </span>x<span class="w"> </span><span class="k">in</span><span class="w"> </span>range<span class="o">(</span><span class="m">0</span>,RANDOM_WRITES<span class="o">)</span>:
+<span class="w">    </span><span class="c1">#explicitly set a writetime in microseconds</span>
+<span class="w">    </span><span class="nv">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>random.randrange<span class="o">(</span><span class="m">0</span>,1000<span class="o">)</span><span class="w"> </span>,<span class="w"> </span>str<span class="o">(</span>uuid.uuid4<span class="o">())</span><span class="w"> </span>,<span class="w"> </span>int<span class="o">(</span>time.time<span class="o">()</span>*1000000<span class="o">)</span><span class="w"> </span><span class="o">]</span>
+
+<span class="w">    </span>execute<span class="o">(</span><span class="w"> </span>values<span class="w"> </span><span class="o">)</span>
+</pre></div>
+</div>
+<p>See the full code example <a class="reference external" href="https://github.com/scylladb/scylla-code-samples/tree/master/dual_writes">here</a></p>
+<ol class="arabic" start="3">
+<li><p>On each Apache Cassandra node, take a snapshot for every keyspace using the <a class="reference internal" href="../nodetool-commands/snapshot.html"><span class="doc">nodetool snapshot</span></a> command. This will flush all SSTables to disk and generate a <code class="docutils literal notranslate"><span class="pre">snapshots</span></code> folder with an epoch timestamp for each underlying table in that keyspace.</p>
+<p>Folder path post snapshot: <code class="docutils literal notranslate"><span class="pre">/var/lib/cassandra/data/keyspace/table-[uuid]/snapshots/[epoch_timestamp]/</span></code></p>
+</li>
+<li><p>We strongly advise against running the sstableloader tool directly on the Scylla cluster, as it will consume resources from Scylla. Instead you should run the sstableloader from intermediate node/s. To do that, you need to install the <code class="docutils literal notranslate"><span class="pre">scylla-tools-core</span></code> package (it includes the sstableloader tool).</p>
+<p>You need to make sure you have connectivity to both the Apache Cassandra and Scylla clusters. There are two ways to do that; both require having a file system in place (RAID is optional):</p>
+<ul class="simple">
+<li><p>Option 1 (recommended): copy the SSTable files from the Apache Cassandra cluster to a local folder on the intermediate node.</p></li>
+<li><p>Option 2: NFS mount point on the intermediate node to the SSTable files located in the Apache Cassandra nodes.</p>
+<ul>
+<li><p><a class="reference external" href="http://www.digitalocean.com/community/tutorials/how-to-set-up-an-nfs-mount-on-centos-6">NFS mount on CentOS</a></p></li>
+<li><p><a class="reference external" href="http://www.digitalocean.com/community/tutorials/how-to-set-up-an-nfs-mount-on-ubuntu-16-04">NFS mount on Ubuntu</a></p></li>
+</ul>
+</li>
+</ul>
+<ol class="arabic">
+<li><p>After installing the relevant pkgs (detailed in the links), edit <code class="docutils literal notranslate"><span class="pre">/etc/exports</span></code> file on each Apache Cassandra node and add the following in a single line:</p>
+<p><code class="docutils literal notranslate"><span class="pre">[Full</span> <span class="pre">path</span> <span class="pre">to</span> <span class="pre">snapshot</span> <span class="pre">‘epoch’</span> <span class="pre">folder]</span> <span class="pre">[Scylla_IP](rw,sync,no_root_squash,no_subtree_check)</span></code></p>
+</li>
+<li><p>Restart NFS server <code class="docutils literal notranslate"><span class="pre">sudo</span> <span class="pre">systemctl</span> <span class="pre">restart</span> <span class="pre">nfs-kernel-server</span></code></p></li>
+<li><p>Create a new folder on one of the Scylla nodes and use it as a mount point to the Apache Cassandra node</p>
+<p>Example:</p>
+<p><code class="docutils literal notranslate"><span class="pre">sudo</span> <span class="pre">mount</span> <span class="pre">[Cassandra_IP]:[Full</span> <span class="pre">path</span> <span class="pre">to</span> <span class="pre">snapshots</span> <span class="pre">‘epoch’</span> <span class="pre">folder]</span> <span class="pre">/[ks]/[table]</span></code></p>
+<p>Note: both the local folder or the NFS mount point paths, must end with <code class="docutils literal notranslate"><span class="pre">/[ks]/[table]</span></code> format, used by the sstableloader for parsing purposes (see <code class="docutils literal notranslate"><span class="pre">sstableloader</span> <span class="pre">help</span></code> for more details).</p>
+</li>
+</ol>
+</li>
+<li><p>If you cannot use intermediate node/s (see the previous step), then you have two options:</p>
+<ul>
+<li><p>Option 1: Copy the sstable files to a local folder on one of your Scylla cluster nodes. Preferably on a disk or disk-array which is not part of the Scylla cluster RAID, yet still accessible for the sstableloader tool.</p>
+<p>Note: copying it to the Scylla RAID will require sufficient disk space (Apache Cassandra SSTable snapshots size x2 &lt; 50% of Scylla node capacity) to contain both the copied SSTables files and the entire data migrated to Scylla (keyspace RF should also be taken into account).</p>
+</li>
+<li><p>Option 2: NFS mount point on Scylla nodes to the SSTable files located in the Apache Cassandra nodes (see NFS mount instructions in the previous step). This saves the additional disk space needed for the 1st option.</p>
+<p>Note: both the local folder and the NFS mount point paths must end with <code class="docutils literal notranslate"><span class="pre">/[ks]/[table]</span></code> format, used by the sstableloader for parsing purposes (see <code class="docutils literal notranslate"><span class="pre">sstableloader</span> <span class="pre">help</span></code> for more details).</p>
+</li>
+</ul>
+</li>
+<li><p>Use the Scylla sstableloader tool (<strong>NOT</strong> the Apache Cassandra one which has the same name) to load the SSTables. Running without any parameters will present the list of options and usage. Most important are the SSTables directory and the Scylla node IP.</p></li>
+</ol>
+<p>Examples:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">sstableloader</span> <span class="pre">-d</span> <span class="pre">[Scylla</span> <span class="pre">IP]</span> <span class="pre">.../[ks]/[table]</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sstableloader</span> <span class="pre">-d</span> <span class="pre">[scylla</span> <span class="pre">IP]</span> <span class="pre">.../[mount</span> <span class="pre">point]</span></code> (in <code class="docutils literal notranslate"><span class="pre">/[ks]/[table]</span></code> format)</p></li>
+</ul>
+<ol class="arabic" start="7">
+<li><p>We recommend running several sstableloaders in parallel and utilizing all Scylla nodes as targets for SSTable loading. Start with one keyspace and its underlying SSTable files from all Apache Cassandra nodes. After completion, continue to the next keyspace and so on.</p>
+<p>Note: limit the sstableloader speed by using the throttling <code class="docutils literal notranslate"><span class="pre">-t</span></code> parameter, considering your physical HW, live traffic load, and network utilization (see sstableloader help for more details).</p>
+</li>
+<li><p>Once you completed loading the SSTable files from all keyspaces, you can use <code class="docutils literal notranslate"><span class="pre">cqlsh</span></code> or any other tool to validate the data migrated successfully. We strongly recommend configuring your application to perform both writes and reads to/from both data stores. Apache Cassandra (as is, up to this point) and Scylla (now as primary) for a verification period. Keep track of the number of requests for which the data in both these data stores are mismatched.</p></li>
+<li><p><strong>Apache Cassandra end of life:</strong> once you are confident in your Scylla cluster, you can flip the flag in your application/s, stop writes and reads against the Cassandra cluster, and make Scylla your sole target/source.</p></li>
+</ol>
+</section>
+<section id="failure-handling">
+<h2>Failure Handling<a class="headerlink" href="#failure-handling" title="Link to this heading">¶</a></h2>
+<p><strong>What should I do if sstableloader fails?</strong></p>
+<p>Each loading job is per keyspace/table_name, that means in any case of failure, you need to repeat the loading job. As you are loading the same data (partially loaded before the failure), compactions will take care of any duplication.</p>
+<p><strong>What should I do if an Apache Cassandra node fails?</strong></p>
+<p>If the node that failed was a node you were loading SSTables from, then the sstableloader will also fail. If you were using RF&gt;1 then the data exists on other node/s. Hence you can continue with the sstable loading from all the other Cassandra nodes. Once completed, all your data should be on Scylla.</p>
+<p><strong>What should I do if a Scylla node fails?</strong></p>
+<p>If the node that failed was a node you were loading sstables to, then the sstableloader will also fail. Restart the loading job and use a different Scylla node as your target.</p>
+<p><strong>How to rollback and start from scratch?</strong></p>
+<ol class="arabic simple">
+<li><p>Stop the dual writes to Scylla</p></li>
+<li><p>Stop Scylla service <code class="docutils literal notranslate"><span class="pre">sudo</span> <span class="pre">systemctl</span> <span class="pre">stop</span> <span class="pre">scylla-server</span></code></p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">cqlsh</span></code> to perform <code class="docutils literal notranslate"><span class="pre">truncate</span></code> on all data already loaded to Scylla</p></li>
+<li><p>Start the dual writes again to Scylla</p></li>
+<li><p>Take a new snapshot of all Cassandra nodes</p></li>
+<li><p>Start loading SSTables again to Scylla from the NEW snapshot folder</p></li>
+</ol>
+</section>
+<section id="notes-limitations-and-known-issues">
+<h2>Notes, Limitations and Known Issues<a class="headerlink" href="#notes-limitations-and-known-issues" title="Link to this heading">¶</a></h2>
+<ol class="arabic simple">
+<li><p>The <code class="docutils literal notranslate"><span class="pre">Duration</span></code> data type is only supported in Scylla 2.1 and later (<a class="reference external" href="https://github.com/scylladb/scylla/issues/2240">issue-2240</a>). This is relevant only when migrating from Apache Cassandra 3.X.</p></li>
+<li><p>Changes in table schema from Apache Cassandra 3.0 that requires adjustments for Scylla 2.x, 1.x table schema:</p>
+<ul class="simple">
+<li><p>Changes in create table (<a class="reference external" href="https://issues.apache.org/jira/browse/CASSANDRA-8384">issue-8384</a>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">crc_check_chance</span></code> out of compression options (<a class="reference external" href="https://issues.apache.org/jira/browse/CASSANDRA-9839">issue-9839</a>)</p></li>
+</ul>
+</li>
+<li><p>Scylla 2.x CQL client <code class="docutils literal notranslate"><span class="pre">cqlsh</span></code> does not display the millisecond values of a <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> data type. (<a class="reference external" href="https://github.com/scylladb/scylla-tools-java/issues/36">scylla-tools-java/issues #36</a>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Nodetool</span> <span class="pre">tablestats</span></code> partition keys (estimated) number in Scylla, post migration from Apache Cassandra, differs by 20% less up to 120% more than the original amount in Cassandra (<a class="reference external" href="https://github.com/scylladb/scylla/issues/2545">issue-2545</a>)</p></li>
+<li><p>Scylla 2.x is using Apache Cassandra 2.x file format. This means that migrating from Apache Cassandra 3.x to Scylla 2.x will result in a different storage space of the same data on the Scylla cluster. Scylla 3.x uses the same format as Cassandra 3.x</p></li>
+</ol>
+<section id="counters">
+<h3>Counters<a class="headerlink" href="#counters" title="Link to this heading">¶</a></h3>
+<p>In version 2.1, Apache Cassandra changed how the counters work. The previous design had some hard to fix issues, which meant that there is no safe and general way of converting counter data from the old format to the new one. As a result, counter cells created before version 2.1 may contain old-format information even <strong>after</strong> migration to the latest Cassandra version. As Scylla implements only the new counter design, this imposes restrictions on how counters can be migrated from Cassandra.</p>
+<p>Copying counter SSTables over to Scylla is unsafe and, by default, disallowed. Even if you use sstableloader, which is a safe way to copy the tables, it will refuse to load data in the legacy format.</p>
+<p><strong>Schema differences between Apache Cassandra 4.x and Scylla 4.x</strong></p>
+<p>The following table illustrates the default schema differences between Apache Cassandra 4.x and Scylla 3.x</p>
+<p>Notable differences:</p>
+<ul class="simple">
+<li><p>Since CDC is implemented differently in Cassandra, ‘cdc=false’ in the Cassandra schema, should be changed to cdc = {‘enabled’: ‘false’}</p></li>
+<li><p>additional_write_policy = ‘99p’ is <strong>NOT</strong> supported in Scylla; make sure you remove it from the schema.</p></li>
+<li><p>extensions = {} is <strong>NOT</strong> supported in Scylla; make sure you remove it from the schema.</p></li>
+<li><p>read_repair = ‘BLOCKING’ is <strong>NOT</strong> supported in Scylla; make sure you remove it from the schema.</p></li>
+<li><p>In the expression compression = {‘chunk_length_in_kb’: ‘16’, ‘class’: ‘org.apache.cassandra.io.compress.LZ4Compressor’}’, replace ‘compression” ‘class’: ‘org.apache.cassandra.io.compress.LZ4Compressor’ with ‘sstable_compression’: ‘org.apache.cassandra.io.compress.LZ4Compressor’</p></li>
+<li><p>Replace speculative_retry = ‘99p’ with speculative_retry = ‘99.0PERCENTILE’;</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>If you used the same Counter SSTables with Apache Cassandra from before version 2.1, the migration to Scylla would not work</p>
+</div>
+<p><strong>Schema differences between Apache Cassandra 3.x and Scylla 2.x and 1.x</strong></p>
+<p>The following table illustrates the default schema differences between Apache Cassandra 3.x and Scylla 2.x, 1.x</p>
+<p>Notable differences:</p>
+<ul class="simple">
+<li><p>‘caching’ section is supported in Scylla, yet requires adjustments to the schema (see below).</p></li>
+<li><p>‘crc_check_chance’ (marked in <strong>bold</strong>) is <strong>NOT</strong> supported in Scylla; make sure you remove it from the schema.</p></li>
+</ul>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Apache Cassandra 3.10 (uses 3.x Schema)</p></th>
+<th class="head"><p>Scylla 2.x 1.x (uses Apache Cassandra 2.1 Schema)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">mykeyspace</span> <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span>
+<span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;SimpleStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;replication_factor&#39;</span><span class="p">:</span> <span class="s1">&#39;1&#39;</span><span class="p">}</span>
+<span class="k">AND</span> <span class="n">durable_writes</span> <span class="o">=</span> <span class="n">true</span><span class="p">;</span>
+
+<span class="k">CREATE</span> <span class="k">TYPE</span> <span class="n">mykeyspace</span><span class="mf">.</span><span class="n">udt_info</span> <span class="p">(</span>
+<span class="n">birthday</span> <span class="nb">date</span><span class="p">,</span>
+<span class="n">nationality</span> <span class="nb">text</span><span class="p">,</span>
+<span class="n">height</span> <span class="nb">int</span><span class="p">);</span>
+
+<span class="k">CREATE</span> <span class="k">TABLE</span>
+<span class="n">mykeyspace</span><span class="mf">.</span><span class="n">all_types_no_counter_no_duration</span> <span class="p">(</span>
+<span class="n">aascii</span> <span class="nb">ascii</span><span class="p">,</span>
+<span class="n">abigint</span> <span class="nb">bigint</span><span class="p">,</span>
+<span class="n">ablob</span> <span class="nb">blob</span><span class="p">,</span>
+<span class="n">aboolean</span> <span class="nb">boolean</span><span class="p">,</span>
+<span class="n">adate</span> <span class="nb">date</span><span class="p">,</span>
+<span class="n">adecimal</span> <span class="nb">decimal</span><span class="p">,</span>
+<span class="n">adouble</span> <span class="nb">double</span><span class="p">,</span>
+<span class="n">afloat</span> <span class="nb">float</span><span class="p">,</span>
+<span class="n">afrozen_udt</span> <span class="k">frozen</span><span class="o">&lt;</span><span class="n">udt_info</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="n">ainet</span> <span class="nb">inet</span><span class="p">,</span>
+<span class="n">aint</span> <span class="nb">int</span><span class="p">,</span>
+<span class="n">alist</span> <span class="k">list</span><span class="o">&lt;</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="n">amap</span> <span class="k">map</span><span class="o">&lt;</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="n">aset</span> <span class="k">set</span><span class="o">&lt;</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="n">asmallint</span> <span class="nb">smallint</span><span class="p">,</span>
+<span class="n">atext</span> <span class="nb">text</span><span class="p">,</span>
+<span class="n">atime</span> <span class="nb">time</span><span class="p">,</span>
+<span class="n">atimestamp</span> <span class="nb">timestamp</span><span class="p">,</span>
+<span class="n">atimeuuid</span> <span class="nb">timeuuid</span><span class="p">,</span>
+<span class="n">atinyint</span> <span class="nb">tinyint</span><span class="p">,</span>
+<span class="n">atuple</span> <span class="k">frozen</span><span class="o">&lt;</span><span class="k">tuple</span><span class="o">&lt;</span><span class="nb">int</span><span class="p">,</span> <span class="nb">text</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="n">auuid</span> <span class="nb">uuid</span><span class="p">,</span>
+<span class="n">avarchar</span> <span class="nb">text</span><span class="p">,</span>
+<span class="n">avarint</span> <span class="nb">varint</span><span class="p">,</span>
+<span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">aascii</span><span class="p">,</span> <span class="n">abigint</span><span class="p">))</span>
+<span class="k">WITH</span> <span class="k">CLUSTERING</span> <span class="k">ORDER</span> <span class="k">BY</span> <span class="p">(</span><span class="n">abigint</span> <span class="k">ASC</span><span class="p">)</span>
+<span class="k">AND</span> <span class="n">bloom_filter_fp_chance</span> <span class="o">=</span> <span class="mf">0.01</span>
+<span class="k">AND</span> <span class="n">comment</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+</pre></div>
+</div>
+</td>
+<td><div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">mykeyspace</span> <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span>
+<span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;SimpleStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;replication_factor&#39;</span><span class="p">:</span> <span class="s1">&#39;1&#39;</span><span class="p">}</span>
+<span class="k">AND</span> <span class="n">durable_writes</span> <span class="o">=</span> <span class="n">true</span><span class="p">;</span>
+
+<span class="k">CREATE</span> <span class="k">TYPE</span> <span class="n">mykeyspace</span><span class="mf">.</span><span class="n">udt_info</span> <span class="p">(</span>
+<span class="n">birthday</span> <span class="nb">date</span><span class="p">,</span>
+<span class="n">nationality</span> <span class="nb">text</span><span class="p">,</span>
+<span class="n">height</span> <span class="nb">int</span><span class="p">);</span>
+
+<span class="k">CREATE</span> <span class="k">TABLE</span>
+<span class="n">mykeyspace</span><span class="mf">.</span><span class="n">all_types_no_counter_no_duration</span> <span class="p">(</span>
+<span class="n">aascii</span> <span class="nb">ascii</span><span class="p">,</span>
+<span class="n">abigint</span> <span class="nb">bigint</span><span class="p">,</span>
+<span class="n">ablob</span> <span class="nb">blob</span><span class="p">,</span>
+<span class="n">aboolean</span> <span class="nb">boolean</span><span class="p">,</span>
+<span class="n">adate</span> <span class="nb">date</span><span class="p">,</span>
+<span class="n">adecimal</span> <span class="nb">decimal</span><span class="p">,</span>
+<span class="n">adouble</span> <span class="nb">double</span><span class="p">,</span>
+<span class="n">afloat</span> <span class="nb">float</span><span class="p">,</span>
+<span class="n">afrozen_udt</span> <span class="k">frozen</span><span class="o">&lt;</span><span class="n">udt_info</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="n">ainet</span> <span class="nb">inet</span><span class="p">,</span>
+<span class="n">aint</span> <span class="nb">int</span><span class="p">,</span>
+<span class="n">alist</span> <span class="k">list</span><span class="o">&lt;</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="n">amap</span> <span class="k">map</span><span class="o">&lt;</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="n">aset</span> <span class="k">set</span><span class="o">&lt;</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="n">asmallint</span> <span class="nb">smallint</span><span class="p">,</span>
+<span class="n">atext</span> <span class="nb">text</span><span class="p">,</span>
+<span class="n">atime</span> <span class="nb">time</span><span class="p">,</span>
+<span class="n">atimestamp</span> <span class="nb">timestamp</span><span class="p">,</span>
+<span class="n">atimeuuid</span> <span class="nb">timeuuid</span><span class="p">,</span>
+<span class="n">atinyint</span> <span class="nb">tinyint</span><span class="p">,</span>
+<span class="n">atuple</span> <span class="k">frozen</span><span class="o">&lt;</span><span class="k">tuple</span><span class="o">&lt;</span><span class="nb">int</span><span class="p">,</span> <span class="nb">text</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="n">auuid</span> <span class="nb">uuid</span><span class="p">,</span>
+<span class="n">avarchar</span> <span class="nb">text</span><span class="p">,</span>
+<span class="n">avarint</span> <span class="nb">varint</span><span class="p">,</span>
+<span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">aascii</span><span class="p">,</span> <span class="n">abigint</span><span class="p">))</span>
+<span class="k">WITH</span> <span class="k">CLUSTERING</span> <span class="k">ORDER</span> <span class="k">BY</span> <span class="p">(</span><span class="n">abigint</span> <span class="k">ASC</span><span class="p">)</span>
+<span class="k">AND</span> <span class="n">bloom_filter_fp_chance</span> <span class="o">=</span> <span class="mf">0.01</span>
+<span class="k">AND</span> <span class="n">comment</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+</pre></div>
+</div>
+</td>
+</tr>
+<tr class="row-odd"><td><div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">AND</span> <span class="n">caching</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;keys&#39;</span><span class="p">:</span> <span class="s1">&#39;ALL&#39;</span><span class="p">,</span><span class="s1">&#39;rows_per_partition&#39;</span><span class="p">:</span> <span class="s1">&#39;NONE&#39;</span><span class="p">}</span>
+<span class="k">AND</span> <span class="n">compaction</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;org.apache.cassandra.db.</span>
+<span class="s1">compaction.SizeTieredCompactionStrategy&#39;</span><span class="p">,</span>
+<span class="s1">&#39;max_threshold&#39;</span><span class="p">:</span> <span class="s1">&#39;32&#39;</span><span class="p">,</span> <span class="s1">&#39;min_threshold&#39;</span><span class="p">:</span> <span class="s1">&#39;4&#39;</span><span class="p">}</span>
+<span class="k">AND</span> <span class="n">compression</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;chunk_length_in_kb&#39;</span><span class="p">:</span> <span class="s1">&#39;64&#39;</span><span class="p">,</span><span class="s1">&#39;class&#39;</span><span class="p">:</span>
+<span class="s1">&#39;org.apache.cassandra.io.compress.LZ4Compressor&#39;</span><span class="p">}</span>
+<span class="k">AND</span> <span class="n">speculative_retry</span> <span class="o">=</span> <span class="s1">&#39;99PERCENTILE&#39;</span>
+</pre></div>
+</div>
+</td>
+<td><p>(Adjust for Apache Cassandra 2.1 schema)</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">AND</span> <span class="n">caching</span> <span class="o">=</span> <span class="s1">&#39;{&quot;keys&quot;:&quot;ALL&quot;,&quot;rows_per_partition&quot;:&quot;ALL&quot;}&#39;</span>
+<span class="k">AND</span> <span class="n">compaction</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;SizeTieredCompactionStrategy&#39;</span><span class="p">}</span>
+<span class="k">AND</span> <span class="n">compression</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;sstable_compression&#39;</span><span class="p">:</span>
+<span class="s1">&#39;org.apache.cassandra.io.compress.LZ4Compressor&#39;</span><span class="p">}</span>
+<span class="k">AND</span> <span class="n">speculative_retry</span> <span class="o">=</span> <span class="s1">&#39;99.0PERCENTILE&#39;</span>
+</pre></div>
+</div>
+</td>
+</tr>
+<tr class="row-even"><td><p><strong>AND crc_check_chance = 1.0</strong></p></td>
+<td><p>(Remove from Apache Cassandra 2.1 schema)</p></td>
+</tr>
+<tr class="row-odd"><td><div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">AND</span> <span class="n">dclocal_read_repair_chance</span> <span class="o">=</span> <span class="mf">0.1</span>
+<span class="k">AND</span> <span class="n">default_time_to_live</span> <span class="o">=</span> <span class="mf">0</span>
+<span class="k">AND</span> <span class="n">gc_grace_seconds</span> <span class="o">=</span> <span class="mf">864000</span>
+<span class="k">AND</span> <span class="n">max_index_interval</span> <span class="o">=</span> <span class="mf">2048</span>
+<span class="k">AND</span> <span class="n">memtable_flush_period_in_ms</span> <span class="o">=</span> <span class="mf">0</span>
+<span class="k">AND</span> <span class="n">min_index_interval</span> <span class="o">=</span> <span class="mf">128</span>
+<span class="k">AND</span> <span class="n">read_repair_chance</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">;</span>
+</pre></div>
+</div>
+</td>
+<td><div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">AND</span> <span class="n">dclocal_read_repair_chance</span> <span class="o">=</span> <span class="mf">0.1</span>
+<span class="k">AND</span> <span class="n">default_time_to_live</span> <span class="o">=</span> <span class="mf">0</span>
+<span class="k">AND</span> <span class="n">gc_grace_seconds</span> <span class="o">=</span> <span class="mf">864000</span>
+<span class="k">AND</span> <span class="n">max_index_interval</span> <span class="o">=</span> <span class="mf">2048</span>
+<span class="k">AND</span> <span class="n">memtable_flush_perios_in_ms</span> <span class="o">=</span> <span class="mf">0</span>
+<span class="k">AND</span> <span class="n">min_index_interval</span> <span class="o">=</span> <span class="mf">128</span>
+<span class="k">AND</span> <span class="n">read_repair_chance</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">;</span>
+</pre></div>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+<p>More on <a class="reference internal" href="../../using-scylla/cassandra-compatibility.html"><span class="doc">Scylla and Apache Cassandra Compatibility</span></a></p>
+<p>Also see the <a class="reference external" href="https://university.scylladb.com/courses/scylla-operations/lessons/migrating-to-scylla/">Migrating to Scylla lesson</a> on Scylla University.</p>
+<p>© 2016, The Apache Software Foundation.</p>
+<p>Apache®, Apache Cassandra®, Cassandra®, the Apache feather logo and the Apache Cassandra® Eye logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries. No endorsement by The Apache Software Foundation is implied by the use of these marks.</p>
+</section>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Apache Cassandra to Scylla Migration Process&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-6.0/operating-scylla/procedures/cassandra-to-scylla-migration-process%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="../../using-scylla/migrate-scylla.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Migrate to ScyllaDB
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="../../using-scylla/cassandra-compatibility.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />ScyllaDB and Apache Cassandra Compatibility
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Apache Cassandra to Scylla Migration Process&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-6.0/operating-scylla/procedures/cassandra-to-scylla-migration-process%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/operating-scylla/procedures/cassandra-to-scylla-migration-process.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">Apache Cassandra to Scylla Migration Process</a><ul>
+<li><a class="reference internal" href="#procedure">Procedure</a></li>
+<li><a class="reference internal" href="#failure-handling">Failure Handling</a></li>
+<li><a class="reference internal" href="#notes-limitations-and-known-issues">Notes, Limitations and Known Issues</a><ul>
+<li><a class="reference internal" href="#counters">Counters</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                6.0
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="../../../stable/operating-scylla/procedures/cassandra-to-scylla-migration-process.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-6.1/operating-scylla/procedures/cassandra-to-scylla-migration-process.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="cassandra-to-scylla-migration-process.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.4/operating-scylla/procedures/cassandra-to-scylla-migration-process.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.2/operating-scylla/procedures/cassandra-to-scylla-migration-process.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.1/operating-scylla/procedures/cassandra-to-scylla-migration-process.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../../getting-started/index.html">Getting Started</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../getting-started/install-scylla/index.html">Install ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/launch-on-aws.html">Launch ScyllaDB on AWS</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/launch-on-gcp.html">Launch ScyllaDB on GCP</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/launch-on-azure.html">Launch ScyllaDB on Azure</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/install-on-linux.html">Install ScyllaDB Linux Packages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/unified-installer.html">Install ScyllaDB Without root Privileges</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/disable-housekeeping.html">ScyllaDB Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/dev-mod.html">ScyllaDB Developer Mode</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/configure.html">Configure ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/config-commands.html">ScyllaDB Configuration Reference</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/os-support.html">OS Support by Linux Distributions and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/cloud-instance-recommendations.html">Cloud Instance Recommendations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/scylla-in-a-shared-environment.html">ScyllaDB in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 current has-children"><a class="reference internal" href="../../using-scylla/migrate-scylla.html">Migrate to ScyllaDB</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Migration Process from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/cassandra-compatibility.html">Scylla and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../using-scylla/integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-spark.html">Integrate Scylla with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-kairos.html">Integrate Scylla with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-presto.html">Integrate ScyllaDB with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-elasticsearch.html">Integrate Scylla with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-k8.html">Integrate Scylla with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-janus.html">Integrate Scylla with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-datadog.html">Integrate Scylla with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-kafka.html">Integrate Scylla with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-iota.html">Integrate Scylla with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-spring.html">Integrate Scylla with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-ansible.html">Install Scylla with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-databricks.html">Integrate Scylla with Databricks</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-jaeger.html">Integrate Scylla with Jaeger Server</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-mindsdb.html">Integrate Scylla with MindsDB</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">ScyllaDB for Administrators</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../admin.html">Administration Guide</a></li>
+<li class="toctree-l2 current has-children"><a class="reference internal" href="index.html">Procedures</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../benchmarking-scylla.html">Benchmarking Scylla</a></li>
+<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">Migrate from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../security/index.html">Security</a><input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../security/security-checklist.html">ScyllaDB Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/create-superuser.html">Creating a Custom Superuser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/certificate-authentication.html">Certificate-based Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../security/saslauthd.html">Configure SaslauthdAuthenticator</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../rest.html">Admin REST API</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/scylla-sstable.html">Scylla SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/scylla-types.html">Scylla Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/sstablemetadata.html">SSTableMetadata</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/logging.html">Scylla Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/virtual-tables.html">Virtual Tables</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/select-from-mutation-fragments.html">Reading mutation fragments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/maintenance-socket.html">Maintenance socket</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/maintenance-mode.html">Maintenance mode</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/scylladb-versioning.html">ScyllaDB Versioning</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/upgrade-opensource/index.html">ScyllaDB Open Source Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/upgrade-to-enterprise/index.html">ScyllaDB Open Source to ScyllaDB Enterprise Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/ami-upgrade.html">ScyllaDB Image</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html">ScyllaDB Enterprise</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../system-configuration/snitch.html">ScyllaDB Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../diagnostics.html">ScyllaDB Diagnostic Tools</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../using-scylla/index.html">ScyllaDB for Developers</a><input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/index.html">Develop with ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">Tutorials and Example Projects</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/learn-resources/index.html">Learn to Use ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../using-scylla/alternator/index.html">ScyllaDB Alternator</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../using-scylla/features.html">ScyllaDB Features</a><input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/lwt.html">Lightweight Transactions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/local-secondary-indexes.html">Local Secondary Indexes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/materialized-views.html">Materialized Views</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/counters.html">Counters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/cdc/index.html">Change Data Capture</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/workload-attributes.html">Workload Attributes</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../using-scylla/drivers/index.html">ScyllaDB Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/drivers/cql-drivers/index.html">Scylla CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/drivers/dynamo-drivers/index.html">Scylla DynamoDB Drivers</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../cql/index.html">CQL Reference</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/ddl.html">Data Definition</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../cql/dml.html">Data Manipulation</a><input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/select.html">SELECT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/insert.html">INSERT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/update.html">UPDATE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/delete.html">DELETE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/batch.html">BATCH</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/functions.html">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/wasm.html">Wasm support for user-defined functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/service-levels.html">Service Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../architecture/index.html">ScyllaDB Architecture</a><input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/tablets.html">Data Distribution with Tablets</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/ringarchitecture/index.html">ScyllaDB Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/architecture-fault-tolerance.html">ScyllaDB Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../architecture/anti-entropy/index.html">ScyllaDB Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/anti-entropy/hinted-handoff.html">Scylla Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/anti-entropy/read-repair.html">Scylla Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="maintenance/repair.html">Scylla Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../architecture/sstable/index.html">SSTable</a><input class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/sstable/sstable2/index.html">ScyllaDB SSTable - 2.x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/sstable/sstable3/index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../troubleshooting/index.html">Troubleshooting ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/report-scylla-problem.html">Report a Scylla problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/startup/index.html">ScyllaDB Startup</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/scylla-wont-start.html">Scylla will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/python-error-no-module-named-yaml.html">Scylla Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/upgrade/index.html">Upgrade</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/missing-dotmount-files.html">Inaccessible configuration files after ScyllaDB upgrade</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/handling-node-failures.html">Handling Node Failures</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-add-remove-replace.html">Failure to Add, Remove, or Replace a Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/nodetool-memory-read-timeout.html">SocketTimeoutException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-schema-sync.html">Failed Schema Sync</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/large-partition-table.html">Scylla Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/large-rows-large-cells-tables.html">Scylla Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-update-schema.html">Failure to Update the Schema</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/monitor/index.html">ScyllaDB Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../kb/index.html">Knowledge Base</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/consistency.html">Consistency in ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/custom-user.html">Run Scylla and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/customizing-cpuset.html">Customizing CPUSET</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/gossip.html">Gossip in Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/lwt-differences.html">How does Scylla LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/map-cpu.html">Map CPUs to Scylla Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/memory-usage.html">Scylla Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/ntp.html">NTP Configuration for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/posix.html">POSIX networking for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/quiz-administrators.html">Scylla consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/scylla-and-spark-integration.html">Scylla and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/scylla-limits-systemd.html">Increase Scylla resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/seed-nodes.html">Scylla Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/snapshots.html">Scylla Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/static-columns.html">Scylla payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/unresponsive-nodes.html">Scylla Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/use-perf.html">Using the perf utility with Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/yaml-address.html">Configure Scylla Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../reference/index.html">Reference</a><input class="toctree-checkbox" id="toctree-checkbox-30" name="toctree-checkbox-30" type="checkbox"/><label for="toctree-checkbox-30"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/aws-images.html">AWS Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/azure-images.html">Azure Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/gcp-images.html">GCP Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/configuration-parameters.html">Configuration Parameters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/glossary.html">Glossary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/limits.html">Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/api-reference.html">API Reference (BETA)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/metrics.html">Metrics (BETA)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">ScyllaDB FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contribute.html">Contribute to ScyllaDB</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-31" name="toctree-checkbox-31" type="checkbox"/><label for="toctree-checkbox-31"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../alternator/compatibility.html">ScyllaDB Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

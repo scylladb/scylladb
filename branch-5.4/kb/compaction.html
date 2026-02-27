@@ -1,0 +1,1125 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             Compaction | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/kb/compaction.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                Knowledge Base
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">Compaction</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <section id="compaction">
+<h1>Compaction<a class="headerlink" href="#compaction" title="Link to this heading">¶</a></h1>
+<p>This document gives a high level overview of Compaction, focusing on what compaction is, and how it works. There is a different document that covers the <a class="reference internal" href="../cql/compaction.html"><span class="doc">CQL syntax</span></a> for setting a compaction strategy. There is also another document, <a class="reference internal" href="../architecture/compaction/compaction-strategies.html"><span class="doc">Compaction Strategy Matrix</span></a>, that covers how to decide which strategy works best.</p>
+<section id="how-scylla-writes-data">
+<h2>How Scylla Writes Data<a class="headerlink" href="#how-scylla-writes-data" title="Link to this heading">¶</a></h2>
+<p>Scylla’s write path follows the well-known <strong>Log Structured Merge (LSM)</strong> design for efficient writes that are immediately available for reads. Scylla is not the first project to use this method. Popular projects to use this method include Lucene Search Engine, Google BigTable, and Apache Cassandra.</p>
+<p>Scylla writes its updates to a <a class="reference internal" href="../reference/glossary.html#term-MemTable"><span class="xref std std-term">memory table (MemTable)</span></a>, and when that becomes too big, it is flushed to a new file. This file is sorted to make it easy to search and later merge. This is why the tables are known as Sorted String Tables or <a class="reference internal" href="../reference/glossary.html#term-SSTable"><span class="xref std std-term">SSTables</span></a>.</p>
+<img alt="../_images/write-path-image-memtable-sstable.png" src="../_images/write-path-image-memtable-sstable.png" />
+<p>In time, two major problems start to appear. First, data in one SSTable which is later modified or deleted in another SSTable wastes space as both tables are present in the system. Second, when data is split across many SSTables, read requests are processed slower as many SSTables need to be read. Scylla mitigates the second problem by using a bloom filter and other techniques to avoid reading from SSTables that do not include the desired partition. However, as the number of SSTables grows, inevitably so do the number of disk blocks from which we need to read on every read query. For these reasons, as soon as enough SSTables have accumulated, Scylla performs a <a class="reference internal" href="../reference/glossary.html#term-Compaction"><span class="xref std std-term">compaction</span></a>.</p>
+</section>
+<section id="compaction-overview">
+<h2>Compaction Overview<a class="headerlink" href="#compaction-overview" title="Link to this heading">¶</a></h2>
+<p>Compaction merges several SSTables into new SSTable(s) which contain(s) only the live data from the input SSTables. Merging several sorted files to get a sorted result is an efficient process, and this is the main reason why SSTables are kept sorted.</p>
+<p>There are two types of compactions:</p>
+<ul class="simple">
+<li><dl class="simple">
+<dt>Minor Compaction</dt><dd><p>Scylla automatically triggers a compaction of some SSTables, according to a <a class="reference internal" href="../reference/glossary.html#term-Compaction-Strategy"><span class="xref std std-term">compaction strategy</span></a> (as described below). This is the recommended method.</p>
+</dd>
+</dl>
+</li>
+<li><dl class="simple">
+<dt>Major Compaction</dt><dd><p>A user triggers (using nodetool) a compaction over all SSTables, merging the individual tables according to the selected compaction strategy.</p>
+</dd>
+</dl>
+</li>
+</ul>
+<div class="admonition caution">
+<p class="admonition-title">Caution</p>
+<p>It is always best to allow Scylla to automatically run minor compactions. Major compactions can exhaust resources, increase operational costs, and take up valuable disk space. This requires you to have 50% more disk space than your data unless you are using <a class="reference internal" href="#incremental-compaction-strategy-ics"><span class="std std-ref">Incremental compaction strategy (ICS)</span></a>.</p>
+</div>
+</section>
+<section id="view-compaction-statistics">
+<h2>View Compaction Statistics<a class="headerlink" href="#view-compaction-statistics" title="Link to this heading">¶</a></h2>
+<p>Scylla has tools you can use to see the status of your compactions. These include nodetool (<a class="reference internal" href="../operating-scylla/nodetool-commands/compactionhistory.html"><span class="doc">compactionhistory</span></a>  and <a class="reference internal" href="../operating-scylla/nodetool-commands/compactionstats.html"><span class="doc">compactionstats</span></a>)  and the Grafana dashboards which are part of the <a class="reference external" href="https://monitoring.docs.scylladb.com/">Scylla Monitoring Stack</a> which display the compaction statistics on a per cluster and per node basis.  Compaction errors can be seen in the <a class="reference external" href="https://manager.docs.scylladb.com/stable/config/scylla-manager-config.html">logs</a>.</p>
+</section>
+<section id="compaction-strategy">
+<h2>Compaction strategy<a class="headerlink" href="#compaction-strategy" title="Link to this heading">¶</a></h2>
+<p>A compaction strategy is what determines which of the SSTables will be compacted, and when. The following compaction strategies are available and are described in greater detail below. For a matrix which compares each strategy to its workload, refer to <a class="reference internal" href="../architecture/compaction/compaction-strategies.html"><span class="doc">Compaction Strategy Matrix</span></a></p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#id1">Size-tiered compaction strategy (STCS)</a> - (default setting) triggered when the system has enough similarly sized SSTables.</p></li>
+<li><p><a class="reference internal" href="#id2">Leveled compaction strategy (LCS)</a> - the system uses small, fixed-size (by default 160 MB) SSTables divided into different levels and  lowers both Read and Space Amplification.</p></li>
+<li><p><a class="reference internal" href="#incremental-compaction-strategy-ics"><span class="std std-ref">Incremental compaction strategy (ICS)</span></a> - <span class="label label--tip">ScyllaDB Enterprise</span> Uses runs of sorted, fixed size (by default 1 GB) SSTables in a similar way that LCS does, organized into size-tiers, similar to STCS size-tiers. If you are an Enterprise customer ICS is an updated strategy meant to replace STCS. It has the same read and write amplification, but has lower space amplification due to the reduction of temporary space overhead is reduced to a constant manageable level.</p></li>
+<li><p><a class="reference internal" href="#time-window-compaction-strategy-twcs">Time-window compaction strategy (TWCS)</a> - designed for time series data and puts data in time order. TWCS uses STCS to prevent accumulating  SSTables in a window not yet closed. When the window closes, TWCS works towards reducing the SSTables in a time window to one.</p></li>
+</ul>
+<section id="how-to-set-a-compaction-strategy">
+<h3>How to Set a Compaction Strategy<a class="headerlink" href="#how-to-set-a-compaction-strategy" title="Link to this heading">¶</a></h3>
+<p>Compaction strategies are set as part of the <code class="docutils literal notranslate"><span class="pre">CREATE</span></code> or <code class="docutils literal notranslate"><span class="pre">ALTER</span></code> statement when creating or altering tables. Refer to the <a class="reference internal" href="../cql/compaction.html"><span class="doc">CQL syntax</span></a> for details.</p>
+<div class="admonition caution">
+<p class="admonition-title">Caution</p>
+<p>Changing the parameters for compaction strategies or changing from one strategy to another (using the <code class="docutils literal notranslate"><span class="pre">ALTER</span></code> statement) can create issues. See <a class="reference internal" href="#changing-compaction-strategies-or-properties">Changing Compaction Strategies or Properties</a> for more information.</p>
+</div>
+</section>
+</section>
+<section id="size-tiered-compaction-strategy-stcs">
+<span id="id1"></span><h2>Size-tiered Compaction Strategy (STCS)<a class="headerlink" href="#size-tiered-compaction-strategy-stcs" title="Link to this heading">¶</a></h2>
+<p>The premise of <code class="docutils literal notranslate"><span class="pre">SizeTieredCompactionStrategy</span></code> (STCS) is to merge SSTables of approximately the same size.
+All SSTables are put into different buckets depending on their size.
+An SSTable is added to an existing bucket if size of the SSTable is within the parameters: <a class="reference internal" href="../cql/compaction.html#stcs-options"><span class="std std-ref">bucket_low</span></a> and <a class="reference internal" href="../cql/compaction.html#stcs-options"><span class="std std-ref">bucket_high</span></a>, which is based on calculating the current average size of the SSTables already in the bucket.</p>
+<p>This will create several buckets and when the threshold number of tables(<code class="docutils literal notranslate"><span class="pre">min_threshold</span></code>) within a bucket is reached, the tables in that bucket are compacted.
+Following the compaction, the tables are merged, resulting in one larger SSTable. As time progresses and several large SSTables have accumulated, they will be merged to form one even-larger SSTable and so on.</p>
+<p>This means that the system has several size tiers/buckets (small SSTables, large SSTables, even-larger SSTables) and in each tier, there is roughly the same number of SSTables. When one tier is full (the threshold has been reached), the system merges all its tables to create one SSTable which falls roughly  into the next size tier.</p>
+<img alt="../_images/compaction-size-tiered.png" src="../_images/compaction-size-tiered.png" />
+</section>
+<section id="leveled-compaction-strategy-lcs">
+<span id="id2"></span><h2>Leveled Compaction Strategy (LCS)<a class="headerlink" href="#leveled-compaction-strategy-lcs" title="Link to this heading">¶</a></h2>
+<p>Leveled Compaction uses small, fixed-size (by default 160 MB) SSTables divided into different levels. Each level represents a run of a number of SSTables.</p>
+<section id="a-run-of-sstables">
+<h3>A run of SSTables<a class="headerlink" href="#a-run-of-sstables" title="Link to this heading">¶</a></h3>
+<p>A <strong>run</strong> is a <a class="reference internal" href="../reference/glossary.html#term-Log-structured-merge-LSM"><span class="xref std std-term">log-structured-merge (LSM)</span></a> term for a large SSTable split into several smaller SSTables. In other words, a run is a collection of SSTables with non-overlapping key ranges. The benefit of a run is that when a compaction is done, only parts of it (small individual SSTables) are compacted and deleted. Following a compaction, SSTables are smaller and there is no need to compact a huge SSTable all at once.</p>
+<img alt="../_images/compaction-leveled.png" src="../_images/compaction-leveled.png" />
+<p>The compaction method works as follows:</p>
+<ol class="arabic simple">
+<li><p>New SSTables (created from MemTables) are created in <strong>Level 0</strong>. All other levels are each a run of SSTables, of exponentially increasing size as follows:</p>
+<ul class="simple">
+<li><p><strong>Level 1</strong> is a run of 10 SSTables (160 MB each table * 10)</p></li>
+<li><p><strong>Level 2</strong> is a run of 100 SSTables (160 MB each table * 100), etc.</p></li>
+</ul>
+</li>
+<li><p>When there are 4 SSTables in Level 0, they are compacted with the 10 SSTables in Level 1. This compaction works as follows:</p>
+<ul class="simple">
+<li><p>Read in parallel 4 SSTables in level 0 and 10 in Level 1.</p></li>
+<li><p>Write new SSTables for Level 1 (replacing the 10 old tables which were compacted).</p></li>
+<li><p>Instead of creating one large SSTable, several SSTables are written as follows: One SSTable is created. When it reaches the size limit (160 MB), a new table starts. As the data is merged on the sorted keys, this generates a run (see <a class="reference internal" href="#a-run-of-sstables">A run of SSTables</a>), with non-overlapping key ranges.</p></li>
+</ul>
+</li>
+<li><p>If after the compaction from Level 0 into Level 1, if there are at least 10 SSTables in Level 1, the excess SSTables from Level 1 are compacted and put into Level 2 as follows:</p>
+<ul class="simple">
+<li><p>Take one SSTable from Level 1 (this SSTable will be deleted after the compaction)</p></li>
+<li><p>Look at this SSTable’s key range, and find all SSTables in Level 2 which overlap with it. Typically, there are about 12 of these (the Level 1 SSTable spans roughly 1/10th of the keys, while each Level 2 SSTable spans roughly 1/100th of the keys, so 10 Level 2 SSTables will overlap the Level 1 SSTable’s range, plus two more on the edges).</p></li>
+<li><p>As before, compact the 1 SSTable from Level 1 and the 12 SSTables from Level 2 and create new SSTables in Level 2 (and delete the 1+12 original SSTables).</p></li>
+<li><p>If after this compaction of Level 1 into Level 2, there are excess SSTables in Level 2 (as Level 2 can only take 100 tables), merge them into Level 3.</p></li>
+</ul>
+</li>
+</ol>
+</section>
+<section id="temporary-fallback-to-stcs">
+<span id="id3"></span><h3>Temporary Fallback to STCS<a class="headerlink" href="#temporary-fallback-to-stcs" title="Link to this heading">¶</a></h3>
+<p>When new data is written very quickly, the Leveled Compaction strategy may be temporarily unable to keep up with the demand. This can result in an accumulation of a large number of SSTables in L0 which in turn create very slow reads as all read requests read from all SSTables in L0. So as an emergency measure, when the number of SSTables in L0 grows to 32, LCS falls back to STCS to quickly reduce the number of SSTables in L0. Eventually, LCS will move this data again to fixed-sized SSTables in higher levels.</p>
+<p>Likewise, when <a class="reference internal" href="../reference/glossary.html#term-Bootstrap"><span class="xref std std-term">bootstrapping</span></a> a new node, SSTables are streamed from other nodes. The level of the remote SSTable is kept to avoid many compactions until after the bootstrap is done. During the bootstrap, the new node receives regular write requests while it is streaming the data from the remote node. Just like any other write, these writes are flushed to L0. If Scylla did an LCS compaction on these L0 SSTables and created SSTables in higher level, this could have blocked the remote SSTables from going to the correct level (remember that SSTables in a run must not have overlapping key ranges). To remedy this from happening, Scylla compacts the tables using STCS only in L0 until the bootstrap process is complete. Once done, all resumes as normal under LCS.</p>
+</section>
+</section>
+<section id="incremental-compaction-strategy-ics-scylladb-enterprise">
+<span id="incremental-compaction-strategy-ics"></span><h2>Incremental Compaction Strategy (ICS) <span class="label label--tip">ScyllaDB Enterprise</span><a class="headerlink" href="#incremental-compaction-strategy-ics-scylladb-enterprise" title="Link to this heading">¶</a></h2>
+<p>ICS is only available in ScyllaDB Enterprise. See the <a class="reference external" href="https://enterprise.docs.scylladb.com/stable/kb/compaction.html">ScyllaDB Enetrpise documentation</a> for details.</p>
+</section>
+<section id="time-window-compaction-strategy-twcs">
+<span id="time-window-compactionstrategy-twcs"></span><h2>Time-window Compaction Strategy (TWCS)<a class="headerlink" href="#time-window-compaction-strategy-twcs" title="Link to this heading">¶</a></h2>
+<p>Time-Window Compaction Strategy is designed for handling time series workloads. It compacts SSTables within each time window using <a class="reference internal" href="#id1">Size-tiered Compaction Strategy (STCS)</a>. SSTables from different time windows are never compacted together.</p>
+<div class="admonition caution">
+<p class="admonition-title">Caution</p>
+<ul class="simple">
+<li><p>We strongly recommend using a single TTL value for any given table.</p></li>
+<li><p>This means sticking to the default time to live as specified in the table’s schema.</p></li>
+<li><p>Using multiple TTL values for a given table may lead to inefficiency when purging expired data, because an SSTable will remain until <strong>all</strong> of its data is expired.</p></li>
+<li><p>Tombstone compaction can be enabled to remove data from partially expired SSTables, but this creates additional WA (write amplification).</p></li>
+</ul>
+</div>
+<div class="admonition caution">
+<p class="admonition-title">Caution</p>
+<p>Avoid overwriting data and deleting data explicitly at all costs, as this can potentially block an expired SSTable from being purged, due to the checks that are performed to avoid data resurrection.</p>
+</div>
+<p>The strategy works as follows:</p>
+<ol class="arabic simple">
+<li><p>A time window is configured. The window is determined by the compaction window size <a class="reference internal" href="../cql/compaction.html#twcs-options"><span class="std std-ref">compaction_window_size</span></a>  and the time unit (<a class="reference internal" href="../cql/compaction.html#twcs-options"><span class="std std-ref">compaction_window_unit</span></a>).</p></li>
+<li><p>SSTables created within the time window are compacted using <a class="reference internal" href="#id1">Size-tiered Compaction Strategy (STCS)</a>.</p></li>
+<li><p>Once a time window ends, take all SSTables which were created during the time window and compact the data into one SSTable.</p></li>
+<li><p>The final resulting SSTable is never compacted with other time-windows’ SSTables.</p></li>
+</ol>
+<p>With this explanation, if the time window was for one day, at the end of the day, the SSTables accumulated for that day only would be compacted into one SSTable.</p>
+<section id="when-time-series-data-gets-out-of-order">
+<h3>When time-series data gets out of order<a class="headerlink" href="#when-time-series-data-gets-out-of-order" title="Link to this heading">¶</a></h3>
+<p>The primary motivation for TWCS is to separate data on disk by timestamp and to allow fully expired SSTables to drop more efficiently. This efficiency stops when data is written to SSTables out of order, with new data and old data in the same SSTable. Out of order data can appear in the same SSTable in two ways:</p>
+<ul class="simple">
+<li><p>If the user mixes old data and new data in the traditional write path, the data is commingled in the MemTables and flushed into the same SSTable, where it will remain commingled.</p></li>
+<li><p>If the user’s read requests for old data causes read repairs that pull the old data into the current MemTable. The data is commingled in the MemTables and flushed into the same SSTable, where it will remain commingled.</p></li>
+</ul>
+<p>While TWCS tries to minimize the impact of commingled data, users should attempt to avoid this behavior. Specifically, users should avoid queries that explicitly set the timestamp. It is recommended to run frequent repairs (which streams data in such a way that it does not become commingled), and disable background read repair by setting the table’s <a class="reference internal" href="../cql/ddl.html#create-table-general-options"><span class="std std-ref">read_repair_chance</span></a> and <a class="reference internal" href="../cql/ddl.html#create-table-general-options"><span class="std std-ref">dclocal_read_repair_chance</span></a> to <code class="docutils literal notranslate"><span class="pre">0</span></code>.</p>
+</section>
+</section>
+<section id="changing-compaction-strategies-or-properties">
+<h2>Changing Compaction Strategies or Properties<a class="headerlink" href="#changing-compaction-strategies-or-properties" title="Link to this heading">¶</a></h2>
+<section id="changing-the-threshold-in-lcs">
+<h3>Changing the Threshold in LCS<a class="headerlink" href="#changing-the-threshold-in-lcs" title="Link to this heading">¶</a></h3>
+<p>There can be cases where, following a compaction, tables are created in a level which are not compacted for a considerable amount of time.
+For example, a user has tables which are using LCS. There are 5 levels of tables at present and the <code class="docutils literal notranslate"><span class="pre">SSTable_size_in_mb</span></code> is 5MB. The user changes this threshold to 160MB.  Following this change, there is only enough data to actually get an L3 on the same node. The data in the SSTables in L4 will get starved and will not get compacted. To avoid this, LCS tries to include those starved high level SSTables in future compactions. If after been 25 compaction rounds, a level was not compacted, it is brought in to the next compaction.</p>
+</section>
+<section id="changing-to-time-window-compaction-strategy-twcs">
+<h3>Changing to Time Window Compaction Strategy (TWCS)<a class="headerlink" href="#changing-to-time-window-compaction-strategy-twcs" title="Link to this heading">¶</a></h3>
+<p>If you want to enable TWCS on existing data, you may consider running a major compaction first, placing all existing data into a single (old) window. Subsequent newer writes will then create typical SSTables as expected.</p>
+</section>
+<section id="changing-the-time-window-in-twcs">
+<h3>Changing the Time Window in TWCS<a class="headerlink" href="#changing-the-time-window-in-twcs" title="Link to this heading">¶</a></h3>
+<p>If you want to change the time window you can do so, but keep in mind that this change may trigger additional compactions as adjacent windows are joined together. If the window size is decreased (for example, from 24 hours to 12 hours), then the existing SSTables will not be modified. Note as well that TWCS can not split existing SSTables into multiple windows.</p>
+</section>
+</section>
+<section id="which-strategy-is-best-to-use">
+<h2>Which Strategy is best to use<a class="headerlink" href="#which-strategy-is-best-to-use" title="Link to this heading">¶</a></h2>
+<p>Use the table in <a class="reference internal" href="../architecture/compaction/compaction-strategies.html#which-strategy-is-best"><span class="std std-ref">Which strategy is best</span></a> to determine the right strategy for your needs.</p>
+</section>
+<section id="references">
+<h2>References<a class="headerlink" href="#references" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="../cql/compaction.html"><span class="doc">CQL Reference for Compaction</span></a></p></li>
+<li><p><a class="reference internal" href="../architecture/compaction/compaction-strategies.html"><span class="doc">How to Choose a Compaction Strategy</span></a>.</p></li>
+<li><p><a class="reference external" href="https://www.scylladb.com/2018/01/31/compaction-series-leveled-compaction/">Blog: Scylla’s Compaction Strategies Series: Write Amplification in Leveled Compaction</a></p></li>
+<li><p><a class="reference external" href="https://www.scylladb.com/2018/01/17/compaction-series-space-amplification/">Blog: Scylla’s Compaction Strategies Series: Space Amplification in Size-Tiered Compaction</a></p></li>
+<li><p>Size Tiered: <a class="reference external" href="https://shrikantbang.wordpress.com/2014/04/22/size-tiered-compaction-strategy-in-apache-cassandra/">Shrikant Bang’s Notes</a></p></li>
+</ul>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Compaction&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.4/kb/compaction%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="cdc-experimental-upgrade.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Upgrading from experimental CDC
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="consistency.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />Consistency in ScyllaDB
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Compaction&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.4/kb/compaction%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/kb/compaction.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">Compaction</a><ul>
+<li><a class="reference internal" href="#how-scylla-writes-data">How Scylla Writes Data</a></li>
+<li><a class="reference internal" href="#compaction-overview">Compaction Overview</a></li>
+<li><a class="reference internal" href="#view-compaction-statistics">View Compaction Statistics</a></li>
+<li><a class="reference internal" href="#compaction-strategy">Compaction strategy</a><ul>
+<li><a class="reference internal" href="#how-to-set-a-compaction-strategy">How to Set a Compaction Strategy</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#size-tiered-compaction-strategy-stcs">Size-tiered Compaction Strategy (STCS)</a></li>
+<li><a class="reference internal" href="#leveled-compaction-strategy-lcs">Leveled Compaction Strategy (LCS)</a><ul>
+<li><a class="reference internal" href="#a-run-of-sstables">A run of SSTables</a></li>
+<li><a class="reference internal" href="#temporary-fallback-to-stcs">Temporary Fallback to STCS</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#incremental-compaction-strategy-ics-scylladb-enterprise">Incremental Compaction Strategy (ICS) <span class="label label--tip">ScyllaDB Enterprise</span></a></li>
+<li><a class="reference internal" href="#time-window-compaction-strategy-twcs">Time-window Compaction Strategy (TWCS)</a><ul>
+<li><a class="reference internal" href="#when-time-series-data-gets-out-of-order">When time-series data gets out of order</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#changing-compaction-strategies-or-properties">Changing Compaction Strategies or Properties</a><ul>
+<li><a class="reference internal" href="#changing-the-threshold-in-lcs">Changing the Threshold in LCS</a></li>
+<li><a class="reference internal" href="#changing-to-time-window-compaction-strategy-twcs">Changing to Time Window Compaction Strategy (TWCS)</a></li>
+<li><a class="reference internal" href="#changing-the-time-window-in-twcs">Changing the Time Window in TWCS</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#which-strategy-is-best-to-use">Which Strategy is best to use</a></li>
+<li><a class="reference internal" href="#references">References</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                5.4
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="../../stable/kb/compaction.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-6.1/kb/compaction.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-6.0/kb/compaction.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="compaction.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.2/kb/compaction.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.1/kb/compaction.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../getting-started/index.html">Getting Started</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../getting-started/install-scylla/index.html">Install ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/launch-on-aws.html">Launch ScyllaDB on AWS</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/launch-on-gcp.html">Launch ScyllaDB on GCP</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/launch-on-azure.html">Launch ScyllaDB on Azure</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/install-on-linux.html">Install ScyllaDB Linux Packages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/unified-installer.html">Install ScyllaDB Without root Privileges</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/disable-housekeeping.html">ScyllaDB Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/dev-mod.html">ScyllaDB Developer Mode</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/configure.html">Configure ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/config-commands.html">ScyllaDB Configuration Reference</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/os-support.html">OS Support by Linux Distributions and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/cloud-instance-recommendations.html">Cloud Instance Recommendations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/scylla-in-a-shared-environment.html">ScyllaDB in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/migrate-scylla.html">Migrate to ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migration Process from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/cassandra-compatibility.html">Scylla and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-spark.html">Integrate Scylla with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-kairos.html">Integrate Scylla with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-presto.html">Integrate ScyllaDB with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-elasticsearch.html">Integrate Scylla with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-k8.html">Integrate Scylla with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-janus.html">Integrate Scylla with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-datadog.html">Integrate Scylla with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-kafka.html">Integrate Scylla with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-iota.html">Integrate Scylla with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-spring.html">Integrate Scylla with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-ansible.html">Install Scylla with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-databricks.html">Integrate Scylla with Databricks</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-jaeger.html">Integrate Scylla with Jaeger Server</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-mindsdb.html">Integrate Scylla with MindsDB</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../operating-scylla/index.html">ScyllaDB for Administrators</a><input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/admin.html">Administration Guide</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/procedures/index.html">Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/benchmarking-scylla.html">Benchmarking Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migrate from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/security/index.html">Security</a><input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/security-checklist.html">ScyllaDB Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/create-superuser.html">Creating a Custom Superuser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/certificate-authentication.html">Certificate-based Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/saslauthd.html">Configure SaslauthdAuthenticator</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/rest.html">REST</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/scylla-sstable.html">Scylla SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/scylla-types.html">Scylla Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstable2json.html">SSTable2json</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstablemetadata.html">SSTableMetadata</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/logging.html">Scylla Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/virtual-tables.html">Virtual Tables</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/select-from-mutation-fragments.html">SELECT * FROM MUTATION_FRAGMENTS() Statement</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/scylladb-versioning.html">ScyllaDB Versioning</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/upgrade-opensource/index.html">ScyllaDB Open Source Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/upgrade-to-enterprise/index.html">ScyllaDB Open Source to ScyllaDB Enterprise Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/ami-upgrade.html">ScyllaDB Image</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html">ScyllaDB Enterprise</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/system-configuration/snitch.html">ScyllaDB Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/diagnostics.html">ScyllaDB Diagnostic Tools</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../using-scylla/index.html">ScyllaDB for Developers</a><input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/learn.html">Learn To Use ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/">ScyllaDB University</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/available-courses/">Course catalog</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/scylla-essentials-overview/">ScyllaDB Essentials</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/">Basic Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/">Advanced Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/">MMS - Learn by Example</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://iot.scylladb.com/">Care-Pet an IoT Use Case and Example</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../using-scylla/alternator/index.html">Scylla Alternator</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/features.html">Scylla Features</a><input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/features-open-source.html">Scylla Open Source Features</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/features-ent.html">Scylla Enterprise Features</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/drivers/index.html">Scylla Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/drivers/cql-drivers/index.html">Scylla CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/drivers/dynamo-drivers/index.html">Scylla DynamoDB Drivers</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../using-scylla/workload-attributes.html">Workload Attributes</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../cql/index.html">CQL Reference</a><input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../cql/cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/ddl.html">Data Definition</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cql/dml.html">Data Manipulation</a><input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/select.html">SELECT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/insert.html">INSERT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/update.html">UPDATE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/delete.html">DELETE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/batch.html">BATCH</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/functions.html">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/wasm.html">Wasm support for user-defined functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../architecture/index.html">ScyllaDB Architecture</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/ringarchitecture/index.html">ScyllaDB Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/architecture-fault-tolerance.html">ScyllaDB Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../architecture/anti-entropy/index.html">ScyllaDB Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/anti-entropy/hinted-handoff.html">Scylla Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/anti-entropy/read-repair.html">Scylla Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/maintenance/repair.html">Scylla Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../architecture/sstable/index.html">SSTable</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/sstable/sstable2/index.html">ScyllaDB SSTable - 2.x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/sstable/sstable3/index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../troubleshooting/index.html">Troubleshooting ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/report-scylla-problem.html">Report a Scylla problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/startup/index.html">ScyllaDB Startup</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/scylla-wont-start.html">Scylla will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/python-error-no-module-named-yaml.html">Scylla Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/upgrade/index.html">Upgrade</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/missing-dotmount-files.html">Inaccessible configuration files after ScyllaDB upgrade</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/nodetool-memory-read-timeout.html">SocketTimeoutException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-schema-sync.html">Failed Schema Sync</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/large-partition-table.html">Scylla Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/large-rows-large-cells-tables.html">Scylla Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/monitor/index.html">ScyllaDB Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">Knowledge Base</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-30" name="toctree-checkbox-30" type="checkbox"/><label for="toctree-checkbox-30"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="consistency.html">Consistency in ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="custom-user.html">Run Scylla and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="customizing-cpuset.html">Customizing CPUSET</a></li>
+<li class="toctree-l2"><a class="reference internal" href="decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gossip.html">Gossip in Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="lwt-differences.html">How does Scylla LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="map-cpu.html">Map CPUs to Scylla Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="memory-usage.html">Scylla Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ntp.html">NTP Configuration for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="posix.html">POSIX networking for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="quiz-administrators.html">Scylla consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scylla-and-spark-integration.html">Scylla and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scylla-limits-systemd.html">Increase Scylla resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="seed-nodes.html">Scylla Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="snapshots.html">Scylla Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="static-columns.html">Scylla payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="unresponsive-nodes.html">Scylla Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="use-perf.html">Using the perf utility with Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="yaml-address.html">Configure Scylla Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../reference/index.html">Reference</a><input class="toctree-checkbox" id="toctree-checkbox-31" name="toctree-checkbox-31" type="checkbox"/><label for="toctree-checkbox-31"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../reference/aws-images.html">AWS Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/configuration-parameters.html">Configuration Parameters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/glossary.html">Glossary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../reference/versions-matrix-enterprise-oss.html">ScyllaDB Enterprise vs. Open Source Matrix</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">ScyllaDB FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contribute.html">Contribute to ScyllaDB</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-32" name="toctree-checkbox-32" type="checkbox"/><label for="toctree-checkbox-32"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/compatibility.html">ScyllaDB Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

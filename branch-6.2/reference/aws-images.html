@@ -1,0 +1,1613 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             AWS Images | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/reference/aws-images.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                Reference
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">AWS Images</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <section id="aws-images">
+<h1>AWS Images<a class="headerlink" href="#aws-images" title="Link to this heading">¶</a></h1>
+<section id="id1">
+<h2>6.2.3<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<div class="sphinx_collapse docutils">
+<input checked="checked" class="sphinx_collapse__input" id="03ad0295-44ff-4d29-a7d4-cbf214f3d989" name="03ad0295-44ff-4d29-a7d4-cbf214f3d989" type="checkbox"><label class="sphinx_collapse__label" for="03ad0295-44ff-4d29-a7d4-cbf214f3d989"><i class="sphinx_collapse__icon"></i>View image details</label><div class="sphinx_collapse__content docutils">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Region</p></th>
+<th class="head"><p>x86 AMI ID</p></th>
+<th class="head"><p>Launch x86</p></th>
+<th class="head"><p>ARM AMI ID</p></th>
+<th class="head"><p>Launch ARM</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Asia Pacific (Hyderabad)</p></td>
+<td><p>ami-0c5503356d149aeb5</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-2#LaunchInstanceWizard:ami=ami-0c5503356d149aeb5">Node</a>  / <a class="reference external" href="https://ap-south-2.console.aws.amazon.com/cloudformation/home?region=ap-south-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c5503356d149aeb5">Cluster</a></p></td>
+<td><p>ami-0c3b648f9cafa4dd8</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-2#LaunchInstanceWizard:ami=ami-0c3b648f9cafa4dd8">Node</a>  / <a class="reference external" href="https://ap-south-2.console.aws.amazon.com/cloudformation/home?region=ap-south-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c3b648f9cafa4dd8">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Africa (Cape Town)</p></td>
+<td><p>ami-0acae10ac404d6471</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=af-south-1#LaunchInstanceWizard:ami=ami-0acae10ac404d6471">Node</a>  / <a class="reference external" href="https://af-south-1.console.aws.amazon.com/cloudformation/home?region=af-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0acae10ac404d6471">Cluster</a></p></td>
+<td><p>ami-0212c40473f2653f4</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=af-south-1#LaunchInstanceWizard:ami=ami-0212c40473f2653f4">Node</a>  / <a class="reference external" href="https://af-south-1.console.aws.amazon.com/cloudformation/home?region=af-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0212c40473f2653f4">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Mumbai)</p></td>
+<td><p>ami-069430b2f03e03d94</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-1#LaunchInstanceWizard:ami=ami-069430b2f03e03d94">Node</a>  / <a class="reference external" href="https://ap-south-1.console.aws.amazon.com/cloudformation/home?region=ap-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-069430b2f03e03d94">Cluster</a></p></td>
+<td><p>ami-09a17cdb5eabf8d63</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-1#LaunchInstanceWizard:ami=ami-09a17cdb5eabf8d63">Node</a>  / <a class="reference external" href="https://ap-south-1.console.aws.amazon.com/cloudformation/home?region=ap-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-09a17cdb5eabf8d63">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Stockholm)</p></td>
+<td><p>ami-03ccd44c39ece081c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-north-1#LaunchInstanceWizard:ami=ami-03ccd44c39ece081c">Node</a>  / <a class="reference external" href="https://eu-north-1.console.aws.amazon.com/cloudformation/home?region=eu-north-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-03ccd44c39ece081c">Cluster</a></p></td>
+<td><p>ami-0d3597980d763b4d5</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-north-1#LaunchInstanceWizard:ami=ami-0d3597980d763b4d5">Node</a>  / <a class="reference external" href="https://eu-north-1.console.aws.amazon.com/cloudformation/home?region=eu-north-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0d3597980d763b4d5">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (Paris)</p></td>
+<td><p>ami-0aabc250cad5f1f6e</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-3#LaunchInstanceWizard:ami=ami-0aabc250cad5f1f6e">Node</a>  / <a class="reference external" href="https://eu-west-3.console.aws.amazon.com/cloudformation/home?region=eu-west-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0aabc250cad5f1f6e">Cluster</a></p></td>
+<td><p>ami-0a72eb8082e2a6095</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-3#LaunchInstanceWizard:ami=ami-0a72eb8082e2a6095">Node</a>  / <a class="reference external" href="https://eu-west-3.console.aws.amazon.com/cloudformation/home?region=eu-west-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a72eb8082e2a6095">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Milan)</p></td>
+<td><p>ami-0a00048eb83f5578d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-south-1#LaunchInstanceWizard:ami=ami-0a00048eb83f5578d">Node</a>  / <a class="reference external" href="https://eu-south-1.console.aws.amazon.com/cloudformation/home?region=eu-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a00048eb83f5578d">Cluster</a></p></td>
+<td><p>ami-02fa925168676f81e</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-south-1#LaunchInstanceWizard:ami=ami-02fa925168676f81e">Node</a>  / <a class="reference external" href="https://eu-south-1.console.aws.amazon.com/cloudformation/home?region=eu-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-02fa925168676f81e">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (London)</p></td>
+<td><p>ami-03cd7f4be5ffb9f40</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-2#LaunchInstanceWizard:ami=ami-03cd7f4be5ffb9f40">Node</a>  / <a class="reference external" href="https://eu-west-2.console.aws.amazon.com/cloudformation/home?region=eu-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-03cd7f4be5ffb9f40">Cluster</a></p></td>
+<td><p>ami-0f2cb925e66f6fbbd</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-2#LaunchInstanceWizard:ami=ami-0f2cb925e66f6fbbd">Node</a>  / <a class="reference external" href="https://eu-west-2.console.aws.amazon.com/cloudformation/home?region=eu-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0f2cb925e66f6fbbd">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Ireland)</p></td>
+<td><p>ami-062faa721a0d5b39c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-1#LaunchInstanceWizard:ami=ami-062faa721a0d5b39c">Node</a>  / <a class="reference external" href="https://eu-west-1.console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-062faa721a0d5b39c">Cluster</a></p></td>
+<td><p>ami-07b194b2efe52244e</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-1#LaunchInstanceWizard:ami=ami-07b194b2efe52244e">Node</a>  / <a class="reference external" href="https://eu-west-1.console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-07b194b2efe52244e">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Osaka)</p></td>
+<td><p>ami-05553a285a66fe06d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-3#LaunchInstanceWizard:ami=ami-05553a285a66fe06d">Node</a>  / <a class="reference external" href="https://ap-northeast-3.console.aws.amazon.com/cloudformation/home?region=ap-northeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05553a285a66fe06d">Cluster</a></p></td>
+<td><p>ami-05ed899b22424cdd5</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-3#LaunchInstanceWizard:ami=ami-05ed899b22424cdd5">Node</a>  / <a class="reference external" href="https://ap-northeast-3.console.aws.amazon.com/cloudformation/home?region=ap-northeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05ed899b22424cdd5">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Seoul)</p></td>
+<td><p>ami-0a39ce5ed0c688cdb</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-2#LaunchInstanceWizard:ami=ami-0a39ce5ed0c688cdb">Node</a>  / <a class="reference external" href="https://ap-northeast-2.console.aws.amazon.com/cloudformation/home?region=ap-northeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a39ce5ed0c688cdb">Cluster</a></p></td>
+<td><p>ami-009d140df49132b3b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-2#LaunchInstanceWizard:ami=ami-009d140df49132b3b">Node</a>  / <a class="reference external" href="https://ap-northeast-2.console.aws.amazon.com/cloudformation/home?region=ap-northeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-009d140df49132b3b">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Middle East (Bahrain)</p></td>
+<td><p>ami-0db76d6404e1af64d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=me-south-1#LaunchInstanceWizard:ami=ami-0db76d6404e1af64d">Node</a>  / <a class="reference external" href="https://me-south-1.console.aws.amazon.com/cloudformation/home?region=me-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0db76d6404e1af64d">Cluster</a></p></td>
+<td><p>ami-0087ddf5e6589eb34</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=me-south-1#LaunchInstanceWizard:ami=ami-0087ddf5e6589eb34">Node</a>  / <a class="reference external" href="https://me-south-1.console.aws.amazon.com/cloudformation/home?region=me-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0087ddf5e6589eb34">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Tokyo)</p></td>
+<td><p>ami-06984712b1d4d2f71</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-1#LaunchInstanceWizard:ami=ami-06984712b1d4d2f71">Node</a>  / <a class="reference external" href="https://ap-northeast-1.console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-06984712b1d4d2f71">Cluster</a></p></td>
+<td><p>ami-06f56d5b49eacb28a</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-1#LaunchInstanceWizard:ami=ami-06f56d5b49eacb28a">Node</a>  / <a class="reference external" href="https://ap-northeast-1.console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-06f56d5b49eacb28a">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Israel (Tel Aviv)</p></td>
+<td><p>ami-0f1463c93f61b5342</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=il-central-1#LaunchInstanceWizard:ami=ami-0f1463c93f61b5342">Node</a>  / <a class="reference external" href="https://il-central-1.console.aws.amazon.com/cloudformation/home?region=il-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0f1463c93f61b5342">Cluster</a></p></td>
+<td><p>ami-0d071b35f4e388d20</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=il-central-1#LaunchInstanceWizard:ami=ami-0d071b35f4e388d20">Node</a>  / <a class="reference external" href="https://il-central-1.console.aws.amazon.com/cloudformation/home?region=il-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0d071b35f4e388d20">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Canada (Central)</p></td>
+<td><p>ami-0d36d383f7a125b57</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ca-central-1#LaunchInstanceWizard:ami=ami-0d36d383f7a125b57">Node</a>  / <a class="reference external" href="https://ca-central-1.console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0d36d383f7a125b57">Cluster</a></p></td>
+<td><p>ami-09b18a06e09921c02</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ca-central-1#LaunchInstanceWizard:ami=ami-09b18a06e09921c02">Node</a>  / <a class="reference external" href="https://ca-central-1.console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-09b18a06e09921c02">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>South America (Sao Paulo)</p></td>
+<td><p>ami-0fd72632353befc60</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=sa-east-1#LaunchInstanceWizard:ami=ami-0fd72632353befc60">Node</a>  / <a class="reference external" href="https://sa-east-1.console.aws.amazon.com/cloudformation/home?region=sa-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0fd72632353befc60">Cluster</a></p></td>
+<td><p>ami-0b0661c53016a88a5</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=sa-east-1#LaunchInstanceWizard:ami=ami-0b0661c53016a88a5">Node</a>  / <a class="reference external" href="https://sa-east-1.console.aws.amazon.com/cloudformation/home?region=sa-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0b0661c53016a88a5">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Hong Kong)</p></td>
+<td><p>ami-0c866099bd6de05d9</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-east-1#LaunchInstanceWizard:ami=ami-0c866099bd6de05d9">Node</a>  / <a class="reference external" href="https://ap-east-1.console.aws.amazon.com/cloudformation/home?region=ap-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c866099bd6de05d9">Cluster</a></p></td>
+<td><p>ami-0c3cb00ea43b4cdca</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-east-1#LaunchInstanceWizard:ami=ami-0c3cb00ea43b4cdca">Node</a>  / <a class="reference external" href="https://ap-east-1.console.aws.amazon.com/cloudformation/home?region=ap-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c3cb00ea43b4cdca">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Singapore)</p></td>
+<td><p>ami-061e0d6735b941dea</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-1#LaunchInstanceWizard:ami=ami-061e0d6735b941dea">Node</a>  / <a class="reference external" href="https://ap-southeast-1.console.aws.amazon.com/cloudformation/home?region=ap-southeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-061e0d6735b941dea">Cluster</a></p></td>
+<td><p>ami-00aefcdc9582f3ee8</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-1#LaunchInstanceWizard:ami=ami-00aefcdc9582f3ee8">Node</a>  / <a class="reference external" href="https://ap-southeast-1.console.aws.amazon.com/cloudformation/home?region=ap-southeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-00aefcdc9582f3ee8">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Sydney)</p></td>
+<td><p>ami-0555431be10236db7</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-2#LaunchInstanceWizard:ami=ami-0555431be10236db7">Node</a>  / <a class="reference external" href="https://ap-southeast-2.console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0555431be10236db7">Cluster</a></p></td>
+<td><p>ami-02b742db47ce0d035</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-2#LaunchInstanceWizard:ami=ami-02b742db47ce0d035">Node</a>  / <a class="reference external" href="https://ap-southeast-2.console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-02b742db47ce0d035">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (Frankfurt)</p></td>
+<td><p>ami-04bc16008f69f4125</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-central-1#LaunchInstanceWizard:ami=ami-04bc16008f69f4125">Node</a>  / <a class="reference external" href="https://eu-central-1.console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-04bc16008f69f4125">Cluster</a></p></td>
+<td><p>ami-0332a3fc032f72491</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-central-1#LaunchInstanceWizard:ami=ami-0332a3fc032f72491">Node</a>  / <a class="reference external" href="https://eu-central-1.console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0332a3fc032f72491">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Jakarta)</p></td>
+<td><p>ami-074808b7c0b354c9b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-3#LaunchInstanceWizard:ami=ami-074808b7c0b354c9b">Node</a>  / <a class="reference external" href="https://ap-southeast-3.console.aws.amazon.com/cloudformation/home?region=ap-southeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-074808b7c0b354c9b">Cluster</a></p></td>
+<td><p>ami-049e340c3b963b444</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-3#LaunchInstanceWizard:ami=ami-049e340c3b963b444">Node</a>  / <a class="reference external" href="https://ap-southeast-3.console.aws.amazon.com/cloudformation/home?region=ap-southeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-049e340c3b963b444">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>US East (N. Virginia)</p></td>
+<td><p>ami-05ae086d67dcf314b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:ami=ami-05ae086d67dcf314b">Node</a>  / <a class="reference external" href="https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05ae086d67dcf314b">Cluster</a></p></td>
+<td><p>ami-003c3ecbf6affbec0</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:ami=ami-003c3ecbf6affbec0">Node</a>  / <a class="reference external" href="https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-003c3ecbf6affbec0">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>US East (Ohio)</p></td>
+<td><p>ami-049051aa88de27409</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-2#LaunchInstanceWizard:ami=ami-049051aa88de27409">Node</a>  / <a class="reference external" href="https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-049051aa88de27409">Cluster</a></p></td>
+<td><p>ami-0f971cf5a8fec93ac</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-2#LaunchInstanceWizard:ami=ami-0f971cf5a8fec93ac">Node</a>  / <a class="reference external" href="https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0f971cf5a8fec93ac">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>US West (N. California)</p></td>
+<td><p>ami-049642f797fc8fec2</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-1#LaunchInstanceWizard:ami=ami-049642f797fc8fec2">Node</a>  / <a class="reference external" href="https://us-west-1.console.aws.amazon.com/cloudformation/home?region=us-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-049642f797fc8fec2">Cluster</a></p></td>
+<td><p>ami-0a01a880c3cfc22aa</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-1#LaunchInstanceWizard:ami=ami-0a01a880c3cfc22aa">Node</a>  / <a class="reference external" href="https://us-west-1.console.aws.amazon.com/cloudformation/home?region=us-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a01a880c3cfc22aa">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>US West (Oregon)</p></td>
+<td><p>ami-0c0adeb601b98ba2a</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-2#LaunchInstanceWizard:ami=ami-0c0adeb601b98ba2a">Node</a>  / <a class="reference external" href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c0adeb601b98ba2a">Cluster</a></p></td>
+<td><p>ami-0abbb4db3ad7859fc</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-2#LaunchInstanceWizard:ami=ami-0abbb4db3ad7859fc">Node</a>  / <a class="reference external" href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.3_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0abbb4db3ad7859fc">Cluster</a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="id2">
+<h2>6.2.2<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<div class="sphinx_collapse docutils">
+<input class="sphinx_collapse__input" id="c4d1484c-02a0-4a25-8a92-2ceafc3dc25e" name="c4d1484c-02a0-4a25-8a92-2ceafc3dc25e" type="checkbox"><label class="sphinx_collapse__label" for="c4d1484c-02a0-4a25-8a92-2ceafc3dc25e"><i class="sphinx_collapse__icon"></i>View image details</label><div class="sphinx_collapse__content docutils">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Region</p></th>
+<th class="head"><p>x86 AMI ID</p></th>
+<th class="head"><p>Launch x86</p></th>
+<th class="head"><p>ARM AMI ID</p></th>
+<th class="head"><p>Launch ARM</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Asia Pacific (Hyderabad)</p></td>
+<td><p>ami-0e39f522da779a494</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-2#LaunchInstanceWizard:ami=ami-0e39f522da779a494">Node</a>  / <a class="reference external" href="https://ap-south-2.console.aws.amazon.com/cloudformation/home?region=ap-south-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0e39f522da779a494">Cluster</a></p></td>
+<td><p>ami-065d9161792142687</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-2#LaunchInstanceWizard:ami=ami-065d9161792142687">Node</a>  / <a class="reference external" href="https://ap-south-2.console.aws.amazon.com/cloudformation/home?region=ap-south-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-065d9161792142687">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Africa (Cape Town)</p></td>
+<td><p>ami-09ccad7c6e591b807</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=af-south-1#LaunchInstanceWizard:ami=ami-09ccad7c6e591b807">Node</a>  / <a class="reference external" href="https://af-south-1.console.aws.amazon.com/cloudformation/home?region=af-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-09ccad7c6e591b807">Cluster</a></p></td>
+<td><p>ami-0275c35145d0abe3c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=af-south-1#LaunchInstanceWizard:ami=ami-0275c35145d0abe3c">Node</a>  / <a class="reference external" href="https://af-south-1.console.aws.amazon.com/cloudformation/home?region=af-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0275c35145d0abe3c">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Mumbai)</p></td>
+<td><p>ami-0319efa19fe93fa22</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-1#LaunchInstanceWizard:ami=ami-0319efa19fe93fa22">Node</a>  / <a class="reference external" href="https://ap-south-1.console.aws.amazon.com/cloudformation/home?region=ap-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0319efa19fe93fa22">Cluster</a></p></td>
+<td><p>ami-0c18bee1e5e0e4fcd</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-1#LaunchInstanceWizard:ami=ami-0c18bee1e5e0e4fcd">Node</a>  / <a class="reference external" href="https://ap-south-1.console.aws.amazon.com/cloudformation/home?region=ap-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c18bee1e5e0e4fcd">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Stockholm)</p></td>
+<td><p>ami-0d579d7135bb47d3e</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-north-1#LaunchInstanceWizard:ami=ami-0d579d7135bb47d3e">Node</a>  / <a class="reference external" href="https://eu-north-1.console.aws.amazon.com/cloudformation/home?region=eu-north-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0d579d7135bb47d3e">Cluster</a></p></td>
+<td><p>ami-06df2ac17c550ae1e</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-north-1#LaunchInstanceWizard:ami=ami-06df2ac17c550ae1e">Node</a>  / <a class="reference external" href="https://eu-north-1.console.aws.amazon.com/cloudformation/home?region=eu-north-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-06df2ac17c550ae1e">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (Paris)</p></td>
+<td><p>ami-0083024b73fcf8b4c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-3#LaunchInstanceWizard:ami=ami-0083024b73fcf8b4c">Node</a>  / <a class="reference external" href="https://eu-west-3.console.aws.amazon.com/cloudformation/home?region=eu-west-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0083024b73fcf8b4c">Cluster</a></p></td>
+<td><p>ami-07b81fb80feba7963</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-3#LaunchInstanceWizard:ami=ami-07b81fb80feba7963">Node</a>  / <a class="reference external" href="https://eu-west-3.console.aws.amazon.com/cloudformation/home?region=eu-west-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-07b81fb80feba7963">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Milan)</p></td>
+<td><p>ami-04a7539aa627b76b5</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-south-1#LaunchInstanceWizard:ami=ami-04a7539aa627b76b5">Node</a>  / <a class="reference external" href="https://eu-south-1.console.aws.amazon.com/cloudformation/home?region=eu-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-04a7539aa627b76b5">Cluster</a></p></td>
+<td><p>ami-0ffecc753ba2bae5f</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-south-1#LaunchInstanceWizard:ami=ami-0ffecc753ba2bae5f">Node</a>  / <a class="reference external" href="https://eu-south-1.console.aws.amazon.com/cloudformation/home?region=eu-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0ffecc753ba2bae5f">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (London)</p></td>
+<td><p>ami-020450b9f12ebde57</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-2#LaunchInstanceWizard:ami=ami-020450b9f12ebde57">Node</a>  / <a class="reference external" href="https://eu-west-2.console.aws.amazon.com/cloudformation/home?region=eu-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-020450b9f12ebde57">Cluster</a></p></td>
+<td><p>ami-0b42d65880e5c69bc</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-2#LaunchInstanceWizard:ami=ami-0b42d65880e5c69bc">Node</a>  / <a class="reference external" href="https://eu-west-2.console.aws.amazon.com/cloudformation/home?region=eu-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0b42d65880e5c69bc">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Ireland)</p></td>
+<td><p>ami-04541afe5ffea0038</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-1#LaunchInstanceWizard:ami=ami-04541afe5ffea0038">Node</a>  / <a class="reference external" href="https://eu-west-1.console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-04541afe5ffea0038">Cluster</a></p></td>
+<td><p>ami-03dae9909de35247a</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-1#LaunchInstanceWizard:ami=ami-03dae9909de35247a">Node</a>  / <a class="reference external" href="https://eu-west-1.console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-03dae9909de35247a">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Osaka)</p></td>
+<td><p>ami-00fe76cc251e6bf42</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-3#LaunchInstanceWizard:ami=ami-00fe76cc251e6bf42">Node</a>  / <a class="reference external" href="https://ap-northeast-3.console.aws.amazon.com/cloudformation/home?region=ap-northeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-00fe76cc251e6bf42">Cluster</a></p></td>
+<td><p>ami-02124faec329fefb4</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-3#LaunchInstanceWizard:ami=ami-02124faec329fefb4">Node</a>  / <a class="reference external" href="https://ap-northeast-3.console.aws.amazon.com/cloudformation/home?region=ap-northeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-02124faec329fefb4">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Seoul)</p></td>
+<td><p>ami-02f833f2c58e8fcef</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-2#LaunchInstanceWizard:ami=ami-02f833f2c58e8fcef">Node</a>  / <a class="reference external" href="https://ap-northeast-2.console.aws.amazon.com/cloudformation/home?region=ap-northeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-02f833f2c58e8fcef">Cluster</a></p></td>
+<td><p>ami-0e37bcd0856b26a1b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-2#LaunchInstanceWizard:ami=ami-0e37bcd0856b26a1b">Node</a>  / <a class="reference external" href="https://ap-northeast-2.console.aws.amazon.com/cloudformation/home?region=ap-northeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0e37bcd0856b26a1b">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Middle East (Bahrain)</p></td>
+<td><p>ami-03d8ee3c6162b0131</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=me-south-1#LaunchInstanceWizard:ami=ami-03d8ee3c6162b0131">Node</a>  / <a class="reference external" href="https://me-south-1.console.aws.amazon.com/cloudformation/home?region=me-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-03d8ee3c6162b0131">Cluster</a></p></td>
+<td><p>ami-0da79536e64f95919</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=me-south-1#LaunchInstanceWizard:ami=ami-0da79536e64f95919">Node</a>  / <a class="reference external" href="https://me-south-1.console.aws.amazon.com/cloudformation/home?region=me-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0da79536e64f95919">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Tokyo)</p></td>
+<td><p>ami-0c16ada0621856b4f</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-1#LaunchInstanceWizard:ami=ami-0c16ada0621856b4f">Node</a>  / <a class="reference external" href="https://ap-northeast-1.console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c16ada0621856b4f">Cluster</a></p></td>
+<td><p>ami-0ddc63011d20e5aad</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-1#LaunchInstanceWizard:ami=ami-0ddc63011d20e5aad">Node</a>  / <a class="reference external" href="https://ap-northeast-1.console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0ddc63011d20e5aad">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Israel (Tel Aviv)</p></td>
+<td><p>ami-016828b74820eddd3</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=il-central-1#LaunchInstanceWizard:ami=ami-016828b74820eddd3">Node</a>  / <a class="reference external" href="https://il-central-1.console.aws.amazon.com/cloudformation/home?region=il-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-016828b74820eddd3">Cluster</a></p></td>
+<td><p>ami-05fe25136fb87dfcc</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=il-central-1#LaunchInstanceWizard:ami=ami-05fe25136fb87dfcc">Node</a>  / <a class="reference external" href="https://il-central-1.console.aws.amazon.com/cloudformation/home?region=il-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05fe25136fb87dfcc">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Canada (Central)</p></td>
+<td><p>ami-01fc0b04e9a46883a</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ca-central-1#LaunchInstanceWizard:ami=ami-01fc0b04e9a46883a">Node</a>  / <a class="reference external" href="https://ca-central-1.console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-01fc0b04e9a46883a">Cluster</a></p></td>
+<td><p>ami-0c9e43ca8a205f613</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ca-central-1#LaunchInstanceWizard:ami=ami-0c9e43ca8a205f613">Node</a>  / <a class="reference external" href="https://ca-central-1.console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c9e43ca8a205f613">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>South America (Sao Paulo)</p></td>
+<td><p>ami-012e523926c478c79</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=sa-east-1#LaunchInstanceWizard:ami=ami-012e523926c478c79">Node</a>  / <a class="reference external" href="https://sa-east-1.console.aws.amazon.com/cloudformation/home?region=sa-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-012e523926c478c79">Cluster</a></p></td>
+<td><p>ami-05b0275a237182203</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=sa-east-1#LaunchInstanceWizard:ami=ami-05b0275a237182203">Node</a>  / <a class="reference external" href="https://sa-east-1.console.aws.amazon.com/cloudformation/home?region=sa-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05b0275a237182203">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Hong Kong)</p></td>
+<td><p>ami-0e843e7989451309b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-east-1#LaunchInstanceWizard:ami=ami-0e843e7989451309b">Node</a>  / <a class="reference external" href="https://ap-east-1.console.aws.amazon.com/cloudformation/home?region=ap-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0e843e7989451309b">Cluster</a></p></td>
+<td><p>ami-0c426794b60a5658c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-east-1#LaunchInstanceWizard:ami=ami-0c426794b60a5658c">Node</a>  / <a class="reference external" href="https://ap-east-1.console.aws.amazon.com/cloudformation/home?region=ap-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c426794b60a5658c">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Singapore)</p></td>
+<td><p>ami-05ecdf35102f83853</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-1#LaunchInstanceWizard:ami=ami-05ecdf35102f83853">Node</a>  / <a class="reference external" href="https://ap-southeast-1.console.aws.amazon.com/cloudformation/home?region=ap-southeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05ecdf35102f83853">Cluster</a></p></td>
+<td><p>ami-07c0d8468c86e94a6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-1#LaunchInstanceWizard:ami=ami-07c0d8468c86e94a6">Node</a>  / <a class="reference external" href="https://ap-southeast-1.console.aws.amazon.com/cloudformation/home?region=ap-southeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-07c0d8468c86e94a6">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Sydney)</p></td>
+<td><p>ami-0cae1c25e1d1d0ae1</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-2#LaunchInstanceWizard:ami=ami-0cae1c25e1d1d0ae1">Node</a>  / <a class="reference external" href="https://ap-southeast-2.console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0cae1c25e1d1d0ae1">Cluster</a></p></td>
+<td><p>ami-004f8baacfd413dbf</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-2#LaunchInstanceWizard:ami=ami-004f8baacfd413dbf">Node</a>  / <a class="reference external" href="https://ap-southeast-2.console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-004f8baacfd413dbf">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (Frankfurt)</p></td>
+<td><p>ami-04d893f7db37773b4</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-central-1#LaunchInstanceWizard:ami=ami-04d893f7db37773b4">Node</a>  / <a class="reference external" href="https://eu-central-1.console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-04d893f7db37773b4">Cluster</a></p></td>
+<td><p>ami-0742ee9715bc8f5fa</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-central-1#LaunchInstanceWizard:ami=ami-0742ee9715bc8f5fa">Node</a>  / <a class="reference external" href="https://eu-central-1.console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0742ee9715bc8f5fa">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Jakarta)</p></td>
+<td><p>ami-0a9b9fc8d86c4f83c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-3#LaunchInstanceWizard:ami=ami-0a9b9fc8d86c4f83c">Node</a>  / <a class="reference external" href="https://ap-southeast-3.console.aws.amazon.com/cloudformation/home?region=ap-southeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a9b9fc8d86c4f83c">Cluster</a></p></td>
+<td><p>ami-0341fa1f21de83fa3</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-3#LaunchInstanceWizard:ami=ami-0341fa1f21de83fa3">Node</a>  / <a class="reference external" href="https://ap-southeast-3.console.aws.amazon.com/cloudformation/home?region=ap-southeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0341fa1f21de83fa3">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>US East (N. Virginia)</p></td>
+<td><p>ami-01431b9bf2e7cc148</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:ami=ami-01431b9bf2e7cc148">Node</a>  / <a class="reference external" href="https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-01431b9bf2e7cc148">Cluster</a></p></td>
+<td><p>ami-0825a518ab80e05bf</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:ami=ami-0825a518ab80e05bf">Node</a>  / <a class="reference external" href="https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0825a518ab80e05bf">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>US East (Ohio)</p></td>
+<td><p>ami-02393764f1aa1b85b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-2#LaunchInstanceWizard:ami=ami-02393764f1aa1b85b">Node</a>  / <a class="reference external" href="https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-02393764f1aa1b85b">Cluster</a></p></td>
+<td><p>ami-0cd9a909ca4a47f9d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-2#LaunchInstanceWizard:ami=ami-0cd9a909ca4a47f9d">Node</a>  / <a class="reference external" href="https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0cd9a909ca4a47f9d">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>US West (N. California)</p></td>
+<td><p>ami-07c1994abdc982adb</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-1#LaunchInstanceWizard:ami=ami-07c1994abdc982adb">Node</a>  / <a class="reference external" href="https://us-west-1.console.aws.amazon.com/cloudformation/home?region=us-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-07c1994abdc982adb">Cluster</a></p></td>
+<td><p>ami-0cc8e1f3259410889</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-1#LaunchInstanceWizard:ami=ami-0cc8e1f3259410889">Node</a>  / <a class="reference external" href="https://us-west-1.console.aws.amazon.com/cloudformation/home?region=us-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0cc8e1f3259410889">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>US West (Oregon)</p></td>
+<td><p>ami-0d31a68f80d06c304</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-2#LaunchInstanceWizard:ami=ami-0d31a68f80d06c304">Node</a>  / <a class="reference external" href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0d31a68f80d06c304">Cluster</a></p></td>
+<td><p>ami-0ebc7169ec1c3436d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-2#LaunchInstanceWizard:ami=ami-0ebc7169ec1c3436d">Node</a>  / <a class="reference external" href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.2_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0ebc7169ec1c3436d">Cluster</a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="id3">
+<h2>6.2.1<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
+<div class="sphinx_collapse docutils">
+<input class="sphinx_collapse__input" id="bdd43c43-86f0-4630-8fc2-e48d3080129e" name="bdd43c43-86f0-4630-8fc2-e48d3080129e" type="checkbox"><label class="sphinx_collapse__label" for="bdd43c43-86f0-4630-8fc2-e48d3080129e"><i class="sphinx_collapse__icon"></i>View image details</label><div class="sphinx_collapse__content docutils">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Region</p></th>
+<th class="head"><p>x86 AMI ID</p></th>
+<th class="head"><p>Launch x86</p></th>
+<th class="head"><p>ARM AMI ID</p></th>
+<th class="head"><p>Launch ARM</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Asia Pacific (Hyderabad)</p></td>
+<td><p>ami-027f59af5c94c44b4</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-2#LaunchInstanceWizard:ami=ami-027f59af5c94c44b4">Node</a>  / <a class="reference external" href="https://ap-south-2.console.aws.amazon.com/cloudformation/home?region=ap-south-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-027f59af5c94c44b4">Cluster</a></p></td>
+<td><p>ami-02d2aa6949ccb461e</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-2#LaunchInstanceWizard:ami=ami-02d2aa6949ccb461e">Node</a>  / <a class="reference external" href="https://ap-south-2.console.aws.amazon.com/cloudformation/home?region=ap-south-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-02d2aa6949ccb461e">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Africa (Cape Town)</p></td>
+<td><p>ami-09cf9dbd60c45e979</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=af-south-1#LaunchInstanceWizard:ami=ami-09cf9dbd60c45e979">Node</a>  / <a class="reference external" href="https://af-south-1.console.aws.amazon.com/cloudformation/home?region=af-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-09cf9dbd60c45e979">Cluster</a></p></td>
+<td><p>ami-0885ee86394371524</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=af-south-1#LaunchInstanceWizard:ami=ami-0885ee86394371524">Node</a>  / <a class="reference external" href="https://af-south-1.console.aws.amazon.com/cloudformation/home?region=af-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0885ee86394371524">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Mumbai)</p></td>
+<td><p>ami-0b88e9f14c26a0ea6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-1#LaunchInstanceWizard:ami=ami-0b88e9f14c26a0ea6">Node</a>  / <a class="reference external" href="https://ap-south-1.console.aws.amazon.com/cloudformation/home?region=ap-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0b88e9f14c26a0ea6">Cluster</a></p></td>
+<td><p>ami-081caa48bc780664f</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-1#LaunchInstanceWizard:ami=ami-081caa48bc780664f">Node</a>  / <a class="reference external" href="https://ap-south-1.console.aws.amazon.com/cloudformation/home?region=ap-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-081caa48bc780664f">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Stockholm)</p></td>
+<td><p>ami-0735099b36e3cd782</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-north-1#LaunchInstanceWizard:ami=ami-0735099b36e3cd782">Node</a>  / <a class="reference external" href="https://eu-north-1.console.aws.amazon.com/cloudformation/home?region=eu-north-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0735099b36e3cd782">Cluster</a></p></td>
+<td><p>ami-00c56609cba17cc20</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-north-1#LaunchInstanceWizard:ami=ami-00c56609cba17cc20">Node</a>  / <a class="reference external" href="https://eu-north-1.console.aws.amazon.com/cloudformation/home?region=eu-north-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-00c56609cba17cc20">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (Paris)</p></td>
+<td><p>ami-0f402d6be0a821011</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-3#LaunchInstanceWizard:ami=ami-0f402d6be0a821011">Node</a>  / <a class="reference external" href="https://eu-west-3.console.aws.amazon.com/cloudformation/home?region=eu-west-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0f402d6be0a821011">Cluster</a></p></td>
+<td><p>ami-0438c8c935002c12a</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-3#LaunchInstanceWizard:ami=ami-0438c8c935002c12a">Node</a>  / <a class="reference external" href="https://eu-west-3.console.aws.amazon.com/cloudformation/home?region=eu-west-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0438c8c935002c12a">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Milan)</p></td>
+<td><p>ami-073d1c98ef8c2cc11</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-south-1#LaunchInstanceWizard:ami=ami-073d1c98ef8c2cc11">Node</a>  / <a class="reference external" href="https://eu-south-1.console.aws.amazon.com/cloudformation/home?region=eu-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-073d1c98ef8c2cc11">Cluster</a></p></td>
+<td><p>ami-0822e335950efcaee</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-south-1#LaunchInstanceWizard:ami=ami-0822e335950efcaee">Node</a>  / <a class="reference external" href="https://eu-south-1.console.aws.amazon.com/cloudformation/home?region=eu-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0822e335950efcaee">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (London)</p></td>
+<td><p>ami-00aa447bad2e1a46c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-2#LaunchInstanceWizard:ami=ami-00aa447bad2e1a46c">Node</a>  / <a class="reference external" href="https://eu-west-2.console.aws.amazon.com/cloudformation/home?region=eu-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-00aa447bad2e1a46c">Cluster</a></p></td>
+<td><p>ami-0d0250d086a963cf6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-2#LaunchInstanceWizard:ami=ami-0d0250d086a963cf6">Node</a>  / <a class="reference external" href="https://eu-west-2.console.aws.amazon.com/cloudformation/home?region=eu-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0d0250d086a963cf6">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Ireland)</p></td>
+<td><p>ami-095382b4272f46bd6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-1#LaunchInstanceWizard:ami=ami-095382b4272f46bd6">Node</a>  / <a class="reference external" href="https://eu-west-1.console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-095382b4272f46bd6">Cluster</a></p></td>
+<td><p>ami-08e11e57eb9aa35bc</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-1#LaunchInstanceWizard:ami=ami-08e11e57eb9aa35bc">Node</a>  / <a class="reference external" href="https://eu-west-1.console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-08e11e57eb9aa35bc">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Osaka)</p></td>
+<td><p>ami-079147eaf2d9bc72d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-3#LaunchInstanceWizard:ami=ami-079147eaf2d9bc72d">Node</a>  / <a class="reference external" href="https://ap-northeast-3.console.aws.amazon.com/cloudformation/home?region=ap-northeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-079147eaf2d9bc72d">Cluster</a></p></td>
+<td><p>ami-054367713334ea58b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-3#LaunchInstanceWizard:ami=ami-054367713334ea58b">Node</a>  / <a class="reference external" href="https://ap-northeast-3.console.aws.amazon.com/cloudformation/home?region=ap-northeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-054367713334ea58b">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Seoul)</p></td>
+<td><p>ami-06046fb4339b0394b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-2#LaunchInstanceWizard:ami=ami-06046fb4339b0394b">Node</a>  / <a class="reference external" href="https://ap-northeast-2.console.aws.amazon.com/cloudformation/home?region=ap-northeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-06046fb4339b0394b">Cluster</a></p></td>
+<td><p>ami-0252ebf4b44706ef1</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-2#LaunchInstanceWizard:ami=ami-0252ebf4b44706ef1">Node</a>  / <a class="reference external" href="https://ap-northeast-2.console.aws.amazon.com/cloudformation/home?region=ap-northeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0252ebf4b44706ef1">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Middle East (Bahrain)</p></td>
+<td><p>ami-05b03b7482bd7d37a</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=me-south-1#LaunchInstanceWizard:ami=ami-05b03b7482bd7d37a">Node</a>  / <a class="reference external" href="https://me-south-1.console.aws.amazon.com/cloudformation/home?region=me-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05b03b7482bd7d37a">Cluster</a></p></td>
+<td><p>ami-05717bc12942920c8</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=me-south-1#LaunchInstanceWizard:ami=ami-05717bc12942920c8">Node</a>  / <a class="reference external" href="https://me-south-1.console.aws.amazon.com/cloudformation/home?region=me-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05717bc12942920c8">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Tokyo)</p></td>
+<td><p>ami-06140557760b66227</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-1#LaunchInstanceWizard:ami=ami-06140557760b66227">Node</a>  / <a class="reference external" href="https://ap-northeast-1.console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-06140557760b66227">Cluster</a></p></td>
+<td><p>ami-016357fe25be95225</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-1#LaunchInstanceWizard:ami=ami-016357fe25be95225">Node</a>  / <a class="reference external" href="https://ap-northeast-1.console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-016357fe25be95225">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Israel (Tel Aviv)</p></td>
+<td><p>ami-04683919dbb00afdf</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=il-central-1#LaunchInstanceWizard:ami=ami-04683919dbb00afdf">Node</a>  / <a class="reference external" href="https://il-central-1.console.aws.amazon.com/cloudformation/home?region=il-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-04683919dbb00afdf">Cluster</a></p></td>
+<td><p>ami-0ab9fe83bb2076311</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=il-central-1#LaunchInstanceWizard:ami=ami-0ab9fe83bb2076311">Node</a>  / <a class="reference external" href="https://il-central-1.console.aws.amazon.com/cloudformation/home?region=il-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0ab9fe83bb2076311">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Canada (Central)</p></td>
+<td><p>ami-0009a93d7cd39c620</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ca-central-1#LaunchInstanceWizard:ami=ami-0009a93d7cd39c620">Node</a>  / <a class="reference external" href="https://ca-central-1.console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0009a93d7cd39c620">Cluster</a></p></td>
+<td><p>ami-052bc19f7f490923e</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ca-central-1#LaunchInstanceWizard:ami=ami-052bc19f7f490923e">Node</a>  / <a class="reference external" href="https://ca-central-1.console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-052bc19f7f490923e">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>South America (Sao Paulo)</p></td>
+<td><p>ami-093546698cf66ddd1</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=sa-east-1#LaunchInstanceWizard:ami=ami-093546698cf66ddd1">Node</a>  / <a class="reference external" href="https://sa-east-1.console.aws.amazon.com/cloudformation/home?region=sa-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-093546698cf66ddd1">Cluster</a></p></td>
+<td><p>ami-006193e75adf603b2</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=sa-east-1#LaunchInstanceWizard:ami=ami-006193e75adf603b2">Node</a>  / <a class="reference external" href="https://sa-east-1.console.aws.amazon.com/cloudformation/home?region=sa-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-006193e75adf603b2">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Hong Kong)</p></td>
+<td><p>ami-07ca9525a84cf95fb</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-east-1#LaunchInstanceWizard:ami=ami-07ca9525a84cf95fb">Node</a>  / <a class="reference external" href="https://ap-east-1.console.aws.amazon.com/cloudformation/home?region=ap-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-07ca9525a84cf95fb">Cluster</a></p></td>
+<td><p>ami-0343a0906c19646b5</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-east-1#LaunchInstanceWizard:ami=ami-0343a0906c19646b5">Node</a>  / <a class="reference external" href="https://ap-east-1.console.aws.amazon.com/cloudformation/home?region=ap-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0343a0906c19646b5">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Singapore)</p></td>
+<td><p>ami-0e03bfbbf781b5327</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-1#LaunchInstanceWizard:ami=ami-0e03bfbbf781b5327">Node</a>  / <a class="reference external" href="https://ap-southeast-1.console.aws.amazon.com/cloudformation/home?region=ap-southeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0e03bfbbf781b5327">Cluster</a></p></td>
+<td><p>ami-09a9ee82b17e2103d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-1#LaunchInstanceWizard:ami=ami-09a9ee82b17e2103d">Node</a>  / <a class="reference external" href="https://ap-southeast-1.console.aws.amazon.com/cloudformation/home?region=ap-southeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-09a9ee82b17e2103d">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Sydney)</p></td>
+<td><p>ami-0fe92355c360f62b7</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-2#LaunchInstanceWizard:ami=ami-0fe92355c360f62b7">Node</a>  / <a class="reference external" href="https://ap-southeast-2.console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0fe92355c360f62b7">Cluster</a></p></td>
+<td><p>ami-019621ca1aa0639f4</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-2#LaunchInstanceWizard:ami=ami-019621ca1aa0639f4">Node</a>  / <a class="reference external" href="https://ap-southeast-2.console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-019621ca1aa0639f4">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (Frankfurt)</p></td>
+<td><p>ami-00fc7f8295856c8e2</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-central-1#LaunchInstanceWizard:ami=ami-00fc7f8295856c8e2">Node</a>  / <a class="reference external" href="https://eu-central-1.console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-00fc7f8295856c8e2">Cluster</a></p></td>
+<td><p>ami-0ad792a78e227a667</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-central-1#LaunchInstanceWizard:ami=ami-0ad792a78e227a667">Node</a>  / <a class="reference external" href="https://eu-central-1.console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0ad792a78e227a667">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Jakarta)</p></td>
+<td><p>ami-0751a4796ba332d3c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-3#LaunchInstanceWizard:ami=ami-0751a4796ba332d3c">Node</a>  / <a class="reference external" href="https://ap-southeast-3.console.aws.amazon.com/cloudformation/home?region=ap-southeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0751a4796ba332d3c">Cluster</a></p></td>
+<td><p>ami-0b9f3749d552ef551</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-3#LaunchInstanceWizard:ami=ami-0b9f3749d552ef551">Node</a>  / <a class="reference external" href="https://ap-southeast-3.console.aws.amazon.com/cloudformation/home?region=ap-southeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0b9f3749d552ef551">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>US East (N. Virginia)</p></td>
+<td><p>ami-09a5ff7a28934eabd</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:ami=ami-09a5ff7a28934eabd">Node</a>  / <a class="reference external" href="https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-09a5ff7a28934eabd">Cluster</a></p></td>
+<td><p>ami-0402af29d05251992</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:ami=ami-0402af29d05251992">Node</a>  / <a class="reference external" href="https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0402af29d05251992">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>US East (Ohio)</p></td>
+<td><p>ami-0b010d43b65da036f</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-2#LaunchInstanceWizard:ami=ami-0b010d43b65da036f">Node</a>  / <a class="reference external" href="https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0b010d43b65da036f">Cluster</a></p></td>
+<td><p>ami-05517a1f861b0067f</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-2#LaunchInstanceWizard:ami=ami-05517a1f861b0067f">Node</a>  / <a class="reference external" href="https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05517a1f861b0067f">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>US West (N. California)</p></td>
+<td><p>ami-048cb53bdfa50d3eb</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-1#LaunchInstanceWizard:ami=ami-048cb53bdfa50d3eb">Node</a>  / <a class="reference external" href="https://us-west-1.console.aws.amazon.com/cloudformation/home?region=us-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-048cb53bdfa50d3eb">Cluster</a></p></td>
+<td><p>ami-0f5416df3819af172</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-1#LaunchInstanceWizard:ami=ami-0f5416df3819af172">Node</a>  / <a class="reference external" href="https://us-west-1.console.aws.amazon.com/cloudformation/home?region=us-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0f5416df3819af172">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>US West (Oregon)</p></td>
+<td><p>ami-082d6b499cb5ef2cc</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-2#LaunchInstanceWizard:ami=ami-082d6b499cb5ef2cc">Node</a>  / <a class="reference external" href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-082d6b499cb5ef2cc">Cluster</a></p></td>
+<td><p>ami-015151b3afed80732</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-2#LaunchInstanceWizard:ami=ami-015151b3afed80732">Node</a>  / <a class="reference external" href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.1_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-015151b3afed80732">Cluster</a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="id4">
+<h2>6.2.0<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
+<div class="sphinx_collapse docutils">
+<input class="sphinx_collapse__input" id="6685b6a2-e59c-4e1b-9e55-d3841da5fb8d" name="6685b6a2-e59c-4e1b-9e55-d3841da5fb8d" type="checkbox"><label class="sphinx_collapse__label" for="6685b6a2-e59c-4e1b-9e55-d3841da5fb8d"><i class="sphinx_collapse__icon"></i>View image details</label><div class="sphinx_collapse__content docutils">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Region</p></th>
+<th class="head"><p>x86 AMI ID</p></th>
+<th class="head"><p>Launch x86</p></th>
+<th class="head"><p>ARM AMI ID</p></th>
+<th class="head"><p>Launch ARM</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Asia Pacific (Hyderabad)</p></td>
+<td><p>ami-0a673a40fec26b5fd</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-2#LaunchInstanceWizard:ami=ami-0a673a40fec26b5fd">Node</a>  / <a class="reference external" href="https://ap-south-2.console.aws.amazon.com/cloudformation/home?region=ap-south-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a673a40fec26b5fd">Cluster</a></p></td>
+<td><p>ami-0ee6a15fed5eef170</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-2#LaunchInstanceWizard:ami=ami-0ee6a15fed5eef170">Node</a>  / <a class="reference external" href="https://ap-south-2.console.aws.amazon.com/cloudformation/home?region=ap-south-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0ee6a15fed5eef170">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Africa (Cape Town)</p></td>
+<td><p>ami-0e0d3a00d4d9c804a</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=af-south-1#LaunchInstanceWizard:ami=ami-0e0d3a00d4d9c804a">Node</a>  / <a class="reference external" href="https://af-south-1.console.aws.amazon.com/cloudformation/home?region=af-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0e0d3a00d4d9c804a">Cluster</a></p></td>
+<td><p>ami-0125db7168d794cbd</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=af-south-1#LaunchInstanceWizard:ami=ami-0125db7168d794cbd">Node</a>  / <a class="reference external" href="https://af-south-1.console.aws.amazon.com/cloudformation/home?region=af-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0125db7168d794cbd">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Mumbai)</p></td>
+<td><p>ami-082502acf7608a50c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-1#LaunchInstanceWizard:ami=ami-082502acf7608a50c">Node</a>  / <a class="reference external" href="https://ap-south-1.console.aws.amazon.com/cloudformation/home?region=ap-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-082502acf7608a50c">Cluster</a></p></td>
+<td><p>ami-0c66e36a3501bb394</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-south-1#LaunchInstanceWizard:ami=ami-0c66e36a3501bb394">Node</a>  / <a class="reference external" href="https://ap-south-1.console.aws.amazon.com/cloudformation/home?region=ap-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c66e36a3501bb394">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Stockholm)</p></td>
+<td><p>ami-0fd0ce4d22b5c17d3</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-north-1#LaunchInstanceWizard:ami=ami-0fd0ce4d22b5c17d3">Node</a>  / <a class="reference external" href="https://eu-north-1.console.aws.amazon.com/cloudformation/home?region=eu-north-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0fd0ce4d22b5c17d3">Cluster</a></p></td>
+<td><p>ami-037ac0495bacc5ecb</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-north-1#LaunchInstanceWizard:ami=ami-037ac0495bacc5ecb">Node</a>  / <a class="reference external" href="https://eu-north-1.console.aws.amazon.com/cloudformation/home?region=eu-north-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-037ac0495bacc5ecb">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (Paris)</p></td>
+<td><p>ami-0a6f9657c2a2f3163</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-3#LaunchInstanceWizard:ami=ami-0a6f9657c2a2f3163">Node</a>  / <a class="reference external" href="https://eu-west-3.console.aws.amazon.com/cloudformation/home?region=eu-west-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a6f9657c2a2f3163">Cluster</a></p></td>
+<td><p>ami-070eeb88d121f98d5</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-3#LaunchInstanceWizard:ami=ami-070eeb88d121f98d5">Node</a>  / <a class="reference external" href="https://eu-west-3.console.aws.amazon.com/cloudformation/home?region=eu-west-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-070eeb88d121f98d5">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Milan)</p></td>
+<td><p>ami-05b7b04b89c8a4382</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-south-1#LaunchInstanceWizard:ami=ami-05b7b04b89c8a4382">Node</a>  / <a class="reference external" href="https://eu-south-1.console.aws.amazon.com/cloudformation/home?region=eu-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05b7b04b89c8a4382">Cluster</a></p></td>
+<td><p>ami-05a2b1f4978fd55fb</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-south-1#LaunchInstanceWizard:ami=ami-05a2b1f4978fd55fb">Node</a>  / <a class="reference external" href="https://eu-south-1.console.aws.amazon.com/cloudformation/home?region=eu-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05a2b1f4978fd55fb">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (London)</p></td>
+<td><p>ami-085d8fc6f7a76d2ac</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-2#LaunchInstanceWizard:ami=ami-085d8fc6f7a76d2ac">Node</a>  / <a class="reference external" href="https://eu-west-2.console.aws.amazon.com/cloudformation/home?region=eu-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-085d8fc6f7a76d2ac">Cluster</a></p></td>
+<td><p>ami-0885a6e6d0ef9f12b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-2#LaunchInstanceWizard:ami=ami-0885a6e6d0ef9f12b">Node</a>  / <a class="reference external" href="https://eu-west-2.console.aws.amazon.com/cloudformation/home?region=eu-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0885a6e6d0ef9f12b">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Europe (Ireland)</p></td>
+<td><p>ami-0e3b0cb94b0c86638</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-1#LaunchInstanceWizard:ami=ami-0e3b0cb94b0c86638">Node</a>  / <a class="reference external" href="https://eu-west-1.console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0e3b0cb94b0c86638">Cluster</a></p></td>
+<td><p>ami-0954a702f8d2e5c4d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-west-1#LaunchInstanceWizard:ami=ami-0954a702f8d2e5c4d">Node</a>  / <a class="reference external" href="https://eu-west-1.console.aws.amazon.com/cloudformation/home?region=eu-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0954a702f8d2e5c4d">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Osaka)</p></td>
+<td><p>ami-02240d5d77afbdf02</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-3#LaunchInstanceWizard:ami=ami-02240d5d77afbdf02">Node</a>  / <a class="reference external" href="https://ap-northeast-3.console.aws.amazon.com/cloudformation/home?region=ap-northeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-02240d5d77afbdf02">Cluster</a></p></td>
+<td><p>ami-0e28d874ef3c97cdd</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-3#LaunchInstanceWizard:ami=ami-0e28d874ef3c97cdd">Node</a>  / <a class="reference external" href="https://ap-northeast-3.console.aws.amazon.com/cloudformation/home?region=ap-northeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0e28d874ef3c97cdd">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Seoul)</p></td>
+<td><p>ami-05e2cd301cbdf60d6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-2#LaunchInstanceWizard:ami=ami-05e2cd301cbdf60d6">Node</a>  / <a class="reference external" href="https://ap-northeast-2.console.aws.amazon.com/cloudformation/home?region=ap-northeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05e2cd301cbdf60d6">Cluster</a></p></td>
+<td><p>ami-0d59c953a4856b15b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-2#LaunchInstanceWizard:ami=ami-0d59c953a4856b15b">Node</a>  / <a class="reference external" href="https://ap-northeast-2.console.aws.amazon.com/cloudformation/home?region=ap-northeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0d59c953a4856b15b">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Middle East (Bahrain)</p></td>
+<td><p>ami-0ef649cca99cc4ea6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=me-south-1#LaunchInstanceWizard:ami=ami-0ef649cca99cc4ea6">Node</a>  / <a class="reference external" href="https://me-south-1.console.aws.amazon.com/cloudformation/home?region=me-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0ef649cca99cc4ea6">Cluster</a></p></td>
+<td><p>ami-088bca68e4f59c826</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=me-south-1#LaunchInstanceWizard:ami=ami-088bca68e4f59c826">Node</a>  / <a class="reference external" href="https://me-south-1.console.aws.amazon.com/cloudformation/home?region=me-south-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-088bca68e4f59c826">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Tokyo)</p></td>
+<td><p>ami-0f3ccfbd1370923d6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-1#LaunchInstanceWizard:ami=ami-0f3ccfbd1370923d6">Node</a>  / <a class="reference external" href="https://ap-northeast-1.console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0f3ccfbd1370923d6">Cluster</a></p></td>
+<td><p>ami-03e78b8eecb4d3d67</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-northeast-1#LaunchInstanceWizard:ami=ami-03e78b8eecb4d3d67">Node</a>  / <a class="reference external" href="https://ap-northeast-1.console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-03e78b8eecb4d3d67">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Israel (Tel Aviv)</p></td>
+<td><p>ami-067d629c3762b0435</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=il-central-1#LaunchInstanceWizard:ami=ami-067d629c3762b0435">Node</a>  / <a class="reference external" href="https://il-central-1.console.aws.amazon.com/cloudformation/home?region=il-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-067d629c3762b0435">Cluster</a></p></td>
+<td><p>ami-0a03a128ba09c1ac7</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=il-central-1#LaunchInstanceWizard:ami=ami-0a03a128ba09c1ac7">Node</a>  / <a class="reference external" href="https://il-central-1.console.aws.amazon.com/cloudformation/home?region=il-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a03a128ba09c1ac7">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Canada (Central)</p></td>
+<td><p>ami-0b61ee123730815b9</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ca-central-1#LaunchInstanceWizard:ami=ami-0b61ee123730815b9">Node</a>  / <a class="reference external" href="https://ca-central-1.console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0b61ee123730815b9">Cluster</a></p></td>
+<td><p>ami-0ddbd3cbf9463217a</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ca-central-1#LaunchInstanceWizard:ami=ami-0ddbd3cbf9463217a">Node</a>  / <a class="reference external" href="https://ca-central-1.console.aws.amazon.com/cloudformation/home?region=ca-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0ddbd3cbf9463217a">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>South America (Sao Paulo)</p></td>
+<td><p>ami-05733df19032c0eb6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=sa-east-1#LaunchInstanceWizard:ami=ami-05733df19032c0eb6">Node</a>  / <a class="reference external" href="https://sa-east-1.console.aws.amazon.com/cloudformation/home?region=sa-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-05733df19032c0eb6">Cluster</a></p></td>
+<td><p>ami-0a18e726b5903331b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=sa-east-1#LaunchInstanceWizard:ami=ami-0a18e726b5903331b">Node</a>  / <a class="reference external" href="https://sa-east-1.console.aws.amazon.com/cloudformation/home?region=sa-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a18e726b5903331b">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Hong Kong)</p></td>
+<td><p>ami-008c7908b14489760</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-east-1#LaunchInstanceWizard:ami=ami-008c7908b14489760">Node</a>  / <a class="reference external" href="https://ap-east-1.console.aws.amazon.com/cloudformation/home?region=ap-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-008c7908b14489760">Cluster</a></p></td>
+<td><p>ami-0e964593cb40a275b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-east-1#LaunchInstanceWizard:ami=ami-0e964593cb40a275b">Node</a>  / <a class="reference external" href="https://ap-east-1.console.aws.amazon.com/cloudformation/home?region=ap-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0e964593cb40a275b">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Asia Pacific (Singapore)</p></td>
+<td><p>ami-0dd5ccdf47b310477</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-1#LaunchInstanceWizard:ami=ami-0dd5ccdf47b310477">Node</a>  / <a class="reference external" href="https://ap-southeast-1.console.aws.amazon.com/cloudformation/home?region=ap-southeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0dd5ccdf47b310477">Cluster</a></p></td>
+<td><p>ami-0a20774231125e3ba</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-1#LaunchInstanceWizard:ami=ami-0a20774231125e3ba">Node</a>  / <a class="reference external" href="https://ap-southeast-1.console.aws.amazon.com/cloudformation/home?region=ap-southeast-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a20774231125e3ba">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Sydney)</p></td>
+<td><p>ami-0f758fb4b50d1a4f6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-2#LaunchInstanceWizard:ami=ami-0f758fb4b50d1a4f6">Node</a>  / <a class="reference external" href="https://ap-southeast-2.console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0f758fb4b50d1a4f6">Cluster</a></p></td>
+<td><p>ami-049113999aa000926</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-2#LaunchInstanceWizard:ami=ami-049113999aa000926">Node</a>  / <a class="reference external" href="https://ap-southeast-2.console.aws.amazon.com/cloudformation/home?region=ap-southeast-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-049113999aa000926">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>Europe (Frankfurt)</p></td>
+<td><p>ami-0e102bdb35aa9662c</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-central-1#LaunchInstanceWizard:ami=ami-0e102bdb35aa9662c">Node</a>  / <a class="reference external" href="https://eu-central-1.console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0e102bdb35aa9662c">Cluster</a></p></td>
+<td><p>ami-069356c987e2254fd</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=eu-central-1#LaunchInstanceWizard:ami=ami-069356c987e2254fd">Node</a>  / <a class="reference external" href="https://eu-central-1.console.aws.amazon.com/cloudformation/home?region=eu-central-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-069356c987e2254fd">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Asia Pacific (Jakarta)</p></td>
+<td><p>ami-0c0f1596574fb854b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-3#LaunchInstanceWizard:ami=ami-0c0f1596574fb854b">Node</a>  / <a class="reference external" href="https://ap-southeast-3.console.aws.amazon.com/cloudformation/home?region=ap-southeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0c0f1596574fb854b">Cluster</a></p></td>
+<td><p>ami-03d52339307aa921b</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=ap-southeast-3#LaunchInstanceWizard:ami=ami-03d52339307aa921b">Node</a>  / <a class="reference external" href="https://ap-southeast-3.console.aws.amazon.com/cloudformation/home?region=ap-southeast-3#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-03d52339307aa921b">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>US East (N. Virginia)</p></td>
+<td><p>ami-0b4d2df6fb73b4687</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:ami=ami-0b4d2df6fb73b4687">Node</a>  / <a class="reference external" href="https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0b4d2df6fb73b4687">Cluster</a></p></td>
+<td><p>ami-039338d7e5e3ed484</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LaunchInstanceWizard:ami=ami-039338d7e5e3ed484">Node</a>  / <a class="reference external" href="https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-039338d7e5e3ed484">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>US East (Ohio)</p></td>
+<td><p>ami-07c7588d82a35d8ae</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-2#LaunchInstanceWizard:ami=ami-07c7588d82a35d8ae">Node</a>  / <a class="reference external" href="https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-07c7588d82a35d8ae">Cluster</a></p></td>
+<td><p>ami-0a2148fe47813b41d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-2#LaunchInstanceWizard:ami=ami-0a2148fe47813b41d">Node</a>  / <a class="reference external" href="https://us-east-2.console.aws.amazon.com/cloudformation/home?region=us-east-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0a2148fe47813b41d">Cluster</a></p></td>
+</tr>
+<tr class="row-even"><td><p>US West (N. California)</p></td>
+<td><p>ami-0ab61dc1a14b66e52</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-1#LaunchInstanceWizard:ami=ami-0ab61dc1a14b66e52">Node</a>  / <a class="reference external" href="https://us-west-1.console.aws.amazon.com/cloudformation/home?region=us-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0ab61dc1a14b66e52">Cluster</a></p></td>
+<td><p>ami-0bcd52b79d086dd3d</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-1#LaunchInstanceWizard:ami=ami-0bcd52b79d086dd3d">Node</a>  / <a class="reference external" href="https://us-west-1.console.aws.amazon.com/cloudformation/home?region=us-west-1#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-0bcd52b79d086dd3d">Cluster</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>US West (Oregon)</p></td>
+<td><p>ami-01b6fe6c33daac8e6</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-2#LaunchInstanceWizard:ami=ami-01b6fe6c33daac8e6">Node</a>  / <a class="reference external" href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_x86_64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-01b6fe6c33daac8e6">Cluster</a></p></td>
+<td><p>ami-01685d0e06a1bbefd</p></td>
+<td><p><a class="reference external" href="https://console.aws.amazon.com/ec2/v2/home?region=us-west-2#LaunchInstanceWizard:ami=ami-01685d0e06a1bbefd">Node</a>  / <a class="reference external" href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/downloads/scylla/aws/cloudformation/scylla_cluster_6.2.0_aarch64.yaml&amp;stackName=scylla-cluster&amp;param_ScyllaDBAmi=ami-01685d0e06a1bbefd">Cluster</a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page AWS Images&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-6.2/reference/aws-images%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="index.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Reference
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="azure-images.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />Azure Images
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page AWS Images&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-6.2/reference/aws-images%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/reference/aws-images.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">AWS Images</a><ul>
+<li><a class="reference internal" href="#id1">6.2.3</a></li>
+<li><a class="reference internal" href="#id2">6.2.2</a></li>
+<li><a class="reference internal" href="#id3">6.2.1</a></li>
+<li><a class="reference internal" href="#id4">6.2.0</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                6.2
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="aws-images.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-6.1/reference/aws-images.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-6.0/reference/aws-images.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.4/reference/aws-images.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.2/index.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.1/index.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../getting-started/index.html">Getting Started</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../getting-started/install-scylla/index.html">Install ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/launch-on-aws.html">Launch ScyllaDB on AWS</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/launch-on-gcp.html">Launch ScyllaDB on GCP</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/launch-on-azure.html">Launch ScyllaDB on Azure</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/install-on-linux.html">Install ScyllaDB Linux Packages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/install-jmx.html">Install scylla-jmx Package</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/run-in-docker.html">Run ScyllaDB in Docker</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/unified-installer.html">Install ScyllaDB Without root Privileges</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/disable-housekeeping.html">ScyllaDB Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/dev-mod.html">ScyllaDB Developer Mode</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/configure.html">Configure ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/config-commands.html">ScyllaDB Configuration Reference</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/os-support.html">OS Support by Linux Distributions and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/cloud-instance-recommendations.html">Cloud Instance Recommendations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/scylla-in-a-shared-environment.html">ScyllaDB in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/migrate-scylla.html">Migrate to ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migration Process from Cassandra to ScyllaDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/cassandra-compatibility.html">ScyllaDB and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-spark.html">Integrate ScyllaDB with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-kairos.html">Integrate ScyllaDB with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-presto.html">Integrate ScyllaDB with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-elasticsearch.html">Integrate ScyllaDB with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-k8.html">Integrate ScyllaDB with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-janus.html">Integrate ScyllaDB with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-datadog.html">Integrate ScyllaDB with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-kafka.html">Integrate ScyllaDB with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-iota.html">Integrate ScyllaDB with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-spring.html">Integrate ScyllaDB with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for ScyllaDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-ansible.html">Install ScyllaDB with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-databricks.html">Integrate ScyllaDB with Databricks</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-jaeger.html">Integrate ScyllaDB with Jaeger Server</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-mindsdb.html">Integrate ScyllaDB with MindsDB</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../operating-scylla/index.html">ScyllaDB for Administrators</a><input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/admin.html">Administration Guide</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/procedures/index.html">Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migrate from Cassandra to ScyllaDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/installation-common/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/security/index.html">Security</a><input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/security-checklist.html">ScyllaDB Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/create-superuser.html">Creating a Custom Superuser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/certificate-authentication.html">Certificate-based Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/saslauthd.html">Configure SaslauthdAuthenticator</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/rest.html">Admin REST API</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/scylla-sstable.html">ScyllaDB SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/scylla-types.html">ScyllaDB Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstablemetadata.html">SSTableMetadata</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/logging.html">ScyllaDB Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/virtual-tables.html">Virtual Tables</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/select-from-mutation-fragments.html">Reading mutation fragments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/maintenance-socket.html">Maintenance socket</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/maintenance-mode.html">Maintenance mode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/task-manager.html">Task manager</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/scylladb-versioning.html">ScyllaDB Versioning</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/upgrade-opensource/index.html">ScyllaDB Open Source Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/upgrade-to-enterprise/index.html">ScyllaDB Open Source to ScyllaDB Enterprise Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/ami-upgrade.html">ScyllaDB Image</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html">ScyllaDB Enterprise</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/system-configuration/snitch.html">ScyllaDB Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/diagnostics.html">ScyllaDB Diagnostic Tools</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../using-scylla/index.html">ScyllaDB for Developers</a><input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/index.html">Develop with ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">Tutorials and Example Projects</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/learn-resources/index.html">Learn to Use ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../using-scylla/alternator/index.html">ScyllaDB Alternator</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/drivers/index.html">ScyllaDB Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/drivers/cql-drivers/index.html">ScyllaDB CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/drivers/dynamo-drivers/index.html">ScyllaDB DynamoDB Drivers</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../cql/index.html">CQL Reference</a><input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../cql/cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/ddl.html">Data Definition</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../cql/dml.html">Data Manipulation</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/select.html">SELECT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/insert.html">INSERT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/update.html">UPDATE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/delete.html">DELETE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cql/dml/batch.html">BATCH</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/functions.html">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/wasm.html">Wasm support for user-defined functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/service-levels.html">Service Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cql/cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/compatibility.html">ScyllaDB Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../features/index.html">Features</a><input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../features/lwt.html">Lightweight Transactions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../features/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../features/local-secondary-indexes.html">Local Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../features/materialized-views.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../features/counters.html">Counters</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../features/cdc/index.html">Change Data Capture</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-intro.html">CDC Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-log-table.html">The CDC Log Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-basic-operations.html">Basic operations in CDC</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-streams.html">CDC Streams</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-stream-generations.html">CDC Stream Generations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-querying-streams.html">Querying CDC Streams</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-advanced-types.html">Advanced column types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-preimages.html">Preimages and postimages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../features/cdc/cdc-consistency.html">Data Consistency in CDC</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../features/workload-attributes.html">Workload Attributes</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../architecture/index.html">ScyllaDB Architecture</a><input class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/tablets.html">Data Distribution with Tablets</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/ringarchitecture/index.html">ScyllaDB Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/architecture-fault-tolerance.html">ScyllaDB Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../architecture/anti-entropy/index.html">ScyllaDB Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/anti-entropy/hinted-handoff.html">ScyllaDB Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/anti-entropy/read-repair.html">ScyllaDB Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/maintenance/repair.html">ScyllaDB Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../architecture/sstable/index.html">SSTable</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/sstable/sstable2/index.html">ScyllaDB SSTable - 2.x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/sstable/sstable3/index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/zero-token-nodes.html">Zero-token Nodes</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../troubleshooting/index.html">Troubleshooting ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/report-scylla-problem.html">Report a ScyllaDB problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/startup/index.html">ScyllaDB Startup</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/scylla-wont-start.html">ScyllaDB will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/python-error-no-module-named-yaml.html">ScyllaDB Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/upgrade/index.html">Upgrade</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/missing-dotmount-files.html">Inaccessible configuration files after ScyllaDB upgrade</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/handling-node-failures.html">Handling Node Failures</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-add-remove-replace.html">Failure to Add, Remove, or Replace a Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-schema-sync.html">Failed Schema Sync</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/large-partition-table.html">ScyllaDB Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/large-rows-large-cells-tables.html">ScyllaDB Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-update-schema.html">Failure to Update the Schema</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/monitor/index.html">ScyllaDB Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-30" name="toctree-checkbox-30" type="checkbox"/><label for="toctree-checkbox-30"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/install-remove/index.html">Installation and Removal</a><input class="toctree-checkbox" id="toctree-checkbox-31" name="toctree-checkbox-31" type="checkbox"/><label for="toctree-checkbox-31"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/autoremove-ubuntu.html">Removing ScyllaDB on Ubuntu breaks system packages</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../kb/index.html">Knowledge Base</a><input class="toctree-checkbox" id="toctree-checkbox-32" name="toctree-checkbox-32" type="checkbox"/><label for="toctree-checkbox-32"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../kb/cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/consistency.html">Consistency in ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/custom-user.html">Run ScyllaDB and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/customizing-cpuset.html">Customizing CPUSET</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/gossip.html">Gossip in ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/lwt-differences.html">How does ScyllaDB LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/map-cpu.html">Map CPUs to ScyllaDB Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/memory-usage.html">ScyllaDB Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/ntp.html">NTP Configuration for ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/posix.html">POSIX networking for ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/quiz-administrators.html">ScyllaDB consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/scylla-and-spark-integration.html">ScyllaDB and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/scylla-limits-systemd.html">Increase ScyllaDB resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/seed-nodes.html">ScyllaDB Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/snapshots.html">ScyllaDB Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/static-columns.html">ScyllaDB payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/unresponsive-nodes.html">ScyllaDB Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/use-perf.html">Using the perf utility with ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/yaml-address.html">Configure ScyllaDB Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">Reference</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-33" name="toctree-checkbox-33" type="checkbox"/><label for="toctree-checkbox-33"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">AWS Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="azure-images.html">Azure Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gcp-images.html">GCP Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configuration-parameters.html">Configuration Parameters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="glossary.html">Glossary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="limits.html">Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api-reference.html">API Reference (BETA)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="metrics.html">Metrics (BETA)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">ScyllaDB FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contribute.html">Contribute to ScyllaDB</a></li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

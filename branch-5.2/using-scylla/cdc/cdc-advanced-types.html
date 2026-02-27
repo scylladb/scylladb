@@ -1,0 +1,1509 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             Advanced column types | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/using-scylla/cdc/cdc-advanced-types.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../index.html" class="bread__highlight">
+                ScyllaDB for Developers
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="../features.html" class="bread__highlight">
+                ScyllaDB Features
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="../features-open-source.html" class="bread__highlight">
+                Scylla Open Source Features
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                Change Data Capture (CDC)
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">Advanced column types</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <section id="advanced-column-types">
+<h1>Advanced column types<a class="headerlink" href="#advanced-column-types" title="Link to this heading">¶</a></h1>
+<p>Prerequisites: we assume that the reader is familiar with the <a class="reference internal" href="cdc-log-table.html"><span class="doc">CDC log table</span></a> and <a class="reference internal" href="cdc-basic-operations.html"><span class="doc">Basic operations in CDC</span></a> documents.</p>
+<p>As explained in <a class="reference internal" href="cdc-log-table.html"><span class="doc">CDC log table</span></a>, each <em>atomic</em> non-primary-key column of the base table gets two corresponding columns in the log table:</p>
+<ul class="simple">
+<li><p>one with the same name and type; we call this the <cite>value column</cite>,</p></li>
+<li><p>one with the original name prefixed with <code class="docutils literal notranslate"><span class="pre">cdc$deleted_</span></code> and of <code class="docutils literal notranslate"><span class="pre">boolean</span></code> type; we call this the <cite>deletion column</cite>.</p></li>
+</ul>
+<p><cite>Atomic</cite> means any column whose type is not a non-frozen collection, non-frozen UDT, or a counter. Examples of atomic column types are: <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">timeuuid</span></code>, <code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">frozen&lt;map&lt;int,</span> <span class="pre">int&gt;&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">frozen&lt;my_type&gt;</span></code> (where <code class="docutils literal notranslate"><span class="pre">my_type</span></code> was created using a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TYPE</span></code> statement). Examples of non-atomic types are: <code class="docutils literal notranslate"><span class="pre">map&lt;int,</span> <span class="pre">int&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">set&lt;int&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">my_type</span></code>.</p>
+<p>These columns are filled in CDC log delta rows created for <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>, <code class="docutils literal notranslate"><span class="pre">INSERT</span></code>, and column <code class="docutils literal notranslate"><span class="pre">DELETE</span></code> statements, as explained in the <a class="reference internal" href="cdc-basic-operations.html"><span class="doc">basic operations</span></a> document. If the statement writes a non-null value to the column, its corresponding value column in the delta row gets filled with that exact value. If the statement writes a <code class="docutils literal notranslate"><span class="pre">null</span></code>, its corresponding deletion column in the delta row gets filled with <code class="docutils literal notranslate"><span class="pre">True</span></code>.</p>
+<p>For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="nb">int</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="k">null</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span> <span class="k">from</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>gives:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v    | cdc$deleted_v
+--------------------------------------+----+----+------+---------------
+ 9d764f58-2f32-11eb-ac58-84f095630d16 |  0 |  0 |    0 |          null
+ 9d768b58-2f32-11eb-5cf2-f8131733ca0b |  0 |  0 | null |          True
+</pre></div>
+</div>
+<p>The situation is more complicated for <cite>non-atomic</cite> columns. Each different case has its own section below.</p>
+<section id="maps">
+<span id="cdc-maps"></span><h2>Maps<a class="headerlink" href="#maps" title="Link to this heading">¶</a></h2>
+<p><strong>Note</strong>: everything in this section applies only to <cite>non-frozen</cite> maps. Frozen maps are atomic and behave in the same way as other atomic types (such as <cite>int</cite>). The same comment applies to sets and lists in sections below.</p>
+<p>Let’s start with an example.</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="k">map</span><span class="o">&lt;</span><span class="nb">int</span><span class="p">,</span> <span class="nb">text</span><span class="o">&gt;</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">DESCRIBE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>gives:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>CREATE TABLE ks.t_scylla_cdc_log (
+    ...
+    &quot;cdc$deleted_elements_v&quot; frozen&lt;set&lt;int&gt;&gt;,
+    &quot;cdc$deleted_v&quot; boolean,
+    ...
+    v frozen&lt;map&lt;int, text&gt;&gt;,
+    ...
+</pre></div>
+</div>
+<p>We replaced the irrelevant lines with <code class="docutils literal notranslate"><span class="pre">...</span></code>. The important information for us is the set of columns created for the <code class="docutils literal notranslate"><span class="pre">v</span> <span class="pre">map&lt;int,</span> <span class="pre">text&gt;</span></code> column; there are three:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">v</span></code>: it has the same name as the corresponding base column and its type is a <code class="docutils literal notranslate"><span class="pre">frozen</span></code> version of the base column’s type; the base type was <code class="docutils literal notranslate"><span class="pre">map&lt;int,</span> <span class="pre">text&gt;</span></code>, so this column’s type is <code class="docutils literal notranslate"><span class="pre">frozen&lt;map&lt;int,</span> <span class="pre">text&gt;&gt;</span></code>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_v</span></code>: its name is the base column’s name prefixed with <code class="docutils literal notranslate"><span class="pre">cdc$deleted_</span></code>, and its type is <code class="docutils literal notranslate"><span class="pre">boolean</span></code>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_v</span></code>: its name is the base column’s name prefixed with <code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_</span></code>, and its type is a frozen set whose element type is the base column’s key type. Since the base column’s type was <code class="docutils literal notranslate"><span class="pre">map&lt;int,</span> <span class="pre">text&gt;</span></code>, meaning that its key type is <code class="docutils literal notranslate"><span class="pre">int</span></code>, we obtained <code class="docutils literal notranslate"><span class="pre">frozen&lt;set&lt;int&gt;&gt;</span></code>.</p></li>
+</ul>
+<p>The general rule is: for each column <code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">map&lt;K,</span> <span class="pre">V&gt;</span></code> in the base table, where <code class="docutils literal notranslate"><span class="pre">X</span></code> is a column name and <code class="docutils literal notranslate"><span class="pre">K</span></code>, <code class="docutils literal notranslate"><span class="pre">V</span></code> are types, the CDC log table has 3 corresponding columns:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">frozen&lt;map&lt;K,</span> <span class="pre">V&gt;&gt;</span></code>, which we call the <cite>added elements column</cite>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_X</span> <span class="pre">boolean</span></code>, which we call the <cite>collection deletion column</cite>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_X</span> <span class="pre">frozen&lt;set&lt;K&gt;&gt;</span></code>, which we call the <cite>deleted elements column</cite>.</p></li>
+</ul>
+<section id="adding-elements">
+<h3>Adding elements<a class="headerlink" href="#adding-elements" title="Link to this heading">¶</a></h3>
+<p>The added elements column is filled when new elements are added to the map. Continuing our example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                  | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+--------------------+---------------+------------------------
+ e3ef7952-2f3f-11eb-dc8e-210f916d0a5b |  0 |  0 | {1: &#39;v1&#39;, 2: &#39;v2&#39;} |          null |                   null
+</pre></div>
+</div>
+</section>
+<section id="deleting-elements">
+<h3>Deleting elements<a class="headerlink" href="#deleting-elements" title="Link to this heading">¶</a></h3>
+<p>The deleted elements column is filled when elements are removed from the map:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">-</span> <span class="p">{</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">,</span> <span class="mf">3</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v    | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+------+---------------+------------------------
+ 5bb26094-2f40-11eb-63e9-a0d4519f9c1b |  0 |  0 | null |          null |              {1, 2, 3}
+</pre></div>
+</div>
+<p>Note that the elements don’t need to exist to be removed. Removing an element is expressed by adding a special <code class="docutils literal notranslate"><span class="pre">tombstone</span></code> value (as usual in Scylla) under the given key. Thus, we can understand the <code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_X</span></code> column as showing the set of keys which were assigned tombstones in the corresponding statement. Recall that a tombstone removes a value if its timestamp is greater than or equal to the value’s timestamp.</p>
+<p>Deleting values for specific keys in CQL as above can only be done using an <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> statement with the <code class="docutils literal notranslate"><span class="pre">-</span> <span class="pre">{...}</span></code> notation.</p>
+</section>
+<section id="deleting-the-entire-map">
+<h3>Deleting the entire map<a class="headerlink" href="#deleting-the-entire-map" title="Link to this heading">¶</a></h3>
+<p>The collection deletion column is set to <code class="docutils literal notranslate"><span class="pre">True</span></code> when a <cite>collection-wide</cite> tombstone is created; the tombstone removes <cite>all</cite> elements with timestamps lower than or equal to the tombstone’s timestamp. To delete an entire collection, either set the entire collection value to <code class="docutils literal notranslate"><span class="pre">null</span></code>, or to <code class="docutils literal notranslate"><span class="pre">{}</span></code>; both methods have the same effect:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="k">null</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v    | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+------+---------------+------------------------
+ 2fcc5e48-2f41-11eb-eb46-b59d059991a9 |  0 |  0 | null |          True |                   null
+ 2fcca81c-2f41-11eb-2332-1c30f8a2f717 |  0 |  0 | null |          True |                   null
+</pre></div>
+</div>
+</section>
+<section id="overwriting-maps">
+<h3>Overwriting maps<a class="headerlink" href="#overwriting-maps" title="Link to this heading">¶</a></h3>
+<p>A single <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> statement can be used to <cite>overwrite</cite> a collection using the <code class="docutils literal notranslate"><span class="pre">=</span> <span class="pre">{...}</span></code> notation. Overwriting is the same as creating a collection-wide tombstone and adding new elements at the same time. In other words, the following statement:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>is equivalent to the following:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">BEGIN</span> <span class="k">UNLOGGED</span> <span class="k">BATCH</span><span class="p">;</span>
+    <span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+    <span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">APPLY</span> <span class="k">BATCH</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>CDC understands this equivalence. Overwriting a map column <code class="docutils literal notranslate"><span class="pre">X</span></code> is expressed in CDC by setting both the <code class="docutils literal notranslate"><span class="pre">X</span></code> and <code class="docutils literal notranslate"><span class="pre">cdc$deleted_X</span></code> columns. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">BEGIN</span> <span class="k">UNLOGGED</span> <span class="k">BATCH</span>
+    <span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+    <span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">APPLY</span> <span class="k">BATCH</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                  | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+--------------------+---------------+------------------------
+ 555a4034-2f42-11eb-3e76-a6bbe7fa31b2 |  0 |  0 | {1: &#39;v1&#39;, 2: &#39;v2&#39;} |          True |                   null
+</pre></div>
+</div>
+<p>The same result would be obtained if we used a single <code class="docutils literal notranslate"><span class="pre">SET</span> <span class="pre">v</span> <span class="pre">=</span> <span class="pre">{1:</span> <span class="pre">'v1',</span> <span class="pre">2:</span> <span class="pre">'v2'}</span></code> statement.</p>
+<p>Deleting a map can be understood as a special case of overwriting with 0 elements.</p>
+<p><code class="docutils literal notranslate"><span class="pre">INSERT</span></code> statements can only overwrite (or delete) maps; with <code class="docutils literal notranslate"><span class="pre">INSERT</span></code>, there is no way to add elements to a map without overwriting it, since there is no notation for <code class="docutils literal notranslate"><span class="pre">INSERT</span></code> that would correspond to the <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>-specific <code class="docutils literal notranslate"><span class="pre">SET</span> <span class="pre">X</span> <span class="pre">=</span> <span class="pre">X</span> <span class="pre">+</span> <span class="pre">{...}</span></code> notation. There is also no way to remove specific keys with an <code class="docutils literal notranslate"><span class="pre">INSERT</span></code>.</p>
+<p>Example of using an <code class="docutils literal notranslate"><span class="pre">INSERT</span></code>, compared with an <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">0</span><span class="p">,</span> <span class="mf">0</span><span class="p">,</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">});</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$operation&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                  | cdc$deleted_v | cdc$deleted_elements_v | cdc$operation
+--------------------------------------+----+----+--------------------+---------------+------------------------+---------------
+ 90dd349e-2f43-11eb-fce8-46a663386323 |  0 |  0 | {1: &#39;v1&#39;, 2: &#39;v2&#39;} |          True |                   null |             2
+ 90dd91b4-2f43-11eb-7ee7-e37ab84122d4 |  0 |  0 | {1: &#39;v1&#39;, 2: &#39;v2&#39;} |          True |                   null |             1
+</pre></div>
+</div>
+<p>As we can see, the effect on the <code class="docutils literal notranslate"><span class="pre">v</span></code>-related columns for <code class="docutils literal notranslate"><span class="pre">INSERT</span></code> is the same as for <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>. Which statement was used can be determined by the <code class="docutils literal notranslate"><span class="pre">cdc$operation</span></code> column. The exact difference between the two types of statements was explained in the <a class="reference internal" href="cdc-basic-operations.html"><span class="doc">basic operations</span></a> document.</p>
+</section>
+</section>
+<section id="collection-wide-tombstones-and-timestamps">
+<span id="cdc-collection-tombstones"></span><h2>Collection-wide tombstones and timestamps<a class="headerlink" href="#collection-wide-tombstones-and-timestamps" title="Link to this heading">¶</a></h2>
+<p>The examples in this section use maps, but the discussion applies to <strong>all</strong> non-frozen collections: maps, sets, and lists, and even to non-frozen UDTs.</p>
+<p>Executing the following statements:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">BEGIN</span> <span class="k">UNLOGGED</span> <span class="k">BATCH</span>
+    <span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+    <span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">APPLY</span> <span class="k">BATCH</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">from</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>is equivalent to:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">from</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>and gives:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> pk | ck | v
+----+----+--------------------
+  0 |  0 | {1: &#39;v1&#39;, 2: &#39;v2&#39;}
+</pre></div>
+</div>
+<p>We’ve explained that the <code class="docutils literal notranslate"><span class="pre">SET</span> <span class="pre">v</span> <span class="pre">=</span> <span class="pre">{...}</span></code> notation creates a <cite>collection-wide tombstone</cite>, and tombstones delete all values that have timestamps lower than or equal to the tombstone’s timestamp. How is it then possible to both delete a collection and add elements to it in the same statement?</p>
+<p>Each CQL statement that arrives to Scylla comes with a timestamp (or multiple timestamps, in case of specially constructed batches, but that’s rare); generally, it is the timestamp that’s assigned to the written data. However, collection-wide tombstones written by <code class="docutils literal notranslate"><span class="pre">UPDATE</span> <span class="pre">...</span> <span class="pre">SET</span> <span class="pre">X</span> <span class="pre">=</span> <span class="pre">{...}</span></code> statements or <code class="docutils literal notranslate"><span class="pre">INSERT</span></code> statements are an exception.</p>
+<p>The rule is as follows:</p>
+<blockquote>
+<div><p>Given an <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> or an <code class="docutils literal notranslate"><span class="pre">INSERT</span></code> statement, if the timestamp of this statement is <code class="docutils literal notranslate"><span class="pre">T</span></code>, then the timestamp of collection-wide tombstones written by this statement is <code class="docutils literal notranslate"><span class="pre">T</span> <span class="pre">-</span> <span class="pre">1</span></code>.</p>
+</div></blockquote>
+<p>This is what makes the above behavior possible. Suppose that the statement</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>has timestamp <code class="docutils literal notranslate"><span class="pre">T</span></code>. It is translated by Scylla into 3 pieces of information: an element <code class="docutils literal notranslate"><span class="pre">(1,</span> <span class="pre">'v1')</span></code> with timestamp <code class="docutils literal notranslate"><span class="pre">T</span></code>, an element <code class="docutils literal notranslate"><span class="pre">(2,</span> <span class="pre">'v2')</span></code> with timestamp <code class="docutils literal notranslate"><span class="pre">T</span></code>, and a collection-wide tombstone with timestamp <code class="docutils literal notranslate"><span class="pre">T-1</span></code>. The tombstone will therefore remove all elements that have timestamps lower than or equal to <code class="docutils literal notranslate"><span class="pre">T</span> <span class="pre">-</span> <span class="pre">1</span></code>, but will not remove the elements <code class="docutils literal notranslate"><span class="pre">(1,</span> <span class="pre">'v1'),</span> <span class="pre">(2,</span> <span class="pre">'v2')</span></code>, since their timestamps are greater.</p>
+<p><strong>Warning</strong>: this rule <strong>does not</strong> apply when deleting collections using a column <code class="docutils literal notranslate"><span class="pre">DELETE</span></code>. In that case, the original timestamp is used. The following example illustrates that:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">BEGIN</span> <span class="k">UNLOGGED</span> <span class="k">BATCH</span>
+    <span class="k">DELETE</span> <span class="n">v</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+    <span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">APPLY</span> <span class="k">BATCH</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">from</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>gives:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> pk | ck | v
+----+----+---
+
+(0 rows)
+</pre></div>
+</div>
+<p>In this example, the elements <code class="docutils literal notranslate"><span class="pre">(1,</span> <span class="pre">'v1'),</span> <span class="pre">(2,</span> <span class="pre">'v2')</span></code> were given the same timestamp as the tombstone coming from the <code class="docutils literal notranslate"><span class="pre">DELETE</span></code> statement (by default, all statements in a <code class="docutils literal notranslate"><span class="pre">BATCH</span></code> are given the same timestamp), hence they were deleted by that tombstone.</p>
+<p>CDC takes this rule into account when calculating the value of the <code class="docutils literal notranslate"><span class="pre">cdc$time</span></code> column. Recall from the <a class="reference internal" href="cdc-log-table.html"><span class="doc">CDC log table</span></a> document that the <code class="docutils literal notranslate"><span class="pre">cdc$time</span></code> column is a <cite>timeuuid</cite> that contains a timestamp. Usually, when we write a cell to the base table, a corresponding row in the CDC log table appears whose <code class="docutils literal notranslate"><span class="pre">cdc$time</span></code> is a timeuuid whose timestamp is equal to the timestamp of the written cell. However, collection-wide tombstones are an exception; because of the above rule, the CDC log row which informs about the tombstone (i.e. one which has <code class="docutils literal notranslate"><span class="pre">cdc$deleted_X</span></code> column set to <code class="docutils literal notranslate"><span class="pre">True</span></code>) has <code class="docutils literal notranslate"><span class="pre">cdc$time</span></code> such that its timestamp is the timestamp of the collection-wide tombstone <cite>increased by 1</cite>.</p>
+<p>We already saw this phenomenon before. Consider the following example, where we pick the timestamp manually:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">USING</span> <span class="nb">TIMESTAMP</span> <span class="mf">1606390225588947</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                  | cdc$deleted_v
+--------------------------------------+----+----+--------------------+---------------
+ c72c7c3e-2fda-11eb-ba1d-e2d8e9bb0299 |  0 |  0 | {1: &#39;v1&#39;, 2: &#39;v2&#39;} |          True
+</pre></div>
+</div>
+<p>There is a <cite>single row</cite> that informs both about the collection-wide tombstone and the elements <code class="docutils literal notranslate"><span class="pre">(1,</span> <span class="pre">'v1'),</span> <span class="pre">(2,</span> <span class="pre">'v2')</span></code> written by the <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>, even though the tombstone and the elements have different timestamps, as previously explained. The timestamp of this timeuuid in microseconds (which we can obtain using the Python snippet from the aforementioned document) is <code class="docutils literal notranslate"><span class="pre">1606390225588947</span></code>, i.e. the one we picked. By our previous discussion, this means that the timestamp of the elements is <code class="docutils literal notranslate"><span class="pre">1606390225588947</span></code> and the timestamp of the collection-wide tombstone is <code class="docutils literal notranslate"><span class="pre">1606390225588946</span></code>.</p>
+<p>This is how CDC compensates for the collection-wide tombstone rule. If it didn’t, i.e. if it instead always enforced that <code class="docutils literal notranslate"><span class="pre">cdc$time</span></code>’s timestamp is the same as the timestamp of all elements and tombstones of the base write, the above example would have to produce two rows with different <code class="docutils literal notranslate"><span class="pre">cdc$time</span></code> values, one for the collection-wide tombstone and one for the elements.</p>
+<p>This compensation may introduce confusion when using column deletes, which are an exception to the rule. When we delete a collection column using a <code class="docutils literal notranslate"><span class="pre">DELETE</span></code> statement, the original timestamp of the write is used, but <cite>CDC still applies the compensation</cite>, i.e. the <code class="docutils literal notranslate"><span class="pre">cdc$time</span></code>’s timestamp is then equal to the timestamp of the <code class="docutils literal notranslate"><span class="pre">DELETE</span></code> increased by 1:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">DELETE</span> <span class="n">v</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">USING</span> <span class="nb">TIMESTAMP</span> <span class="mf">1606390225588947</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v    | cdc$deleted_v
+--------------------------------------+----+----+------+---------------
+ c72c7c48-2fda-11eb-1510-6f4271ad8200 |  0 |  0 | null |          True
+</pre></div>
+</div>
+<p>the timestamp of this timeuuid is <code class="docutils literal notranslate"><span class="pre">1606390225588948</span></code>, i.e. it is the timestamp used in the delete statement increased by 1.</p>
+<p>Another example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">BEGIN</span> <span class="k">UNLOGGED</span> <span class="k">BATCH</span>
+    <span class="k">DELETE</span> <span class="n">v</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">USING</span> <span class="nb">TIMESTAMP</span> <span class="mf">1606390225588946</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+    <span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">USING</span> <span class="nb">TIMESTAMP</span> <span class="mf">1606390225588947</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span> <span class="s1">&#39;v1&#39;</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span> <span class="s1">&#39;v2&#39;</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">APPLY</span> <span class="k">BATCH</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                  | cdc$deleted_v
+--------------------------------------+----+----+--------------------+---------------
+ c72c7c3e-2fda-11eb-b78e-840de9f2b0dd |  0 |  0 | {1: &#39;v1&#39;, 2: &#39;v2&#39;} |          True
+</pre></div>
+</div>
+</section>
+<section id="sets">
+<h2>Sets<a class="headerlink" href="#sets" title="Link to this heading">¶</a></h2>
+<p>Non-frozen sets behave similarly to non-frozen maps. In fact, we can think of them as special cases of maps, where the type of the value is a <cite>unit</cite> type, i.e. a type with exactly one possible value. The only difference in CDC is the type of the of the added elements column in the CDC log table; instead of a frozen map, we’re using a frozen set.</p>
+<p>For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="k">set</span><span class="o">&lt;</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">DESCRIBE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>gives:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>CREATE TABLE ks.t_scylla_cdc_log (
+    ...
+    &quot;cdc$deleted_elements_v&quot; frozen&lt;set&lt;int&gt;&gt;,
+    &quot;cdc$deleted_v&quot; boolean,
+    ...
+    v frozen&lt;set&lt;int&gt;&gt;,
+    ...
+</pre></div>
+</div>
+<p>For each column <code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">set&lt;K&gt;</span></code> in the base table, where <code class="docutils literal notranslate"><span class="pre">X</span></code> is a column name and <code class="docutils literal notranslate"><span class="pre">K</span></code> is a type, the CDC log table has 3 corresponding columns:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">frozen&lt;set&lt;K&gt;&gt;</span></code>, the <cite>added elements column</cite>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_X</span> <span class="pre">boolean</span></code>, the <cite>collection deletion column</cite>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_X</span> <span class="pre">frozen&lt;set&lt;K&gt;&gt;</span></code>, the <cite>deleted elements column</cite>.</p></li>
+</ul>
+<section id="id1">
+<h3>Adding elements<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<p>The <cite>added elements</cite> column describes new elements added to the set:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">{</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v      | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+--------+---------------+------------------------
+ d67d19b2-2fe1-11eb-d2a2-1f69144504ce |  0 |  0 | {1, 2} |          null |                   null
+</pre></div>
+</div>
+</section>
+<section id="id2">
+<h3>Deleting elements<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<p>The <cite>deleted elements</cite> column describes elements that are removed from the set:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">-</span> <span class="p">{</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">,</span> <span class="mf">3</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v    | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+------+---------------+------------------------
+ eef36438-2fe1-11eb-b7b0-c0a03f64d719 |  0 |  0 | null |          null |              {1, 2, 3}
+</pre></div>
+</div>
+</section>
+<section id="deleting-and-overwriting-sets">
+<h3>Deleting and overwriting sets<a class="headerlink" href="#deleting-and-overwriting-sets" title="Link to this heading">¶</a></h3>
+<p>The collection deletion column is set to <code class="docutils literal notranslate"><span class="pre">True</span></code> when a collection-wide tombstone is created. Furthermore, a single <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> or <code class="docutils literal notranslate"><span class="pre">INSERT</span></code> statement can be used to <cite>overwrite</cite> a set using the <code class="docutils literal notranslate"><span class="pre">=</span> <span class="pre">{...}</span></code> notation, which is the same as creating a collection-wide tombstone and adding new elements at the same time. The behavior is the same as for maps. Example for deleting follows:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="k">null</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v    | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+------+---------------+------------------------
+ 1c89ecc8-2fe2-11eb-f3d0-c8f925d280df |  0 |  0 | null |          True |                   null
+ 1c8a2850-2fe2-11eb-ad18-c31ba093947b |  0 |  0 | null |          True |                   null
+</pre></div>
+</div>
+<p>Another example for overwriting:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v      | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+--------+---------------+------------------------
+ 78a546ec-2fe2-11eb-3dda-ce195f6906c6 |  0 |  0 | {1, 2} |          True |                   null
+</pre></div>
+</div>
+<p>The rules for timestamps described in the <a class="reference internal" href="#cdc-collection-tombstones"><span class="std std-ref">Collection-wide tombstones and timestamps</span></a> section apply.</p>
+</section>
+</section>
+<section id="lists">
+<h2>Lists<a class="headerlink" href="#lists" title="Link to this heading">¶</a></h2>
+<p>Non-frozen lists are possibly the weirdest types you can find in Scylla (and Cassandra). Perhaps it’s surprising when we say that non-frozen lists are also special cases of non-frozen maps; when querying tables that use lists, however, the <cite>key</cite> is hidden and only the values are shown. The type of the key used in the internal map representation of a list is <code class="docutils literal notranslate"><span class="pre">timeuuid</span></code>.</p>
+<p>Although you can’t see list keys when using CQL read queries, you can <cite>update</cite> the value under any given key. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="k">list</span><span class="o">&lt;</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">));</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span><span class="p">[</span><span class="n">SCYLLA_TIMEUUID_LIST_INDEX</span><span class="p">(</span><span class="m">839e7120-2fe4-11eb-af55-000000000001</span><span class="p">)]</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Thus, the syntax is:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="mf">...</span> <span class="k">SET</span> <span class="n">X</span><span class="p">[</span><span class="n">SCYLLA_TIMEUUID_LIST_INDEX</span><span class="p">(</span><span class="n">k</span><span class="p">)]</span> <span class="o">=</span> <span class="n">v</span> <span class="k">WHERE</span> <span class="mf">...</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>where <code class="docutils literal notranslate"><span class="pre">X</span></code> is the list column name, <code class="docutils literal notranslate"><span class="pre">k</span></code> is a timeuuid, and <code class="docutils literal notranslate"><span class="pre">v</span></code> is a value of the list’s value type.</p>
+<p>The keys define the order of elements in the list. When using the standard list update syntax (e.g. <code class="docutils literal notranslate"><span class="pre">SET</span> <span class="pre">v</span> <span class="pre">=</span> <span class="pre">v</span> <span class="pre">+</span> <span class="pre">[1,</span> <span class="pre">2]</span></code>), the timeuuids are automatically generated by Scylla using the current time. This method allows fast, conflict-free concurrent updates to the list (such as appending or prepending elements). This list representation is a simple example of a <a class="reference external" href="https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type">CRDT</a>.</p>
+<p>In the CDC log table, the key is revealed to the user. The design goals of CDC enforce this: the user should have the possibility of replaying <cite>the exact same sequence of changes</cite> to another Scylla cluster in order to obtain the same result. In the case of lists, one can’t allow the other cluster to generate the timeuuids since the resulting order of elements in the list may end up different; the user must specify the keys on their own, thus they must be able to learn what the keys are in the first place.</p>
+<p>Let’s start with an example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="k">list</span><span class="o">&lt;</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">DESCRIBE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>CREATE TABLE ks.t_scylla_cdc_log (
+    ...
+    &quot;cdc$deleted_elements_v&quot; frozen&lt;set&lt;timeuuid&gt;&gt;,
+    &quot;cdc$deleted_v&quot; boolean,
+    ...
+    v frozen&lt;map&lt;timeuuid, int&gt;&gt;,
+    ...
+</pre></div>
+</div>
+<p>After reading the <a class="reference internal" href="#cdc-maps"><span class="std std-ref">Maps</span></a> section and the above discussion one shouldn’t be surprised by the resulting types. If one remembers that <code class="docutils literal notranslate"><span class="pre">list&lt;V&gt;</span></code> is syntactic sugar for <code class="docutils literal notranslate"><span class="pre">map&lt;timeuuid,</span> <span class="pre">V&gt;</span></code> everything else should become obvious.</p>
+<p>For each column <code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">list&lt;V&gt;</span></code> in the base table, where <code class="docutils literal notranslate"><span class="pre">X</span></code> is a column name and <code class="docutils literal notranslate"><span class="pre">V</span></code> is a type, the CDC log table has 3 corresponding columns:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">frozen&lt;map&lt;timeuuid,</span> <span class="pre">V&gt;&gt;</span></code>, the <cite>added elements column</cite>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_X</span> <span class="pre">boolean</span></code>, the <cite>collection deletion column</cite>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_X</span> <span class="pre">frozen&lt;set&lt;timeuuid&gt;&gt;</span></code>, the <cite>deleted elements column</cite>.</p></li>
+</ul>
+<section id="id3">
+<h3>Adding elements<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<p>The added elements column is filled when new elements are added to the list:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">[</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">]</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                                                                                  | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+------------------------------------------------------------------------------------+---------------+------------------------
+ db320398-2fe9-11eb-6e4b-cb8fd582dbb5 |  0 |  0 | {db3214f0-2fe9-11eb-af55-000000000001: 1, db3214f1-2fe9-11eb-af55-000000000001: 2} |          null |                   null
+</pre></div>
+</div>
+<p>example of using the <code class="docutils literal notranslate"><span class="pre">SCYLLA_TIMEUUID_LIST_INDEX</span></code> syntax:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span><span class="p">[</span><span class="n">SCYLLA_TIMEUUID_LIST_INDEX</span><span class="p">(</span><span class="m">0dd381f0-2fea-11eb-af55-000000000001</span><span class="p">)]</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                                         | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+-------------------------------------------+---------------+------------------------
+ 21c6a3fe-2fea-11eb-15ca-5fb980489b57 |  0 |  0 | {0dd381f0-2fea-11eb-af55-000000000001: 0} |          null |                   null
+</pre></div>
+</div>
+<p>as we can see, the added element’s key is equal to the timeuuid we’ve used in the <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> statement.</p>
+</section>
+<section id="id4">
+<h3>Deleting elements<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<p>The <cite>deleted elements</cite> column describes elements that are removed from the list. Scylla offers the <code class="docutils literal notranslate"><span class="pre">v</span> <span class="pre">=</span> <span class="pre">v</span> <span class="pre">-</span> <span class="pre">[...]</span></code> syntax for removing all elements whose values appear in the provided list of values. To do this, Scylla first performs a read, obtaining the set of all keys that contain the values from the provided list, and then writes a tombstone for each obtained key. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">[</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">,</span> <span class="mf">1</span><span class="p">,</span> <span class="mf">3</span><span class="p">]</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">-</span> <span class="p">[</span><span class="mf">1</span><span class="p">]</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                                                                                                                                                                    | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+---------------+------------------------------------------------------------------------------
+ cc5bb172-2fec-11eb-2396-140c0c098ef0 |  0 |  0 | {cc5baec0-2fec-11eb-af55-000000000001: 1, cc5baec1-2fec-11eb-af55-000000000001: 2, cc5baec2-2fec-11eb-af55-000000000001: 1, cc5baec3-2fec-11eb-af55-000000000001: 3} |          null |                                                                         null
+ cc5bfc40-2fec-11eb-24e1-0da297c23c66 |  0 |  0 |                                                                                                                                                                 null |          null | {cc5baec0-2fec-11eb-af55-000000000001, cc5baec2-2fec-11eb-af55-000000000001}
+</pre></div>
+</div>
+<p>We can see how the deleted keys in the second row are the same as the keys that were assigned to the list elements with value <code class="docutils literal notranslate"><span class="pre">1</span></code> in the first row. The resulting list is <code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">3]</span></code>, represented by the map <code class="docutils literal notranslate"><span class="pre">{cc5baec1-2fec-11eb-af55-000000000001:</span> <span class="pre">2,</span> <span class="pre">cc5baec3-2fec-11eb-af55-000000000001:</span> <span class="pre">3}</span></code> underneath.</p>
+<p>You can also delete the value under a specific key:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span><span class="p">[</span><span class="n">SCYLLA_TIMEUUID_LIST_INDEX</span><span class="p">(</span><span class="m">cc5baec0-2fec-11eb-af55-000000000001</span><span class="p">)]</span> <span class="o">=</span> <span class="k">null</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v    | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+------+---------------+----------------------------------------
+ 23158f88-2fed-11eb-0968-538fd19b1920 |  0 |  0 | null |          null | {cc5baec0-2fec-11eb-af55-000000000001}
+</pre></div>
+</div>
+</section>
+<section id="deleting-and-overwriting-lists">
+<h3>Deleting and overwriting lists<a class="headerlink" href="#deleting-and-overwriting-lists" title="Link to this heading">¶</a></h3>
+<p>The collection deletion column is set to <code class="docutils literal notranslate"><span class="pre">True</span></code> when a collection-wide tombstone is created. Furthermore, a single <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> or <code class="docutils literal notranslate"><span class="pre">INSERT</span></code> statement can be used to <cite>overwrite</cite> a list using the <code class="docutils literal notranslate"><span class="pre">=</span> <span class="pre">[...]</span></code> notation, which is the same as creating a collection-wide tombstone and adding new elements at the same time. The behavior is the same as for maps. Example for deleting:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="k">null</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">[]</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v    | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+------+---------------+------------------------
+ fe29e712-2fee-11eb-ae33-9223dde04e80 |  0 |  0 | null |          True |                   null
+ fe2a31e0-2fee-11eb-6a46-0da9bf86f6e9 |  0 |  0 | null |          True |                   null
+</pre></div>
+</div>
+<p>Another example for overwriting:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">[</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">]</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                                                                                  | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+------------------------------------------------------------------------------------+---------------+------------------------
+ 276b9724-2fef-11eb-d5b0-dbccd2164c64 |  0 |  0 | {276b8860-2fef-11eb-af55-000000000001: 1, 276b8861-2fef-11eb-af55-000000000001: 2} |          True |                   null
+</pre></div>
+</div>
+<p>The rules for timestamps described in the <a class="reference internal" href="#cdc-collection-tombstones"><span class="std std-ref">Collection-wide tombstones and timestamps</span></a> section apply.</p>
+</section>
+</section>
+<section id="user-defined-types">
+<h2>User Defined Types<a class="headerlink" href="#user-defined-types" title="Link to this heading">¶</a></h2>
+<p>Unsurprisingly, non-frozen UDTs are also special cases of non-frozen maps. This time the key type is <code class="docutils literal notranslate"><span class="pre">smallint</span></code> and the keys stand for field indices. When using UDTs one refers to the field names and Scylla translates them to keys (field indices) using schema internal definitions.</p>
+<p>Understanding the correspondence between field names and field indices is important when using CDC with non-frozen UDT columns. Everything then works the same as for maps.</p>
+<p>Let’s start with an example.</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TYPE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">ut</span> <span class="p">(</span><span class="n">a</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span> <span class="nb">int</span><span class="p">,</span> <span class="n">c</span> <span class="nb">int</span><span class="p">);</span>
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="n">ut</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">DESCRIBE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>CREATE TABLE ks.t_scylla_cdc_log (
+    ...
+    &quot;cdc$deleted_elements_v&quot; frozen&lt;set&lt;smallint&gt;&gt;,
+    &quot;cdc$deleted_v&quot; boolean,
+    ...
+    v frozen&lt;ut&gt;,
+    ...
+</pre></div>
+</div>
+<p>For each column <code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">T</span></code> in the base table, where <code class="docutils literal notranslate"><span class="pre">X</span></code> is a column name and <code class="docutils literal notranslate"><span class="pre">T</span></code> is a user-defined-type, the CDC log table has 3 corresponding columns:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">frozen&lt;T&gt;</span></code>, the <cite>added elements column</cite>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_X</span> <span class="pre">boolean</span></code>, the <cite>collection deletion column</cite>,</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_X</span> <span class="pre">frozen&lt;set&lt;smallint&gt;&gt;</span></code>, the <cite>deleted elements column</cite>.</p></li>
+</ul>
+<section id="id5">
+<h3>Adding elements<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<p>The added elements column is filled when non-null values are assigned to the fields of the user type:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span><span class="mf">.</span><span class="n">a</span> <span class="o">=</span> <span class="mf">0</span><span class="p">,</span> <span class="n">v</span><span class="mf">.</span><span class="n">b</span> <span class="o">=</span> <span class="mf">1</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                     | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+-----------------------+---------------+------------------------
+ 6380f682-2ff4-11eb-c312-0e51af7972af |  0 |  0 | {a: 0, b: 1, c: null} |          null |                   null
+</pre></div>
+</div>
+<p>All fields that were not assigned a non-null value are shown as <code class="docutils literal notranslate"><span class="pre">null</span></code> in the added elements column (in this case, <code class="docutils literal notranslate"><span class="pre">c:</span> <span class="pre">null</span></code>). Note that this is only an artifact of the CQL syntax and <strong>does not mean that the fields were deleted</strong>: field deletions are shown in the <code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_X</span></code> column, as we will see in the next subsection.</p>
+</section>
+<section id="id6">
+<h3>Deleting elements<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<p>The deleted elements column is filled when fields are set to <code class="docutils literal notranslate"><span class="pre">null</span></code>:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span><span class="mf">.</span><span class="n">a</span> <span class="o">=</span> <span class="k">null</span><span class="p">,</span> <span class="n">v</span><span class="mf">.</span><span class="n">b</span> <span class="o">=</span> <span class="k">null</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                           | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+-----------------------------+---------------+------------------------
+ d5da679a-2ff4-11eb-6db1-fb8aacbc8bca |  0 |  0 | {a: null, b: null, c: null} |          null |                 {0, 1}
+</pre></div>
+</div>
+<p>as we can see, two field indices were shown in the <code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_v</span></code> column: the index <code class="docutils literal notranslate"><span class="pre">0</span></code> corresponds to field <code class="docutils literal notranslate"><span class="pre">a</span></code>, and the index <code class="docutils literal notranslate"><span class="pre">1</span></code> corresponds to field <code class="docutils literal notranslate"><span class="pre">b</span></code>. As explained in the <cite>Adding elements</cite> subsection above, since no field was assigned a non-null value, the <code class="docutils literal notranslate"><span class="pre">v</span></code> column shows each field as <code class="docutils literal notranslate"><span class="pre">null</span></code> (for no reason other than a CQL syntax quirk).</p>
+<p>The indices are assigned to fields consecutively, starting from <code class="docutils literal notranslate"><span class="pre">0</span></code>, in the order that the fields are listed in the result of <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">TYPE</span></code> statement. For example, suppose that the following statement:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">DESCRIBE</span> <span class="k">TYPE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">ut</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>gives the following result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>CREATE TYPE ks.ut (
+    a int,
+    b int,
+    c int
+);
+</pre></div>
+</div>
+<p>The fields <code class="docutils literal notranslate"><span class="pre">a</span></code>, <code class="docutils literal notranslate"><span class="pre">b</span></code>, <code class="docutils literal notranslate"><span class="pre">c</span></code> are assigned indices <code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">2</span></code> correspondingly. Renaming a field does not change its placement in the order, therefore it does not change the index that it’s assigned to. You can’t remove a field. You can only add a field, in which case the new field is assigned the next free index. Continuing the above example, suppose you execute the statement</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">ALTER</span> <span class="k">TYPE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">ut</span> <span class="k">ADD</span> <span class="n">d</span> <span class="nb">int</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The field <code class="docutils literal notranslate"><span class="pre">d</span></code> will be assigned index <code class="docutils literal notranslate"><span class="pre">3</span></code> (assuming there was no concurrent <code class="docutils literal notranslate"><span class="pre">ALTER</span> <span class="pre">TYPE</span></code> performed which executed before the above statement; use <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">TYPE</span></code> to learn what the end result is).</p>
+<p>The following example illustrates how the same statement can both set a non-null value to one of the fields and remove another:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span><span class="mf">.</span><span class="n">a</span> <span class="o">=</span> <span class="mf">42</span><span class="p">,</span> <span class="n">v</span><span class="mf">.</span><span class="n">c</span> <span class="o">=</span> <span class="k">null</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                         | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+---------------------------+---------------+------------------------
+ e0debf6e-2ff5-11eb-0509-e0877d00c0c2 |  0 |  0 | {a: 42, b: null, c: null} |          null |                    {2}
+</pre></div>
+</div>
+<p>The index <code class="docutils literal notranslate"><span class="pre">2</span></code> corresponds to field <code class="docutils literal notranslate"><span class="pre">c</span></code>, so the deleted elements set contains <code class="docutils literal notranslate"><span class="pre">2</span></code>, as expected.</p>
+<p>Unfortunately, Scylla offers no syntax to operate directly on field indices; you can only perform writes using field names. Thus, to replay a CDC log entry which contains user type field deletions, you must manually translate the field indices to field names using the rule explained above.</p>
+</section>
+<section id="deleting-and-overwriting-udts">
+<h3>Deleting and overwriting UDTs<a class="headerlink" href="#deleting-and-overwriting-udts" title="Link to this heading">¶</a></h3>
+<p>The collection deletion column is set to <code class="docutils literal notranslate"><span class="pre">True</span></code> when a collection-wide tombstone is created. Furthermore, a single <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> or <code class="docutils literal notranslate"><span class="pre">INSERT</span></code> statement can be used to <cite>overwrite</cite> a set using the <code class="docutils literal notranslate"><span class="pre">=</span> <span class="pre">{...}</span></code> notation, which is the same as creating a collection-wide tombstone and adding new elements at the same time. The behavior is the same as for maps. Example for deleting follows:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="k">null</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                           | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+-----------------------------+---------------+------------------------
+ 0176e250-2ff7-11eb-fcff-e94971544fd7 |  0 |  0 | {a: null, b: null, c: null} |          True |                   null
+</pre></div>
+</div>
+<p>Another example for overwriting:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="n">a</span><span class="p">:</span> <span class="mf">1</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="mf">2</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | pk | ck | v                     | cdc$deleted_v | cdc$deleted_elements_v
+--------------------------------------+----+----+-----------------------+---------------+------------------------
+ 17a530b8-2ff7-11eb-ce58-8914310ad1e2 |  0 |  0 | {a: 1, b: 2, c: null} |          True |                   null
+</pre></div>
+</div>
+<p>The rules for timestamps described in the <a class="reference internal" href="#cdc-collection-tombstones"><span class="std std-ref">Collection-wide tombstones and timestamps</span></a> section apply.</p>
+</section>
+</section>
+<section id="counters">
+<h2>Counters<a class="headerlink" href="#counters" title="Link to this heading">¶</a></h2>
+<p>Counters are currently not supported in CDC. If you try to enable CDC on a table with counters, a message like the following will be generated:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>Cannot create CDC log for table ks.t. Counter support not implemented.
+</pre></div>
+</div>
+<p>You can track the counter support issue here: <a class="reference external" href="https://github.com/scylladb/scylla/issues/6013">https://github.com/scylladb/scylla/issues/6013</a>.</p>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Advanced column types&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.2/using-scylla/cdc/cdc-advanced-types%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="cdc-querying-streams.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Querying CDC Streams
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="cdc-preimages.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />Preimages and postimages
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Advanced column types&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.2/using-scylla/cdc/cdc-advanced-types%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/using-scylla/cdc/cdc-advanced-types.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">Advanced column types</a><ul>
+<li><a class="reference internal" href="#maps">Maps</a><ul>
+<li><a class="reference internal" href="#adding-elements">Adding elements</a></li>
+<li><a class="reference internal" href="#deleting-elements">Deleting elements</a></li>
+<li><a class="reference internal" href="#deleting-the-entire-map">Deleting the entire map</a></li>
+<li><a class="reference internal" href="#overwriting-maps">Overwriting maps</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#collection-wide-tombstones-and-timestamps">Collection-wide tombstones and timestamps</a></li>
+<li><a class="reference internal" href="#sets">Sets</a><ul>
+<li><a class="reference internal" href="#id1">Adding elements</a></li>
+<li><a class="reference internal" href="#id2">Deleting elements</a></li>
+<li><a class="reference internal" href="#deleting-and-overwriting-sets">Deleting and overwriting sets</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#lists">Lists</a><ul>
+<li><a class="reference internal" href="#id3">Adding elements</a></li>
+<li><a class="reference internal" href="#id4">Deleting elements</a></li>
+<li><a class="reference internal" href="#deleting-and-overwriting-lists">Deleting and overwriting lists</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#user-defined-types">User Defined Types</a><ul>
+<li><a class="reference internal" href="#id5">Adding elements</a></li>
+<li><a class="reference internal" href="#id6">Deleting elements</a></li>
+<li><a class="reference internal" href="#deleting-and-overwriting-udts">Deleting and overwriting UDTs</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#counters">Counters</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                5.2
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="../../../stable/index.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-6.1/using-scylla/cdc/cdc-advanced-types.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-6.0/using-scylla/cdc/cdc-advanced-types.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.4/using-scylla/cdc/cdc-advanced-types.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="cdc-advanced-types.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.1/using-scylla/cdc/cdc-advanced-types.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../getting-started/index.html">Getting Started</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../getting-started/install-scylla/index.html">Install ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/unified-installer.html">ScyllaDB Unified Installer (relocatable executable)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/rpm-info.html">What is in each RPM</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/disable-housekeeping.html">ScyllaDB Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/dev-mod.html">ScyllaDB Developer Mode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/config-commands.html">ScyllaDB Configuration Reference</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/configure.html">Configure ScyllaDB</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/os-support.html">OS Support by Linux Distributions and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/scylla-in-a-shared-environment.html">ScyllaDB in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../migrate-scylla.html">Migrate to ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migration Process from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cassandra-compatibility.html">Scylla and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-spark.html">Integrate Scylla with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-kairos.html">Integrate Scylla with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-presto.html">Integrate Scylla with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-elasticsearch.html">Integrate Scylla with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-k8.html">Integrate Scylla with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-janus.html">Integrate Scylla with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-datadog.html">Integrate Scylla with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-kafka.html">Integrate Scylla with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-iota.html">Integrate Scylla with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-spring.html">Integrate Scylla with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-ansible.html">Install Scylla with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-databricks.html">Integrate Scylla with Databricks</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../operating-scylla/index.html">ScyllaDB for Administrators</a><input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../operating-scylla/admin.html">Administration Guide</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../operating-scylla/procedures/index.html">Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/benchmarking-scylla.html">Benchmarking Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migrate from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../operating-scylla/security/index.html">Security</a><input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/security-checklist.html">ScyllaDB Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/auditing.html">ScyllaDB Auditing Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/encryption-at-rest.html">Encryption at Rest</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/ldap-authentication.html">LDAP Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/ldap-authorization.html">LDAP Authorization (Role Management)</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../operating-scylla/admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/rest.html">REST</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/scylla-sstable.html">Scylla SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/scylla-types.html">Scylla Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/sstable2json.html">SSTable2json</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/logging.html">Scylla Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/virtual-tables.html">Virtual Tables</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/upgrade-opensource/index.html">ScyllaDB Open Source Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/upgrade-to-enterprise/index.html">ScyllaDB Open Source to ScyllaDB Enterprise Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/ami-upgrade.html">ScyllaDB Image</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html">ScyllaDB Enterprise</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../operating-scylla/system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/system-configuration/snitch.html">ScyllaDB Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../operating-scylla/benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">ScyllaDB for Developers</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2 has-children"><a class="reference internal" href="../learn.html">Learn To Use ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/">Scylla University</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/available-courses/">Course catalog</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/scylla-essentials-overview/">Scylla Essentials</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/">Basic Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/">Advanced Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/">MMS - Learn by Example</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://iot.scylladb.com/">Care-Pet an IoT Use Case and Example</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/index.html">Scylla Alternator</a></li>
+<li class="toctree-l2 current has-children"><a class="reference internal" href="../features.html">Scylla Features</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l3 current"><a class="reference internal" href="../features-open-source.html">Scylla Open Source Features</a></li>
+<li class="toctree-l3 current current-page"><a class="reference internal" href="../features-ent.html">Scylla Enterprise Features</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../drivers/index.html">Scylla Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../drivers/cql-drivers/index.html">Scylla CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../drivers/dynamo-drivers/index.html">Scylla DynamoDB Drivers</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../workload-attributes.html">Workload Attributes</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../cql/index.html">CQL Reference</a><input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/ddl.html">Data Definition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/dml.html">Data Manipulation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/secondary-indexes.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/time-to-live.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/functions.html">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../architecture/index.html">ScyllaDB Architecture</a><input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/ringarchitecture/index.html">ScyllaDB Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/architecture-fault-tolerance.html">ScyllaDB Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../architecture/anti-entropy/index.html">ScyllaDB Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/anti-entropy/hinted-handoff.html">Scylla Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/anti-entropy/read-repair.html">Scylla Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/maintenance/repair.html">Scylla Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../architecture/sstable/index.html">SSTable</a><input class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/sstable/sstable2/index.html">ScyllaDB SSTable - 2.x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/sstable/sstable3/index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../troubleshooting/index.html">Troubleshooting ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/report-scylla-problem.html">Report a Scylla problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/startup/index.html">ScyllaDB Startup</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/scylla-wont-start.html">Scylla will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/python-error-no-module-named-yaml.html">Scylla Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/upgrade/index.html">Upgrade</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/missing-dotmount-files.html">Inaccessible configuration files after ScyllaDB upgrade</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/nodetool-memory-read-timeout.html">SocketTimeoutException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/large-partition-table.html">Scylla Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/large-rows-large-cells-tables.html">Scylla Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/reverse-queries.html">Reverse queries fail</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/monitor/index.html">ScyllaDB Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../kb/index.html">Knowledge Base</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/custom-user.html">Run Scylla and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/gossip.html">Gossip in Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/lwt-differences.html">How does Scylla LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/map-cpu.html">Map CPUs to Scylla Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/memory-usage.html">Scylla Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/ntp.html">NTP Configuration for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/posix.html">POSIX networking for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/quiz-administrators.html">Scylla consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/scylla-and-spark-integration.html">Scylla and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/scylla-limits-systemd.html">Increase Scylla resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/seed-nodes.html">Scylla Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/snapshots.html">Scylla Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/static-columns.html">Scylla payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/unresponsive-nodes.html">Scylla Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/use-perf.html">Using the perf utility with Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/yaml-address.html">Configure Scylla Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">ScyllaDB FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contribute.html">Contribute to ScyllaDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../glossary.html">Glossary</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-30" name="toctree-checkbox-30" type="checkbox"/><label for="toctree-checkbox-30"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../alternator/compatibility.html">ScyllaDB Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

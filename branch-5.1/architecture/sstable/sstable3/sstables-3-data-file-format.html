@@ -1,0 +1,1370 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             SSTables 3.0 Data File Format | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/architecture/sstable/sstable3/sstables-3-data-file-format.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../../../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../../index.html" class="bread__highlight">
+                Scylla Architecture
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="../index.html" class="bread__highlight">
+                Scylla SSTable Format
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                ScyllaDB SSTable - 3.x
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">SSTables 3.0 Data File Format</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <section id="sstables-3-0-data-file-format">
+<h1>SSTables 3.0 Data File Format<a class="headerlink" href="#sstables-3-0-data-file-format" title="Link to this heading">¶</a></h1>
+<div class="versionadded">
+<p><span class="versionmodified added">Added in version 3.0.</span></p>
+</div>
+<p>This article aims at describing the format of data files introduced in Cassandra 3.0. The data file is the file that actually stores the data managed by the database. As important as it is, this file does not come alone. There are other files that altogether constitute a set of components sufficient for manipulating the stored data.
+The following table outlines the types of files used by Cassandra SSTables 3.0:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>File Type</p></th>
+<th class="head"><p>Typical Name</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Compression information</p></td>
+<td><p>mc-1-big-CompressionInfo.db</p></td>
+<td><p>Contains information about the compression algorithm, if used</p></td>
+</tr>
+<tr class="row-odd"><td><p>Data file</p></td>
+<td><p>mc-1-big-Data.db</p></td>
+<td><p>Stores the actual data</p></td>
+</tr>
+<tr class="row-even"><td><p>Checksum file</p></td>
+<td><p>mc-1-big-Digest.crc32</p></td>
+<td><p>Contains a checksum of the data file</p></td>
+</tr>
+<tr class="row-odd"><td><p>Bloom filter</p></td>
+<td><p>mc-1-big-Filter.db</p></td>
+<td><p>Contains a Bloom filter to check whether particular data may be stored in the data file</p></td>
+</tr>
+<tr class="row-even"><td><p>Index</p></td>
+<td><p>mc-1-big-Index.db</p></td>
+<td><p>Contains the primary index of data for easier search</p></td>
+</tr>
+<tr class="row-odd"><td><p>Statistics</p></td>
+<td><p>mc-1-big-Statistics.db</p></td>
+<td><p>Stores aggregated statistics about the data</p></td>
+</tr>
+<tr class="row-even"><td><p>Summary</p></td>
+<td><p>mc-1-big-Summary.db</p></td>
+<td><p>Provides sampling of the index file (can be seen as “coarse-grained” index)</p></td>
+</tr>
+<tr class="row-odd"><td><p>Table of contents</p></td>
+<td><p>mc-1-big-TOC.txt</p></td>
+<td><p>Lists all the files for the current SSTable</p></td>
+</tr>
+</tbody>
+</table>
+<p>This document focuses on the data file format but also refers to other components in parts where information stored in them affects the way we read/write the data file.</p>
+<p>Note that the file on-disk format applies to all “m*” SSTable format versions (“mc”, “md”, and “me”).</p>
+<ul class="simple">
+<li><p>The “md” format only fixed the semantics of the <code class="docutils literal notranslate"><span class="pre">(min|max)_clustering_key</span></code> fields in the SSTable Statistics file,
+which are now valid for describing the accurate range of clustering prefixes present in the SSTable.</p></li>
+<li><p>The “me” format added the <code class="docutils literal notranslate"><span class="pre">host_id</span></code> of the host writing the SStable to the SSTable Statistics file.
+It is used to qualify the commit log replay position that is also stored in the SSTable Statistics file.</p></li>
+</ul>
+<p>See <a class="reference internal" href="sstables-3-statistics.html"><span class="doc">SSTables 3.0 Statistics File Format</span></a> for more details.</p>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading">¶</a></h2>
+<p>The storage format has been significantly revamped in Cassandra 3.0 compared to the 2.x series. The primary driver for that was the fact that the previous storage format has been devised long before CQL and did not reflect its concepts and abstractions. This, in turn, hindered various fixes and led to suboptimal disk space usage.</p>
+<p>To understand what that means, you can refer to the <a class="reference internal" href="../sstable2/sstable-data-file.html"><span class="doc">SSTables 2.x data file format</span></a> description. In brief, in 2.x every data file is a sequence of partitions (called “rows” in pre-CQL terminology) where each partition is more or less a sequence of cells (or, more precisely, atoms with a majority of them being cells). There is no notion of columns or rows (in CQL terminology) at this level. Each cell has its full name comprised of the clustering prefix (values of all the clustering columns) followed by the non-PK column name.</p>
+<p>This scheme causes a lot of duplication since for every row in a given partition determined by a set of clustering columns values those values are stored in names of all the cells that belong to this row. For composite primary keys with long clustering columns values that would mean a lot of disk space wasted for no good reason. Another consequence is that the storage engine has to recognize and group cells from the row itself without knowing in advance their count or overall size.</p>
+<p>SSTables 3.0 format addresses this by re-arranging the way data is stored. Now every partition is comprised of rows. Each row is defined by its clustering columns values and consists of a number of cells that all share those clustering columns values as their name prefix. So now one can reason about the data file as a sequence of partitions where partition consists of rows that consist of cells, whereas before it was a sequence of partitions with each partition consisting of cells. This is oversimplified but helpful for understanding the high-level picture of changes.</p>
+<p>SSTables 3.0 data file format relies heavily on the table schema. It contains information about PK and non-PK columns, corresponding data types and width (fixed-width vs. variable-width), clustering columns ordering and so on.</p>
+<p>Let’s examine in more detail how the data representation looks in 3.0.</p>
+</section>
+<section id="building-blocks">
+<span id="sstables-3-building-blocks"></span><h2>Building Blocks<a class="headerlink" href="#building-blocks" title="Link to this heading">¶</a></h2>
+<p>Before we describe the data format in every detail, let’s define a few concepts that are used throughout the whole SSTables 3.0 specification. They act as building blocks for the new format and are responsible for noticeable space savings compared to the old one.</p>
+<section id="variable-length-integers-varints">
+<h3>Variable Length Integers (Varints)<a class="headerlink" href="#variable-length-integers-varints" title="Link to this heading">¶</a></h3>
+<p>Variable length integers are inspired by Google Protocol Buffers internal representation for serialised integers. They can save a significant amount of memory/space if the majority of serialised integer values are relatively small.</p>
+<p>The internal representation of varints is explained in great detail in this <a class="reference external" href="https://haaawk.github.io/2018/02/26/sstables-variant-integers.html">article</a>.
+The main idea is that variable-length integers occupy between 1 and 9 bytes and smaller values require fewer bytes so the format is efficient for storing many relatively small values.</p>
+<p>In the structures below, <cite>varint</cite> will indicate an integer stored in its variable-length representation on the disk according to the described encoding.</p>
+</section>
+<section id="delta-encoding">
+<h3>Delta Encoding<a class="headerlink" href="#delta-encoding" title="Link to this heading">¶</a></h3>
+<p>A lot of values stored in a data file represent timestamps or TTL which values are microseconds since UNIX epoch. Those values are quite large and as such don’t benefit much from being stored as varints. The idea that allows reducing timestamp/TTL values footprint is to only store the full value of the minimal timestamp/TTL per a set of objects. For other objects that have a different timestamp/TTL, we store its delta from the minimal value. The delta is typically much smaller and thus has a better chance to occupy fewer bytes upon serialisation.
+Varints can be used for storing deltas just fine.</p>
+</section>
+<section id="optional-items">
+<h3>Optional Items<a class="headerlink" href="#optional-items" title="Link to this heading">¶</a></h3>
+<p>In order to save more disk space, some items can be omitted during serialisation. The presence or absence of a particular optional item is typically indicated by a flag or, in some cases, can be easily deduced in some way from the preceding data.
+These items are marked as optional below. Keep in mind this is <strong>not</strong> <a class="reference external" href="http://en.cppreference.com/w/cpp/utility/optional">optional</a>  but rather merely a convention to mark the items that may not be present in a particular data file.</p>
+</section>
+</section>
+<section id="the-data-file-layout">
+<h2>The Data File Layout<a class="headerlink" href="#the-data-file-layout" title="Link to this heading">¶</a></h2>
+<p>The data file itself, just as before, is no more than a plain sequence of serialised partitions:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">data_file</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">partition</span><span class="p">[];</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<section id="partition">
+<h3>Partition<a class="headerlink" href="#partition" title="Link to this heading">¶</a></h3>
+<p>References:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/Clusterable.java/">Clusterable.java</a></p></li>
+</ul>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/ClusteringPrefix.java/">ClusteringPrefix</a></p></li>
+</ul>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/ClusteringComparator.java/">ClusteringComparator</a></p></li>
+</ul>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/rows/Unfiltered.java/">Unfiltered.java</a></p></li>
+</ul>
+<p>When talking about partitions in SSTables, one needs to keep in mind that those partitions contain information about the updates to data and <strong>not</strong> the final state of data. That is, every partition in SSTables is a collection of records (commonly referred to as <strong>mutations</strong>) that have been applied sequentially to modify (insert, update or delete) the data in the data partition with a given partition key.</p>
+<p>A partition consists of a header, an optional static row and a sequence of clusterable objects:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">partition</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">partition_header</span><span class="w"> </span><span class="n">header</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="k">struct</span><span class="w"> </span><span class="nc">row</span><span class="o">&gt;</span><span class="w"> </span><span class="n">static_row</span><span class="p">;</span><span class="w"> </span><span class="c1">// Has IS_STATIC flag set</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">unfiltered</span><span class="w"> </span><span class="n">unfiltereds</span><span class="p">[];</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">partition_header</span></code> contains partition key and deletion information, just as in 2.x formats.</p>
+<p>The optional <code class="docutils literal notranslate"><span class="pre">static_row</span></code> is only present if there have been inserts to the table’s static column(s). If no inserts are present in the Memtable that is flushed into the SSTable, the static row is not present even though the table schema may contain static columns. Static row structure is given below, for now, it suffices to say that it only differs from regular (non-static) rows in that it doesn’t have a clustering prefix.</p>
+<p>An unfiltered object is an object that can be ordered by the clustering prefix using a <code class="docutils literal notranslate"><span class="pre">clustering_comparator</span></code> according to its clustering values and the schema-induced ordering.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">unfiltered</span><span class="w"> </span><span class="p">{</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>Any unfiltered data in a partition is either a row or a <code class="docutils literal notranslate"><span class="pre">range_tombstone_marker</span></code>. We will examine both of them below.</p>
+</section>
+<section id="partition-header">
+<h3>Partition Header<a class="headerlink" href="#partition-header" title="Link to this heading">¶</a></h3>
+<p>Reference:</p>
+<p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/ColumnIndex.java/">ColumnIndex.java, writePartitionHeader</a></p>
+<p>The <cite>partition_header</cite> format has not changed since 2.x and is defined as:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">partition_header</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">be16</span><span class="w"> </span><span class="n">key_length</span><span class="p">;</span>
+<span class="w">    </span><span class="n">byte</span><span class="w"> </span><span class="n">key</span><span class="p">[</span><span class="n">key_length</span><span class="p">];</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">deletion_time</span><span class="w"> </span><span class="n">deletion_time</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">deletion_time</span></code> structure determines whether this is a partition tombstone - i.e., whether the whole partition has been deleted, and if so, when:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">deletion_time</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">be32</span><span class="w"> </span><span class="n">local_deletion_time</span><span class="p">;</span>
+<span class="w">    </span><span class="n">be64</span><span class="w"> </span><span class="n">marked_for_delete_at</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>The special value LIVE = (MAX_BE32, MIN_BE64), i.e., the bytes <cite>7F FF FF FF 80 00 00 00 00 00 00 00</cite>, is the default for live, undeleted, partitions. <code class="docutils literal notranslate"><span class="pre">marked_for_delete_at</span></code> is a timestamp (typically in microseconds since the UNIX epoch) after which data should be considered deleted. If set to MIN_BE64, the data has not been marked for deletion at all. <code class="docutils literal notranslate"><span class="pre">local_deletion_time</span></code> is the local server timestamp (in seconds since the UNIX) epoch when this tombstone was created - this is only used for purposes of purging the tombstone after <code class="docutils literal notranslate"><span class="pre">gc_grace_seconds</span></code> have elapsed.</p>
+</section>
+<section id="row">
+<h3>Row<a class="headerlink" href="#row" title="Link to this heading">¶</a></h3>
+<p>References:</p>
+<p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/rows/UnfilteredSerializer.java#L125/">UnfilteredSerializer.java, serialize</a></p>
+<p>A <cite>row</cite> is represented with the following layout:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">row</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">byte</span><span class="w"> </span><span class="n">flags</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="n">byte</span><span class="o">&gt;</span><span class="w"> </span><span class="n">extended_flags</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// only present for non-static rows</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="k">struct</span><span class="w"> </span><span class="nc">clustering_block</span><span class="p">[]</span><span class="o">&gt;</span><span class="w"> </span><span class="n">clustering_blocks</span><span class="p">;</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">row_body_size</span><span class="p">;</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">prev_unfiltered_size</span><span class="p">;</span><span class="w"> </span><span class="c1">// for backward traversing</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="k">struct</span><span class="w"> </span><span class="nc">liveness_info</span><span class="o">&gt;</span><span class="w"> </span><span class="n">liveness_info</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="k">struct</span><span class="w"> </span><span class="nc">delta_deletion_time</span><span class="o">&gt;</span><span class="w"> </span><span class="n">deletion_time</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="n">varint</span><span class="p">[]</span><span class="o">&gt;</span><span class="w"> </span><span class="n">missing_columns</span><span class="p">;</span>
+<span class="w">    </span><span class="n">cell</span><span class="p">[]</span><span class="w"> </span><span class="n">cells</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="row-flags">
+<h3>Row Flags<a class="headerlink" href="#row-flags" title="Link to this heading">¶</a></h3>
+<p>The first byte <cite>flags</cite> is a bitwise-or of the following flags:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">row_flags</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Signal the end of the partition. Nothing follows a &lt;flags&gt; field with that flag.</span>
+<span class="w">    </span><span class="n">END_OF_PARTITION</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x01</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// Whether the encoded unfiltered is a marker or a row. All following flags apply only to rows.</span>
+<span class="w">    </span><span class="n">IS_MARKER</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x02</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// Whether the encoded row has a timestamp (i.e. its liveness_info is not empty).</span>
+<span class="w">    </span><span class="n">HAS_TIMESTAMP</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x04</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// Whether the encoded row has some expiration info (i.e. if its liveness_info contains TTL and local_deletion).</span>
+<span class="w">    </span><span class="n">HAS_TTL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x08</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// Whether the encoded row has some deletion info.</span>
+<span class="w">    </span><span class="n">HAS_DELETION</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x10</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// Whether the encoded row has all of the columns from the header present.</span>
+<span class="w">    </span><span class="n">HAS_ALL_COLUMNS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x20</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// Whether the encoded row has some complex deletion for at least one of its complex columns.</span>
+<span class="w">    </span><span class="n">HAS_COMPLEX_DELETION</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x40</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// If present, another byte is read containing the &quot;extended flags&quot; below.</span>
+<span class="w">    </span><span class="n">EXTENSION_FLAG</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x80</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>If <cite>EXTENSION_FLAG</cite> is set, the following byte <cite>extended_flags</cite> is a bitwise-or of the following flags:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">row_extended_flags</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Whether the encoded row is a static. If there is no extended flag, the row is assumed not static.</span>
+<span class="w">    </span><span class="n">IS_STATIC</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x01</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// Whether the row deletion is shadowable. If there is no extended flag (or no row deletion), the deletion is assumed not shadowable. This flag is deprecated - see CASSANDRA-11500.</span>
+<span class="w">    </span><span class="c1">// This flag is not supported by Scylla and SSTables that have this flag set fail to be loaded.</span>
+<span class="w">    </span><span class="n">HAS_SHADOWABLE_DELETION_CASSANDRA</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x02</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// A Scylla-specific flag (not supported by Cassandra) that indicates the presence of a shadowable tombstone.</span>
+<span class="w">    </span><span class="c1">// See below for details</span>
+<span class="w">    </span><span class="n">HAS_SHADOWABLE_DELETION_SCYLLA</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x80</span><span class="p">,</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>As mentioned earlier, every partition may or may not have a static row. If present, the static row precedes any other rows or range tombstone markers and has <code class="docutils literal notranslate"><span class="pre">EXTENSION_FLAG</span></code> set in <code class="docutils literal notranslate"><span class="pre">flags</span></code> and <code class="docutils literal notranslate"><span class="pre">IS_STATIC</span></code> set in <code class="docutils literal notranslate"><span class="pre">extended_flags</span></code>. As you might expect, the static row will not have any clustering information just by its definition.</p>
+</section>
+<section id="clustering-blocks">
+<h3>Clustering Blocks<a class="headerlink" href="#clustering-blocks" title="Link to this heading">¶</a></h3>
+<p>If <code class="docutils literal notranslate"><span class="pre">IS_STATIC</span></code> is not set or <code class="docutils literal notranslate"><span class="pre">extended_flags</span></code> byte is missing, the row has a list of clustering blocks that represents the values of clustering columns.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">clustering_block</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">clustering_block_header</span><span class="p">;</span>
+<span class="w">    </span><span class="n">simple_cell</span><span class="p">[]</span><span class="w"> </span><span class="n">clustering_cells</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>To build the clustering blocks, all the clustering columns are split into batches of 32 (or less for the last batch).
+To calculate the <code class="docutils literal notranslate"><span class="pre">clustering_block_header</span></code>, for each column in batch, the information about if its cell is null or empty is encoded using 2 bits in a 64-bit integer. The higher bit is set if the cell value is null or the smaller set if it is empty.
+A <code class="docutils literal notranslate"><span class="pre">null</span></code> cell means that this column doesn’t have a value in the current row. An empty cell means that the value exists but is empty in a way (e.g., if the data type is <code class="docutils literal notranslate"><span class="pre">text</span></code> or <cite>blob</cite>, this indicates it has no bytes and a zero length in it). Note that for rows, clustering cells are never <code class="docutils literal notranslate"><span class="pre">null</span></code>. But this encoding is also used for range tombstone markers that can contain only a prefix of clustering cells with others being treated as <code class="docutils literal notranslate"><span class="pre">null</span></code> in this case.
+The number of clustering blocks is not stored in the data file as it can be easily deduced from the schema.</p>
+<p>The resulting integer is then stored as <code class="docutils literal notranslate"><span class="pre">varint</span> <span class="pre">clustering_block_header</span></code>. Next, the cells from the current batch are serialised using simple cells serialisation which is described below.</p>
+<p>Note that we don’t store the number of clustering cells as we take this information from table schema.</p>
+</section>
+<section id="sizes">
+<h3>Sizes<a class="headerlink" href="#sizes" title="Link to this heading">¶</a></h3>
+<p>After the clustering blocks, the size of the serialised row is calculated and stored as a <cite>varint</cite>. This is the number of bytes between the byte after the last clustering block (inclusive) and the <cite>flags</cite> byte of the next <cite>unfiltered</cite> (exclusive) or the end of the file.</p>
+<p>Next <cite>varint</cite> is the size of the previous unfiltered (not necessarily a row, can be a range tombstone marker), supposedly stored to allow backwards traversal.</p>
+</section>
+<section id="row-content">
+<h3>Row Content<a class="headerlink" href="#row-content" title="Link to this heading">¶</a></h3>
+<p>After the sizes, next goes the <code class="docutils literal notranslate"><span class="pre">liveness_info</span></code> which is defined as:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">liveness_info</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">delta_timestamp</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="n">varint</span><span class="o">&gt;</span><span class="w"> </span><span class="n">delta_ttl</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="n">varint</span><span class="o">&gt;</span><span class="w"> </span><span class="n">delta_local_deletion_time</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>It is present if <code class="docutils literal notranslate"><span class="pre">HAS_TIMESTAMP</span></code> flag is set. This liveness information is what allows us to distinguish between a dead row (it has no live cells and its primary key liveness info is empty) and a live row but where all non-PK columns are null (it has no live cells, but its primary key liveness is not empty). Please note that the liveness info only applies to the primary key columns and has no impact on the row content.
+In a way, <code class="docutils literal notranslate"><span class="pre">liveness_info</span></code> is a less hacky successor to CQL row marker used in 2.x data format.</p>
+<p>In liveness_info, as well as in some other places, timestamps, TTLs and deletion time values are stored as <cite>varint`s using delta encoding. But an astute reader may ask a reasonable question: “What are the base values these deltas are taken from?”. It turns out that a Memtable maintains aggregated statistics about all the information put into it and tracks the minimal timestamp, TTL and local deletion time values across all the records. These values are used as bases for delta encoding when the Memtable is flushed onto the disk. The values themselves are stored in `-Statistics.db</cite> file and deserialised from there before the data file is read. For more details, refer to <a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/rows/EncodingStats.java">EncodingStats.java</a> and <a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/Memtable.java#L232">Memtable.java</a>,</p>
+<p>If the TTL information was included in the modification statement, the <code class="docutils literal notranslate"><span class="pre">HAS_TTL</span></code> flag is set. In this case, both TTL and local deletion time values are stored as <code class="docutils literal notranslate"><span class="pre">varints</span></code> using deltas taken from the corresponding minimal values from Memtable stats.</p>
+<p>For dead row markers or expired liveness info, a special value -1 of TTL is set.</p>
+<p>If the row is deleted, <cite>HAS_DELETION</cite> flag is set. In this case, <code class="docutils literal notranslate"><span class="pre">deletion_time</span></code> is delta-encoded as follows:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">delta_deletion_time</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">delta_marked_for_delete_at</span><span class="p">;</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">delta_local_deletion_time</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>Note that the order here is different from partition header: in <code class="docutils literal notranslate"><span class="pre">partition_header</span></code>, <code class="docutils literal notranslate"><span class="pre">local_deletion_time</span></code> is serialised first and then followed by <code class="docutils literal notranslate"><span class="pre">marked_for_delete_at</span></code>. Here, delta-encoded <code class="docutils literal notranslate"><span class="pre">marked_for_delete_at</span></code> precedes delta-encoded <code class="docutils literal notranslate"><span class="pre">local_deletion_time</span></code>.</p>
+</section>
+<section id="shadowable-tombstones">
+<h3>Shadowable Tombstones<a class="headerlink" href="#shadowable-tombstones" title="Link to this heading">¶</a></h3>
+<p>Cassandra only maintains up to one tombstone for a row. In case if it is shadowable, Cassandra sets the corresponding HAS_SHADOWABLE_DELETION_CASSANDRA flag.</p>
+<p>It turns out that this approach is imperfect and there are known issues with the current shadowable deletions support in Cassandra (see <a class="reference external" href="https://issues.apache.org/jira/browse/CASSANDRA-13826">https://issues.apache.org/jira/browse/CASSANDRA-13826</a> for details).
+To address those, Scylla maintains a separate shadowable tombstone in addition to the regular one. That means a row can have up to two tombstones in Scylla-written SSTables. If the second tombstone is present, the Scylla-specific extended flag HAS_SHADOWABLE_DELETION_SCYLLA is set.</p>
+<p>Note that Cassandra does not know this flag and would consider those files invalid. This is deemed to be safe to do because shadowable tombstones can only appear in Materialized Views tables and those are not supposed to be ever exported and imported between Scylla and Cassandra.</p>
+</section>
+<section id="missing-columns-encoding">
+<h3>Missing Columns Encoding<a class="headerlink" href="#missing-columns-encoding" title="Link to this heading">¶</a></h3>
+<p>Reference:</p>
+<p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/Columns.java#L444">Columns.java, serializeSubset</a></p>
+<p>Next, if <cite>HAS_ALL_COLUMNS</cite> flag is <strong>not</strong> set, the <cite>missing_columns</cite> field contains information about which columns are _missing_. Note that the <cite>HAS_ALL_COLUMNS</cite> flag doesn’t necessarily mean that the row has all the columns from the table schema definition. Each Memtable keeps track of filled columns on updates so when serialised into SSTables, the columns of a particular row are compared against the superset of filled columns in the Memtable. For example, if your table has 5 non-clustering columns (‘a’ through ‘e’), all the records in the current Memtable have only some of (‘a’, ‘b’, ‘c’) filled and the current row has all ‘a’, ‘b’ and ‘c’, it will have the <cite>HAS_ALL_COLUMNS</cite> flag set even though it doesn’t have columns ‘d’ and ‘e’. This information (the list of all filled columns) is also stored in <cite>-Statistics.db</cite>.</p>
+<p>We have a _superset_ of columns, which is a list of all non-PK columns in the table, and a _current set of columns, which is a list of columns filled within this row. The encoding procedure is optimised towards small column sets (&lt;64 columns) and employs slightly more complex encoding for larger sets.
+When the superset columns count is &lt; 64, a 64-bit integer is used as a bitmap with its bits set for <strong>missing</strong> columns and stored as a single <cite>varint</cite>.</p>
+<p>For larger supersets, the delta between the superset columns count and the current row columns count is written as the first <cite>varint</cite>.
+The procedure then differs based on whether the number of columns in the row is less than half of the size of the superset or not.
+If <cite>columns.count() &lt; superset.count() / 2</cite>, the <strong>present</strong> columns indices are written as <cite>varints</cite>, otherwise the <strong>missing</strong> columns indices are written. The logic is clear - we just write whatever appears to be less in count.</p>
+<p>Although the field is named <cite>missing_columns</cite>, one can see from the algorithm described above that in some cases the values stored are indices of present columns, not missing ones. This may be a bit confusing, but it helps to reason about it in the following way: whatever is stored can be used to get the list of missing columns.</p>
+<p>As of today, Scylla treats the whole set of columns as a superset regardless of whether all columns are ever filled or not. <a class="reference external" href="https://github.com/scylladb/scylla/issues/3901">See for details</a>.</p>
+<p>Lastly, all the cells of the current row are encoded.</p>
+</section>
+<section id="cells">
+<h3>Cells<a class="headerlink" href="#cells" title="Link to this heading">¶</a></h3>
+<p>References:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/rows/BufferCell.java#L236">BufferCell.java, Serializer.serialize</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/rows/UnfilteredSerializer.java#L204">UnfilteredSerializer, writeComplexColumn</a></p></li>
+</ul>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">cell</span><span class="w"> </span><span class="p">{</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>Any non-clustering column can be either “simple”, which means it can only have a single cell associated to it in any row, or “complex”, where an arbitrary number of cells can be associated. As of today, “complex” columns are those declared for non-frozen collections. All clustering columns are “simple” because non-frozen collections are allowed for non-PK columns only - if you remember, we said earlier that the cells in a clustering block are serialised using <cite>simple_cell</cite> serialisation.
+&gt; Note that since we encode the information about filled columns, every cell is non-null by definition. They can still be empty though.</p>
+<p>A cell is recognised as simple or complex based the definition in the table schema for the column that owns this cell.</p>
+</section>
+<section id="simple-cells">
+<h3>Simple Cells<a class="headerlink" href="#simple-cells" title="Link to this heading">¶</a></h3>
+<p>A serialised simple sell looks like:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">simple_cell</span>
+<span class="o">:</span><span class="w"> </span><span class="n">cell</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">byte</span><span class="w"> </span><span class="n">flags</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="n">varint</span><span class="o">&gt;</span><span class="w"> </span><span class="n">delta_timestamp</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="n">varint</span><span class="o">&gt;</span><span class="w"> </span><span class="n">delta_local_deletion_time</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="n">varint</span><span class="o">&gt;</span><span class="w"> </span><span class="n">delta_ttl</span><span class="p">;</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="n">cell_path</span><span class="o">&gt;</span><span class="w"> </span><span class="n">path</span><span class="p">;</span><span class="w"> </span><span class="c1">// only in cells nested into complex_cells</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="k">struct</span><span class="w"> </span><span class="nc">cell_value</span><span class="o">&gt;</span><span class="w"> </span><span class="n">value</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>First, the <cite>flags</cite> byte is a bitwise-or of the following flags:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">cell_flags</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">IS_DELETED_MASK</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x01</span><span class="p">,</span><span class="w"> </span><span class="c1">// Whether the cell is a tombstone or not.</span>
+<span class="w">    </span><span class="n">IS_EXPIRING_MASK</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x02</span><span class="p">,</span><span class="w"> </span><span class="c1">// Whether the cell is expiring.</span>
+<span class="w">    </span><span class="n">HAS_EMPTY_VALUE_MASK</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x04</span><span class="p">,</span><span class="w"> </span><span class="c1">// Whether the cell has an empty value. This will be the case for a tombstone in particular.</span>
+<span class="w">    </span><span class="n">USE_ROW_TIMESTAMP_MASK</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x08</span><span class="p">,</span><span class="w"> </span><span class="c1">// Whether the cell has the same timestamp as the row this is a cell of.</span>
+<span class="w">    </span><span class="n">USE_ROW_TTL_MASK</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x10</span><span class="p">,</span><span class="w"> </span><span class="c1">// Whether the cell has the same TTL as the row this is a cell of.</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p><cite>IS_DELETED_MASK</cite> and <cite>IS_EXPIRING_MASK</cite> flags are mutually exclusive for an obvious reason that the same cell can either be deleted or live but expiring.</p>
+<p>If <cite>USE_ROW_TIMESTAMP_MASK</cite> flag is <strong>not</strong> set, i.e., the cell timestamp differs from that of the row, the delta-encoded timestamp is stored as a <cite>varint</cite>.</p>
+<p>If the cell is a tombstone (<cite>IS_DELETED_MASK</cite> is set) or expiring (<cite>IS_EXPIRING_MASK</cite> is set) and its local deletion time and TTL differ from those of the row (<cite>USE_ROW_TTL_MASK</cite> is <strong>not</strong> set), cell delta-encoded local deletion time is stored as a <cite>varint</cite>.</p>
+<p>If the cell is expiring (<cite>IS_EXPIRING_MASK</cite> is set) and its TTL differs from that of the row (<cite>USE_ROW_TTL_MASK</cite> is <strong>not</strong> set), cell delta-encoded TTL is stored as a <cite>varint</cite>.</p>
+<p>A regular simple cell that belongs to a simple column doesn’t have a <cite>path</cite> item. This one only appears in cells wrapped by a <cite>complex_cell</cite> (see below).</p>
+<p>Finally, if the cell value is not empty (<cite>HAS_EMPTY_VALUE_MASK</cite> is <strong>not</strong> set), it is serialised. It can be a fixed-width value (for fixed-width CQL data types like <cite>int</cite> or <cite>boolean</cite>) or a variable-width one (for CQL data types like <cite>text</cite> or <cite>blob</cite>). Those are encoded differently since we don’t need to store the length of fixed-width values (it can be deduced from the table schema definition) but have to for variable-length cells.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">cell_value</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="n">varint</span><span class="o">&gt;</span><span class="w"> </span><span class="n">length</span><span class="p">;</span>
+<span class="w">    </span><span class="n">byte</span><span class="w"> </span><span class="n">value</span><span class="p">[];</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="complex-cells">
+<h3>Complex Cells<a class="headerlink" href="#complex-cells" title="Link to this heading">¶</a></h3>
+<p>A complex cell acts as a kind of a container for multiple simple cells distinguished by so-called <cite>cell_path</cite>:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">complex_cell</span>
+<span class="o">:</span><span class="w"> </span><span class="n">cell</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">optional</span><span class="o">&lt;</span><span class="k">struct</span><span class="w"> </span><span class="nc">delta_deletion_time</span><span class="o">&gt;</span><span class="w"> </span><span class="n">complex_deletion_time</span><span class="p">;</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">items_count</span><span class="p">;</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">simple_cell</span><span class="p">[</span><span class="n">items_count</span><span class="p">];</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>First, let’s describe what a “complex deletion” means. A “complex deletion” is a deletion applied to all the items (or sub-cells) of a complex cell. For instance, for a collection, this corresponds to a full collection deletion. Note that if complex_deletion is absent, individual items (sub-cells) can still be deleted within a complex cell.</p>
+<p>The presence or absence of <cite>complex_deletion_time</cite> is determined by the <cite>HAS_COMPLEX_DELETION</cite> flag in row <cite>flags</cite>. Interestingly, this flag is set if any of row complex columns has a complex deletion, so in practice, it will be written for all the complex columns if at least one of them has been entirely deleted in the current row.</p>
+<p>Next, the number of items of the current complex cell (aka sub-cells) is stored as a <cite>varint</cite>.</p>
+<p>Lastly, we have the complex cell items serialised one by one. They, in fact, represent simple cells that have an additional <cite>path</cite> component that allows to distinguish them.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">cell_path</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">length</span><span class="p">;</span>
+<span class="w">    </span><span class="n">byte</span><span class="w"> </span><span class="n">value</span><span class="p">[</span><span class="n">length</span><span class="p">];</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>As of today, the only implementation of the <cite>cell_path</cite> is the one for collections so it always has a single value which is:</p>
+<ul class="simple">
+<li><p>an auto-generated <cite>timeuuid</cite> for lists</p></li>
+<li><p>the current map key for maps</p></li>
+<li><p>the actual value for sets (the <cite>complex_cell_item.value</cite> is empty in this case)</p></li>
+</ul>
+</section>
+<section id="range-tombstone-marker">
+<h3>Range Tombstone Marker<a class="headerlink" href="#range-tombstone-marker" title="Link to this heading">¶</a></h3>
+<p>References:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/rows/RangeTombstoneMarker.java">RangeTombstoneMarker.java</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/rows/RangeTombstoneBoundMarker.java">RangeTombstoneBoundMarker.java</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/cassandra/blob/cassandra-3.0/src/java/org/apache/cassandra/db/rows/RangeTombstoneBoundaryMarker.java">RangeTombstoneBoundaryMarker.java</a></p></li>
+</ul>
+<p>In SSTables, we have a notion of range tombstones that represent tombstones that cover a slice/range of rows.
+Since 3.0, they are stored as pairs of range tombstone markers indicating its start and its end so that each tombstone corresponds to two ordered <cite>unfiltered</cite> objects or <code class="docutils literal notranslate"><span class="pre">range_tombstone_marker</span></code> type. This is done to simplify merging. The ordering of <code class="docutils literal notranslate"><span class="pre">unfiltered</span></code> by their clustering prefixes makes sure that a range tombstone start marker precedes any rows covered by the range and a range tombstone end marker goes after them.
+Given that, it becomes clear that as a reader advances through a data file, it has to maintain only up to one range tombstone deletion mark. If the deletion mark is filled, all the rows read are considered deleted until the corresponding end marker is met.</p>
+<p>Every range tombstone marker can be either a <cite>range_tombstone_bound_marker</cite>, which represents a single bound of a slice or a <cite>range_tombstone_boundary_marker</cite>, which represents a boundary between two adjacent range tombstones and notifies an “open end, closed start” type of bound. The latter makes for both disk space savings (requires 1 range tombstone marker instead of 2) and simplifies the merging logic of the database storage engine.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">range_tombstone_marker</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">byte</span><span class="w"> </span><span class="n">flags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">IS_MARKER</span><span class="p">;</span>
+<span class="w">    </span><span class="n">byte</span><span class="w"> </span><span class="n">kind_ordinal</span><span class="p">;</span>
+<span class="w">    </span><span class="n">be16</span><span class="w"> </span><span class="n">bound_values_count</span><span class="p">;</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">clustering_block</span><span class="p">[]</span><span class="w"> </span><span class="n">clustering_blocks</span><span class="p">;</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">marker_body_size</span><span class="p">;</span>
+<span class="w">    </span><span class="n">varint</span><span class="w"> </span><span class="n">prev_unfiltered_size</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>The first byte represents <cite>flags</cite> which for a range tombstone marker always contain a single <code class="docutils literal notranslate"><span class="pre">IS_MARKER</span></code> flag.
+Next byte is a slice bound kind ordinal:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">bound_kind</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kt">uint8_t</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">EXCL_END_BOUND</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">    </span><span class="n">INCL_START_BOUND</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">    </span><span class="n">EXCL_END_INCL_START_BOUNDARY</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">    </span><span class="n">STATIC_CLUSTERING</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">    </span><span class="n">CLUSTERING</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
+<span class="w">    </span><span class="n">INCL_END_EXCL_START_BOUNDARY</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<span class="w">    </span><span class="n">INCL_END_BOUND</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span>
+<span class="w">    </span><span class="n">EXCL_START_BOUND</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>It can be one of {0, 1, 6, 7} for a <code class="docutils literal notranslate"><span class="pre">range_tombstone_bound_marker</span></code> and either 2 or 5 for a <code class="docutils literal notranslate"><span class="pre">range_tombstone_boundary_marker</span></code>.
+Next, the two-byte integer value of the number of non-null columns in the clustering prefix is stored, followed by clustering blocks that are serialised in the exact same way as for rows.
+&gt; For rows, the length of the clustering prefix is not stored as it is always full, meaning that all its clustering columns are non-<cite>null</cite>. For a range tombstone marker, however, the trailing columns can be <cite>null</cite> and so we need to know how many cells are encoded in the clustering blocks.</p>
+<p>After that, the size of the marker body is stored as a <cite>varint</cite>, followed by another <cite>varint</cite> that contains the size of the previous unfiltered (row or range tombstone marker).</p>
+<p>Next fields depend on whether this range tombstone marker is a bound or a boundary.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">range_tombstone_bound_marker</span>
+<span class="o">:</span><span class="w"> </span><span class="n">range_tombstone_marker</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">delta_deletion_time</span><span class="w"> </span><span class="n">deletion_time</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">range_tombstone_boundary_marker</span>
+<span class="o">:</span><span class="w"> </span><span class="n">range_tombstone_marker</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">delta_deletion_time</span><span class="w"> </span><span class="n">end_deletion_time</span><span class="p">;</span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">delta_deletion_time</span><span class="w"> </span><span class="n">start_deletion_time</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>For a bound marker, it stores its delta-encoded deletion time, and for boundary marker, we store two delta-encoded deletion time structures, one for the end bound and another for the start bound within the boundary.</p>
+</section>
+<section id="shadowable-deletion">
+<h3>Shadowable Deletion<a class="headerlink" href="#shadowable-deletion" title="Link to this heading">¶</a></h3>
+<p>Initially, an extended <cite>HAS_SHADOWABLE_DELETION</cite> flag has been introduced in 3.0 format to solve a tricky problem described in [CASSANDRA-10261](<a class="reference external" href="https://issues.apache.org/jira/browse/CASSANDRA-10261">https://issues.apache.org/jira/browse/CASSANDRA-10261</a>). Later some other problems have been discovered ([CASSANDRA-11500](<a class="reference external" href="https://issues.apache.org/jira/browse/CASSANDRA-11500">https://issues.apache.org/jira/browse/CASSANDRA-11500</a>)) which led to a more generic approach that deprecated shadowable tombstones and used expired liveness info instead.</p>
+<p>As a result, this flag is not supposed to be written for new SSTables by Cassandra.
+Scylla tracks the presence of this flag and fails to load files that have it set.</p>
+</section>
+<section id="references">
+<h3>References<a class="headerlink" href="#references" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><a class="reference external" href="https://www.datastax.com/2015/12/storage-engine-30">Putting some structure in the storage engine</a> - An overview of the main features of the SSTables 3.0 format including some measurements of disk space savings compared to 2.x.</p></li>
+<li><p><a class="reference external" href="https://thelastpickle.com/blog/2016/03/04/introductiont-to-the-apache-cassandra-3-storage-engine.html">Introduction To The Apache Cassandra 3.x Storage Engine</a> - A detailed article on SSTables 3.0 data file format with lots of references to the relevant code parts. This article has a few inaccuracies like complex cells format but otherwise is a great read with a lot of useful details.</p></li>
+<li><p><a class="reference external" href="http://thelastpickle.com/blog/2016/07/27/about-deletes-and-tombstones.html">About Deletes and Tombstones in Cassandra</a> - An article that covers tombstones in SSTables 3.0 in a great detail.</p></li>
+<li><p><a class="reference external" href="https://apache.googlesource.com/cassandra/+show/cassandra-3.0.0-rc2/guide_8099.md">Overview of CASSANDRA-8099 changes</a> - An engineering description of changes in SSTables data format in Cassandra 3.0. Explains well a variety of higher-level concepts and sheds light on some lower-level implementation details.</p></li>
+<li><p>There is hardly any documentation that would be more accurate and up-to-date than the actual <a class="reference external" href="https://github.com/apache/cassandra/tree/cassandra-3.0">source code</a>.</p></li>
+</ul>
+<p>Copyright</p>
+<p>© 2016, The Apache Software Foundation.</p>
+<p>Apache®, Apache Cassandra®, Cassandra®, the Apache feather logo and the Apache Cassandra® Eye logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries. No endorsement by The Apache Software Foundation is implied by the use of these marks.</p>
+</section>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page SSTables 3.0 Data File Format&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.1/architecture/sstable/sstable3/sstables-3-data-file-format%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="index.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />ScyllaDB SSTable - 3.x
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="sstables-3-statistics.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />SSTables 3.0 Statistics File Format
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page SSTables 3.0 Data File Format&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.1/architecture/sstable/sstable3/sstables-3-data-file-format%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/architecture/sstable/sstable3/sstables-3-data-file-format.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">SSTables 3.0 Data File Format</a><ul>
+<li><a class="reference internal" href="#overview">Overview</a></li>
+<li><a class="reference internal" href="#building-blocks">Building Blocks</a><ul>
+<li><a class="reference internal" href="#variable-length-integers-varints">Variable Length Integers (Varints)</a></li>
+<li><a class="reference internal" href="#delta-encoding">Delta Encoding</a></li>
+<li><a class="reference internal" href="#optional-items">Optional Items</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#the-data-file-layout">The Data File Layout</a><ul>
+<li><a class="reference internal" href="#partition">Partition</a></li>
+<li><a class="reference internal" href="#partition-header">Partition Header</a></li>
+<li><a class="reference internal" href="#row">Row</a></li>
+<li><a class="reference internal" href="#row-flags">Row Flags</a></li>
+<li><a class="reference internal" href="#clustering-blocks">Clustering Blocks</a></li>
+<li><a class="reference internal" href="#sizes">Sizes</a></li>
+<li><a class="reference internal" href="#row-content">Row Content</a></li>
+<li><a class="reference internal" href="#shadowable-tombstones">Shadowable Tombstones</a></li>
+<li><a class="reference internal" href="#missing-columns-encoding">Missing Columns Encoding</a></li>
+<li><a class="reference internal" href="#cells">Cells</a></li>
+<li><a class="reference internal" href="#simple-cells">Simple Cells</a></li>
+<li><a class="reference internal" href="#complex-cells">Complex Cells</a></li>
+<li><a class="reference internal" href="#range-tombstone-marker">Range Tombstone Marker</a></li>
+<li><a class="reference internal" href="#shadowable-deletion">Shadowable Deletion</a></li>
+<li><a class="reference internal" href="#references">References</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                5.1
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="../../../../stable/architecture/sstable/sstable3/sstables-3-data-file-format.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../branch-6.1/architecture/sstable/sstable3/sstables-3-data-file-format.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../branch-6.0/architecture/sstable/sstable3/sstables-3-data-file-format.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../branch-5.4/architecture/sstable/sstable3/sstables-3-data-file-format.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../branch-5.2/architecture/sstable/sstable3/sstables-3-data-file-format.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="sstables-3-data-file-format.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../getting-started/index.html">Getting Started</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../getting-started/install-scylla/index.html">Install Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/unified-installer.html">Scylla Unified Installer (relocatable executable)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/rpm-info.html">What is in each RPM</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/disable-housekeeping.html">Scylla Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/dev-mod.html">Scylla Developer Mode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/config-commands.html">Scylla Configuration Reference</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../../getting-started/configure.html">Configure Scylla</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/os-support.html">OS Support by Platform and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/scylla-in-a-shared-environment.html">Scylla in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/migrate-scylla.html">Migrate to ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migration Process from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/cassandra-compatibility.html">Scylla and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-spark.html">Integrate Scylla with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-kairos.html">Integrate Scylla with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-presto.html">Integrate Scylla with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-elasticsearch.html">Integrate Scylla with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-k8.html">Integrate Scylla with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-janus.html">Integrate Scylla with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-datadog.html">Integrate Scylla with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-kafka.html">Integrate Scylla with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-iota.html">Integrate Scylla with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-spring.html">Integrate Scylla with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-ansible.html">Install Scylla with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-databricks.html">Integrate Scylla with Databricks</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../operating-scylla/index.html">Scylla for Administrators</a><input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../operating-scylla/admin.html">Administration Guide</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../operating-scylla/procedures/index.html">Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/benchmarking-scylla.html">Benchmarking Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migrate from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../operating-scylla/security/index.html">Security</a><input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/security-checklist.html">Scylla Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/auditing.html">Scylla Auditing Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/encryption-at-rest.html">Encryption at Rest</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/ldap-authentication.html">LDAP Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/ldap-authorization.html">LDAP Authorization (Role Management)</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../operating-scylla/admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../cql/cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/rest.html">REST</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/scylla-sstable.html">Scylla SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/scylla-types.html">Scylla Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/sstable2json.html">SSTable2json</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/sstable-index.html">SSTable Index</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/logging.html">Scylla Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/virtual-tables.html">Virtual Tables</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../upgrade/upgrade-enterprise/index.html">Scylla Enterprise</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../upgrade/upgrade-opensource/index.html">Scylla Open Source</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../upgrade/upgrade-to-enterprise/index.html">Scylla Open Source to Scylla Enterprise</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../upgrade/ami-upgrade.html">Scylla AMI</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../operating-scylla/system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/system-configuration/snitch.html">Scylla Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../../operating-scylla/benchmarking-scylla.html">Benchmarking Scylla</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../using-scylla/index.html">Scylla for Developers</a><input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/learn.html">Learn To Use Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/">Scylla University</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/available-courses/">Course catalog</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/scylla-essentials-overview/">Scylla Essentials</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/">Basic Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/">Advanced Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/">MMS - Learn by Example</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://iot.scylladb.com/">Care-Pet an IoT Use Case and Example</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../../using-scylla/alternator/index.html">Scylla Alternator</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/features.html">Scylla Features</a><input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/features-open-source.html">Scylla Open Source Features</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/features-ent.html">Scylla Enterprise Features</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/drivers/index.html">Scylla Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/drivers/cql-drivers/index.html">Scylla CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/drivers/dynamo-drivers/index.html">Scylla DynamoDB Drivers</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../cql/index.html">CQL Reference</a><input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/ddl.html">Data Definition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/dml.html">Data Manipulation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/secondary-indexes.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/time-to-live.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/functions.html">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../../index.html">Scylla Architecture</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../../ringarchitecture/index.html">Scylla Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture-fault-tolerance.html">Scylla Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../anti-entropy/index.html">Scylla Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../anti-entropy/hinted-handoff.html">Scylla Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../anti-entropy/read-repair.html">Scylla Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/maintenance/repair.html">Scylla Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 current has-children"><a class="reference internal" href="../index.html">SSTable</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../sstable2/index.html">Scylla SSTable - 2.x</a></li>
+<li class="toctree-l3 current current-page"><a class="reference internal" href="index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../troubleshooting/index.html">Troubleshooting Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/report-scylla-problem.html">Report a Scylla problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/startup/index.html">Scylla Startup</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/scylla-wont-start.html">Scylla will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/python-error-no-module-named-yaml.html">Scylla Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/nodetool-memory-read-timeout.html">SocketTimeoutException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/large-partition-table.html">Scylla Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/large-rows-large-cells-tables.html">Scylla Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/reverse-queries.html">Reverse queries fail</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/monitor/index.html">Scylla Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../kb/index.html">Knowledge Base</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/custom-user.html">Run Scylla and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/gossip.html">Gossip in Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/lwt-differences.html">How does Scylla LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/map-cpu.html">Map CPUs to Scylla Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/memory-usage.html">Scylla Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/ntp.html">NTP Configuration for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/posix.html">POSIX networking for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/quiz-administrators.html">Scylla consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/scylla-and-spark-integration.html">Scylla and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/scylla-limits-systemd.html">Increase Scylla resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/seed-nodes.html">Scylla Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/snapshots.html">Scylla Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/static-columns.html">Scylla payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/unresponsive-nodes.html">Scylla Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/use-perf.html">Using the perf utility with Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/yaml-address.html">Configure Scylla Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference external" href="https://university.scylladb.com/">ScyllaDB University</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../faq.html">Scylla FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../contribute.html">Contribute to ScyllaDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../glossary.html">Glossary</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../alternator/compatibility.html">Scylla Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

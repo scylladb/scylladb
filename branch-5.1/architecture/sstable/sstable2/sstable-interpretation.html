@@ -1,0 +1,1369 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             SSTable Interpretation | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/architecture/sstable/sstable2/sstable-interpretation.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../../../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../../index.html" class="bread__highlight">
+                Scylla Architecture
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="../index.html" class="bread__highlight">
+                Scylla SSTable Format
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                Scylla SSTable - 2.x
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">SSTable Interpretation</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <section id="sstable-interpretation">
+<h1>SSTable Interpretation<a class="headerlink" href="#sstable-interpretation" title="Link to this heading">¶</a></h1>
+<p><strong>Topic: Internals</strong></p>
+<p><strong>Audience: Devops professionals, architects</strong></p>
+<p>The SSTables Data File contains rows of data. This document discusses
+how to interpret the various fields described in <a class="reference internal" href="sstable-data-file.html"><span class="doc">SSTables Data File</span></a> in the context of Scylla, and how to
+convert this data into Scylla’s native data structure:
+<strong>mutation_partition</strong>.</p>
+<section id="sstable-rows">
+<h2>SSTable Rows<a class="headerlink" href="#sstable-rows" title="Link to this heading">¶</a></h2>
+<p>Each row in the SSTable isn’t necessarily a full row of data. Rather, it
+is just a <strong>mutation</strong>, a list of changed (added or deleted) columns and
+their new values (or “tombstone” for a deleted column), and a timestamp
+for each such change (this timestamp is used for reconciling conflicting
+mutations). The full data row needed by a request will be composed from
+potentially multiple sstables and/or the in-memory table(s).</p>
+<p>As we’ll explain below when discussing clustering columns, the best term
+for what we read from one row in the SSTable isn’t a “row”, but rather a
+<strong>partition</strong>.</p>
+<p>For these reasons, Scylla’s internal representation for a row we read
+from the SSTable is called <code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">mutation_partition</span></code>.</p>
+</section>
+<section id="column-names">
+<h2>Column Names<a class="headerlink" href="#column-names" title="Link to this heading">¶</a></h2>
+<p>As explained in <a class="reference internal" href="sstable-data-file.html"><span class="doc">SSTables Data File</span></a>, the
+sstable row (a mutation partition) is a list of <em>cells</em> (column values).
+Each cell is preceded by the full column name. This was considered a
+good idea when Apache Cassandra was designed to support rows with many and
+arbitrary columns, but Scylla is more oriented toward the CQL use case
+with a known schema. So Scylla’s rows do not store the full column name,
+but rather store a numeric ID which points to the known list of columns
+from the schema. So as we read column names from the SSTable in form of IDs,
+we need to translate the IDs into names by looking them up in the schema.</p>
+</section>
+<section id="composite-column-names">
+<h2>Composite Column Names<a class="headerlink" href="#composite-column-names" title="Link to this heading">¶</a></h2>
+<p>But the column names mentioned in the sstable cells usually aren’t a
+field name mentioned in the schema, and additional processing needs to
+be done to the column names which we read from the SSTable.</p>
+<p>The first issue is that starting with Apache Cassandra 1.2 (and unless
+<code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">COMPACT</span> <span class="pre">STORAGE</span></code> is used), column names aren’t plain strings,
+but each is rather rather a <em>composite</em> name - a short list of name
+components. See <a class="reference internal" href="sstable-data-file.html"><span class="doc">SSTables Data File</span></a> for this
+list’s on-disk encoding, but for simplicity of exposition let’s use the
+convention of writing a composite name as <strong>(part1:part2:…)</strong></p>
+<p>Things are simplest when no clustering keys are involved; Then, cell
+names have just one component. For example, consider the table created
+with the following CQL command:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">harels</span> <span class="p">(</span>
+        <span class="n">name</span> <span class="n">text</span><span class="p">,</span>
+        <span class="n">age</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">(</span><span class="n">name</span><span class="p">)</span>
+<span class="p">);</span>
+<span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">harels</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">age</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;nadav&#39;</span><span class="p">,</span> <span class="mi">40</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>In this table, we have a row with the key “nadav”, and in this row, one
+cell, with the column name “age” encoded as a single-component composite
+string <strong>(age)</strong> (on disk, <code class="docutils literal notranslate"><span class="pre">\003</span> <span class="pre">a</span> <span class="pre">g</span> <span class="pre">e</span> <span class="pre">\0</span></code>). This only component,
+“age”, can be looked up in the table’s schema, and converted to a column
+ID in the <code class="docutils literal notranslate"><span class="pre">mutation_partition</span></code>, as explained above.</p>
+</section>
+<section id="cql-row-marker">
+<h2>CQL Row Marker<a class="headerlink" href="#cql-row-marker" title="Link to this heading">¶</a></h2>
+<p>As explained in <a class="reference internal" href="sstable-data-file.html"><span class="doc">SSTables Data File</span></a>,
+Apache Cassandra always (except when a COMPACT table is used and other esoteric
+exceptions) adds to each row an empty-named and empty-valued bogus
+“cell”, to solve various problems involving finding a row after its only
+column has been deleted. This is also explained in a comment in
+UpdateStatement.Java, and in
+<a class="reference external" href="https://issues.apache.org/jira/browse/CASSANDRA-4361">https://issues.apache.org/jira/browse/CASSANDRA-4361</a>.</p>
+<p>For example, if we inspect with <code class="docutils literal notranslate"><span class="pre">tools/bin/sstable2json</span></code> the table
+created in the previous example, we find:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;nadav&quot;</span><span class="p">,</span>
+ <span class="s2">&quot;cells&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1426688662900463</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;age&quot;</span><span class="p">,</span><span class="s2">&quot;40&quot;</span><span class="p">,</span><span class="mi">1426688662900463</span><span class="p">]]}</span>
+</pre></div>
+</div>
+<p>The first cell, with the empty name (“”) and value (the second “”), is
+the “CQL Row Marker”. As usual, the empty name “” shown by sstable2json
+is not actually an empty string, but a composite with one empty
+component, <strong>()</strong> (serialized on disk as <code class="docutils literal notranslate"><span class="pre">'\000</span> <span class="pre">\000</span> <span class="pre">\000'</span></code>).</p>
+<p>I hope we can simply ignore these CQL Row Marker cells, and not
+duplicate them in Scylla’s internal format. We just need a different way
+to allow empty rows (a row with only a key, but no data columns) to
+exist, to circumvent the problems mentioned in CASSANDRA-4361 and the
+comment in UpdateStatement.Java.</p>
+</section>
+<section id="clustering-keys">
+<h2>Clustering Keys<a class="headerlink" href="#clustering-keys" title="Link to this heading">¶</a></h2>
+<p>When the table has a clustering key, column names in the sstable no
+longer have a single component:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">USE</span> <span class="n">try1</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">harels2</span> <span class="p">(</span>
+        <span class="n">name</span> <span class="n">text</span><span class="p">,</span>
+        <span class="n">nick</span> <span class="n">text</span><span class="p">,</span>
+        <span class="n">age</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">nick</span><span class="p">)</span>
+<span class="p">)</span> <span class="n">WITH</span> <span class="n">compression</span> <span class="o">=</span> <span class="p">{};</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">harels2</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">nick</span><span class="p">,</span> <span class="n">age</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;nadav&#39;</span><span class="p">,</span> <span class="s1">&#39;nyh&#39;</span><span class="p">,</span> <span class="mi">40</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Note how name and nick form the primary key, but the CQL syntax
+specifies that the <strong>partition key</strong> is name, and the <strong>clustering key</strong>
+is nick. This means that different tables entries that have the same
+name (but different nick) will appear in the same partition, i.e., in
+the same sstable row. Inside that partition, different nicks can appear,
+each with its own age. To see what this looks like in the sstable we
+again use the <em>sstable2json</em> tool, and see:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;nadav&quot;</span><span class="p">,</span>
+ <span class="s2">&quot;cells&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="s2">&quot;nyh:&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1427032626839065</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;nyh:age&quot;</span><span class="p">,</span><span class="s2">&quot;40&quot;</span><span class="p">,</span><span class="mi">1427032626839065</span><span class="p">]]}</span>
+</pre></div>
+</div>
+<p>In other words, the composite column name (nyh:age) is used to store the
+age for the nick nyh, and a different column would be used to store some
+other nick’s age. Note how in (nyh:age), the “nyh” is not one of the CQL
+column names, but rather the <em>value</em> of the clustering column nick, and
+only the last component, “age”, is an actual name of a field from the
+CQL schema.</p>
+<p>In Scylla nomenclature, this single <strong>partition</strong> (with key
+name=”nadav”) has multiple <strong>rows</strong>, each with a different value of the
+clustering key (nick). Each of these rows has, as usual, columns whose
+names are the fields from the CQL schema (and as explained above, are
+kept as column IDs, not names).</p>
+<p>So when converting an sstable row into a <code class="docutils literal notranslate"><span class="pre">mutation_partition</span></code>, we need
+to consult the schema to look for a clustering key. If “nick” is the
+clustering key, we shouldn’t look as usual for cells named (nick).
+Instead, we expect <em>every</em> cell name to have &gt;=2 components, where the
+first component is a value of nick, and the second component an actual
+column name. In the <code class="docutils literal notranslate"><span class="pre">mutation_partition</span></code> object, we need to insert
+multiple <code class="docutils literal notranslate"><span class="pre">row</span></code> objects, where each row corresponds to one value of the
+first component.</p>
+<p>The silly cell with key <strong>(nyh:)</strong> (empty second component) and empty
+value is the “CQL Row Marker” described above, which appears for each
+<em>row</em> (combination of partition key and clustering key) separately.</p>
+</section>
+<section id="static-columns">
+<h2>Static Columns<a class="headerlink" href="#static-columns" title="Link to this heading">¶</a></h2>
+<p>A static column is a special column which is shared by all rows of the
+same partition. As we saw above, the case of multiple rows per partition
+happens when there is a clustering column. When Datastax introduced
+static columns in Cassandra 2.0.6, they used the following example
+(<a class="reference external" href="http://www.datastax.com/dev/blog/cql-in-2-0-6">http://www.datastax.com/dev/blog/cql-in-2-0-6</a>):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">bills</span> <span class="p">(</span>
+     <span class="n">user</span> <span class="n">text</span><span class="p">,</span>
+     <span class="n">balance</span> <span class="nb">int</span> <span class="n">static</span><span class="p">,</span>
+     <span class="n">expense_id</span> <span class="nb">int</span><span class="p">,</span>
+     <span class="n">amount</span> <span class="nb">int</span><span class="p">,</span>
+     <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">expense_id</span><span class="p">)</span>
+  <span class="p">);</span>
+</pre></div>
+</div>
+<p>This is a table of bills (amounts that certain users need to pay).
+According to the “PRIMARY KEY” line, the partition key is “user”, and
+“expense_id” is the clustering key; This means that there will be a
+partition (sstable row) for each user, and for each such partition, we
+can have multiple expenses (<em>rows</em>), each with a different
+clustering-key expense_id, and corresponding amount. But the “balance”
+column is for all the different expenses of the same user.</p>
+<p>So if we insert one expense for ‘user1’, and set user1’s balance:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">bills</span> <span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">balance</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;user1&#39;</span><span class="p">,</span> <span class="mi">17</span><span class="p">);</span>
+<span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">bills</span> <span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">expense_id</span><span class="p">,</span> <span class="n">amount</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;user1&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>What is written to the sstable looks like this (as usual, output from
+<code class="docutils literal notranslate"><span class="pre">sstable2json</span></code>):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;user1&quot;</span><span class="p">,</span>
+ <span class="s2">&quot;cells&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="s2">&quot;:balance&quot;</span><span class="p">,</span><span class="s2">&quot;17&quot;</span><span class="p">,</span><span class="mi">1428849747953348</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;1:&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1428849747970947</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;1:amount&quot;</span><span class="p">,</span><span class="s2">&quot;8&quot;</span><span class="p">,</span><span class="mi">1428849747970947</span><span class="p">]]}</span>
+</pre></div>
+</div>
+<p>The (1:amount) and (1:) is what we already saw above, the new thing here
+is the (:balance), a static column.</p>
+<p>So sstables have static columns specially marked by an empty first
+component of the composite cell name. We need to verify that each such
+cell actually corresponds to a known static column from the table’s
+schema, and collect all these static columns into one row
+(<code class="docutils literal notranslate"><span class="pre">_static_row</span></code>) stored in Scylla’s <code class="docutils literal notranslate"><span class="pre">mutation_partition</span></code>.</p>
+<p>TODO: CompositeType.java explains that static columns do not really have
+an empty first component (size 0), but rather the first component has
+the fake size STATIC_MARKER = 0xFFFF (65536). We need to verify this.</p>
+</section>
+<section id="compound-clustering-key">
+<h2>Compound Clustering Key<a class="headerlink" href="#compound-clustering-key" title="Link to this heading">¶</a></h2>
+<p>When the clustering key is compound, i.e., composed of multiple columns,
+the SSTable column names will contain more than two components. For
+example consider:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">USE</span> <span class="n">try1</span><span class="p">;</span>
+<span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">bills3</span> <span class="p">(</span>
+     <span class="n">user</span> <span class="n">text</span><span class="p">,</span>
+     <span class="n">expense_id</span> <span class="nb">int</span><span class="p">,</span>
+     <span class="n">year</span> <span class="nb">int</span><span class="p">,</span>
+     <span class="n">amount</span> <span class="nb">int</span><span class="p">,</span>
+     <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">year</span><span class="p">,</span> <span class="n">expense_id</span><span class="p">)</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">bills3</span> <span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">year</span><span class="p">,</span> <span class="n">expense_id</span><span class="p">,</span> <span class="n">amount</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;user1&#39;</span><span class="p">,</span> <span class="mi">2015</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Here as usual, the first column name in “PRIMARY KEY”, user, is the
+partition key, but the two others, year and expense_id are both
+clustering columns, forming a compound clustering key. I.e., each
+partition contains several rows, each defined by (and sorted by) the
+pair (year, expense_id).</p>
+<p>The resulting SSTable row is:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;user1&quot;</span><span class="p">,</span>
+ <span class="s2">&quot;cells&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="s2">&quot;2015:1:&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1428853746711253</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;2015:1:amount&quot;</span><span class="p">,</span><span class="s2">&quot;8&quot;</span><span class="p">,</span><span class="mi">1428853746711253</span><span class="p">]]}</span>
+</pre></div>
+</div>
+<p>Note how the column name “amount” is now prefixed by two components, the
+values of the two clustering columns. Of course, a schema can have any
+number of clustering columns and as a result, expect that number of
+prefix components in the SSTable’s column names.</p>
+<p>As before, all but the last column-name component are expected to be
+values of the clustering-key of the various rows inside the partition,
+and only the last component is a column name to be looked up in the
+schema. It’s safer, though, to consult with the schema to see the number
+of clustering columns instead of guessing it as the number of components
+minus one. This is a good sanity check, and also necessary when
+collections are concerned (see below).</p>
+</section>
+<section id="compound-partition-key">
+<h2>Compound Partition Key<a class="headerlink" href="#compound-partition-key" title="Link to this heading">¶</a></h2>
+<p>The row key read from the SSTable can also be a composite (a list of
+components) if the schema says the partition key is compound. For
+example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">bills2</span> <span class="p">(</span>
+     <span class="n">user</span> <span class="n">text</span><span class="p">,</span>
+     <span class="n">expense_id</span> <span class="nb">int</span><span class="p">,</span>
+     <span class="n">amount</span> <span class="nb">int</span><span class="p">,</span>
+     <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">((</span><span class="n">user</span><span class="p">,</span> <span class="n">expense_id</span><span class="p">))</span>
+<span class="p">);</span>
+<span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">bills</span> <span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">expense_id</span><span class="p">,</span> <span class="n">amount</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;user1&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Note the extra pair of parenthesis in the “PRIMARY KEY” specification,
+which says that expense_id is part of the partition key, not a
+clustering ey.</p>
+<p>The key of each SSTable row is now the pair (user, expense_id), a
+composite with two components.</p>
+<p>TODO: Print the resulting SSTable</p>
+</section>
+<section id="collections">
+<h2>Collections<a class="headerlink" href="#collections" title="Link to this heading">¶</a></h2>
+<p>The encoding of <em>collections</em> in SSTables is more complex.</p>
+<p>Consider this table definition with a column which is a <em>set</em>
+collection:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">col2</span> <span class="p">(</span>
+     <span class="n">user</span> <span class="n">text</span><span class="p">,</span>
+     <span class="n">favorites</span> <span class="nb">set</span><span class="o">&lt;</span><span class="n">text</span><span class="o">&gt;</span><span class="p">,</span>
+     <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">(</span><span class="n">user</span><span class="p">)</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">col2</span> <span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">favorites</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;user1&#39;</span><span class="p">,</span> <span class="p">{</span><span class="s1">&#39;raindrops&#39;</span><span class="p">,</span> <span class="s1">&#39;kittens&#39;</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>The resulting SSTable row is:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;user1&quot;</span><span class="p">,</span>
+ <span class="s2">&quot;cells&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1428855312063525</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;favorites:_&quot;</span><span class="p">,</span><span class="s2">&quot;favorites:!&quot;</span><span class="p">,</span><span class="mi">1428855312063524</span><span class="p">,</span><span class="s2">&quot;t&quot;</span><span class="p">,</span><span class="mi">1428855312</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;favorites:6b697474656e73&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1428855312063525</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;favorites:7261696e64726f7073&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1428855312063525</span><span class="p">]]}</span>
+</pre></div>
+</div>
+<p>Here we also have two components in the column names, but we need to
+know this is not the case of a clustering key (“favorites” isn’t a value
+of a clustering column) but that of a collection. We need to consult the
+schema to tell the two cases apart (in this case, there are no
+clustering columns, so no component needs to be treated as a clustering
+column, so when we see two components, it must be a collection).</p>
+<p>In a set, we have a cell for each item in the collection, and <em>second</em>
+component of the cell’s name is the serialized value. E.g., in our case,
+the byte array “kittens” is shown by sstable2json in hex
+(6b697474656e73) - in the actual SSTable the hex does not appear (there
+is the length of the string followed by the actual bytes). The value of
+each of these cells is empty for a <em>set</em> (for other types of collections
+it is not empty - see below).</p>
+<p>The weird cell in the beginning of the above sstable2json output (with
+<code class="docutils literal notranslate"><span class="pre">favorites:_</span></code>) is not a normal cell - this is how sstable prints a
+<em>range tombstone</em>, whose range is between the start of “favorites:” and
+the end of “favorites:”, the markedForDeleteAt value is 1428855312063524
+and localDeletionTime is 1428855312. The need for this range tombstone
+appears to be as follows: Because each of the collection’s items is a
+separate cell, when we <em>set</em> the collection (as in the INSERT command we
+used) the intention is to delete any old item in the collection, if
+there are any, and add the new items. The range tombstone takes care of
+deleting all the old items.</p>
+<p>The actual sstable doesn’t have the “_” or “!” characters printed by
+sstable2json. What it really has is <code class="docutils literal notranslate"><span class="pre">&quot;\00\09favorites\ff&quot;</span></code> and
+0`9favorites:raw-latex:<cite>0`1”. I.e., each
+of these two column names has only one component, but instead of ending
+as usual with the end-of-component byte :raw-latex:</cite>0`0, the first ends
+with 0`1
+(END). This means the range tombstone spans everything between the first
+column and the last, as indeed desired.</p>
+<p>The second type of collection, the <strong>map</strong>, is similar to the <strong>set</strong>,
+just the value is not empty but rather the desired value in the map. For
+example,</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">col4</span> <span class="p">(</span>
+     <span class="n">user</span> <span class="n">text</span><span class="p">,</span>
+     <span class="n">favorites</span> <span class="nb">map</span><span class="o">&lt;</span><span class="n">text</span><span class="p">,</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span>
+     <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">(</span><span class="n">user</span><span class="p">)</span>
+<span class="p">)</span> <span class="n">WITH</span> <span class="n">compression</span> <span class="o">=</span> <span class="p">{};</span>
+<span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">col4</span> <span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">favorites</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;user1&#39;</span><span class="p">,</span> <span class="p">{</span><span class="s1">&#39;raindrops&#39;</span> <span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;kittens&#39;</span> <span class="p">:</span> <span class="mi">2</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>We see in the SSTable with sstable2json:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;user1&quot;</span><span class="p">,</span>
+ <span class="s2">&quot;cells&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1428864848550739</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;favorites:_&quot;</span><span class="p">,</span><span class="s2">&quot;favorites:!&quot;</span><span class="p">,</span><span class="mi">1428864848550738</span><span class="p">,</span><span class="s2">&quot;t&quot;</span><span class="p">,</span><span class="mi">1428864848</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;favorites:6b697474656e73&quot;</span><span class="p">,</span><span class="s2">&quot;00000002&quot;</span><span class="p">,</span><span class="mi">1428864848550739</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;favorites:7261696e64726f7073&quot;</span><span class="p">,</span><span class="s2">&quot;00000001&quot;</span><span class="p">,</span><span class="mi">1428864848550739</span><span class="p">]]}</span>
+</pre></div>
+</div>
+<p>I.e., indeed exactly the same as the representation of the set, except
+the cell’s values are the desired 1 and 2. The way the values are
+printed above as strings (“0000002”) is just an artifact of how
+sstable2json works - the value is represented in the SSTable as an
+actual serialized int (32-bit length 4, followed by 4 bytes of the
+integer’s representation) as expected.</p>
+<p>For the ordered <strong>list</strong> collection, things are similar, but not quite
+the same because of the need to keep the desired item order:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">col1</span> <span class="p">(</span>
+     <span class="n">user</span> <span class="n">text</span><span class="p">,</span>
+     <span class="n">favorites</span> <span class="nb">list</span><span class="o">&lt;</span><span class="n">text</span><span class="o">&gt;</span><span class="p">,</span>
+     <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">(</span><span class="n">user</span><span class="p">)</span>
+<span class="p">);</span>
+<span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">col1</span> <span class="p">(</span><span class="n">user</span><span class="p">,</span> <span class="n">favorites</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;user1&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;raindrops&#39;</span><span class="p">,</span> <span class="s1">&#39;kittens&#39;</span><span class="p">]);</span>
+</pre></div>
+</div>
+<p>The resulting SSTable row is now:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;user1&quot;</span><span class="p">,</span>
+ <span class="s2">&quot;cells&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1428854738475900</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;favorites:_&quot;</span><span class="p">,</span><span class="s2">&quot;favorites:!&quot;</span><span class="p">,</span><span class="mi">1428854738475899</span><span class="p">,</span><span class="s2">&quot;t&quot;</span><span class="p">,</span><span class="mi">1428854738</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;favorites:c2bcd290e12d11e49cac000000000000&quot;</span><span class="p">,</span><span class="s2">&quot;7261696e64726f7073&quot;</span><span class="p">,</span><span class="mi">1428854738475900</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;favorites:c2bcd291e12d11e49cac000000000000&quot;</span><span class="p">,</span><span class="s2">&quot;6b697474656e73&quot;</span><span class="p">,</span><span class="mi">1428854738475900</span><span class="p">]]}</span>
+</pre></div>
+</div>
+<p>Note how this time, the items (“raindrops” and “kittens”) are the value
+of the cell, not in the column name. In the column name we have some
+long strings intended to sort in the requested list order. These long
+hex strings are misrepresented by sstable2json - they are not a hex
+string but rather a 16-byte UUID.</p>
+<p>To merely keep the list items in order, Apache Cassandra could have used small
+integers instead of these UUIDs. But these UUIDs have an additional
+benefit: as <a class="reference external" href="http://www.datastax.com/dev/blog/cql3_collections">http://www.datastax.com/dev/blog/cql3_collections</a> explains,
+Apache Cassandra wishes to allow efficient <em>append</em> and <em>prepend</em> operations to
+an existing list - without reading the existing list first (i.e., the
+append/prepend is a fast write-only mutation, not a slow
+read-modify-write operation). To achieve that, Apache Cassandra uses signed
+time-UUIDs as the list sort string - with positive times used for append
+operations, and negative for prepend operations. This ensures that, for
+example, a later append always sorts after an earlier append - without
+the append having to know which items already exist in the list.</p>
+<p>Scylla’s internal storage of a collection in a mutation is the
+<code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">collection_mutation</span></code>, and we need to convert the above
+described representation into that class. TODO: I still can’t figure out
+exactly what is the internal structure of our collection_mutation
+(which hides behind an opaque byte array), or what functions we are
+supposed to call to build one).</p>
+</section>
+<section id="cells-with-expiration-time">
+<h2>Cells with Expiration Time<a class="headerlink" href="#cells-with-expiration-time" title="Link to this heading">¶</a></h2>
+<p>An SSTable cell may have an expiration time, as explained
+<a class="reference external" href="http://docs.datastax.com/en/cql/3.1/cql/cql_using/use_expire_c.html">http://docs.datastax.com/en/cql/3.1/cql/cql_using/use_expire_c.html</a>.
+Such a cell is marked by the EXPIRATION_MASK bit in the mask byte, and
+in addition to the cell’s normal fields, has two additional fields,
+“ttl” and “expiration”, both 32-bit and measured in seconds. “ttl” is
+the original time-to-live (number of seconds until expiration) specified
+when the cell was created, and “expiration” is the absolute time when
+the cell should be expired (in seconds since the Unix Epoch).</p>
+<p>The following CQL example creates a cell with a time-to-live of 3600
+seconds:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">ttl</span> <span class="p">(</span>
+    <span class="n">name</span> <span class="n">text</span><span class="p">,</span>
+    <span class="n">age</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">(</span><span class="n">name</span><span class="p">)</span>
+<span class="p">);</span>
+<span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">ttl</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">age</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;nadav&#39;</span><span class="p">,</span> <span class="mi">40</span><span class="p">)</span> <span class="n">USING</span> <span class="n">TTL</span> <span class="mi">3600</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>sstable2json prints the resulting SSTable row as:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;nadav&quot;</span><span class="p">,</span>
+ <span class="s2">&quot;cells&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="mi">1430151018675502</span><span class="p">,</span><span class="s2">&quot;e&quot;</span><span class="p">,</span><span class="mi">3600</span><span class="p">,</span><span class="mi">1430154618</span><span class="p">],</span>
+           <span class="p">[</span><span class="s2">&quot;age&quot;</span><span class="p">,</span><span class="s2">&quot;40&quot;</span><span class="p">,</span><span class="mi">1430151018675502</span><span class="p">,</span><span class="s2">&quot;e&quot;</span><span class="p">,</span><span class="mi">3600</span><span class="p">,</span><span class="mi">1430154618</span><span class="p">]]}</span>
+</pre></div>
+</div>
+<p>Note how each of cells (the cql row marker, and our actual data cell)
+have a TTL of 3600 seconds, and an expiration time calculated by adding
+3600 to the current time on the server. The fact that the row marker
+also got this TTL is not certain to be a good thing - see discussion in
+<a class="reference external" href="https://issues.apache.org/jira/browse/CASSANDRA-5762">https://issues.apache.org/jira/browse/CASSANDRA-5762</a>.</p>
+</section>
+<section id="cell-tombstone">
+<h2>Cell Tombstone<a class="headerlink" href="#cell-tombstone" title="Link to this heading">¶</a></h2>
+<p>We’ve already discussed row tombstones (marking the deletion of an
+entire row) and range tombstone (marking the deletion of a range of
+columns). We can also have a cell tombstone, marking the deletion of a
+single cell. A deleted cell is encoded in the SSTable like a normal
+cell, except the mask has the DELETION_MASK bit, and the <em>value</em> of the
+cell contains the serialized <code class="docutils literal notranslate"><span class="pre">local_deletion_time</span></code> (the local server
+time in seconds since the epoch), which is probably only needed for the
+purpose of purging the tombstone after gc_grace_seconds have elapsed.</p>
+<p>To create an sstable with a deleted cell in Apache Cassandra, consider creating
+a table with some data:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">deleted</span> <span class="p">(</span>
+    <span class="n">name</span> <span class="n">text</span><span class="p">,</span>
+    <span class="n">age</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">PRIMARY</span> <span class="n">KEY</span> <span class="p">(</span><span class="n">name</span><span class="p">)</span>
+<span class="p">);</span>
+<span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">deleted</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">age</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="s1">&#39;nadav&#39;</span><span class="p">,</span> <span class="mi">40</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Then flushing this data to an SSTable (with
+<code class="docutils literal notranslate"><span class="pre">bin/nodetool</span> <span class="pre">flush</span> <span class="pre">keyspacename</span></code>), and then deleting the cell we
+added:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">DELETE</span> <span class="n">age</span> <span class="n">FROM</span> <span class="n">deleted</span> <span class="n">WHERE</span> <span class="n">name</span> <span class="o">=</span> <span class="s1">&#39;nadav&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>When the second SSTable is flushed, it will have a cell tombstone.
+sstable2json shows the second SSTable like this:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">&quot;key&quot;</span><span class="p">:</span> <span class="s2">&quot;nadav&quot;</span><span class="p">,</span>
+ <span class="s2">&quot;cells&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="s2">&quot;age&quot;</span><span class="p">,</span><span class="mi">1430200516</span><span class="p">,</span><span class="mi">1430200516937621</span><span class="p">,</span><span class="s2">&quot;d&quot;</span><span class="p">]]}</span>
+</pre></div>
+</div>
+<p>Note how the cell has the DELETION_MASK bit (written as a “d”), its
+“value” is the local-deletion-time, 1430200516, and as usual it has a
+timestamp</p>
+<p><a class="reference internal" href="../../index.html"><span class="doc">Scylla Architecture</span></a></p>
+<p>Copyright</p>
+<p>© 2016, The Apache Software Foundation.</p>
+<p>Apache®, Apache Cassandra®, Cassandra®, the Apache feather logo and the Apache Cassandra® Eye logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries. No endorsement by The Apache Software Foundation is implied by the use of these marks.</p>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page SSTable Interpretation&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.1/architecture/sstable/sstable2/sstable-interpretation%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="sstable-format.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />SSTable format in Scylla
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="sstable-summary-file.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />SSTable Summary File
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page SSTable Interpretation&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.1/architecture/sstable/sstable2/sstable-interpretation%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/architecture/sstable/sstable2/sstable-interpretation.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">SSTable Interpretation</a><ul>
+<li><a class="reference internal" href="#sstable-rows">SSTable Rows</a></li>
+<li><a class="reference internal" href="#column-names">Column Names</a></li>
+<li><a class="reference internal" href="#composite-column-names">Composite Column Names</a></li>
+<li><a class="reference internal" href="#cql-row-marker">CQL Row Marker</a></li>
+<li><a class="reference internal" href="#clustering-keys">Clustering Keys</a></li>
+<li><a class="reference internal" href="#static-columns">Static Columns</a></li>
+<li><a class="reference internal" href="#compound-clustering-key">Compound Clustering Key</a></li>
+<li><a class="reference internal" href="#compound-partition-key">Compound Partition Key</a></li>
+<li><a class="reference internal" href="#collections">Collections</a></li>
+<li><a class="reference internal" href="#cells-with-expiration-time">Cells with Expiration Time</a></li>
+<li><a class="reference internal" href="#cell-tombstone">Cell Tombstone</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                5.1
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="../../../../stable/architecture/sstable/sstable2/sstable-interpretation.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../branch-6.1/architecture/sstable/sstable2/sstable-interpretation.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../branch-6.0/architecture/sstable/sstable2/sstable-interpretation.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../branch-5.4/architecture/sstable/sstable2/sstable-interpretation.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../../branch-5.2/architecture/sstable/sstable2/sstable-interpretation.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="sstable-interpretation.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../getting-started/index.html">Getting Started</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../getting-started/install-scylla/index.html">Install Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/unified-installer.html">Scylla Unified Installer (relocatable executable)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/rpm-info.html">What is in each RPM</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/disable-housekeeping.html">Scylla Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/dev-mod.html">Scylla Developer Mode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/config-commands.html">Scylla Configuration Reference</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../../getting-started/configure.html">Configure Scylla</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/os-support.html">OS Support by Platform and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/scylla-in-a-shared-environment.html">Scylla in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/migrate-scylla.html">Migrate to ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migration Process from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/cassandra-compatibility.html">Scylla and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-spark.html">Integrate Scylla with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-kairos.html">Integrate Scylla with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-presto.html">Integrate Scylla with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-elasticsearch.html">Integrate Scylla with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-k8.html">Integrate Scylla with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-janus.html">Integrate Scylla with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-datadog.html">Integrate Scylla with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-kafka.html">Integrate Scylla with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-iota.html">Integrate Scylla with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-spring.html">Integrate Scylla with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-ansible.html">Install Scylla with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/integrations/integration-databricks.html">Integrate Scylla with Databricks</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../operating-scylla/index.html">Scylla for Administrators</a><input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../operating-scylla/admin.html">Administration Guide</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../operating-scylla/procedures/index.html">Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/benchmarking-scylla.html">Benchmarking Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migrate from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/install-scylla/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../operating-scylla/security/index.html">Security</a><input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/security-checklist.html">Scylla Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/auditing.html">Scylla Auditing Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/encryption-at-rest.html">Encryption at Rest</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/ldap-authentication.html">LDAP Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/security/ldap-authorization.html">LDAP Authorization (Role Management)</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../operating-scylla/admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../cql/cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/rest.html">REST</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/scylla-sstable.html">Scylla SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/scylla-types.html">Scylla Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/sstable2json.html">SSTable2json</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/sstable-index.html">SSTable Index</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/logging.html">Scylla Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin-tools/virtual-tables.html">Virtual Tables</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../upgrade/upgrade-enterprise/index.html">Scylla Enterprise</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../upgrade/upgrade-opensource/index.html">Scylla Open Source</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../upgrade/upgrade-to-enterprise/index.html">Scylla Open Source to Scylla Enterprise</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../upgrade/ami-upgrade.html">Scylla AMI</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../operating-scylla/system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/system-configuration/snitch.html">Scylla Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../../operating-scylla/benchmarking-scylla.html">Benchmarking Scylla</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../using-scylla/index.html">Scylla for Developers</a><input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/learn.html">Learn To Use Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/">Scylla University</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/available-courses/">Course catalog</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/scylla-essentials-overview/">Scylla Essentials</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/">Basic Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/">Advanced Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/">MMS - Learn by Example</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://iot.scylladb.com/">Care-Pet an IoT Use Case and Example</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../../using-scylla/alternator/index.html">Scylla Alternator</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/features.html">Scylla Features</a><input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/features-open-source.html">Scylla Open Source Features</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/features-ent.html">Scylla Enterprise Features</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../using-scylla/drivers/index.html">Scylla Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/drivers/cql-drivers/index.html">Scylla CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../using-scylla/drivers/dynamo-drivers/index.html">Scylla DynamoDB Drivers</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../cql/index.html">CQL Reference</a><input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/ddl.html">Data Definition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/dml.html">Data Manipulation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/secondary-indexes.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/time-to-live.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/functions.html">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../cql/cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../../index.html">Scylla Architecture</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../../ringarchitecture/index.html">Scylla Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture-fault-tolerance.html">Scylla Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../anti-entropy/index.html">Scylla Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../anti-entropy/hinted-handoff.html">Scylla Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../anti-entropy/read-repair.html">Scylla Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../operating-scylla/procedures/maintenance/repair.html">Scylla Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 current has-children"><a class="reference internal" href="../index.html">SSTable</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l3 current current-page"><a class="reference internal" href="index.html">Scylla SSTable - 2.x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../sstable3/index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../troubleshooting/index.html">Troubleshooting Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/report-scylla-problem.html">Report a Scylla problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/startup/index.html">Scylla Startup</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/scylla-wont-start.html">Scylla will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/python-error-no-module-named-yaml.html">Scylla Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/nodetool-memory-read-timeout.html">SocketTimeoutException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/large-partition-table.html">Scylla Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/large-rows-large-cells-tables.html">Scylla Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/reverse-queries.html">Reverse queries fail</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../../troubleshooting/monitor/index.html">Scylla Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../kb/index.html">Knowledge Base</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/custom-user.html">Run Scylla and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/gossip.html">Gossip in Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/lwt-differences.html">How does Scylla LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/map-cpu.html">Map CPUs to Scylla Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/memory-usage.html">Scylla Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/ntp.html">NTP Configuration for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/posix.html">POSIX networking for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/quiz-administrators.html">Scylla consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/scylla-and-spark-integration.html">Scylla and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/scylla-limits-systemd.html">Increase Scylla resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/seed-nodes.html">Scylla Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/snapshots.html">Scylla Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/static-columns.html">Scylla payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/unresponsive-nodes.html">Scylla Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/use-perf.html">Using the perf utility with Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../kb/yaml-address.html">Configure Scylla Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference external" href="https://university.scylladb.com/">ScyllaDB University</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../faq.html">Scylla FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../contribute.html">Contribute to ScyllaDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../glossary.html">Glossary</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../alternator/compatibility.html">Scylla Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

@@ -1,0 +1,1284 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             Preimages and postimages | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/using-scylla/cdc/cdc-preimages.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../index.html" class="bread__highlight">
+                ScyllaDB for Developers
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="../features.html" class="bread__highlight">
+                ScyllaDB Features
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                Change Data Capture (CDC)
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">Preimages and postimages</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <section id="preimages-and-postimages">
+<h1>Preimages and postimages<a class="headerlink" href="#preimages-and-postimages" title="Link to this heading">¶</a></h1>
+<p>Prerequisites: make sure you are familiar with the <a class="reference internal" href="cdc-log-table.html"><span class="doc">CDC log table</span></a> and <a class="reference internal" href="cdc-basic-operations.html"><span class="doc">Basic operations in CDC</span></a> documents. Whenever we discuss non-frozen collections and UDTs, knowledge from the <a class="reference internal" href="cdc-advanced-types.html"><span class="doc">Advanced column types</span></a> is also helpful (but it’s not required to understand parts of the document which don’t refer to non-frozen collections and UDTs).</p>
+<p>When a write is performed to the base table, a corresponding write is made to the CDC log table associated with the base table. This CDC write can have many rows.</p>
+<p>There are three kinds of rows: preimage rows, delta rows, and postimage rows.</p>
+<p>The row’s kind can be recognized using the <code class="docutils literal notranslate"><span class="pre">cdc$operation</span></code> column: values <code class="docutils literal notranslate"><span class="pre">1</span></code> to <code class="docutils literal notranslate"><span class="pre">8</span></code> denote the different types of delta rows (as explained in the <a class="reference internal" href="cdc-log-table.html"><span class="doc">CDC log table</span></a> document), value <code class="docutils literal notranslate"><span class="pre">0</span></code> denotes a preimage row, and value <code class="docutils literal notranslate"><span class="pre">9</span></code> denotes a postimage row.</p>
+<p><strong>Delta rows</strong> have been extensively covered in the previous documents. They always appear if CDC is enabled. On the other hand, preimage and postimage rows are optional.</p>
+<p>The purpose of delta rows is to describe the write itself — the <cite>mutation</cite> performed on the table. The design principle of CDC is that using the information gathered from delta rows you can replay the exact same write that was used to generate those rows (except when you specify the CDC <code class="docutils literal notranslate"><span class="pre">enabled</span></code> parameter to <code class="docutils literal notranslate"><span class="pre">'keys'</span></code> in CDC options, in which case only the keys of the mutations will be shown).</p>
+<p><strong>Preimage rows</strong> exist to show what the state of the row affected by the write was <cite>prior</cite> to the write. The amount of information shown by preimage rows can be configured: the user can choose that the preimage contains the entire row (how it was before the write was made) by passing the <code class="docutils literal notranslate"><span class="pre">'full'</span></code> value to the <code class="docutils literal notranslate"><span class="pre">'preimage'</span></code> parameter when enabling CDC on a table, or that the preimage contains only the columns that were changed by the write by passing the <code class="docutils literal notranslate"><span class="pre">true</span></code> value to the <code class="docutils literal notranslate"><span class="pre">'preimage'</span></code> parameter. We will see examples of this.</p>
+<p><strong>Postimage rows</strong> exist to show what the state of the row affected by the write is <cite>after</cite> the write. Postimages always describe the state of the entire row. They are constructed by combining the delta row with the full preimage row (including columns not affected by the write).</p>
+<div class="admonition caution">
+<p class="admonition-title">Caution</p>
+<p>in order to generate preimage rows for a given write, Scylla must perform a read before making the write. This increases latencies significantly. Furthermore, the read-then-write procedure is not atomic; between the read and the write a concurrent write may be performed. If the concurrent write modifies the same row and column that the preimage had read, the preimage’s value will not be consistent with the order of writes as they appear in the CDC log. Preimages will only give “sensible” results if no concurrent writes are performed to the same row. They also heavily depend on monotonicity of clocks used to generate write timestamps. We will see some examples of what can go wrong in a later section. These remarks also apply to postimages, since they are computed from preimages.</p>
+</div>
+<section id="preimage-rows">
+<h2>Preimage rows<a class="headerlink" href="#preimage-rows" title="Link to this heading">¶</a></h2>
+<p>As mentioned in the <a class="reference internal" href="cdc-log-table.html"><span class="doc">CDC log table</span></a> document, each non-primary-key column of the base table has a corresponding column in the CDC log table with the same name, called the <cite>value column</cite>. The value column is used by delta rows to describe the change. Preimage rows use it to describe the previous values of the base table column in the corresponding base table rows.</p>
+<p>Suppose that a write generates a preimage row and let <code class="docutils literal notranslate"><span class="pre">X</span></code> be a base table column. If the write modified the <code class="docutils literal notranslate"><span class="pre">X</span></code> column, or if the <code class="docutils literal notranslate"><span class="pre">full</span></code> option for preimages is enabled, then the value of the column <code class="docutils literal notranslate"><span class="pre">X</span></code> in the preimage row is equal to the value of the corresponding column of the corresponding row of the base table <em>before</em> the write was performed. We call this value the <strong>preimage</strong> of <code class="docutils literal notranslate"><span class="pre">X</span></code> for the written row; it’s obtained by reading the base table before making the write. The read’s consistency level depends on the write’s consistency level:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 50.0%" />
+<col style="width: 50.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Base write CL</p></th>
+<th class="head"><p>Preimage read CL</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>ANY</p></td>
+<td><p>ONE</p></td>
+</tr>
+<tr class="row-odd"><td><p>ALL or SERIAL</p></td>
+<td><p>QUORUM</p></td>
+</tr>
+<tr class="row-even"><td><p>LOCAL SERIAL</p></td>
+<td><p>LOCAL QUORUM</p></td>
+</tr>
+<tr class="row-odd"><td><p>other</p></td>
+<td><p>the same as base write CL</p></td>
+</tr>
+</tbody>
+</table>
+<p>Therefore, depending on the CL of the write, the value obtained by the read may be different as it may contact different sets of replicas. We generally recommend using <code class="docutils literal notranslate"><span class="pre">QUORUM</span></code> or higher with CDC so that preimages observe previously finished writes. All examples in this document assume that <code class="docutils literal notranslate"><span class="pre">QUORUM</span></code> writes are used. With lower consistency levels and replication factors greater than 1 the results may differ in unpredictable ways.</p>
+<p>The preimage row is created if and only if the read returned the corresponding base table row. Thus, there will be no preimage row if the base row had no live row marker (created by an <code class="docutils literal notranslate"><span class="pre">INSERT</span></code>) and no other live cells.</p>
+<p>The deletion columns (<code class="docutils literal notranslate"><span class="pre">cdc$deleted_X</span></code>) are set to <code class="docutils literal notranslate"><span class="pre">true</span></code> for columns that have a <code class="docutils literal notranslate"><span class="pre">null</span></code> value in the preimage, but only for those columns that the write modified or for all columns if the <code class="docutils literal notranslate"><span class="pre">full</span></code> option for preimages is enabled. The deleted elements columns (<code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_X</span></code>, for non-frozen collections and UDTs) are not used by preimage rows and are set to <code class="docutils literal notranslate"><span class="pre">null</span></code>.</p>
+<p>Consider the following example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v1</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v2</span> <span class="k">map</span><span class="o">&lt;</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v1</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v2</span> <span class="o">=</span> <span class="n">v2</span> <span class="o">+</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span><span class="mf">2</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v2</span> <span class="o">=</span> <span class="n">v2</span> <span class="o">+</span> <span class="p">{</span><span class="mf">2</span><span class="p">:</span><span class="mf">3</span><span class="p">,</span> <span class="mf">3</span><span class="p">:</span><span class="mf">4</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$batch_seq_no&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$operation&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v1</span><span class="p">,</span> <span class="n">v2</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>returns:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | cdc$batch_seq_no | cdc$operation | pk | ck | v1   | v2
+--------------------------------------+------------------+---------------+----+----+------+--------------
+ 84d11998-3eea-11eb-c97a-ef64e058e2fb |                0 |             1 |  0 |  0 |    0 |         null
+ 84d18fd6-3eea-11eb-81e4-bb608d1b47fc |                0 |             0 |  0 |  0 | null |         null
+ 84d18fd6-3eea-11eb-81e4-bb608d1b47fc |                1 |             1 |  0 |  0 | null | {1: 1, 2: 2}
+ 84d2059c-3eea-11eb-f572-692d1e15a146 |                0 |             0 |  0 |  0 | null | {1: 1, 2: 2}
+ 84d2059c-3eea-11eb-f572-692d1e15a146 |                1 |             1 |  0 |  0 | null | {2: 3, 3: 4}
+</pre></div>
+</div>
+<p>There are 3 batches (each with a single <code class="docutils literal notranslate"><span class="pre">cdc$time</span></code>) corresponding to the 3 updates:</p>
+<ul class="simple">
+<li><p>The first batch consists of a single row with <code class="docutils literal notranslate"><span class="pre">cdc$operation</span> <span class="pre">=</span> <span class="pre">1</span></code> (denoting <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>); this is the delta row corresponding to the first update. There is no preimage row because the base table did not have a row with <code class="docutils literal notranslate"><span class="pre">(pk,</span> <span class="pre">ck)</span> <span class="pre">=</span> <span class="pre">(0,</span> <span class="pre">0)</span></code> before the update happened.</p></li>
+<li><p>The second batch has two rows: a preimage row (<code class="docutils literal notranslate"><span class="pre">cdc$operation</span> <span class="pre">=</span> <span class="pre">0</span></code>) and a delta row (<code class="docutils literal notranslate"><span class="pre">cdc$operation</span> <span class="pre">=</span> <span class="pre">1</span></code>); it corresponds to the second update. This time the preimage row appeared because the table had a row with <code class="docutils literal notranslate"><span class="pre">(pk,</span> <span class="pre">ck)</span> <span class="pre">=</span> <span class="pre">(0,</span> <span class="pre">0)</span></code> before the update happened and the preimage read returned it. Column <code class="docutils literal notranslate"><span class="pre">v1</span></code> has <code class="docutils literal notranslate"><span class="pre">null</span></code> because this update did not modify the <code class="docutils literal notranslate"><span class="pre">v1</span></code> column and the CDC options contained <code class="docutils literal notranslate"><span class="pre">'preimage':</span> <span class="pre">true</span></code>, not <code class="docutils literal notranslate"><span class="pre">'preimage':</span> <span class="pre">'full'</span></code>. Column <code class="docutils literal notranslate"><span class="pre">v2</span></code> has <code class="docutils literal notranslate"><span class="pre">null</span></code> because that’s what the preimage read returned — there was no value under this column before this update.</p></li>
+<li><p>The third batch also has two rows, a preimage and a delta. This time the <code class="docutils literal notranslate"><span class="pre">v2</span></code> column of the preimage row contains <code class="docutils literal notranslate"><span class="pre">{1:</span> <span class="pre">1,</span> <span class="pre">2:</span> <span class="pre">2}</span></code> since that was the value of <code class="docutils literal notranslate"><span class="pre">v2</span></code> of the corresponding row in the base table before the update.</p></li>
+</ul>
+<p>Let’s see what happens if we use <code class="docutils literal notranslate"><span class="pre">'preimage':</span> <span class="pre">'full'</span></code> instead:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v1</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v2</span> <span class="k">map</span><span class="o">&lt;</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span><span class="p">:</span> <span class="s1">&#39;full&#39;</span><span class="p">};</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v1</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v2</span> <span class="o">=</span> <span class="n">v2</span> <span class="o">+</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span><span class="mf">2</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v2</span> <span class="o">=</span> <span class="n">v2</span> <span class="o">+</span> <span class="p">{</span><span class="mf">2</span><span class="p">:</span><span class="mf">3</span><span class="p">,</span> <span class="mf">3</span><span class="p">:</span><span class="mf">4</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$batch_seq_no&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$operation&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v1</span><span class="p">,</span> <span class="n">v2</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>returns:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | cdc$batch_seq_no | cdc$operation | pk | ck | v1   | v2
+--------------------------------------+------------------+---------------+----+----+------+--------------
+ 2d5df268-3eee-11eb-7927-87ffdbd439b6 |                0 |             1 |  0 |  0 |    0 |         null
+ 2d5e3002-3eee-11eb-148e-77c7cfe215fc |                0 |             0 |  0 |  0 |    0 |         null
+ 2d5e3002-3eee-11eb-148e-77c7cfe215fc |                1 |             1 |  0 |  0 | null | {1: 1, 2: 2}
+ 2d5e71a2-3eee-11eb-218e-3a6f0b631141 |                0 |             0 |  0 |  0 |    0 | {1: 1, 2: 2}
+ 2d5e71a2-3eee-11eb-218e-3a6f0b631141 |                1 |             1 |  0 |  0 | null | {2: 3, 3: 4}
+</pre></div>
+</div>
+<p>The difference, compared to the previous example, is that the <code class="docutils literal notranslate"><span class="pre">v1</span></code> column has a value in all preimage rows: even though the second and third updates did not modify this column, the preimage shows its previous value anyway since we enabled full preimages.</p>
+<p>Preimage rows are only created for rows modified using inserts, updates, or row deletes. They are not created for range deletes or partition deletes. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="nb">int</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">1</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">2</span><span class="p">;</span>
+
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="mf">1</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">0</span><span class="p">,</span> <span class="mf">0</span><span class="p">,</span> <span class="mf">2</span><span class="p">);</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">&gt;=</span> <span class="mf">1</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">&lt;</span> <span class="mf">2</span><span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$batch_seq_no&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$operation&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>returns:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | cdc$batch_seq_no | cdc$operation | pk | ck   | v
+--------------------------------------+------------------+---------------+----+------+------
+ e4892556-3f8a-11eb-20ea-30fe49fdd40c |                0 |             1 |  0 |    0 |    0
+ e48a3a0e-3f8a-11eb-129f-afaf7bdf3862 |                0 |             1 |  0 |    1 |    0
+ e48b53bc-3f8a-11eb-5392-14b6b05c122b |                0 |             1 |  0 |    2 |    0
+
+ e48c605e-3f8a-11eb-fd38-697c7087e1e0 |                0 |             0 |  0 |    0 |    0
+ e48c605e-3f8a-11eb-fd38-697c7087e1e0 |                1 |             1 |  0 |    0 |    1
+
+ e48d37d6-3f8a-11eb-66f8-c231b41871ae |                0 |             0 |  0 |    0 |    1
+ e48d37d6-3f8a-11eb-66f8-c231b41871ae |                1 |             2 |  0 |    0 |    2
+
+ e48d89ac-3f8a-11eb-cf87-59a4595c6414 |                0 |             0 |  0 |    0 |    2
+ e48d89ac-3f8a-11eb-cf87-59a4595c6414 |                1 |             3 |  0 |    0 | null
+
+ e48de5c8-3f8a-11eb-40f8-df57c38bb13f |                0 |             5 |  0 |    1 | null
+ e48de5c8-3f8a-11eb-40f8-df57c38bb13f |                1 |             8 |  0 |    2 | null
+
+ e48e239e-3f8a-11eb-d1c6-5d36bba44905 |                0 |             4 |  0 | null | null
+</pre></div>
+</div>
+<p>(we’ve inserted the empty lines to improve readability of the example).</p>
+<p>We first create 3 rows using <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> with <code class="docutils literal notranslate"><span class="pre">(pk,</span> <span class="pre">ck)</span> <span class="pre">=</span> <span class="pre">(0,</span> <span class="pre">0),</span> <span class="pre">(0,</span> <span class="pre">1),</span> <span class="pre">(0,</span> <span class="pre">2)</span></code>. The first 3 rows of the CDC log shown above correspond to these 3 updates; as expected, none of them got a preimage (because the rows didn’t exist before).</p>
+<p>We then modify the row <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">0)</span></code> using <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>, as shown by rows 4 and 5 of the CDC log, then <code class="docutils literal notranslate"><span class="pre">INSERT</span></code>, as shown by rows 6 and 7, and then we delete the row, which corresponds to rows 8 and 9. We can see that each operation has a preimage row.</p>
+<p>Finally, we perform a range delete (rows 10 and 11) and a partition delete (row 12); these operations didn’t get preimage rows even though the range delete removed the row <code class="docutils literal notranslate"><span class="pre">(pk,</span> <span class="pre">ck)</span> <span class="pre">=</span> <span class="pre">(0,</span> <span class="pre">1)</span></code> and the partition delete removed the row <code class="docutils literal notranslate"><span class="pre">(pk,</span> <span class="pre">ck)</span> <span class="pre">=</span> <span class="pre">(0,</span> <span class="pre">2)</span></code>. The reason we don’t generate preimages for range deletes and partition deletes is that in general these operations may affect any number of rows; obtaining preimages for all of them has an unbounded cost.</p>
+<section id="preimages-and-non-atomic-columns">
+<h3>Preimages and non-atomic columns<a class="headerlink" href="#preimages-and-non-atomic-columns" title="Link to this heading">¶</a></h3>
+<p>Recall that for atomic columns in the base table, the corresponding value columns in the CDC log table have the same type. For non-frozen collections and UDTs the type is different; in particular, it is always frozen (see <a class="reference internal" href="cdc-advanced-types.html"><span class="doc">Advanced column types</span></a> for details).</p>
+<p>The preimage for a non-frozen collection/UDT column is calculated by reading the collection/UDT from the base table and “freezing” the obtained set of cells. For maps, sets and UDTs, the preimage value will “look” the same as if we manually performed a read from the base table, except that its type will be a frozen version of the base type. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="k">set</span><span class="o">&lt;</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">{</span><span class="mf">3</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$batch_seq_no&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$operation&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>returns:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | cdc$batch_seq_no | cdc$operation | pk | ck | v
+--------------------------------------+------------------+---------------+----+----+--------
+ 920e2c86-3f94-11eb-67f7-62f63aa4f8ee |                0 |             1 |  0 |  0 | {1, 2}
+ 920e78d0-3f94-11eb-dd3c-388dcc1a0644 |                0 |             0 |  0 |  0 | {1, 2}
+ 920e78d0-3f94-11eb-dd3c-388dcc1a0644 |                1 |             1 |  0 |  0 |    {3}
+</pre></div>
+</div>
+<p>The preimage of <code class="docutils literal notranslate"><span class="pre">v</span></code> for the second update shows <code class="docutils literal notranslate"><span class="pre">{1,</span> <span class="pre">2}</span></code>. This value has type <code class="docutils literal notranslate"><span class="pre">frozen&lt;set&lt;int&gt;&gt;</span></code>. If we had performed a read after the first update but before the second one, we would have also obtained <code class="docutils literal notranslate"><span class="pre">{1,</span> <span class="pre">2}</span></code>, although of type <code class="docutils literal notranslate"><span class="pre">set&lt;int&gt;</span></code>. The values “look” the same but formally they are different (they have different types). In particular CQL drivers may represent them differently.</p>
+<p>For columns of type <code class="docutils literal notranslate"><span class="pre">list&lt;T&gt;</span></code>, the type of the CDC value column is <code class="docutils literal notranslate"><span class="pre">map&lt;timeuuid,</span> <span class="pre">T&gt;</span></code> (see <a class="reference internal" href="cdc-advanced-types.html"><span class="doc">Advanced column types</span></a>). Therefore, for non-frozen lists, the timeuuid keys are also exposed in preimages. To obtain the list that one would obtain by performing a standard read of the base table simply remove the keys. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="k">list</span><span class="o">&lt;</span><span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">[</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">]</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">[</span><span class="mf">3</span><span class="p">]</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$batch_seq_no&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$operation&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>returns:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | cdc$batch_seq_no | cdc$operation | pk | ck | v
+--------------------------------------+------------------+---------------+----+----+------------------------------------------------------------------------------------
+ a252aa44-3f95-11eb-384d-579394688d26 |                0 |             1 |  0 |  0 | {a252bb60-3f95-11eb-9a61-000000000001: 1, a252bb61-3f95-11eb-9a61-000000000001: 2}
+ a252e8a6-3f95-11eb-78fe-4635649d129b |                0 |             0 |  0 |  0 | {a252bb60-3f95-11eb-9a61-000000000001: 1, a252bb61-3f95-11eb-9a61-000000000001: 2}
+ a252e8a6-3f95-11eb-78fe-4635649d129b |                1 |             1 |  0 |  0 |                                          {a252e270-3f95-11eb-9a61-000000000001: 3}
+</pre></div>
+</div>
+<p>The preimage of <code class="docutils literal notranslate"><span class="pre">v</span></code> for the second update is <code class="docutils literal notranslate"><span class="pre">{a252bb60-3f95-11eb-9a61-000000000001:</span> <span class="pre">1,</span> <span class="pre">a252bb61-3f95-11eb-9a61-000000000001:</span> <span class="pre">2}</span></code>. Performing a standard read before the second update would return the list <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">2]</span></code>. Observe that this list can also be obtained from the preimage by listing the (key, value) pairs in the order shown in the preimage map and removing the keys.</p>
+<div class="admonition caution">
+<p class="admonition-title">Caution</p>
+<p>Unfortunately, CDC is currently not suited for working with large collections. The reason is that freezing a collection may cause a large allocation - while non-frozen collections are stored as sequences of (small) cells, freezing a collection requires all cells to be fitted in a continuous memory buffer. This issue is currently being worked on; you can track it here: <a class="reference external" href="https://github.com/scylladb/scylla/issues/7506">https://github.com/scylladb/scylla/issues/7506</a>. But even after this issue is resolved, remember that generating a preimage requires reading (and storing) the entire value, which may be costly with large collections.</p>
+</div>
+</section>
+<section id="preimages-vs-concurrent-writes">
+<h3>Preimages vs concurrent writes<a class="headerlink" href="#preimages-vs-concurrent-writes" title="Link to this heading">¶</a></h3>
+<p>Preimages don’t play well with concurrent writes made to the same rows and columns. The following example illustrates what can happen.</p>
+<p>Suppose we have a table with a single row:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="nb">int</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>and we perform the following statements concurrently. Statement 1 (which we refer to as S1):</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="mf">1</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Statement 2 (S2):</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="mf">2</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Suppose that the timestamp of S2 is greater than the timestamp of S1 (doesn’t matter whether the timestamps were generated by drivers or coordinators).</p>
+<p>The “most intuitive” result is obtained if the preimage read for S2 (denoted R2 on the picture) gets ordered after the write for S1 (denoted W1):</p>
+<img alt="../../_images/preimage-ordering-1122.svg" src="../../_images/preimage-ordering-1122.svg" />
+<p>Performing the following query:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$batch_seq_no&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$operation&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>would return:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$batch_seq_no | cdc$operation | pk | ck | v
+------------------+---------------+----+----+---
+                0 |             1 |  0 |  0 | 0
+
+                0 |             0 |  0 |  0 | 0
+                1 |             1 |  0 |  0 | 1
+
+                0 |             0 |  0 |  0 | 1
+                1 |             1 |  0 |  0 | 2
+</pre></div>
+</div>
+<p>The first row corresponds to the initial update. Rows for S2 (4 and 5) got ordered after rows for S1 (2 and 3) because the timestamp of S2 is greater. The preimage for S2 observed the effect of S1 (<code class="docutils literal notranslate"><span class="pre">v</span> <span class="pre">=</span> <span class="pre">1</span></code>) because the S2 preimage read got ordered after the S1 write.</p>
+<p>However, the following ordering is also possible:</p>
+<img alt="../../_images/preimage-ordering-1212.svg" src="../../_images/preimage-ordering-1212.svg" />
+<p>Then, performing our query would return:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$batch_seq_no | cdc$operation | pk | ck | v
+------------------+---------------+----+----+---
+                0 |             1 |  0 |  0 | 0
+
+                0 |             0 |  0 |  0 | 0
+                1 |             1 |  0 |  0 | 1
+
+                0 |             0 |  0 |  0 | 0
+                1 |             1 |  0 |  0 | 2
+</pre></div>
+</div>
+<p>This time the preimage for S2 <em>did not observe the effect of S1</em> (the preimage value for S2 is <code class="docutils literal notranslate"><span class="pre">v</span> <span class="pre">=</span> <span class="pre">0</span></code>) because the S2 preimage read got ordered before the S1 write.</p>
+<p>One could argue that the preimage still “makes sense” because it shows an earlier value, it’s just “stale”. But it can get even more interesting than that:</p>
+<img alt="../../_images/preimage-ordering-2211.svg" src="../../_images/preimage-ordering-2211.svg" />
+<p>The query result is then:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$batch_seq_no | cdc$operation | pk | ck | v
+------------------+---------------+----+----+---
+                0 |             1 |  0 |  0 | 0
+
+                0 |             0 |  0 |  0 | 2
+                1 |             1 |  0 |  0 | 1
+
+                0 |             0 |  0 |  0 | 0
+                1 |             1 |  0 |  0 | 2
+</pre></div>
+</div>
+<p>As usual, the timestamps dictate how the writes get ordered and what the end result is (if we now query <code class="docutils literal notranslate"><span class="pre">ks.t</span></code>, we will get the row <code class="docutils literal notranslate"><span class="pre">(pk,</span> <span class="pre">ck,</span> <span class="pre">v)</span> <span class="pre">=</span> <span class="pre">(0,</span> <span class="pre">0,</span> <span class="pre">2)</span></code> - “last write wins”, where “last” is defined by timestamps). However, this causes preimages to be completely inconsistent: because the write for S2 happened before the preimage read for S1, the preimage for S1 shows <code class="docutils literal notranslate"><span class="pre">v</span> <span class="pre">=</span> <span class="pre">2</span></code>.</p>
+<p>Note that <strong>this is not an “improbable edge case”</strong>: if you perform concurrent writes to the same rows and columns with timestamps generated by different sources, these anomalies will be the common case.</p>
+<p>If you’re using preimages and you want the CDC log to give you a consistent, sequential view of changes as they happen in your table (according to their timestamp order), make sure that:</p>
+<ul class="simple">
+<li><p>there are no two clients writing to the same row and column concurrently,</p></li>
+<li><p>each client uses monotonically increasing timestamps (CQL drivers guarantee this by default).</p></li>
+</ul>
+<p>A possible strategy may be to distribute the partition keys between your client processes so that at most one process writes to each partition key at the same time.</p>
+</section>
+</section>
+<section id="postimage-rows">
+<h2>Postimage rows<a class="headerlink" href="#postimage-rows" title="Link to this heading">¶</a></h2>
+<p>Postimage rows use the CDC value columns to show the state of each row affected by the write as it appears after the write is applied. To enable postimages pass the <code class="docutils literal notranslate"><span class="pre">'postimage':</span> <span class="pre">true</span></code> parameter to the <code class="docutils literal notranslate"><span class="pre">cdc</span></code> table option.</p>
+<p>Postimages only appear for rows that were modified using <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> or <code class="docutils literal notranslate"><span class="pre">INSERT</span></code>. No postimages are generated for range deletes, partition deletes and, unlike preimages, for row deletes (there is no additional information that a postimage would give compared to the delta for row deletes).</p>
+<p>Given a write that generates a postimage row and a column <code class="docutils literal notranslate"><span class="pre">X</span></code> in the base table, the value under column <code class="docutils literal notranslate"><span class="pre">X</span></code> in the CDC log table in the postimage row is called the <strong>postimage</strong> of <code class="docutils literal notranslate"><span class="pre">X</span></code> for the written row. It is obtained by reading the base table before making the write and applying the write to the result of the read. If preimages are enabled, the same read is used to generate both preimages and postimages; in fact, you can easily understand postimages as full preimages (including columns not affected by the write) with delta rows applied. Postimage rows show the state of all columns, not only those that were modified by the write. In particular, if you use the <code class="docutils literal notranslate"><span class="pre">'preimage':</span> <span class="pre">'full'</span></code> option together with the <code class="docutils literal notranslate"><span class="pre">'postimage':</span> <span class="pre">true</span></code> option, then for each column not modified by the write, the value in the postimage row is the same as the value in the preimage row.</p>
+<p>The deletion columns (<code class="docutils literal notranslate"><span class="pre">cdc$deleted_X</span></code>) and deleted elements columns (<code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_X</span></code>, for non-frozen collections and UDTs) are not used by postimage rows. They are always <code class="docutils literal notranslate"><span class="pre">null</span></code>.</p>
+<p>Example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v1</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v2</span> <span class="nb">int</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span><span class="p">:</span> <span class="s1">&#39;full&#39;</span><span class="p">,</span> <span class="s1">&#39;postimage&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v1</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v2</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">1</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v1</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">2</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v2</span><span class="p">)</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">0</span><span class="p">,</span> <span class="mf">0</span><span class="p">,</span> <span class="mf">0</span><span class="p">);</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">&gt;=</span> <span class="mf">1</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">&lt;</span> <span class="mf">2</span><span class="p">;</span>
+<span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$batch_seq_no&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$operation&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v1</span><span class="p">,</span> <span class="n">v2</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | cdc$batch_seq_no | cdc$operation | pk | ck   | v1   | v2
+--------------------------------------+------------------+---------------+----+------+------+------
+ d5c0d060-3fb6-11eb-20fa-e8053e8a076f |                0 |             1 |  0 |    0 |    0 | null
+ d5c0d060-3fb6-11eb-20fa-e8053e8a076f |                1 |             9 |  0 |    0 |    0 | null
+
+ d5c10dc8-3fb6-11eb-7181-1f7a149772ed |                0 |             1 |  0 |    1 | null |    0
+ d5c10dc8-3fb6-11eb-7181-1f7a149772ed |                1 |             9 |  0 |    1 | null |    0
+
+ d5c146e4-3fb6-11eb-b10d-292fb7071c95 |                0 |             1 |  0 |    2 |    0 | null
+ d5c146e4-3fb6-11eb-b10d-292fb7071c95 |                1 |             9 |  0 |    2 |    0 | null
+
+ d5c18384-3fb6-11eb-1d0a-387f4795ae4c |                0 |             0 |  0 |    0 |    0 | null
+ d5c18384-3fb6-11eb-1d0a-387f4795ae4c |                1 |             2 |  0 |    0 | null |    0
+ d5c18384-3fb6-11eb-1d0a-387f4795ae4c |                2 |             9 |  0 |    0 |    0 |    0
+
+ d5c1c01a-3fb6-11eb-1b34-8f83918c46e8 |                0 |             0 |  0 |    0 |    0 |    0
+ d5c1c01a-3fb6-11eb-1b34-8f83918c46e8 |                1 |             3 |  0 |    0 | null | null
+
+ d5c1f846-3fb6-11eb-176e-c5aafe60baf2 |                0 |             5 |  0 |    1 | null | null
+ d5c1f846-3fb6-11eb-176e-c5aafe60baf2 |                1 |             8 |  0 |    2 | null | null
+
+ d5c2251e-3fb6-11eb-f640-5bb1b9bc08bc |                0 |             4 |  0 | null | null | null
+</pre></div>
+</div>
+<p>The first 3 updates (corresponding to the first 3 batches above) don’t have preimages since the rows <code class="docutils literal notranslate"><span class="pre">(pk,</span> <span class="pre">ck)</span> <span class="pre">=</span> <span class="pre">(0,</span> <span class="pre">0),</span> <span class="pre">(0,</span> <span class="pre">1),</span> <span class="pre">(0,</span> <span class="pre">2)</span></code> didn’t exist, but they do have postimages since the write created those rows.</p>
+<p>The insert (4th batch) has both a preimage (it affected an existing row) and a postimage. Observe that the postimage row shows values for both <code class="docutils literal notranslate"><span class="pre">v1</span></code> and <code class="docutils literal notranslate"><span class="pre">v2</span></code> columns, even though only <code class="docutils literal notranslate"><span class="pre">v2</span></code> was modified by this statement.</p>
+<p>As expected, none of the last 3 batches - which correspond to the row delete, the range delete, and the partition delete - have a postimage, and only the row delete has a preimage.</p>
+<p>Note how in each batch that has a postimage, the postimage can be obtained from the preimage by applying the delta (in the first 3 batches we can imagine an empty preimage).</p>
+<p>Example with collections:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">int</span><span class="p">,</span> <span class="n">ck</span> <span class="nb">int</span><span class="p">,</span> <span class="n">v</span> <span class="k">map</span><span class="o">&lt;</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="o">&gt;</span><span class="p">,</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">))</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">,</span> <span class="s1">&#39;postimage&#39;</span><span class="p">:</span> <span class="n">true</span><span class="p">};</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="mf">1</span><span class="p">:</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">:</span><span class="mf">2</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">+</span> <span class="p">{</span><span class="mf">3</span><span class="p">:</span><span class="mf">3</span><span class="p">},</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span> <span class="o">-</span> <span class="p">{</span><span class="mf">2</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">UPDATE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t</span> <span class="k">SET</span> <span class="n">v</span> <span class="o">=</span> <span class="p">{</span><span class="mf">4</span><span class="p">:</span><span class="mf">4</span><span class="p">}</span> <span class="k">WHERE</span> <span class="n">pk</span> <span class="o">=</span> <span class="mf">0</span> <span class="k">AND</span> <span class="n">ck</span> <span class="o">=</span> <span class="mf">0</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="s s-Name">&quot;cdc$time&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$batch_seq_no&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$operation&quot;</span><span class="p">,</span> <span class="n">pk</span><span class="p">,</span> <span class="n">ck</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_elements_v&quot;</span><span class="p">,</span> <span class="s s-Name">&quot;cdc$deleted_v&quot;</span> <span class="k">FROM</span> <span class="n">ks</span><span class="mf">.</span><span class="n">t_scylla_cdc_log</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Result:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span> cdc$time                             | cdc$batch_seq_no | cdc$operation | pk | ck | v            | cdc$deleted_elements_v | cdc$deleted_v
+--------------------------------------+------------------+---------------+----+----+--------------+------------------------+---------------
+ 7a7bbc14-406b-11eb-68ec-0c723669d5a2 |                0 |             1 |  0 |  0 | {1: 1, 2: 2} |                   null |          True
+ 7a7bbc14-406b-11eb-68ec-0c723669d5a2 |                1 |             9 |  0 |  0 | {1: 1, 2: 2} |                   null |          null
+
+ 7a7c05ac-406b-11eb-5663-bdda698b05ea |                0 |             0 |  0 |  0 | {1: 1, 2: 2} |                   null |          null
+ 7a7c05ac-406b-11eb-5663-bdda698b05ea |                1 |             1 |  0 |  0 |       {3: 3} |                    {2} |          null
+ 7a7c05ac-406b-11eb-5663-bdda698b05ea |                2 |             9 |  0 |  0 | {1: 1, 3: 3} |                   null |          null
+
+ 7a7c50ca-406b-11eb-964d-2bfb4e77e256 |                0 |             0 |  0 |  0 | {1: 1, 3: 3} |                   null |          null
+ 7a7c50ca-406b-11eb-964d-2bfb4e77e256 |                1 |             1 |  0 |  0 |       {4: 4} |                   null |          True
+ 7a7c50ca-406b-11eb-964d-2bfb4e77e256 |                2 |             9 |  0 |  0 |       {4: 4} |                   null |          null
+</pre></div>
+</div>
+<p>The second update both added a new key-value pair <code class="docutils literal notranslate"><span class="pre">(3,</span> <span class="pre">3)</span></code> to the map and removed the pair <code class="docutils literal notranslate"><span class="pre">(2,</span> <span class="pre">2)</span></code>, as indicated by the value column and the deleted elements column in the delta row. The postimage reflects both of these operations, showing the end result <code class="docutils literal notranslate"><span class="pre">{1:</span> <span class="pre">1,</span> <span class="pre">3:</span> <span class="pre">3}</span></code> obtained by applying the update to the preimage <code class="docutils literal notranslate"><span class="pre">{1:</span> <span class="pre">1,</span> <span class="pre">2:</span> <span class="pre">2}</span></code>. The third update completely replaces the collection with <code class="docutils literal notranslate"><span class="pre">{4:</span> <span class="pre">4}</span></code>, as indicated by the value column and the deletion column in the delta row, and the postimage also reflects that by showing the end result in the value column.</p>
+<p>In general, let <code class="docutils literal notranslate"><span class="pre">X</span></code> be a non-primary-key column of the base table and consider a write. Then:</p>
+<ul class="simple">
+<li><p>if <code class="docutils literal notranslate"><span class="pre">X</span></code> is not a non-frozen collection or UDT, the <code class="docutils literal notranslate"><span class="pre">X</span></code> postimage is equal to the <code class="docutils literal notranslate"><span class="pre">X</span></code> delta if the column was modified by the write, otherwise it is equal to the result of the preimage read.</p></li>
+<li><p>If <code class="docutils literal notranslate"><span class="pre">X</span></code> is a non-frozen collection or UDT, the postimage is equal to the result of the preimage read modified by the following procedure:</p>
+<ul>
+<li><p>if <code class="docutils literal notranslate"><span class="pre">cdc$deleted_X</span></code> is <code class="docutils literal notranslate"><span class="pre">True</span></code> in the delta row, remove the entire collection,</p></li>
+<li><p>add all cells shown in the <code class="docutils literal notranslate"><span class="pre">X</span></code> column in the delta row (if any),</p></li>
+<li><p>remove all cells with keys shown in the <code class="docutils literal notranslate"><span class="pre">cdc$deleted_elements_X</span></code> column in the delta row (if any).</p></li>
+</ul>
+</li>
+</ul>
+<p>All considerations regarding concurrent writes from the previous section apply to postimages as they do to preimages. In particular, if you want your postimages to be consistent, avoid concurrent writes to the same row and column.</p>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Preimages and postimages&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-6.0/using-scylla/cdc/cdc-preimages%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="cdc-advanced-types.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Advanced column types
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="cdc-consistency.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />Data Consistency in CDC
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Preimages and postimages&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-6.0/using-scylla/cdc/cdc-preimages%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/using-scylla/cdc/cdc-preimages.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">Preimages and postimages</a><ul>
+<li><a class="reference internal" href="#preimage-rows">Preimage rows</a><ul>
+<li><a class="reference internal" href="#preimages-and-non-atomic-columns">Preimages and non-atomic columns</a></li>
+<li><a class="reference internal" href="#preimages-vs-concurrent-writes">Preimages vs concurrent writes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#postimage-rows">Postimage rows</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                6.0
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="../../../stable/index.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-6.1/using-scylla/cdc/cdc-preimages.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="cdc-preimages.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.4/using-scylla/cdc/cdc-preimages.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.2/using-scylla/cdc/cdc-preimages.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.1/using-scylla/cdc/cdc-preimages.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../getting-started/index.html">Getting Started</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../getting-started/install-scylla/index.html">Install ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/launch-on-aws.html">Launch ScyllaDB on AWS</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/launch-on-gcp.html">Launch ScyllaDB on GCP</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/launch-on-azure.html">Launch ScyllaDB on Azure</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/install-on-linux.html">Install ScyllaDB Linux Packages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/unified-installer.html">Install ScyllaDB Without root Privileges</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/disable-housekeeping.html">ScyllaDB Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/dev-mod.html">ScyllaDB Developer Mode</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/configure.html">Configure ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/config-commands.html">ScyllaDB Configuration Reference</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/os-support.html">OS Support by Linux Distributions and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/cloud-instance-recommendations.html">Cloud Instance Recommendations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/scylla-in-a-shared-environment.html">ScyllaDB in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../migrate-scylla.html">Migrate to ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migration Process from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../cassandra-compatibility.html">Scylla and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-spark.html">Integrate Scylla with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-kairos.html">Integrate Scylla with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-presto.html">Integrate ScyllaDB with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-elasticsearch.html">Integrate Scylla with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-k8.html">Integrate Scylla with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-janus.html">Integrate Scylla with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-datadog.html">Integrate Scylla with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-kafka.html">Integrate Scylla with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-iota.html">Integrate Scylla with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-spring.html">Integrate Scylla with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-ansible.html">Install Scylla with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-databricks.html">Integrate Scylla with Databricks</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-jaeger.html">Integrate Scylla with Jaeger Server</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../integrations/integration-mindsdb.html">Integrate Scylla with MindsDB</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../operating-scylla/index.html">ScyllaDB for Administrators</a><input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../operating-scylla/admin.html">Administration Guide</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../operating-scylla/procedures/index.html">Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/benchmarking-scylla.html">Benchmarking Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migrate from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/installation-common/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../operating-scylla/security/index.html">Security</a><input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/security-checklist.html">ScyllaDB Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/create-superuser.html">Creating a Custom Superuser</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/certificate-authentication.html">Certificate-based Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/security/saslauthd.html">Configure SaslauthdAuthenticator</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../operating-scylla/admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/rest.html">Admin REST API</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/scylla-sstable.html">Scylla SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/scylla-types.html">Scylla Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/sstablemetadata.html">SSTableMetadata</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/logging.html">Scylla Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/virtual-tables.html">Virtual Tables</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/select-from-mutation-fragments.html">Reading mutation fragments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/maintenance-socket.html">Maintenance socket</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin-tools/maintenance-mode.html">Maintenance mode</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/scylladb-versioning.html">ScyllaDB Versioning</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/upgrade-opensource/index.html">ScyllaDB Open Source Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/upgrade-to-enterprise/index.html">ScyllaDB Open Source to ScyllaDB Enterprise Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/ami-upgrade.html">ScyllaDB Image</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html">ScyllaDB Enterprise</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../operating-scylla/system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/system-configuration/snitch.html">ScyllaDB Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../operating-scylla/benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../operating-scylla/diagnostics.html">ScyllaDB Diagnostic Tools</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">ScyllaDB for Developers</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/index.html">Develop with ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">Tutorials and Example Projects</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://docs.scylladb.com/stable/get-started/learn-resources/index.html">Learn to Use ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/index.html">ScyllaDB Alternator</a></li>
+<li class="toctree-l2 current has-children"><a class="reference internal" href="../features.html">ScyllaDB Features</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../lwt.html">Lightweight Transactions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../local-secondary-indexes.html">Local Secondary Indexes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../materialized-views.html">Materialized Views</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../counters.html">Counters</a></li>
+<li class="toctree-l3 current current-page"><a class="reference internal" href="index.html">Change Data Capture</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../workload-attributes.html">Workload Attributes</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../drivers/index.html">ScyllaDB Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../drivers/cql-drivers/index.html">Scylla CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../drivers/dynamo-drivers/index.html">Scylla DynamoDB Drivers</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../cql/index.html">CQL Reference</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/ddl.html">Data Definition</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../cql/dml.html">Data Manipulation</a><input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/select.html">SELECT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/insert.html">INSERT</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/update.html">UPDATE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/delete.html">DELETE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/dml/batch.html">BATCH</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/functions.html">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/wasm.html">Wasm support for user-defined functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/service-levels.html">Service Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../architecture/index.html">ScyllaDB Architecture</a><input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/tablets.html">Data Distribution with Tablets</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/ringarchitecture/index.html">ScyllaDB Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/architecture-fault-tolerance.html">ScyllaDB Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../architecture/anti-entropy/index.html">ScyllaDB Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/anti-entropy/hinted-handoff.html">Scylla Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/anti-entropy/read-repair.html">Scylla Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../operating-scylla/procedures/maintenance/repair.html">Scylla Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../architecture/sstable/index.html">SSTable</a><input class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/sstable/sstable2/index.html">ScyllaDB SSTable - 2.x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/sstable/sstable3/index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../troubleshooting/index.html">Troubleshooting ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/report-scylla-problem.html">Report a Scylla problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/startup/index.html">ScyllaDB Startup</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/scylla-wont-start.html">Scylla will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/python-error-no-module-named-yaml.html">Scylla Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/upgrade/index.html">Upgrade</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/missing-dotmount-files.html">Inaccessible configuration files after ScyllaDB upgrade</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/handling-node-failures.html">Handling Node Failures</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-add-remove-replace.html">Failure to Add, Remove, or Replace a Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/nodetool-memory-read-timeout.html">SocketTimeoutException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-schema-sync.html">Failed Schema Sync</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/large-partition-table.html">Scylla Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/large-rows-large-cells-tables.html">Scylla Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-update-schema.html">Failure to Update the Schema</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/monitor/index.html">ScyllaDB Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../kb/index.html">Knowledge Base</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/consistency.html">Consistency in ScyllaDB</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/custom-user.html">Run Scylla and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/customizing-cpuset.html">Customizing CPUSET</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/gossip.html">Gossip in Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/lwt-differences.html">How does Scylla LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/map-cpu.html">Map CPUs to Scylla Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/memory-usage.html">Scylla Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/ntp.html">NTP Configuration for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/posix.html">POSIX networking for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/quiz-administrators.html">Scylla consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/scylla-and-spark-integration.html">Scylla and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/scylla-limits-systemd.html">Increase Scylla resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/seed-nodes.html">Scylla Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/snapshots.html">Scylla Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/static-columns.html">Scylla payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/unresponsive-nodes.html">Scylla Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/use-perf.html">Using the perf utility with Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/yaml-address.html">Configure Scylla Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../reference/index.html">Reference</a><input class="toctree-checkbox" id="toctree-checkbox-30" name="toctree-checkbox-30" type="checkbox"/><label for="toctree-checkbox-30"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/aws-images.html">AWS Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/azure-images.html">Azure Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/gcp-images.html">GCP Images</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/configuration-parameters.html">Configuration Parameters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/glossary.html">Glossary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/limits.html">Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/api-reference.html">API Reference (BETA)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../reference/metrics.html">Metrics (BETA)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">ScyllaDB FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contribute.html">Contribute to ScyllaDB</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-31" name="toctree-checkbox-31" type="checkbox"/><label for="toctree-checkbox-31"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../alternator/compatibility.html">ScyllaDB Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

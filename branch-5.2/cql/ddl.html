@@ -1,0 +1,1872 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             Data Definition | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/cql/ddl.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../_static/copybutton.js?v=f281be69"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                CQL Reference
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">Data Definition</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <section id="data-definition">
+<h1>Data Definition<a class="headerlink" href="#data-definition" title="Link to this heading">¶</a></h1>
+<p>CQL stores data in <em>tables</em>, whose schema defines the layout of said data in the table, and those tables are grouped in
+<em>keyspaces</em>. A keyspace defines a number of options that apply to all the tables it contains, most prominently of
+which is the replication strategy used by the keyspace. An application can have only one keyspace. However, it is also possible to
+have multiple keyspaces in case your application has different replication requirements.</p>
+<p>This section describes the statements used to create, modify, and remove keyspaces and tables.</p>
+<p><a class="reference internal" href="#create-keyspace-statement"><span class="std std-ref">CREATE KEYSPACE</span></a></p>
+<p id="create-keyspace"><a class="reference internal" href="#use-statement"><span class="std std-ref">USE</span></a></p>
+<p id="use"><a class="reference internal" href="#alter-keyspace-statement"><span class="std std-ref">ALTER KEYSPACE</span></a></p>
+<p id="alter-keyspace"><a class="reference internal" href="#drop-keyspace-statement"><span class="std std-ref">DROP KEYSPACE</span></a></p>
+<p id="drop-keyspace"><a class="reference internal" href="#create-table-statement"><span class="std std-ref">CREATE TABLE</span></a></p>
+<p id="create-table"><a class="reference internal" href="#alter-table-statement"><span class="std std-ref">ALTER TABLE</span></a></p>
+<p id="alter-table"><a class="reference internal" href="#drop-table-statement"><span class="std std-ref">DROP TABLE</span></a></p>
+<p id="drop-table"><a class="reference internal" href="#truncate-statement"><span class="std std-ref">TRUNCATE</span></a></p>
+<section id="common-definitions">
+<span id="id1"></span><span id="truncate"></span><h2>Common Definitions<a class="headerlink" href="#common-definitions" title="Link to this heading">¶</a></h2>
+<p>Keyspace and table names are defined by the following grammar:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">keyspace_name</span><span class="p">:</span> <span class="o">`</span><span class="n">name</span><span class="o">`</span>
+<span class="n">table_name</span><span class="p">:</span> <span class="p">[</span> <span class="o">`</span><span class="n">keyspace_name</span><span class="o">`</span> <span class="s1">&#39;.&#39;</span> <span class="p">]</span> <span class="o">`</span><span class="n">name</span><span class="o">`</span>
+<span class="n">name</span><span class="p">:</span> <span class="o">`</span><span class="n">unquoted_name</span><span class="o">`</span> <span class="o">|</span> <span class="o">`</span><span class="n">quoted_name</span><span class="o">`</span>
+<span class="n">unquoted_name</span><span class="p">:</span> <span class="n">re</span><span class="p">(</span><span class="s1">&#39;[a-zA-Z_0-9]{1, 48}&#39;</span><span class="p">)</span>
+<span class="n">quoted_name</span><span class="p">:</span> <span class="s1">&#39;&quot;&#39;</span> <span class="o">`</span><span class="n">unquoted_name</span><span class="o">`</span> <span class="s1">&#39;&quot;&#39;</span>
+</pre></div>
+</div>
+<p>Both keyspace and table names consist of only alphanumeric characters, cannot be empty, and are limited in
+size to 48 characters (that limit exists mostly to avoid filenames, which may include the keyspace and table name, to go
+over the limits of certain file systems). By default, keyspace and table names are case insensitive (<code class="docutils literal notranslate"><span class="pre">myTable</span></code> is
+equivalent to <code class="docutils literal notranslate"><span class="pre">mytable</span></code>), but case sensitivity can be forced by using double-quotes (<code class="docutils literal notranslate"><span class="pre">&quot;myTable&quot;</span></code> is different from
+<code class="docutils literal notranslate"><span class="pre">mytable</span></code>).</p>
+<p>Further, a table is always part of a keyspace, and a table name can be provided fully-qualified by the keyspace it is
+part of. If it is not fully-qualified, the table is assumed to be in the <em>current</em> keyspace (see <a class="reference internal" href="#use-statement"><span class="std std-ref">USE statement</span></a>).</p>
+<p>Further, valid column names are simply defined as:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">column_name</span><span class="p">:</span> <span class="o">`</span><span class="n">identifier</span><span class="o">`</span>
+</pre></div>
+</div>
+<p>We also define the notion of statement options for use in the following section:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">options</span><span class="p">:</span> <span class="o">`</span><span class="n">option</span><span class="o">`</span> <span class="p">(</span> <span class="k">AND</span> <span class="o">`</span><span class="n">option</span><span class="o">`</span> <span class="p">)</span><span class="o">*</span>
+<span class="n">option</span><span class="p">:</span> <span class="o">`</span><span class="n">identifier</span><span class="o">`</span> <span class="s1">&#39;=&#39;</span> <span class="p">(</span> <span class="o">`</span><span class="n">identifier</span><span class="o">`</span> <span class="o">|</span> <span class="o">`</span><span class="n">constant</span><span class="o">`</span> <span class="o">|</span> <span class="o">`</span><span class="n">map_literal</span><span class="o">`</span> <span class="p">)</span>
+</pre></div>
+</div>
+<p id="create-keyspace-statement">In all cases, for creating keyspaces and tables, if you are using <a class="reference internal" href="reserved-keywords.html"><span class="doc">Reserved Keywords</span></a>, enclose them in single or double-quotes.</p>
+</section>
+<section id="id2">
+<h2>CREATE KEYSPACE<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<p>A keyspace is created using a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">KEYSPACE</span></code> statement:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">create_keyspace_statement</span><span class="p">:</span> <span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="p">[</span> <span class="k">IF</span> <span class="k">NOT</span> <span class="k">EXISTS</span> <span class="p">]</span> <span class="o">`</span><span class="n">keyspace_name</span><span class="o">`</span> <span class="k">WITH</span> <span class="o">`</span><span class="k">options</span><span class="o">`</span>
+</pre></div>
+</div>
+<p>For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">Excalibur</span>
+<span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;NetworkTopologyStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;DC1&#39;</span> <span class="p">:</span> <span class="mf">1</span><span class="p">,</span> <span class="s1">&#39;DC2&#39;</span> <span class="p">:</span> <span class="mf">3</span><span class="p">}</span>
+<span class="k">AND</span> <span class="n">durable_writes</span> <span class="o">=</span> <span class="n">true</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">Excelsior</span>
+<span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;SimpleStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;replication_factor&#39;</span> <span class="p">:</span> <span class="mf">3</span><span class="p">};</span>
+</pre></div>
+</div>
+<p>The supported <code class="docutils literal notranslate"><span class="pre">options</span></code> are:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>name</p></th>
+<th class="head"><p>kind</p></th>
+<th class="head"><p>mandatory</p></th>
+<th class="head"><p>default</p></th>
+<th class="head"><p>description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">replication</span></code></p></td>
+<td><p><em>map</em></p></td>
+<td><p>yes</p></td>
+<td></td>
+<td><p>The replication strategy and options to use for the keyspace (see
+details below).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">durable_writes</span></code></p></td>
+<td><p><em>simple</em></p></td>
+<td><p>no</p></td>
+<td><p>true</p></td>
+<td><p>Whether to use the commit log for updates on this keyspace
+(disable this option at your own risk!).</p></td>
+</tr>
+</tbody>
+</table>
+<p>The <code class="docutils literal notranslate"><span class="pre">replication</span></code> property is mandatory and must at least contains the <code class="docutils literal notranslate"><span class="pre">'class'</span></code> sub-option, which defines the
+replication strategy class to use. The rest of the sub-options depend on what replication
+strategy is used. By default, Scylla supports the following <code class="docutils literal notranslate"><span class="pre">'class'</span></code>:</p>
+<section id="simplestrategy">
+<span id="replication-strategy"></span><h3>SimpleStrategy<a class="headerlink" href="#simplestrategy" title="Link to this heading">¶</a></h3>
+<p>A simple strategy that defines a replication factor for data to be spread
+across the entire cluster. This is generally not a wise choice for production
+because it does not respect datacenter layouts and can lead to wildly varying
+query latency. For a production ready strategy, see <em>NetworkTopologyStrategy</em> . <em>SimpleStrategy</em> supports a single mandatory argument:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>sub-option</p></th>
+<th class="head"><p>type</p></th>
+<th class="head"><p>since</p></th>
+<th class="head"><p>description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">'replication_factor'</span></code></p></td>
+<td><p>int</p></td>
+<td><p>all</p></td>
+<td><p>The number of replicas to store per range</p></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Using NetworkTopologyStrategy is recommended. Using SimpleStrategy will make it harder to add Data Center in the future.</p>
+</div>
+</section>
+<section id="networktopologystrategy">
+<h3>NetworkTopologyStrategy<a class="headerlink" href="#networktopologystrategy" title="Link to this heading">¶</a></h3>
+<p>A production ready replication strategy that allows to set the replication
+factor independently for each data-center. The rest of the sub-options are
+key-value pairs where a key is a data-center name and its value is the
+associated replication factor. Options:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>sub-option</p></th>
+<th class="head"><p>type</p></th>
+<th class="head"><p>description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">'&lt;datacenter&gt;'</span></code></p></td>
+<td><p>int</p></td>
+<td><p>The number of replicas to store per range in
+the provided datacenter.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">'replication_factor'</span></code></p></td>
+<td><p>int</p></td>
+<td><p>The number of replicas to use as a default
+per datacenter if not specifically provided.
+Note that this always defers to existing
+definitions or explicit datacenter settings.
+For example, to have three replicas per
+datacenter, supply this with a value of 3.</p></td>
+</tr>
+</tbody>
+</table>
+<p>Note that when <code class="docutils literal notranslate"><span class="pre">ALTER</span></code> ing keyspaces and supplying <code class="docutils literal notranslate"><span class="pre">replication_factor</span></code>,
+auto-expansion will only <em>add</em> new datacenters for safety, it will not alter
+existing datacenters or remove any even if they are no longer in the cluster.
+If you want to remove datacenters while still supplying <code class="docutils literal notranslate"><span class="pre">replication_factor</span></code>,
+explicitly zero out the datacenter you want to have zero replicas.</p>
+<p>An example of auto-expanding datacenters with two datacenters: <code class="docutils literal notranslate"><span class="pre">DC1</span></code> and <code class="docutils literal notranslate"><span class="pre">DC2</span></code>:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">excalibur</span>
+    <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;NetworkTopologyStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;replication_factor&#39;</span> <span class="p">:</span> <span class="mf">3</span><span class="p">}</span>
+
+<span class="k">DESCRIBE</span> <span class="k">KEYSPACE</span> <span class="n">excalibur</span>
+    <span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">excalibur</span> <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;NetworkTopologyStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;DC1&#39;</span><span class="p">:</span> <span class="s1">&#39;3&#39;</span><span class="p">,</span> <span class="s1">&#39;DC2&#39;</span><span class="p">:</span> <span class="s1">&#39;3&#39;</span><span class="p">}</span> <span class="k">AND</span> <span class="n">durable_writes</span> <span class="o">=</span> <span class="n">true</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>An example of auto-expanding and overriding a datacenter:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">excalibur</span>
+    <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;NetworkTopologyStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;replication_factor&#39;</span> <span class="p">:</span> <span class="mf">3</span><span class="p">,</span> <span class="s1">&#39;DC2&#39;</span><span class="p">:</span> <span class="mf">2</span><span class="p">}</span>
+
+<span class="k">DESCRIBE</span> <span class="k">KEYSPACE</span> <span class="n">excalibur</span>
+    <span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">excalibur</span> <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;NetworkTopologyStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;DC1&#39;</span><span class="p">:</span> <span class="s1">&#39;3&#39;</span><span class="p">,</span> <span class="s1">&#39;DC2&#39;</span><span class="p">:</span> <span class="s1">&#39;2&#39;</span><span class="p">}</span> <span class="k">AND</span> <span class="n">durable_writes</span> <span class="o">=</span> <span class="n">true</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>An example that excludes a datacenter while using <code class="docutils literal notranslate"><span class="pre">replication_factor</span></code>:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">excalibur</span>
+    <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;NetworkTopologyStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;replication_factor&#39;</span> <span class="p">:</span> <span class="mf">3</span><span class="p">,</span> <span class="s1">&#39;DC2&#39;</span><span class="p">:</span> <span class="mf">0</span><span class="p">}</span> <span class="p">;</span>
+
+<span class="k">DESCRIBE</span> <span class="k">KEYSPACE</span> <span class="n">excalibur</span>
+    <span class="k">CREATE</span> <span class="k">KEYSPACE</span> <span class="n">excalibur</span> <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;NetworkTopologyStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;DC1&#39;</span><span class="p">:</span> <span class="s1">&#39;3&#39;</span><span class="p">}</span> <span class="k">AND</span> <span class="n">durable_writes</span> <span class="o">=</span> <span class="n">true</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="use-statement">
+<span id="id3"></span><h2>USE<a class="headerlink" href="#use-statement" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">USE</span></code> statement allows you to change the <em>current</em> keyspace (for the <em>connection</em> on which it is executed). Some objects in CQL are bound to a keyspace (tables, user-defined types, functions, …), and the current keyspace is the
+default keyspace used when those objects are referred without a fully-qualified name (that is, without being prefixed a
+keyspace name). A <code class="docutils literal notranslate"><span class="pre">USE</span></code> statement simply takes the specified keyspace and uses the name as an argument for all future actions until this name is changed.</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">use_statement</span><span class="p">:</span> <span class="k">USE</span> <span class="o">`</span><span class="n">keyspace_name</span><span class="o">`</span>
+</pre></div>
+</div>
+</section>
+<section id="alter-keyspace-statement">
+<span id="id4"></span><h2>ALTER KEYSPACE<a class="headerlink" href="#alter-keyspace-statement" title="Link to this heading">¶</a></h2>
+<p>An <code class="docutils literal notranslate"><span class="pre">ALTER</span> <span class="pre">KEYSPACE</span></code> statement lets you modify the options of a keyspace:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">alter_keyspace_statement</span><span class="p">:</span> <span class="k">ALTER</span> <span class="k">KEYSPACE</span> <span class="o">`</span><span class="n">keyspace_name</span><span class="o">`</span> <span class="k">WITH</span> <span class="o">`</span><span class="k">options</span><span class="o">`</span>
+</pre></div>
+</div>
+<p>For instance:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">ALTER</span> <span class="k">KEYSPACE</span> <span class="n">Excelsior</span>
+ <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span> <span class="s1">&#39;class&#39;</span> <span class="p">:</span> <span class="s1">&#39;NetworkTopologyStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;dc1&#39;</span> <span class="p">:</span> <span class="mf">3</span><span class="p">,</span> <span class="s1">&#39;dc2&#39;</span> <span class="p">:</span> <span class="mf">0</span><span class="p">};</span>
+
+
+<span class="k">ALTER</span> <span class="k">KEYSPACE</span> <span class="n">Excelsior</span>
+ <span class="k">WITH</span> <span class="n">replication</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;class&#39;</span><span class="p">:</span> <span class="s1">&#39;SimpleStrategy&#39;</span><span class="p">,</span> <span class="s1">&#39;replication_factor&#39;</span> <span class="p">:</span> <span class="mf">4</span><span class="p">};</span>
+</pre></div>
+</div>
+<p>The supported options are the same as <a class="reference internal" href="#create-keyspace-statement"><span class="std std-ref">creating a keyspace</span></a>.</p>
+</section>
+<section id="drop-keyspace-statement">
+<span id="id5"></span><h2>DROP KEYSPACE<a class="headerlink" href="#drop-keyspace-statement" title="Link to this heading">¶</a></h2>
+<p>Dropping a keyspace can be done using the <code class="docutils literal notranslate"><span class="pre">DROP</span> <span class="pre">KEYSPACE</span></code> statement:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">drop_keyspace_statement</span><span class="p">:</span> <span class="k">DROP</span> <span class="k">KEYSPACE</span> <span class="p">[</span> <span class="k">IF</span> <span class="k">EXISTS</span> <span class="p">]</span> <span class="o">`</span><span class="n">keyspace_name</span><span class="o">`</span>
+</pre></div>
+</div>
+<p>For instance:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">DROP</span> <span class="k">KEYSPACE</span> <span class="n">Excelsior</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Dropping a keyspace results in the immediate removal of that keyspace, including all the tables, UTD and
+functions in it, and all the data contained in those tables.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>By default, when a table or a keyspace is removed, a snapshot is taken so that you can restore it later. As a result, the disk space remains the same and is not immediately reclaimed.
+Refer to <a class="reference internal" href="../troubleshooting/drop-table-space-up.html"><span class="doc">this article</span></a> or this <a class="reference internal" href="../faq.html#reclaim-space"><span class="std std-ref">FAQ entry</span></a>.</p>
+</div>
+<p>If the keyspace does not exist, the statement will return an error unless <code class="docutils literal notranslate"><span class="pre">IF</span> <span class="pre">EXISTS</span></code> is used, in which case the
+operation is a no-op.</p>
+</section>
+<section id="create-table-statement">
+<span id="id6"></span><h2>CREATE TABLE<a class="headerlink" href="#create-table-statement" title="Link to this heading">¶</a></h2>
+<p>Creating a new table uses the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code> statement:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">create_table_statement</span><span class="p">:</span> <span class="k">CREATE</span> <span class="k">TABLE</span> <span class="p">[</span> <span class="k">IF</span> <span class="k">NOT</span> <span class="k">EXISTS</span> <span class="p">]</span> <span class="o">`</span><span class="n">table_name</span><span class="o">`</span>
+                      <span class="p">:</span> <span class="s1">&#39;(&#39;</span>
+                      <span class="p">:</span>     <span class="o">`</span><span class="n">column_definition</span><span class="o">`</span>
+                      <span class="p">:</span>     <span class="p">(</span> <span class="s1">&#39;,&#39;</span> <span class="o">`</span><span class="n">column_definition</span><span class="o">`</span> <span class="p">)</span><span class="o">*</span>
+                      <span class="p">:</span>     <span class="p">[</span> <span class="s1">&#39;,&#39;</span> <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="s1">&#39;(&#39;</span> <span class="o">`</span><span class="n">primary_key</span><span class="o">`</span> <span class="s1">&#39;)&#39;</span> <span class="p">]</span>
+                      <span class="p">:</span> <span class="s1">&#39;)&#39;</span> <span class="p">[</span> <span class="k">WITH</span> <span class="o">`</span><span class="n">table_options</span><span class="o">`</span> <span class="p">]</span>
+
+<span class="n">column_definition</span><span class="p">:</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="o">`</span><span class="n">cql_type</span><span class="o">`</span> <span class="p">[</span> <span class="k">STATIC</span> <span class="p">]</span> <span class="p">[</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">]</span>
+
+<span class="n">primary_key</span><span class="p">:</span> <span class="o">`</span><span class="n">partition_key</span><span class="o">`</span> <span class="p">[</span> <span class="s1">&#39;,&#39;</span> <span class="o">`</span><span class="n">clustering_columns</span><span class="o">`</span> <span class="p">]</span>
+
+<span class="n">partition_key</span><span class="p">:</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span>
+             <span class="p">:</span> <span class="o">|</span> <span class="s1">&#39;(&#39;</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="p">(</span> <span class="s1">&#39;,&#39;</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="p">)</span><span class="o">*</span> <span class="s1">&#39;)&#39;</span>
+
+<span class="n">clustering_columns</span><span class="p">:</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="p">(</span> <span class="s1">&#39;,&#39;</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="p">)</span><span class="o">*</span>
+
+<span class="n">table_options</span><span class="p">:</span> <span class="k">COMPACT</span> <span class="k">STORAGE</span> <span class="p">[</span> <span class="k">AND</span> <span class="o">`</span><span class="n">table_options</span><span class="o">`</span> <span class="p">]</span>
+                <span class="p">:</span> <span class="o">|</span> <span class="k">CLUSTERING</span> <span class="k">ORDER</span> <span class="k">BY</span> <span class="s1">&#39;(&#39;</span> <span class="o">`</span><span class="n">clustering_order</span><span class="o">`</span> <span class="s1">&#39;)&#39;</span> <span class="p">[</span> <span class="k">AND</span> <span class="o">`</span><span class="n">table_options</span><span class="o">`</span> <span class="p">]</span>
+                <span class="p">:</span> <span class="o">|</span> <span class="n">scylla_encryption_options</span><span class="p">:</span> <span class="s1">&#39;=&#39;</span> <span class="s1">&#39;{&#39;</span><span class="p">[</span><span class="o">`</span><span class="n">cipher_algorithm</span><span class="o">`</span> <span class="p">:</span> <span class="o">&lt;</span><span class="n">hash</span><span class="o">&gt;</span><span class="p">]</span><span class="s1">&#39;,&#39;</span><span class="p">[</span><span class="o">`</span><span class="n">secret_key_strength</span><span class="o">`</span> <span class="p">:</span> <span class="o">&lt;</span><span class="n">len</span><span class="o">&gt;</span><span class="p">]</span><span class="s1">&#39;,&#39;</span><span class="p">[</span><span class="o">`</span><span class="n">key_provider</span><span class="o">`</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">provider</span><span class="o">&gt;</span><span class="p">]</span><span class="s1">&#39;}&#39;</span>
+                <span class="p">:</span> <span class="o">|</span> <span class="n">caching</span>  <span class="s1">&#39;=&#39;</span> <span class="s1">&#39; {&#39;</span><span class="n">caching_options</span><span class="s1">&#39;}&#39;</span>
+                <span class="p">:</span> <span class="o">|</span> <span class="o">`</span><span class="k">options</span><span class="o">`</span>
+
+<span class="n">clustering_order</span><span class="p">:</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="p">(</span><span class="k">ASC</span> <span class="o">|</span> <span class="k">DESC</span><span class="p">)</span> <span class="p">(</span> <span class="s1">&#39;,&#39;</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="p">(</span><span class="k">ASC</span> <span class="o">|</span> <span class="k">DESC</span><span class="p">)</span> <span class="p">)</span><span class="o">*</span>
+</pre></div>
+</div>
+<p>For instance:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span> <span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">monkeySpecies</span> <span class="p">(</span>
+     <span class="n">species</span> <span class="nb">text</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span>
+     <span class="n">common_name</span> <span class="nb">text</span><span class="p">,</span>
+     <span class="n">population</span> <span class="nb">varint</span><span class="p">,</span>
+     <span class="n">average_size</span> <span class="nb">int</span>
+ <span class="p">)</span> <span class="k">WITH</span> <span class="n">comment</span><span class="o">=</span><span class="s1">&#39;Important biological records&#39;</span>
+    <span class="k">AND</span> <span class="n">read_repair_chance</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">;</span>
+
+ <span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">timeline</span> <span class="p">(</span>
+     <span class="n">userid</span> <span class="nb">uuid</span><span class="p">,</span>
+     <span class="n">posted_month</span> <span class="nb">int</span><span class="p">,</span>
+     <span class="n">posted_time</span> <span class="nb">uuid</span><span class="p">,</span>
+     <span class="n">body</span> <span class="nb">text</span><span class="p">,</span>
+     <span class="n">posted_by</span> <span class="nb">text</span><span class="p">,</span>
+     <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">userid</span><span class="p">,</span> <span class="n">posted_month</span><span class="p">,</span> <span class="n">posted_time</span><span class="p">)</span>
+ <span class="p">)</span> <span class="k">WITH</span> <span class="n">compaction</span> <span class="o">=</span> <span class="p">{</span> <span class="s1">&#39;class&#39;</span> <span class="p">:</span> <span class="s1">&#39;LeveledCompactionStrategy&#39;</span> <span class="p">};</span>
+
+ <span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">loads</span> <span class="p">(</span>
+     <span class="n">machine</span> <span class="nb">inet</span><span class="p">,</span>
+     <span class="n">cpu</span> <span class="nb">int</span><span class="p">,</span>
+     <span class="n">mtime</span> <span class="nb">timeuuid</span><span class="p">,</span>
+     <span class="n">load</span> <span class="nb">float</span><span class="p">,</span>
+     <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">((</span><span class="n">machine</span><span class="p">,</span> <span class="n">cpu</span><span class="p">),</span> <span class="n">mtime</span><span class="p">)</span>
+ <span class="p">)</span> <span class="k">WITH</span> <span class="k">CLUSTERING</span> <span class="k">ORDER</span> <span class="k">BY</span> <span class="p">(</span><span class="n">mtime</span> <span class="k">DESC</span><span class="p">);</span>
+
+ <span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">users_picture</span> <span class="p">(</span>
+     <span class="n">userid</span> <span class="nb">uuid</span><span class="p">,</span>
+     <span class="n">pictureid</span> <span class="nb">uuid</span><span class="p">,</span>
+     <span class="n">body</span> <span class="nb">text</span><span class="p">,</span>
+     <span class="n">posted_by</span> <span class="nb">text</span><span class="p">,</span>
+     <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">userid</span><span class="p">,</span> <span class="n">pictureid</span><span class="p">,</span> <span class="n">posted_by</span><span class="p">)</span>
+ <span class="p">)</span> <span class="k">WITH</span> <span class="n">compression</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;sstable_compression&#39;</span><span class="p">:</span> <span class="s1">&#39;LZ4Compressor&#39;</span><span class="p">};</span>
+
+
+ <span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">data_atrest</span> <span class="p">(</span>
+     <span class="n">pk</span> <span class="nb">text</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span>
+     <span class="n">c0</span> <span class="nb">int</span>
+ <span class="p">)</span> <span class="k">WITH</span> <span class="n">scylla_encryption_options</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;cipher_algorithm&#39;</span> <span class="p">:</span> <span class="s1">&#39;AES/ECB/PKCS5Padding&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_strength&#39;</span> <span class="p">:</span> <span class="mf">128</span><span class="p">,</span>
+    <span class="s1">&#39;key_provider&#39;</span><span class="p">:</span> <span class="s1">&#39;LocalFileSystemKeyProviderFactory&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_file&#39;</span><span class="p">:</span> <span class="s1">&#39;/etc/scylla/data_encryption_keys/secret_key&#39;</span><span class="p">};</span>
+
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">caching</span> <span class="p">(</span>
+                 <span class="n">k</span> <span class="nb">int</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span>
+                 <span class="n">v1</span> <span class="nb">int</span><span class="p">,</span>
+                 <span class="n">v2</span> <span class="nb">int</span><span class="p">,</span>
+             <span class="p">)</span> <span class="k">WITH</span> <span class="n">caching</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">};</span>
+</pre></div>
+</div>
+<p>A CQL table has a name and is composed of a set of <em>rows</em>. Creating a table amounts to defining which <a class="reference internal" href="#column-definition"><span class="std std-ref">columns</span></a> the rows will be composed, which of those columns compose the <a class="reference internal" href="#primary-key"><span class="std std-ref">primary key</span></a>, as
+well as optional <a class="reference internal" href="#create-table-options"><span class="std std-ref">options</span></a> for the table.</p>
+<p>Attempting to create an already existing table will return an error unless the <code class="docutils literal notranslate"><span class="pre">IF</span> <span class="pre">NOT</span> <span class="pre">EXISTS</span></code> directive is used. If
+it is used, the statement will be a no-op if the table already exists.</p>
+<section id="column-definitions">
+<span id="column-definition"></span><h3>Column definitions<a class="headerlink" href="#column-definitions" title="Link to this heading">¶</a></h3>
+<p>Every row in a CQL table has a set of predefined columns defined at the time of the table creation (or added later
+using an <a class="reference internal" href="#alter-table-statement"><span class="std std-ref">alter statement</span></a>).</p>
+<p>A <code class="xref std std-token docutils literal notranslate"><span class="pre">column_definition</span></code> is primarily comprised of the name of the column defined and its <a class="reference internal" href="types.html#id1"><span class="std std-ref">type</span></a>,
+which restricts which values are accepted for that column. Additionally, a column definition can have the following
+modifiers:</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">STATIC</span></code></dt><dd><p>declares the column as being a <a class="reference internal" href="#static-columns"><span class="std std-ref">static column</span></a>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span></code></dt><dd><p>declares the column as being the sole component of the <a class="reference internal" href="#primary-key"><span class="std std-ref">primary key</span></a> of the table.</p>
+</dd>
+</dl>
+<section id="static-columns">
+<span id="id7"></span><h4>Static columns<a class="headerlink" href="#static-columns" title="Link to this heading">¶</a></h4>
+<p>Some columns can be declared as <code class="docutils literal notranslate"><span class="pre">STATIC</span></code> in a table definition. A column that is static will be “shared” by all the
+rows belonging to the same partition (having the same <a class="reference internal" href="#partition-key"><span class="std std-ref">partition key</span></a>). For instance:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">t</span> <span class="p">(</span>
+    <span class="n">pk</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">t</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">v</span> <span class="nb">text</span><span class="p">,</span>
+    <span class="n">s</span> <span class="nb">text</span> <span class="k">static</span><span class="p">,</span>
+    <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">t</span><span class="p">)</span>
+<span class="p">);</span>
+
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">t</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">s</span><span class="p">)</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">0</span><span class="p">,</span> <span class="mf">0</span><span class="p">,</span> <span class="s1">&#39;val0&#39;</span><span class="p">,</span> <span class="s1">&#39;static0&#39;</span><span class="p">);</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">t</span> <span class="p">(</span><span class="n">pk</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">s</span><span class="p">)</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">0</span><span class="p">,</span> <span class="mf">1</span><span class="p">,</span> <span class="s1">&#39;val1&#39;</span><span class="p">,</span> <span class="s1">&#39;static1&#39;</span><span class="p">);</span>
+
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">t</span><span class="p">;</span>
+   <span class="n">pk</span> <span class="o">|</span> <span class="n">t</span> <span class="o">|</span> <span class="n">v</span>      <span class="o">|</span> <span class="n">s</span>
+  <span class="c1">----+---+--------+-----------</span>
+   <span class="mf">0</span>  <span class="o">|</span> <span class="mf">0</span> <span class="o">|</span> <span class="s1">&#39;val0&#39;</span> <span class="o">|</span> <span class="s1">&#39;static1&#39;</span>
+   <span class="mf">0</span>  <span class="o">|</span> <span class="mf">1</span> <span class="o">|</span> <span class="s1">&#39;val1&#39;</span> <span class="o">|</span> <span class="s1">&#39;static1&#39;</span>
+</pre></div>
+</div>
+<p>As can be seen, the <code class="docutils literal notranslate"><span class="pre">s</span></code> value is the same (<code class="docutils literal notranslate"><span class="pre">static1</span></code>) for both of the rows in the partition (the partition key in
+that example being <code class="docutils literal notranslate"><span class="pre">pk</span></code>, both rows are in that same partition): the 2nd insertion has overridden the value for <code class="docutils literal notranslate"><span class="pre">s</span></code>.</p>
+<p>Static columns have the following restrictions:</p>
+<ul class="simple">
+<li><p>tables with the <code class="docutils literal notranslate"><span class="pre">COMPACT</span> <span class="pre">STORAGE</span></code> option (see below) cannot use them.</p></li>
+<li><p>a table without clustering columns cannot have static columns (in a table without clustering columns, every partition
+has only one row, and so every column is inherently static).</p></li>
+<li><p>only non <code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span></code> columns can be static.</p></li>
+</ul>
+</section>
+</section>
+<section id="the-primary-key">
+<span id="primary-key"></span><h3>The Primary key<a class="headerlink" href="#the-primary-key" title="Link to this heading">¶</a></h3>
+<p>Within a table, a row is uniquely identified by its <code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span></code>, and hence all tables <strong>must</strong> define a PRIMARY KEY
+(and only one). A <code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span></code> definition is composed of one or more of the columns defined in the table.
+Syntactically, the primary key is defined by the keywords <code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span></code>, followed by a comma-separated list of the column
+names composing it within parenthesis. However, if the primary key has only one column, one can alternatively follow that
+column definition by the <code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span></code> keywords. The order of the columns in the primary key definition matter.</p>
+<p>A CQL primary key is composed of 2 parts:</p>
+<ul>
+<li><p>the <a class="reference internal" href="#partition-key"><span class="std std-ref">partition key</span></a> part. It is the first component of the primary key definition. It can be a
+single column or, using additional parenthesis, can be multiple columns. A table always has at least a partition key,
+the smallest possible table definition is:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">t</span> <span class="p">(</span><span class="n">k</span> <span class="nb">text</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">);</span>
+</pre></div>
+</div>
+</li>
+<li><p>the <a class="reference internal" href="#clustering-columns"><span class="std std-ref">clustering columns</span></a>. Those are the columns after the first component of the primary key
+definition, and the order of those columns define the <em>clustering order</em>.</p></li>
+</ul>
+<p>Some examples of primary key definition are:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span> <span class="pre">(a)</span></code>: <code class="docutils literal notranslate"><span class="pre">a</span></code> is the partition key, and there are no clustering columns.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span> <span class="pre">(a,</span> <span class="pre">b,</span> <span class="pre">c)</span></code>: <code class="docutils literal notranslate"><span class="pre">a</span></code> is the partition key, and <code class="docutils literal notranslate"><span class="pre">b</span></code> and <code class="docutils literal notranslate"><span class="pre">c</span></code> are the clustering columns.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">PRIMARY</span> <span class="pre">KEY</span> <span class="pre">((a,</span> <span class="pre">b),</span> <span class="pre">c)</span></code>: <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code> compose the partition key (this is often called a <em>composite</em> partition
+key), and <code class="docutils literal notranslate"><span class="pre">c</span></code> is the clustering column.</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>A <em>null</em> value is not allowed as any partition-key or clustering-key column. A Null value is <em>not</em> the same as an empty string.</p>
+</div>
+<section id="the-partition-key">
+<span id="partition-key"></span><h4>The partition key<a class="headerlink" href="#the-partition-key" title="Link to this heading">¶</a></h4>
+<p>Within a table, CQL defines the notion of a <em>partition</em>. A partition is simply the set of rows that share the same value
+for their partition key. Note that if the partition key is composed of multiple columns, then rows belong to the same
+partition only when they have the same values for all those partition key columns. So, for instance, given the following table
+definition and content:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">t</span> <span class="p">(</span>
+    <span class="n">a</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">b</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">c</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">d</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">((</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">c</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span>
+<span class="p">);</span>
+
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">t</span><span class="p">;</span>
+   <span class="n">a</span> <span class="o">|</span> <span class="n">b</span> <span class="o">|</span> <span class="n">c</span> <span class="o">|</span> <span class="n">d</span>
+  <span class="c1">---+---+---+---</span>
+   <span class="mf">0</span> <span class="o">|</span> <span class="mf">0</span> <span class="o">|</span> <span class="mf">0</span> <span class="o">|</span> <span class="mf">0</span>    <span class="c1">// row 1</span>
+   <span class="mf">0</span> <span class="o">|</span> <span class="mf">0</span> <span class="o">|</span> <span class="mf">1</span> <span class="o">|</span> <span class="mf">1</span>    <span class="c1">// row 2</span>
+   <span class="mf">0</span> <span class="o">|</span> <span class="mf">1</span> <span class="o">|</span> <span class="mf">2</span> <span class="o">|</span> <span class="mf">2</span>    <span class="c1">// row 3</span>
+   <span class="mf">0</span> <span class="o">|</span> <span class="mf">1</span> <span class="o">|</span> <span class="mf">3</span> <span class="o">|</span> <span class="mf">3</span>    <span class="c1">// row 4</span>
+   <span class="mf">1</span> <span class="o">|</span> <span class="mf">1</span> <span class="o">|</span> <span class="mf">4</span> <span class="o">|</span> <span class="mf">4</span>    <span class="c1">// row 5</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">row</span> <span class="pre">1</span></code> and <code class="docutils literal notranslate"><span class="pre">row</span> <span class="pre">2</span></code> are in the same partition, <code class="docutils literal notranslate"><span class="pre">row</span> <span class="pre">3</span></code> and <code class="docutils literal notranslate"><span class="pre">row</span> <span class="pre">4</span></code> are also in the same partition (but a
+different one) and <code class="docutils literal notranslate"><span class="pre">row</span> <span class="pre">5</span></code> is in yet another partition.</p>
+<p>Note that a table always has a partition key and that if the table has no <a class="reference internal" href="#clustering-columns"><span class="std std-ref">clustering columns</span></a>, then every partition of that table is only comprised of a single row (since the primary key
+uniquely identifies rows and the primary key is equal to the partition key if there are no clustering columns).</p>
+<p>The most important property of partition is that all the rows belonging to the same partition are guarantee to be stored
+on the same set of replica nodes. In other words, the partition key of a table defines which of the rows will be
+localized together in the cluster, and it is thus important to choose your partition key wisely so that rows that need
+to be fetched together are in the same partition (so that querying those rows together require contacting a minimum of
+nodes).</p>
+<p>However, please note that there is a flip-side to this guarantee: as all rows sharing a partition key are guaranteed to
+be stored on the same set of replica nodes, a partition key that groups too much data can create a hotspot.</p>
+<p>Another useful property of a partition is that when writing data, all the updates belonging to a single partition are
+done <em>atomically</em> and in <em>isolation</em>, which is not the case across partitions.</p>
+<p>The proper choice of the partition key and clustering columns for a table is probably one of the most important aspects
+of data modeling in Scylla. It largely impacts which queries can be performed and how efficient they are.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>An empty string is <em>not</em> allowed as a partition key value. In a compound partition key (multiple partition-key columns), any or all of them may be empty strings. Empty string is <em>not</em> a Null value.</p>
+</div>
+</section>
+<section id="the-clustering-columns">
+<span id="clustering-columns"></span><h4>The clustering columns<a class="headerlink" href="#the-clustering-columns" title="Link to this heading">¶</a></h4>
+<p>The clustering columns of a table define the clustering order for the partition of that table. For a given
+<a class="reference internal" href="#partition-key"><span class="std std-ref">partition</span></a>, all the rows are physically ordered inside Scylla by that clustering order. For
+instance, given:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">t</span> <span class="p">(</span>
+    <span class="n">a</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">b</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">c</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+<span class="p">);</span>
+
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">t</span><span class="p">;</span>
+   <span class="n">a</span> <span class="o">|</span> <span class="n">b</span> <span class="o">|</span> <span class="n">c</span>
+  <span class="c1">---+---+---</span>
+   <span class="mf">0</span> <span class="o">|</span> <span class="mf">0</span> <span class="o">|</span> <span class="mf">4</span>     <span class="c1">// row 1</span>
+   <span class="mf">0</span> <span class="o">|</span> <span class="mf">1</span> <span class="o">|</span> <span class="mf">9</span>     <span class="c1">// row 2</span>
+   <span class="mf">0</span> <span class="o">|</span> <span class="mf">2</span> <span class="o">|</span> <span class="mf">2</span>     <span class="c1">// row 3</span>
+   <span class="mf">0</span> <span class="o">|</span> <span class="mf">3</span> <span class="o">|</span> <span class="mf">3</span>     <span class="c1">// row 4</span>
+</pre></div>
+</div>
+<p>then the rows (which all belong to the same partition) are all stored internally in the order of the values of their
+<code class="docutils literal notranslate"><span class="pre">b</span></code> column (the order they are displayed above). So, where the partition keys of the table let you group rows on the
+same replica set, the clustering columns control how those rows are stored on the replica. That sorting allows the
+retrieval of a range of rows within a partition (for instance, in the example above, <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">*</span> <span class="pre">FROM</span> <span class="pre">t</span> <span class="pre">WHERE</span> <span class="pre">a</span> <span class="pre">=</span> <span class="pre">0</span> <span class="pre">AND</span> <span class="pre">b</span>
+<span class="pre">&gt;</span> <span class="pre">1</span> <span class="pre">and</span> <span class="pre">b</span> <span class="pre">&lt;=</span> <span class="pre">3</span></code>) is very efficient.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>An empty string is allowed as a clustering key value. Empty string is <em>not</em> a Null value.</p>
+</div>
+</section>
+</section>
+<section id="table-options">
+<span id="create-table-options"></span><h3>Table options<a class="headerlink" href="#table-options" title="Link to this heading">¶</a></h3>
+<p>A CQL table has a number of options that can be set at creation (and, for most of them, <a class="reference internal" href="#alter-table-statement"><span class="std std-ref">altered</span></a> later). These options are specified after the <code class="docutils literal notranslate"><span class="pre">WITH</span></code> keyword.</p>
+<p>Amongst those options, two important ones cannot be changed after creation and influence which queries can be done
+against the table: the <code class="docutils literal notranslate"><span class="pre">COMPACT</span> <span class="pre">STORAGE</span></code> option and the <code class="docutils literal notranslate"><span class="pre">CLUSTERING</span> <span class="pre">ORDER</span></code> option. Those, as well as the other
+options of a table are described in the following sections.</p>
+<section id="compact-tables">
+<span id="id8"></span><h4>Compact tables<a class="headerlink" href="#compact-tables" title="Link to this heading">¶</a></h4>
+<p>A <em>compact</em> table is one defined with the <code class="docutils literal notranslate"><span class="pre">COMPACT</span> <span class="pre">STORAGE</span></code> option. This option is only maintained for backward
+compatibility for definitions created before CQL version 3 and shouldn’t be used for new tables. Declaring a
+table with this option creates limitations for the table, which are largely arbitrary (and exists for historical
+reasons). Amongst these limitations:</p>
+<ul class="simple">
+<li><p>a compact table cannot use collections nor static columns.</p></li>
+<li><p>if a compact table has at least one clustering column, then it must have <em>exactly</em> one column outside of the primary
+key ones. This implies that you cannot add or remove columns in particular after creation.</p></li>
+<li><p>a compact table is limited as to the indexes it can create, and no materialized view can be created on it.</p></li>
+</ul>
+</section>
+<section id="reversing-the-clustering-order">
+<span id="clustering-order"></span><h4>Reversing the clustering order<a class="headerlink" href="#reversing-the-clustering-order" title="Link to this heading">¶</a></h4>
+<p>The clustering order of a table is defined by the <a class="reference internal" href="#clustering-columns"><span class="std std-ref">clustering columns</span></a> of that table. By
+default, that ordering is based on the natural order of the clustering order, but the <code class="docutils literal notranslate"><span class="pre">CLUSTERING</span> <span class="pre">ORDER</span></code> lets you
+change that clustering order to use the <em>reverse</em> natural order for some (potentially all) of the columns.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">CLUSTERING</span> <span class="pre">ORDER</span></code> option takes the comma-separated list of the clustering column, each with an <code class="docutils literal notranslate"><span class="pre">ASC</span></code> (for
+<em>ascendant</em>, e.g. the natural order) or <code class="docutils literal notranslate"><span class="pre">DESC</span></code> (for <em>descendant</em>, e.g. the reverse natural order). Note in particular
+that the default (if the <code class="docutils literal notranslate"><span class="pre">CLUSTERING</span> <span class="pre">ORDER</span></code> option is not used) is strictly equivalent to using the option with all
+clustering columns using the <code class="docutils literal notranslate"><span class="pre">ASC</span></code> modifier.</p>
+<p>Note that this option is basically a hint for the storage engine to change the order in which it stores the row, but it
+has three visible consequences:</p>
+<ul class="simple">
+<li><p>it limits which <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> clause is allowed for <a class="reference internal" href="dml.html#select-statement"><span class="std std-ref">selects</span></a> on that table. You can only
+order results by the clustering order or the reverse clustering order. Meaning that if a table has two clustering columns
+<code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code>,  and you define <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">CLUSTERING</span> <span class="pre">ORDER</span> <span class="pre">(a</span> <span class="pre">DESC,</span> <span class="pre">b</span> <span class="pre">ASC)</span></code>, then in queries, you will be allowed to use
+<code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">(a</span> <span class="pre">DESC,</span> <span class="pre">b</span> <span class="pre">ASC)</span></code> and (reverse clustering order) <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">(a</span> <span class="pre">ASC,</span> <span class="pre">b</span> <span class="pre">DESC)</span></code> but <strong>not</strong> <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">(a</span>
+<span class="pre">ASC,</span> <span class="pre">b</span> <span class="pre">ASC)</span></code> (nor <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">(a</span> <span class="pre">DESC,</span> <span class="pre">b</span> <span class="pre">DESC)</span></code>).</p></li>
+<li><p>it also changes the default order of results when queried (if no <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> is provided). Results are always returned
+in clustering order (within a partition).</p></li>
+<li><p>it has a small performance impact on some queries as queries in reverse clustering order are slower than the one in
+forward clustering order. In practice, this means that if you plan on querying mostly in the reverse natural order of
+your columns (which is common with time series, for instance, where you often want data from the newest to the oldest),
+it is an optimization to declare a descending clustering order.</p></li>
+</ul>
+</section>
+<section id="other-table-options">
+<span id="create-table-general-options"></span><h4>Other table options<a class="headerlink" href="#other-table-options" title="Link to this heading">¶</a></h4>
+<p>A table supports the following options:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 20.0%" />
+<col style="width: 10.0%" />
+<col style="width: 10.0%" />
+<col style="width: 60.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Kind</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">comment</span></code></p></td>
+<td><p>simple</p></td>
+<td><p>none</p></td>
+<td><p>A free-form, human-readable comment.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">read_repair_chance</span></code></p></td>
+<td><p>simple</p></td>
+<td><p>0</p></td>
+<td><p>The probability that extra nodes are queried (e.g. more nodes than required by the consistency level) for the purpose of read repairs.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">dclocal_read_repair_chance</span></code></p></td>
+<td><p>simple</p></td>
+<td><p>0</p></td>
+<td><p>The probability that extra nodes are queried (e.g. more nodes than required by the consistency level) belonging to the same data center as the read coordinator for the purpose of read repairs.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">speculative_retry</span></code></p></td>
+<td><p>simple</p></td>
+<td><p>99PERCENTILE</p></td>
+<td><p><a class="reference internal" href="#speculative-retry-options"><span class="std std-ref">Speculative retry options</span></a></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">gc_grace_seconds</span></code></p></td>
+<td><p>simple</p></td>
+<td><p>864000</p></td>
+<td><p>Time to wait before garbage collecting tombstones (deletion markers). See <a class="reference internal" href="#ddl-tombstones-gc"><span class="std std-ref">Tombstones GC options</span></a>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">tombstone_gc</span></code></p></td>
+<td><p>mode</p></td>
+<td><p>see below</p></td>
+<td><p>The mode of garbage collecting tombstones. See <a class="reference internal" href="#ddl-tombstones-gc"><span class="std std-ref">Tombstones GC options</span></a>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">bloom_filter_fp_chance</span></code></p></td>
+<td><p>simple</p></td>
+<td><p>0.01</p></td>
+<td><p>The target probability of false-positive of the sstable bloom filters. Sstable bloom filters will be sized to provide the provided probability (thus lowering this value impact the size of bloom filters in-memory and on-disk).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">default_time_to_live</span></code></p></td>
+<td><p>simple</p></td>
+<td><p>0</p></td>
+<td><p>The default expiration time (“TTL”) in seconds for a table.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">compaction</span></code></p></td>
+<td><p>map</p></td>
+<td><p>see below</p></td>
+<td><p><a class="reference internal" href="#cql-compaction-options"><span class="std std-ref">Compaction options</span></a></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">compression</span></code></p></td>
+<td><p>map</p></td>
+<td><p>see below</p></td>
+<td><p><a class="reference internal" href="#cql-compression-options"><span class="std std-ref">Compression options</span></a></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">caching</span></code></p></td>
+<td><p>map</p></td>
+<td><p>see below</p></td>
+<td><p><a class="reference internal" href="#cql-caching-options"><span class="std std-ref">Caching Options</span></a></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">cdc</span></code></p></td>
+<td><p>map</p></td>
+<td><p>see below</p></td>
+<td><p><a class="reference internal" href="#cdc-options"><span class="std std-ref">CDC Options</span></a></p></td>
+</tr>
+</tbody>
+</table>
+<section id="speculative-retry-options">
+<span id="id9"></span><h5>Speculative retry options<a class="headerlink" href="#speculative-retry-options" title="Link to this heading">¶</a></h5>
+<p>By default, Scylla read coordinators only query as many replicas as necessary to satisfy
+consistency levels: one for consistency level <code class="docutils literal notranslate"><span class="pre">ONE</span></code>, a quorum for <code class="docutils literal notranslate"><span class="pre">QUORUM</span></code>, and so on.
+<code class="docutils literal notranslate"><span class="pre">speculative_retry</span></code> determines when coordinators may query additional replicas, which is useful
+when replicas are slow or unresponsive.  The following are legal values (case-insensitive):</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Format</p></th>
+<th class="head"><p>Example</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">XPERCENTILE</span></code></p></td>
+<td><p>90.5PERCENTILE</p></td>
+<td><p>Coordinators record average per-table response times for all replicas.
+If a replica takes longer than <code class="docutils literal notranslate"><span class="pre">X</span></code> percent of this table’s average
+response time, the coordinator queries an additional replica.
+<code class="docutils literal notranslate"><span class="pre">X</span></code> must be between 0 and 100.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">XP</span></code></p></td>
+<td><p>90.5P</p></td>
+<td><p>Synonym for <code class="docutils literal notranslate"><span class="pre">XPERCENTILE</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Yms</span></code></p></td>
+<td><p>25ms</p></td>
+<td><p>If a replica takes more than <code class="docutils literal notranslate"><span class="pre">Y</span></code> milliseconds to respond,
+the coordinator queries an additional replica.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ALWAYS</span></code></p></td>
+<td></td>
+<td><p>Coordinators always query all replicas.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">NONE</span></code></p></td>
+<td></td>
+<td><p>Coordinators never query additional replicas.</p></td>
+</tr>
+</tbody>
+</table>
+<p>This setting does not affect reads with consistency level <code class="docutils literal notranslate"><span class="pre">ALL</span></code> because they already query all replicas.</p>
+<p>Note that frequently reading from additional replicas can hurt cluster performance.
+When in doubt, keep the default <code class="docutils literal notranslate"><span class="pre">99PERCENTILE</span></code>.</p>
+</section>
+<section id="compaction-options">
+<span id="cql-compaction-options"></span><h5>Compaction options<a class="headerlink" href="#compaction-options" title="Link to this heading">¶</a></h5>
+<p>The <code class="docutils literal notranslate"><span class="pre">compaction</span></code> options must at least define the <code class="docutils literal notranslate"><span class="pre">'class'</span></code> sub-option, which defines the compaction strategy class
+to use. The default supported class are <code class="docutils literal notranslate"><span class="pre">'SizeTieredCompactionStrategy'</span></code>,
+<code class="docutils literal notranslate"><span class="pre">'LeveledCompactionStrategy'</span></code>, <code class="docutils literal notranslate"><span class="pre">'IncrementalCompactionStrategy'</span></code>, and <code class="docutils literal notranslate"><span class="pre">'DateTieredCompactionStrategy'</span></code>
+Custom strategy can be provided by specifying the full class name as a <a class="reference internal" href="definitions.html#constants"><span class="std std-ref">string constant</span></a>.</p>
+<p>All default strategies support a number of common options, as well as options specific to
+the strategy chosen (see the section corresponding to your strategy for details: <a class="reference internal" href="compaction.html#stcs-options"><span class="std std-ref">STCS</span></a>, <a class="reference internal" href="compaction.html#lcs-options"><span class="std std-ref">LCS</span></a>, <a class="reference internal" href="compaction.html#ics-options"><span class="std std-ref">ICS</span></a>, and <a class="reference internal" href="compaction.html#twcs-options"><span class="std std-ref">TWCS</span></a>). DTCS is not recommended, and TWCS should be used instead.</p>
+</section>
+<section id="compression-options">
+<span id="cql-compression-options"></span><h5>Compression options<a class="headerlink" href="#compression-options" title="Link to this heading">¶</a></h5>
+<p>The <code class="docutils literal notranslate"><span class="pre">compression</span></code> options define if and how the sstables of the table are compressed. The following sub-options are
+available:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">sstable_compression</span></code></p></td>
+<td><p>LZ4Compressor</p></td>
+<td><p>The compression algorithm to use. Default compressors are
+LZ4Compressor, SnappyCompressor, and DeflateCompressor.
+A custom compressor can be provided by specifying the full class
+name as a “string constant”:#constants.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">chunk_length_in_kb</span></code></p></td>
+<td><p>4KB</p></td>
+<td><p>On disk SSTables are compressed by block (to allow random reads). This
+defines the size (in KB) of the block. Bigger values may improve the
+compression rate, but increases the minimum size of data to be read from disk
+for a read.</p></td>
+</tr>
+</tbody>
+</table>
+<p>For example, to enable compression:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">CREATE TABLE id (id int PRIMARY KEY) WITH compression = {&#39;sstable_compression&#39;: &#39;LZ4Compressor&#39;};</span>
+</pre></div>
+</div>
+<p>For example, to disable compression:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">CREATE TABLE id (id int PRIMARY KEY) WITH compression = {};</span>
+</pre></div>
+</div>
+</section>
+<section id="cdc-options">
+<span id="id10"></span><h5>CDC options<a class="headerlink" href="#cdc-options" title="Link to this heading">¶</a></h5>
+<div class="versionadded">
+<p><span class="versionmodified added">Added in version 3.2: </span>Scylla Open Source</p>
+</div>
+<p>The following options can be used with Change Data Capture.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>option</p></th>
+<th class="head"><p>default</p></th>
+<th class="head"><p>description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">enabled</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>When set to <code class="docutils literal notranslate"><span class="pre">true</span></code>, another table — the CDC log table — is created and associated with the table you are
+creating/altering (for example, customer_data). All writes made to this table (customer_data) are reflected in
+the corresponding CDC log table.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">preimage</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>When set to <code class="docutils literal notranslate"><span class="pre">true</span></code>, it saves the result of what a client performing a write would display if it has queried this
+table before making the write into the corresponding CDC log table.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ttl</span></code></p></td>
+<td><p>86400 seconds
+24 hours</p></td>
+<td><p>Time after which data stored in CDC will be removed and won’t be accessible to the client anymore.</p></td>
+</tr>
+</tbody>
+</table>
+<p>For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">customer_data</span> <span class="p">(</span>
+    <span class="n">cust_id</span> <span class="nb">uuid</span><span class="p">,</span>
+    <span class="n">cust_first</span><span class="o">-</span><span class="n">name</span> <span class="nb">text</span><span class="p">,</span>
+    <span class="n">cust_last</span><span class="o">-</span><span class="n">name</span> <span class="nb">text</span><span class="p">,</span>
+    <span class="n">cust_phone</span> <span class="nb">text</span><span class="p">,</span>
+    <span class="n">cust_get</span><span class="o">-</span><span class="n">sms</span> <span class="nb">text</span><span class="p">,</span>
+    <span class="k">PRIMARY</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">customer_id</span><span class="p">)</span>
+<span class="p">)</span> <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span> <span class="s1">&#39;enabled&#39;</span> <span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span> <span class="p">:</span> <span class="s1">&#39;true&#39;</span> <span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="caching-options">
+<span id="cql-caching-options"></span><h5>Caching options<a class="headerlink" href="#caching-options" title="Link to this heading">¶</a></h5>
+<p>Caching optimizes cache memory usage of a table. The cached data is weighed by size and access frequency.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>option</p></th>
+<th class="head"><p>default</p></th>
+<th class="head"><p>description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">enabled</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TRUE</span></code></p></td>
+<td><p>When set to TRUE enables caching on the specified table. Valid options are TRUE and FALSE.</p></td>
+</tr>
+</tbody>
+</table>
+<p>For example,</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">caching</span> <span class="p">(</span>
+                 <span class="n">k</span> <span class="nb">int</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span>
+                 <span class="n">v1</span> <span class="nb">int</span><span class="p">,</span>
+                 <span class="n">v2</span> <span class="nb">int</span><span class="p">,</span>
+             <span class="p">)</span> <span class="k">WITH</span> <span class="n">caching</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;enabled&#39;</span><span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="encryption-options">
+<h5>Encryption options<a class="headerlink" href="#encryption-options" title="Link to this heading">¶</a></h5>
+<p>Encryption options are used when enabling or disabling encryption at rest, available in Scylla Enterprise from version 2019.1.1.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>When the <code class="docutils literal notranslate"><span class="pre">key_provider</span></code> is <code class="docutils literal notranslate"><span class="pre">LocalFileSystemKeyProviderFactory</span></code>, you must indicate where the key resides using the <code class="docutils literal notranslate"><span class="pre">secret_key_file:</span> <span class="pre">&lt;path&gt;</span></code> parameter. Refer to <a class="reference internal" href="../operating-scylla/security/encryption-at-rest.html"><span class="doc">Encryption at Rest</span></a> for details.</p>
+</div>
+</section>
+<section id="tombstones-gc-options">
+<span id="gc-grace-seconds"></span><span id="ddl-tombstones-gc"></span><h5>Tombstones GC options<a class="headerlink" href="#tombstones-gc-options" title="Link to this heading">¶</a></h5>
+<p>ScyllaDB inherited the <code class="docutils literal notranslate"><span class="pre">gc_grace_seconds</span></code> option from Apache Cassandra. The option allows you to specify the wait time
+(in seconds) before data marked with a deletion <a class="reference internal" href="../glossary.html#term-Tombstone"><span class="xref std std-term">tombstone</span></a> is removed via compaction.
+This option assumes that you run <a class="reference internal" href="../glossary.html#term-Repair"><span class="xref std std-term">repair</span></a> during the specified time. Failing to run repair during the wait
+time may result in the resurrection of deleted data.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">tombstone_gc</span></code> option allows you to prevent data resurrection. With the <code class="docutils literal notranslate"><span class="pre">repair</span></code> mode configured, <a class="reference internal" href="../glossary.html#term-Tombstone"><span class="xref std std-term">tombstone</span></a>
+are only removed after <a class="reference internal" href="../glossary.html#term-Repair"><span class="xref std std-term">repair</span></a> is performed. Unlike  <code class="docutils literal notranslate"><span class="pre">gc_grace_seconds</span></code>, <code class="docutils literal notranslate"><span class="pre">tombstone_gc</span></code> has no time constraints - when
+the <code class="docutils literal notranslate"><span class="pre">repair</span></code> mode is on, tombstones garbage collection will wait until repair is run.</p>
+<p>You can enable the after-repair tombstone GC by setting the <code class="docutils literal notranslate"><span class="pre">repair</span></code> mode using
+<code class="docutils literal notranslate"><span class="pre">ALTER</span> <span class="pre">TABLE</span></code> or <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code>. For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">cf</span> <span class="p">(</span><span class="k">key</span> <span class="nb">blob</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span>  <span class="n">val</span> <span class="nb">blob</span><span class="p">)</span> <span class="k">WITH</span> <span class="n">tombstone_gc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;mode&#39;</span><span class="p">:</span><span class="s1">&#39;repair&#39;</span><span class="p">};</span>
+</pre></div>
+</div>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">ALTER</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">cf</span> <span class="k">WITH</span> <span class="n">tombstone_gc</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;mode&#39;</span><span class="p">:</span><span class="s1">&#39;repair&#39;</span><span class="p">}</span> <span class="p">;</span>
+</pre></div>
+</div>
+<p>The following modes are available:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 20.0%" />
+<col style="width: 80.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Mode</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">timeout</span></code></p></td>
+<td><p>Tombstone GC is performed after the wait time specified with <code class="docutils literal notranslate"><span class="pre">gc_grace_seconds</span></code> (default).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">repair</span></code></p></td>
+<td><p>Tombstone GC is performed after repair is run.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">disabled</span></code></p></td>
+<td><p>Tombstone GC is never performed. This mode may be useful when loading data to the database, to avoid tombstone GC when part of the data is not yet available.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">immediate</span></code></p></td>
+<td><p>Tombstone GC is immediately performed. There is no wait time or repair requirement. This mode is useful for a table that uses the TWCS compaction strategy with no user deletes. After data is expired after TTL, ScyllaDB can perform compaction to drop the expired data immediately.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="other-considerations">
+<h5>Other considerations:<a class="headerlink" href="#other-considerations" title="Link to this heading">¶</a></h5>
+<ul class="simple">
+<li><p>Adding new columns (see <code class="docutils literal notranslate"><span class="pre">ALTER</span> <span class="pre">TABLE</span></code> below) is a constant time operation. There is thus no need to try to
+anticipate future usage when creating a table.</p></li>
+</ul>
+</section>
+</section>
+</section>
+<section id="limiting-the-rate-of-requests-per-partition">
+<span id="ddl-per-parition-rate-limit"></span><h3>Limiting the rate of requests per partition<a class="headerlink" href="#limiting-the-rate-of-requests-per-partition" title="Link to this heading">¶</a></h3>
+<p>You can limit the read rates and writes rates into a partition by applying
+a ScyllaDB CQL extension to the CREATE TABLE or ALTER TABLE statements.
+See <a class="reference external" href="https://docs.scylladb.com/stable/cql/cql-extensions.html#per-partition-rate-limit">Per-partition rate limit</a>
+for details.</p>
+<blockquote>
+<div></div></blockquote>
+</section>
+</section>
+<section id="alter-table-statement">
+<span id="id11"></span><h2>ALTER TABLE<a class="headerlink" href="#alter-table-statement" title="Link to this heading">¶</a></h2>
+<p>Altering an existing table uses the <code class="docutils literal notranslate"><span class="pre">ALTER</span> <span class="pre">TABLE</span></code> statement:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">alter_table_statement</span><span class="p">:</span> <span class="k">ALTER</span> <span class="k">TABLE</span> <span class="o">`</span><span class="n">table_name</span><span class="o">`</span> <span class="o">`</span><span class="n">alter_table_instruction</span><span class="o">`</span>
+<span class="n">alter_table_instruction</span><span class="p">:</span> <span class="k">ADD</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="o">`</span><span class="n">cql_type</span><span class="o">`</span> <span class="p">(</span> <span class="s1">&#39;,&#39;</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="o">`</span><span class="n">cql_type</span><span class="o">`</span> <span class="p">)</span><span class="o">*</span>
+                       <span class="p">:</span> <span class="o">|</span> <span class="k">DROP</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span>
+                       <span class="p">:</span> <span class="o">|</span> <span class="k">DROP</span> <span class="s1">&#39;(&#39;</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="p">(</span> <span class="s1">&#39;,&#39;</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="p">)</span><span class="o">*</span> <span class="s1">&#39;)&#39;</span>
+                       <span class="p">:</span> <span class="o">|</span> <span class="k">ALTER</span> <span class="o">`</span><span class="n">column_name</span><span class="o">`</span> <span class="k">TYPE</span> <span class="o">`</span><span class="n">cql_type</span><span class="o">`</span>
+                       <span class="p">:</span> <span class="o">|</span> <span class="k">WITH</span> <span class="o">`</span><span class="k">options</span><span class="o">`</span>
+                       <span class="p">:</span> <span class="o">|</span> <span class="n">scylla_encryption_options</span><span class="p">:</span> <span class="s1">&#39;=&#39;</span> <span class="s1">&#39;{&#39;</span><span class="p">[</span><span class="o">`</span><span class="n">cipher_algorithm</span><span class="o">`</span> <span class="p">:</span> <span class="o">&lt;</span><span class="n">hash</span><span class="o">&gt;</span><span class="p">]</span><span class="s1">&#39;,&#39;</span><span class="p">[</span><span class="o">`</span><span class="n">secret_key_strength</span><span class="o">`</span> <span class="p">:</span> <span class="o">&lt;</span><span class="n">len</span><span class="o">&gt;</span><span class="p">]</span><span class="s1">&#39;,&#39;</span><span class="p">[</span><span class="o">`</span><span class="n">key_provider</span><span class="o">`</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">provider</span><span class="o">&gt;</span><span class="p">]</span><span class="s1">&#39;}&#39;</span>
+</pre></div>
+</div>
+<p>For instance:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">ALTER</span> <span class="k">TABLE</span> <span class="n">addamsFamily</span> <span class="k">ADD</span> <span class="n">gravesite</span> <span class="nb">varchar</span><span class="p">;</span>
+
+<span class="k">ALTER</span> <span class="k">TABLE</span> <span class="n">addamsFamily</span>
+       <span class="k">WITH</span> <span class="n">comment</span> <span class="o">=</span> <span class="s1">&#39;A most excellent and useful table&#39;</span>
+       <span class="k">AND</span> <span class="n">read_repair_chance</span> <span class="o">=</span> <span class="mf">0.2</span><span class="p">;</span>
+
+
+<span class="k">ALTER</span> <span class="k">TABLE</span> <span class="n">data_atrest</span> <span class="p">(</span>
+    <span class="n">pk</span> <span class="nb">text</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span>
+    <span class="n">c0</span> <span class="nb">int</span>
+<span class="p">)</span> <span class="k">WITH</span> <span class="n">scylla_encryption_options</span> <span class="o">=</span> <span class="p">{</span>
+   <span class="s1">&#39;cipher_algorithm&#39;</span> <span class="p">:</span> <span class="s1">&#39;AES/ECB/PKCS5Padding&#39;</span><span class="p">,</span>
+   <span class="s1">&#39;secret_key_strength&#39;</span> <span class="p">:</span> <span class="mf">128</span><span class="p">,</span>
+   <span class="s1">&#39;key_provider&#39;</span><span class="p">:</span> <span class="s1">&#39;LocalFileSystemKeyProviderFactory&#39;</span><span class="p">,</span>
+   <span class="s1">&#39;secret_key_file&#39;</span><span class="p">:</span> <span class="s1">&#39;/etc/scylla/data_encryption_keys/secret_key&#39;</span><span class="p">};</span>
+
+<span class="k">ALTER</span> <span class="k">TABLE</span> <span class="n">customer_data</span>
+   <span class="k">WITH</span> <span class="n">cdc</span> <span class="o">=</span> <span class="p">{</span> <span class="s1">&#39;enabled&#39;</span> <span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">,</span> <span class="s1">&#39;preimage&#39;</span> <span class="p">:</span> <span class="s1">&#39;true&#39;</span> <span class="p">};</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">ALTER</span> <span class="pre">TABLE</span></code> statement can:</p>
+<ul class="simple">
+<li><p>Add new column(s) to the table (through the <code class="docutils literal notranslate"><span class="pre">ADD</span></code> instruction). Note that the primary key of a table cannot be
+changed, and thus newly added column will, by extension, never be part of the primary key. Also, note that <a class="reference internal" href="#compact-tables"><span class="std std-ref">compact
+tables</span></a> have restrictions regarding column addition. Note that this is constant (in the amount of
+data the cluster contains) time operation.</p></li>
+<li><p>Remove column(s) from the table. This drops both the column and all its content, but note that while the column
+becomes immediately unavailable, its content is only removed lazily during compaction. Please also note the warnings
+below. Due to lazy removal, the altering itself is a constant (in the amount of data removed or contained in the
+cluster) time operation.</p></li>
+<li><p>Change data type of the column to a compatible type.</p></li>
+<li><p>Change some of the table options (through the <code class="docutils literal notranslate"><span class="pre">WITH</span></code> instruction). The <a class="reference internal" href="#create-table-options"><span class="std std-ref">supported options</span></a> are the same that when creating a table (outside of <code class="docutils literal notranslate"><span class="pre">COMPACT</span> <span class="pre">STORAGE</span></code> and <code class="docutils literal notranslate"><span class="pre">CLUSTERING</span>
+<span class="pre">ORDER</span></code> that cannot be changed after creation). Note that setting any <code class="docutils literal notranslate"><span class="pre">compaction</span></code> sub-options has the effect of
+erasing all previous <code class="docutils literal notranslate"><span class="pre">compaction</span></code> options, so you need to re-specify all the sub-options if you want to keep them.
+The same note applies to the set of <code class="docutils literal notranslate"><span class="pre">compression</span></code> sub-options.</p></li>
+<li><p>Change or add any of the <code class="docutils literal notranslate"><span class="pre">Encryption</span> <span class="pre">options</span></code> above.</p></li>
+<li><p>Change or add any of the <a class="reference internal" href="#cdc-options"><span class="std std-ref">CDC options</span></a> above.</p></li>
+<li><p>Change or add per-partition rate limits. See <a class="reference internal" href="#ddl-per-parition-rate-limit"><span class="std std-ref">Limiting the rate of requests per partition</span></a>.</p></li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Dropping a column assumes that the timestamps used for the value of this column are “real” timestamp in
+microseconds. Using “real” timestamps in microseconds is the default is and is <strong>strongly</strong> recommended, but as
+Scylla allows the client to provide any timestamp on any table, it is theoretically possible to use another
+convention. Please be aware that if you do so, dropping a column will not work correctly.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Once a column is dropped, it is allowed to re-add a column with the same name as the dropped one
+<strong>unless</strong> the type of the dropped column was a (non-frozen) column (due to an internal technical limitation).</p>
+</div>
+</section>
+<section id="drop-table-statement">
+<span id="id12"></span><h2>DROP TABLE<a class="headerlink" href="#drop-table-statement" title="Link to this heading">¶</a></h2>
+<p>Dropping a table uses the <code class="docutils literal notranslate"><span class="pre">DROP</span> <span class="pre">TABLE</span></code> statement:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">drop_table_statement</span><span class="p">:</span> <span class="k">DROP</span> <span class="k">TABLE</span> <span class="p">[</span> <span class="k">IF</span> <span class="k">EXISTS</span> <span class="p">]</span> <span class="o">`</span><span class="n">table_name</span><span class="o">`</span>
+</pre></div>
+</div>
+<p>Dropping a table results in the immediate removal of the table, including all data it contains and any associated secondary indexes.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>By default, when a table or a keyspace is removed, a snapshot is taken so that you can restore it later. As a result, the disk space remains the same and is not immediately reclaimed.
+Refer to <a class="reference internal" href="../troubleshooting/drop-table-space-up.html"><span class="doc">this article</span></a> or this <a class="reference internal" href="../faq.html#reclaim-space"><span class="std std-ref">FAQ entry</span></a>.</p>
+</div>
+<p>If the table does not exist, the statement will return an error unless <code class="docutils literal notranslate"><span class="pre">IF</span> <span class="pre">EXISTS</span></code> is used, in which case the
+operation is a no-op.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Dropping a table that has materialized views is disallowed and will return an error. To do so, the materialized views that depend on the table must first be explicitly dropped. Refer to <a class="reference internal" href="mv.html"><span class="doc">Materialized Views</span></a> for details.</p>
+</div>
+</section>
+<section id="truncate-statement">
+<span id="id13"></span><h2>TRUNCATE<a class="headerlink" href="#truncate-statement" title="Link to this heading">¶</a></h2>
+<p>A table can be truncated using the <code class="docutils literal notranslate"><span class="pre">TRUNCATE</span></code> statement:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="n">truncate_statement</span><span class="p">:</span> <span class="k">TRUNCATE</span> <span class="p">[</span> <span class="k">TABLE</span> <span class="p">]</span> <span class="o">`</span><span class="n">table_name</span><span class="o">`</span>
+                  <span class="p">:</span> <span class="p">[</span> <span class="k">USING</span> <span class="n">TIMEOUT</span> <span class="o">`</span><span class="n">timeout</span><span class="o">`</span> <span class="p">]</span>
+<span class="n">timeout</span><span class="p">:</span> <span class="o">`</span><span class="n">duration</span><span class="o">`</span>
+</pre></div>
+</div>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">TRUNCATE</span> <span class="pre">TABLE</span> <span class="pre">foo</span></code> is allowed for consistency with other DDL statements, but tables are the only object
+that can be truncated currently and so the <code class="docutils literal notranslate"><span class="pre">TABLE</span></code> keyword can be omitted.</p>
+<p>Truncating a table permanently removes all existing data from the table, but without removing the table itself.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">USING</span> <span class="pre">TIMEOUT</span></code> clause allows specifying a timeout for a specific request.</p>
+<p>For example:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">TRUNCATE</span> <span class="k">TABLE</span> <span class="k">users</span> <span class="k">USING</span> <span class="n">TIMEOUT</span> <span class="mf">5</span><span class="n">m</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="admonition caution">
+<p class="admonition-title">Caution</p>
+<p>Do not run any operation on a table that is being truncated. Truncate operation is an administrative operation, and running any other operation on the same table in parallel may cause the truncating table’s data to end up in an undefined state.</p>
+</div>
+<ul class="simple">
+<li><p><a class="reference internal" href="index.html"><span class="doc">Apache Cassandra Query Language (CQL) Reference</span></a></p></li>
+</ul>
+<p>Copyright</p>
+<p>© 2016, The Apache Software Foundation.</p>
+<p>Apache®, Apache Cassandra®, Cassandra®, the Apache feather logo and the Apache Cassandra® Eye logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries. No endorsement by The Apache Software Foundation is implied by the use of these marks.</p>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Data Definition&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.2/cql/ddl%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="consistency-calculator.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Consistency Level Calculator
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="dml.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />Data Manipulation
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Data Definition&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.2/cql/ddl%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/cql/ddl.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">Data Definition</a><ul>
+<li><a class="reference internal" href="#common-definitions">Common Definitions</a></li>
+<li><a class="reference internal" href="#id2">CREATE KEYSPACE</a><ul>
+<li><a class="reference internal" href="#simplestrategy">SimpleStrategy</a></li>
+<li><a class="reference internal" href="#networktopologystrategy">NetworkTopologyStrategy</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#use-statement">USE</a></li>
+<li><a class="reference internal" href="#alter-keyspace-statement">ALTER KEYSPACE</a></li>
+<li><a class="reference internal" href="#drop-keyspace-statement">DROP KEYSPACE</a></li>
+<li><a class="reference internal" href="#create-table-statement">CREATE TABLE</a><ul>
+<li><a class="reference internal" href="#column-definitions">Column definitions</a><ul>
+<li><a class="reference internal" href="#static-columns">Static columns</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#the-primary-key">The Primary key</a><ul>
+<li><a class="reference internal" href="#the-partition-key">The partition key</a></li>
+<li><a class="reference internal" href="#the-clustering-columns">The clustering columns</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#table-options">Table options</a><ul>
+<li><a class="reference internal" href="#compact-tables">Compact tables</a></li>
+<li><a class="reference internal" href="#reversing-the-clustering-order">Reversing the clustering order</a></li>
+<li><a class="reference internal" href="#other-table-options">Other table options</a><ul>
+<li><a class="reference internal" href="#speculative-retry-options">Speculative retry options</a></li>
+<li><a class="reference internal" href="#compaction-options">Compaction options</a></li>
+<li><a class="reference internal" href="#compression-options">Compression options</a></li>
+<li><a class="reference internal" href="#cdc-options">CDC options</a></li>
+<li><a class="reference internal" href="#caching-options">Caching options</a></li>
+<li><a class="reference internal" href="#encryption-options">Encryption options</a></li>
+<li><a class="reference internal" href="#tombstones-gc-options">Tombstones GC options</a></li>
+<li><a class="reference internal" href="#other-considerations">Other considerations:</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#limiting-the-rate-of-requests-per-partition">Limiting the rate of requests per partition</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#alter-table-statement">ALTER TABLE</a></li>
+<li><a class="reference internal" href="#drop-table-statement">DROP TABLE</a></li>
+<li><a class="reference internal" href="#truncate-statement">TRUNCATE</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                5.2
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="../../stable/cql/ddl.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-6.1/cql/ddl.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-6.0/cql/ddl.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.4/cql/ddl.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="ddl.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../branch-5.1/cql/ddl.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../getting-started/index.html">Getting Started</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../getting-started/install-scylla/index.html">Install ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/unified-installer.html">ScyllaDB Unified Installer (relocatable executable)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/rpm-info.html">What is in each RPM</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/disable-housekeeping.html">ScyllaDB Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/dev-mod.html">ScyllaDB Developer Mode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/config-commands.html">ScyllaDB Configuration Reference</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/configure.html">Configure ScyllaDB</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/os-support.html">OS Support by Linux Distributions and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/scylla-in-a-shared-environment.html">ScyllaDB in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/migrate-scylla.html">Migrate to ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migration Process from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/cassandra-compatibility.html">Scylla and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-spark.html">Integrate Scylla with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-kairos.html">Integrate Scylla with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-presto.html">Integrate Scylla with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-elasticsearch.html">Integrate Scylla with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-k8.html">Integrate Scylla with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-janus.html">Integrate Scylla with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-datadog.html">Integrate Scylla with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-kafka.html">Integrate Scylla with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-iota.html">Integrate Scylla with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-spring.html">Integrate Scylla with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-ansible.html">Install Scylla with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/integrations/integration-databricks.html">Integrate Scylla with Databricks</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../operating-scylla/index.html">ScyllaDB for Administrators</a><input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/admin.html">Administration Guide</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/procedures/index.html">Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/benchmarking-scylla.html">Benchmarking Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/cassandra-to-scylla-migration-process.html">Migrate from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/install-scylla/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/security/index.html">Security</a><input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/security-checklist.html">ScyllaDB Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/auditing.html">ScyllaDB Auditing Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/encryption-at-rest.html">Encryption at Rest</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/ldap-authentication.html">LDAP Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/security/ldap-authorization.html">LDAP Authorization (Role Management)</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/rest.html">REST</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/scylla-sstable.html">Scylla SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/scylla-types.html">Scylla Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/sstable2json.html">SSTable2json</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/logging.html">Scylla Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin-tools/virtual-tables.html">Virtual Tables</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/upgrade-opensource/index.html">ScyllaDB Open Source Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/upgrade-to-enterprise/index.html">ScyllaDB Open Source to ScyllaDB Enterprise Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../upgrade/ami-upgrade.html">ScyllaDB Image</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html">ScyllaDB Enterprise</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../operating-scylla/system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/system-configuration/snitch.html">ScyllaDB Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../operating-scylla/benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../using-scylla/index.html">ScyllaDB for Developers</a><input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/learn.html">Learn To Use ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/">Scylla University</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/available-courses/">Course catalog</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/scylla-essentials-overview/">Scylla Essentials</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/">Basic Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/">Advanced Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/">MMS - Learn by Example</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://iot.scylladb.com/">Care-Pet an IoT Use Case and Example</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../using-scylla/alternator/index.html">Scylla Alternator</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/features.html">Scylla Features</a><input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/features-open-source.html">Scylla Open Source Features</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/features-ent.html">Scylla Enterprise Features</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../using-scylla/drivers/index.html">Scylla Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/drivers/cql-drivers/index.html">Scylla CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-scylla/drivers/dynamo-drivers/index.html">Scylla DynamoDB Drivers</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../using-scylla/workload-attributes.html">Workload Attributes</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">CQL Reference</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Data Definition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dml.html">Data Manipulation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="secondary-indexes.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="time-to-live.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="functions.html">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../architecture/index.html">ScyllaDB Architecture</a><input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/ringarchitecture/index.html">ScyllaDB Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/architecture-fault-tolerance.html">ScyllaDB Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../architecture/anti-entropy/index.html">ScyllaDB Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/anti-entropy/hinted-handoff.html">Scylla Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/anti-entropy/read-repair.html">Scylla Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../operating-scylla/procedures/maintenance/repair.html">Scylla Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../architecture/sstable/index.html">SSTable</a><input class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/sstable/sstable2/index.html">ScyllaDB SSTable - 2.x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../architecture/sstable/sstable3/index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../architecture/raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../troubleshooting/index.html">Troubleshooting ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/report-scylla-problem.html">Report a Scylla problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/startup/index.html">ScyllaDB Startup</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/scylla-wont-start.html">Scylla will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/python-error-no-module-named-yaml.html">Scylla Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/upgrade/index.html">Upgrade</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/missing-dotmount-files.html">Inaccessible configuration files after ScyllaDB upgrade</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/nodetool-memory-read-timeout.html">SocketTimeoutException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/large-partition-table.html">Scylla Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/large-rows-large-cells-tables.html">Scylla Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/reverse-queries.html">Reverse queries fail</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../troubleshooting/monitor/index.html">ScyllaDB Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../kb/index.html">Knowledge Base</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../kb/cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/custom-user.html">Run Scylla and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/gossip.html">Gossip in Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/lwt-differences.html">How does Scylla LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/map-cpu.html">Map CPUs to Scylla Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/memory-usage.html">Scylla Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/ntp.html">NTP Configuration for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/posix.html">POSIX networking for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/quiz-administrators.html">Scylla consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/scylla-and-spark-integration.html">Scylla and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/scylla-limits-systemd.html">Increase Scylla resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/seed-nodes.html">Scylla Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/snapshots.html">Scylla Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/static-columns.html">Scylla payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/unresponsive-nodes.html">Scylla Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/use-perf.html">Using the perf utility with Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../kb/yaml-address.html">Configure Scylla Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">ScyllaDB FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contribute.html">Contribute to ScyllaDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../glossary.html">Glossary</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-30" name="toctree-checkbox-30" type="checkbox"/><label for="toctree-checkbox-30"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../alternator/compatibility.html">ScyllaDB Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>

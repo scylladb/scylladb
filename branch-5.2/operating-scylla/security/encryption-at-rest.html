@@ -1,0 +1,1424 @@
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="en" style="visibility: hidden;">
+    
+    
+
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width initial-scale=1" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>
+             Encryption at Rest | ScyllaDB Docs 
+        </title>
+        <meta name="description" content="ScyllaDB is an Apache Cassandra-compatible NoSQL data store that can handle 1 million transactions per second on a single server." />
+        <link rel="icon" href="../../_static/img/favicon.ico" type="image/x-icon" />
+        <link rel="icon" href="../../_static/img/favicon-32x32.png" sizes="32x32" />
+        <link rel="icon" href="../../_static/img/favicon-228x228.png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="../../_static/img/favicon-228x228.png" />
+        <meta name="msapplication-TileImage" href="../../_static/img/favicon-228x228.png" />
+
+        
+            
+            
+        
+
+        
+            
+            <link rel="canonical" href="https://opensource.docs.scylladb.com/stable/operating-scylla/security/encryption-at-rest.html"/>
+        
+
+        <link rel="author" href="mailto:info@scylladb.com" />
+
+        
+            
+        <!-- increase expertrec loading priority-->
+        <link rel="dns-prefetch" href="https://cse.expertrec.com">
+
+        <!-- increase font loading priority -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="preload" as="style"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- async CSS -->
+        <link rel="stylesheet" media="print" onload="this.onload=null;this.removeAttribute('media');"
+              href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+
+        <!-- no-JS fallback -->
+        <noscript>
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&display=swap" />
+        </noscript>
+
+        
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.css">
+            <script type="module" src="https://cdn.jsdelivr.net/npm/biel-search@latest/dist/biel-search/biel-search.esm.js"></script>
+        
+
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/main.css?v=0ebb4bd5" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/sphinx_collapse.css?v=226d88b4" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+            
+        
+            
+                <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css?v=5a6d8084" />
+            
+        
+    
+        
+        
+    
+    
+    <meta name="robots" content="noindex">
+    
+    
+            
+        <script type="text/javascript" src="../../_static/js/runtime.bundle.js"></script>
+        <script type="text/javascript" src="../../_static/js/main.bundle.js"></script>
+        
+            
+                <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+            
+        
+            
+                <script src="../../_static/doctools.js?v=9bcbadda"></script>
+            
+        
+            
+                <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+            
+        
+            
+                <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+            
+        
+            
+                <script src="../../_static/copybutton.js?v=f281be69"></script>
+            
+        
+            
+                <script src="../../_static/tabs.js?v=3030b3cb"></script>
+            
+        
+    
+            
+                <!-- Local meta tags -->
+            
+            
+                <!-- Google Tag Manager docs -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-54NWVS4");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Google Tag Manager global -->
+<script>
+    (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({
+            "gtm.start": new Date().getTime(),
+            event: "gtm.js"
+        });
+        var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+        j.async = true;
+        j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, "script", "dataLayer", "GTM-T8P2JP");
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Expertrec -->
+<script>
+    var id = "e2077224-9ccf-11e9-a0c9-0242ac130002";
+    var ci_search = document.createElement("script");
+    ci_search.type = "text/javascript";
+    ci_search.async = true;
+    ci_search.src = "https://cse.expertrec.com/api/js/ci_common.js?id=" + id;
+    var s = document.getElementsByTagName("script")[0];
+    s.parentNode.insertBefore(ci_search, s);
+</script>
+<!-- End Expertrec -->
+            
+        
+
+    </head>
+
+    <body class="brand-open-source">
+        <section class="promo-banner  promo-banner--hide" style="display: none;">
+    <div class="promo-banner-wrapper">
+        <div class="promo-banner__content">
+            
+            <div class="promo-banner__title">ScyllaDB University LIVE, FREE Virtual Training Event | March 21</div>
+            <a class="promo-banner__button button button--reverse" href="https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs"
+               target="_blank" rel="noopener noreferrer">Register for Free</a>
+        </div>
+        <button class="promo-banner__close">
+            <i class="icon-cancel"></i>
+        </button>
+    </div>
+</section>
+        <header class="header">
+    <div class="header-logo">
+        <a class="header-logo__img" href="https://scylladb.com/">
+            <img src="../../_static/img/scylladb-logo-horizontal.svg" alt="ScyllaDB Documentation Logo" />
+        </a>
+        <span class="header-logo__bar"></span>
+        <a class="header-logo__text" href="https://docs.scylladb.com/">
+            Documentation
+        </a>
+    </div>
+    <div class="header-navigation">
+        <ul class="dropdown menu scylla-dropdown scylla-dropdown--header" data-dropdown-menu>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Deployments <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/scylla-cloud/">
+                            <i class="icon-docs-cloud"></i>Cloud</a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/manual/">
+                            <i class="icon-server"></i>Server</a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Tools <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://manager.docs.scylladb.com/">
+                            <i class="icon-docs-manager"></i>ScyllaDB Manager</a>
+                    </li>
+                    <li>
+                        <a href="https://monitoring.docs.scylladb.com/">
+                            <i class="icon-docs-monitoring"></i>ScyllaDB
+                            Monitoring Stack</a>
+                    </li>
+                    <li>
+                        <a href="https://operator.docs.scylladb.com/">
+                            <i class="icon-docs-operator"></i>ScyllaDB Operator
+                        </a>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Drivers <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/cql-drivers">
+                            <i class="icon-docs-nsql-guides"></i>CQL Drivers
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/drivers/dynamo-drivers">
+                            <i class="icon-docs-alternator"></i>DynamoDB Drivers
+                        </a>
+
+                        <li>
+                            <a href="https://docs.scylladb.com/stable/versioning/driver-support">
+                                <i class="icon-docs-blog"></i>Supported Driver Versions
+                            </a>
+                        </li>
+                    </li>
+                </ul>
+            </li>
+            <li class="scylla-dropdown__item">
+                <a href="#" class="scylla-dropdown__title">Resources
+                    <i class="chevron icon-arrow-dropdown"></i></a>
+                <ul class="menu scylla-dropdown__content">
+                    <li>
+                        <a href="https://university.scylladb.com">
+                            <i class="icon-university"></i>
+                            ScyllaDB University
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://forum.scylladb.com">
+                            <i class="icon-docs-community"></i>
+                            Community Forum
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html">
+                            <i class="icon-docs-training"></i>
+                            Tutorials
+                        </a>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <div class="header-button">
+            <a href="https://docs.scylladb.com/manual/stable/getting-started/installation-common/scylla-web-installer.html" class="button"><i class="icon-download me-2"></i> Install</a>
+        </div>
+    </div>
+    <div class="header-search-box">
+        <i class="dark-theme-toggler icon-theme"></i>
+        <div class="search-box">
+            <ci-search></ci-search>
+        </div>
+        
+            <biel-button class="header-ask-ai" project="ddfdo8m94k"
+                         header-title="ScyllaDB chatbot (beta)"
+                         button-position="default"
+                         modal-position="bottom-right"
+                         button-style="dark">
+                Ask AI
+            </biel-button>
+        
+    </div>
+    <div class="side-nav-toggle">
+    <i class="dark-theme-toggler icon-theme"></i>
+    <div class="side-nav-toggle__button" data-toggle="side-nav">
+        <i class="icon-menu"></i>
+    </div>
+</div>
+</header>
+        <div class="title"></div>
+        <section
+            class="layout  layout--sidebar layout--has-secondary-sidebar ">
+            <div class="content large-order-2">
+                
+                    <div class="pre-content">
+                        <div class="breadcrumbs">
+    <span class="bread__item">
+        <a href="https://docs.scylladb.com"
+           class="bread__highlight">
+            <i class="icon-home"></i> ScyllaDB Docs
+        </a>
+    </span>
+    <span class="bread__item">
+        <a href="../../index.html"
+           class="bread__highlight">
+            ScyllaDB Open Source
+        </a>
+    </span>
+    
+        <span class="bread__item">
+            <a href="../index.html" class="bread__highlight">
+                ScyllaDB for Administrators
+            </a>
+        </span>
+    
+        <span class="bread__item">
+            <a href="index.html" class="bread__highlight">
+                Security
+            </a>
+        </span>
+    
+    <span class="bread__item bread__item--last">Encryption at Rest</span>
+</div>
+                    </div>
+                
+                
+                    <div class="sidebar-right-layout">
+                        <div class="body-container">
+                
+
+                <div class="content-body">
+                    
+                        
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+
+                    
+
+                    <section id="encryption-at-rest">
+<h1>Encryption at Rest<a class="headerlink" href="#encryption-at-rest" title="Link to this heading">¶</a></h1>
+<p><span class="label label--tip">ScyllaDB Enterprise</span></p>
+<div class="versionadded">
+<p><span class="versionmodified added">Added in version 2019.1.1.</span></p>
+</div>
+<div class="versionchanged">
+<p><span class="versionmodified changed">Changed in version 2019.1.3.</span></p>
+</div>
+<section id="introduction">
+<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h2>
+<p>Scylla Enterprise protects your sensitive data with data-at-rest encryption.
+It protects the privacy of your user’s data, reduces the risk of data breaches, and helps meet regulatory requirements.
+In particular, it provides an additional level of protection for your data persisted in storage or its backups.</p>
+<p>When Scylla Enterprise Encryption at Rest is used together with Encryption in Transit (<a class="reference internal" href="node-node-encryption.html"><span class="doc">Node to Node</span></a>  and <a class="reference internal" href="client-node-encryption.html"><span class="doc">Client to Node</span></a>), you benefit from end to end data encryption.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Encryption at Rest is available for Scylla Enterprise customers version 2019.1.1 and later. <abbr title="Key Management Interoperability Protocol">KMIP</abbr> support is available for Scylla Enterprise customers version 2019.1.3 and later.</p>
+</div>
+</section>
+<section id="about-encryption-at-rest">
+<h2>About Encryption at Rest<a class="headerlink" href="#about-encryption-at-rest" title="Link to this heading">¶</a></h2>
+<p>The following can be encrypted:</p>
+<ul class="simple">
+<li><p>Scylla persistent tables (SSTables)</p></li>
+<li><p>System level data, such as:</p>
+<ul>
+<li><p>Commit logs</p></li>
+<li><p>Batches</p></li>
+<li><p>hints logs</p></li>
+<li><p>KMIP Password (part of scylla.yaml)</p></li>
+</ul>
+</li>
+</ul>
+<p>Encryption at Rest works at table level granularity, so you can choose to encrypt only sensitive tables. For both system and table data, you can use different algorithms that are supported by <a class="reference external" href="https://www.openssl.org/">OpenSSL</a> in a file block encryption scheme.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>SSTables of a particular table can have different encryption keys, use different encryption algorithms, or not be encrypted at all - at the same time.</p>
+</div>
+</section>
+<section id="when-is-data-encrypted">
+<h2>When is Data Encrypted?<a class="headerlink" href="#when-is-data-encrypted" title="Link to this heading">¶</a></h2>
+<p>As SSTables are immutable, tables are encrypted only once, as a result of memtable flush, compaction, or upgrade (with <a class="reference internal" href="../nodetool-commands/upgradesstables.html"><span class="doc">Nodetool upgradesstables</span></a>).</p>
+<p>Once a table is encrypted, all resulting SSTables are encrypted using the most current key and algorithm.
+When you encrypt an existing table, the new SSTables are encrypted. The old SSTables which existed before the encryption are not updated. These tables are encrypted according to the same actions as described previously.</p>
+</section>
+<section id="when-is-data-decrypted">
+<h2>When is Data Decrypted?<a class="headerlink" href="#when-is-data-decrypted" title="Link to this heading">¶</a></h2>
+<p>When Scylla reads an encrypted SSTable from disk, it fetches the encryption key’s ID from the SSTable and uses it to extract the key and decrypt the data.
+When Scylla reads an encrypted system table, it fetches the system table encryption key location from the scylla.yaml file. It locates the key and uses it to extract the key and decrypt the data.</p>
+</section>
+<section id="encryption-keys">
+<h2>Encryption Keys<a class="headerlink" href="#encryption-keys" title="Link to this heading">¶</a></h2>
+<p>Two types of encryption keys are available: System Keys and Table Keys.</p>
+<section id="system-keys">
+<h3>System Keys<a class="headerlink" href="#system-keys" title="Link to this heading">¶</a></h3>
+<p>System keys are used for encrypting system data, such as commit logs, hints, and/or other user table keys. When a Replicated Key Provider is used for encrypting SSTables, the table keys are stored in the encrypted_keys table, and the system key is used to encrypt the encrypted_keys table. The system key is stored as the contents of a local file and is encrypted with a single key that you provide. The default location of system keys is <code class="docutils literal notranslate"><span class="pre">/etc/scylla/resources/system_keys/</span></code> and can be changed with the <code class="docutils literal notranslate"><span class="pre">system_key_directory</span></code> option in scylla.yaml file. When a Local Key Provider is used for encrypting system info, you can provide your own key, or Scylla can make one for you.</p>
+</section>
+<section id="table-keys">
+<span id="replicated"></span><h3>Table Keys<a class="headerlink" href="#table-keys" title="Link to this heading">¶</a></h3>
+<p>Table keys are used for encrypting SSTables. Depending on your key provider, this key is stored in different locations:</p>
+<ul class="simple">
+<li><p>Replicated Key Provider - encrypted_keys table</p></li>
+<li><p>KMIP Key Provider - KMIP server</p></li>
+<li><p>Local Key Provider - in a local file with multiple keys. You can provide your own key or Scylla can make one for you.</p></li>
+</ul>
+</section>
+</section>
+<section id="key-providers">
+<h2>Key Providers<a class="headerlink" href="#key-providers" title="Link to this heading">¶</a></h2>
+<p>When encrypting the system tables or SSTables, you need to state which provider is holding your keys. You can use the following options:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 33.3%" />
+<col style="width: 33.3%" />
+<col style="width: 33.3%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Key Provider Name</p></th>
+<th class="head"><p>key_provider Name</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Local Key Provider</p></td>
+<td><p>LocalFileSystemKeyProviderFactory (<strong>default</strong>)</p></td>
+<td><p>Stores the key on the same machine as the data.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Replicated Key Provider</p></td>
+<td><p>ReplicatedKeyProviderFactory</p></td>
+<td><p>Stores table keys in a Scylla table where the table itself is encrypted using the system key (available from 2019.1.3)</p></td>
+</tr>
+<tr class="row-even"><td><p>KMIP Key Provider</p></td>
+<td><p>KmipKeyProviderFactory</p></td>
+<td><p>External key management server (available from 2019.1.3)</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="cipher-algorithms">
+<h2>Cipher Algorithms<a class="headerlink" href="#cipher-algorithms" title="Link to this heading">¶</a></h2>
+<p>The following cipher_algorithims are available for use with Scylla using <a class="reference external" href="https://www.openssl.org/">OpenSSL</a>. Note that the default algorithm (AES/CBC/PKCS5Padding with key strength 128 ) is recommended.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 70.0%" />
+<col style="width: 30.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>cipher_algorithm</p></th>
+<th class="head"><p>secret_key_strength</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>AES/CBC/PKCS5Padding (<strong>default</strong>)</p></td>
+<td><p>128 (<strong>default</strong>), 192, or 256</p></td>
+</tr>
+<tr class="row-odd"><td><p>AES/ECB/PKCS5Padding</p></td>
+<td><p>128, 192, or 256</p></td>
+</tr>
+<tr class="row-even"><td><p>Blowfish/CBC/PKCS5Padding</p></td>
+<td><p>32-448</p></td>
+</tr>
+<tr class="row-odd"><td><p>DES/CBC/PKCS5Padding</p></td>
+<td><p>56</p></td>
+</tr>
+<tr class="row-even"><td><p>DESede/CBC/PKCS5Padding</p></td>
+<td><p>112 or 168</p></td>
+</tr>
+<tr class="row-odd"><td><p>RC2/CBC/PKCS5Padding</p></td>
+<td><p>40-128</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="about-local-key-storage">
+<h2>About Local Key Storage<a class="headerlink" href="#about-local-key-storage" title="Link to this heading">¶</a></h2>
+<p>Local keys are used for encrypting user data, such as SSTables.
+Currently, this is the only option  available for user data and, as such, is the default key storage manager.
+With local key storage, keys are stored locally on disk in a text file. The location of this file is specified in the scylla.yaml.</p>
+<div class="admonition caution">
+<p class="admonition-title">Caution</p>
+<p>Care should be taken so that no unauthorized person can access the key data from the file system. Make sure that the owner of this file is the <code class="docutils literal notranslate"><span class="pre">scylla</span></code> user and that the file is <strong>not</strong> readable by <strong>other users</strong>, not accessible by <strong>other roles</strong>.</p>
+</div>
+<p>You should also consider keeping the key directory on a network drive (using TLS for the file sharing) to avoid having keys and data on the same storage media, in case your storage is stolen or discarded.</p>
+</section>
+<section id="encrypt-a-single-table">
+<h2>Encrypt a Single Table<a class="headerlink" href="#encrypt-a-single-table" title="Link to this heading">¶</a></h2>
+<p>This procedure demonstrates how to encrypt a new table.</p>
+<p><strong>Before you Begin</strong></p>
+<ul class="simple">
+<li><p>Make sure to <a class="reference internal" href="#set-the-kmip-host">Set the KMIP Host</a> if you are using KMIP.</p></li>
+<li><p>If you want to make your own key, use the procedure in <a class="reference internal" href="#create-encryption-keys">Create Encryption Keys</a> and skip to step 3. If you do not create your own key, Scylla will create one for you in the <code class="docutils literal notranslate"><span class="pre">secret_key_file</span></code> path. If you are not creating your own key, start with step 1.</p></li>
+</ul>
+<p><strong>Procedure</strong></p>
+<ol class="arabic">
+<li><p>By default, the encryption key is located in the <code class="docutils literal notranslate"><span class="pre">/etc/scylla/</span></code> directory, and the file is named <code class="docutils literal notranslate"><span class="pre">data_encryption_keys</span></code>. If you want to save the key in a different directory, create one. This example will create encryption keys in a different directory (<code class="docutils literal notranslate"><span class="pre">/etc/scylla/encryption_keys</span></code>, for example), which ensures that the owner of this directory is <code class="docutils literal notranslate"><span class="pre">scylla</span></code> and not another user.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Using the default location results in a known permission issue (scylladb/scylla-tools-java#94), so it is recommended to use another location as described in the example.</p>
+</div>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>sudo mkdir -p /etc/scylla/encryption_keys
+sudo chown -R scylla:scylla /etc/scylla/encryption_keys
+sudo chmod -R 700 /etc/scylla/encryption_keys
+</pre></div>
+</div>
+</li>
+<li><p>Create the keyspace if it doesn’t exist.</p></li>
+<li><p>Create the table using the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code> CQL statement, adding any <a class="reference internal" href="../../cql/ddl.html#create-table-statement"><span class="std std-ref">additional options</span></a>. To encrypt the table, use the options for encryption below, remembering to set the <code class="docutils literal notranslate"><span class="pre">secret_key_file</span> <span class="pre">&lt;path&gt;</span></code> to the same directory you created in step 1.</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="o">&lt;</span><span class="k">keyspace</span><span class="o">&gt;</span><span class="mf">.</span><span class="o">&lt;</span><span class="n">table_name</span><span class="o">&gt;</span> <span class="p">(</span><span class="mf">...</span><span class="o">&lt;</span><span class="n">columns</span><span class="o">&gt;</span><span class="mf">...</span><span class="p">)</span> <span class="k">WITH</span>
+  <span class="n">scylla_encryption_options</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;cipher_algorithm&#39;</span> <span class="p">:</span> <span class="o">&lt;</span><span class="n">hash</span><span class="o">&gt;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_strength&#39;</span> <span class="p">:</span> <span class="o">&lt;</span><span class="n">len</span><span class="o">&gt;</span><span class="p">,</span>
+    <span class="s1">&#39;key_provider&#39;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">provider</span><span class="o">&gt;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_file&#39;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">path</span><span class="o">&gt;</span>
+  <span class="p">}</span>
+<span class="p">;</span>
+</pre></div>
+</div>
+<p>Where:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">cipher_algorithm</span></code> -  The hashing algorithm which is to be used to create the key. See <a class="reference internal" href="#cipher-algorithms">Cipher Algorithms</a> for more information.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">secret_key_strength</span></code> - The length of the key in bytes. This is determined by the cipher you choose. See <a class="reference internal" href="#cipher-algorithms">Cipher Algorithms</a> for more information.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">key_provider</span></code> is the name or type of key provider. Refer to <a class="reference internal" href="#key-providers">Key Providers</a> for more information.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">secret_key_file</span></code> - the location that Scylla will store the key it creates (if one does not exist in this location) or the location of the key. By default the location is <code class="docutils literal notranslate"><span class="pre">/etc/scylla/data_encryption_keys</span></code>.</p></li>
+</ul>
+<p>Example:</p>
+<p>Continuing the example from above, this command will instruct Scylla to encrypt the table and will save the key in the location created in step 1.</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">data</span><span class="mf">.</span><span class="n">atrest</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">text</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span> <span class="n">c0</span> <span class="nb">int</span><span class="p">)</span> <span class="k">WITH</span>
+  <span class="n">scylla_encryption_options</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;cipher_algorithm&#39;</span> <span class="p">:</span> <span class="s1">&#39;AES/ECB/PKCS5Padding&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_strength&#39;</span> <span class="p">:</span> <span class="mf">128</span><span class="p">,</span>
+    <span class="s1">&#39;key_provider&#39;</span><span class="p">:</span> <span class="s1">&#39;LocalFileSystemKeyProviderFactory&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_file&#39;</span><span class="p">:</span> <span class="s1">&#39;/etc/scylla/encryption_keys/data_encryption_keys&#39;</span>
+  <span class="p">}</span>
+<span class="p">;</span>
+</pre></div>
+</div>
+</li>
+<li><p>From this point, every new SSTable created for the <code class="docutils literal notranslate"><span class="pre">atrest</span></code> table is encrypted, using the <code class="docutils literal notranslate"><span class="pre">data_encryption_keys</span></code> key located in <code class="docutils literal notranslate"><span class="pre">/etc/scylla/encryption_keys/</span></code>. This table will remain encrypted with this key until you either change the key, change the key properties, or disable encryption.</p></li>
+<li><p>To ensure all SSTables for this table on every node are encrypted, run the <a class="reference internal" href="../nodetool-commands/upgradesstables.html"><span class="doc">Nodetool upgradesstables</span></a> command. If not, the SSTables remain unencrypted until they are compacted or flushed from MemTables.</p>
+<p>For Example:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>nodetool upgradesstables data atrest
+</pre></div>
+</div>
+</li>
+<li><p>Your SSTables are encrypted. If you want to change the key at any point, use the <a class="reference internal" href="#update-encryption-properties-of-existing-tables">Update Encryption Properties of Existing Tables</a> procedure. Always keep your key in a safe location known to you. Do not lose it. See <a class="reference internal" href="#when-a-key-is-lost">When a Key is Lost</a>.</p></li>
+</ol>
+<section id="update-encryption-properties-of-existing-tables">
+<h3>Update Encryption Properties of Existing Tables<a class="headerlink" href="#update-encryption-properties-of-existing-tables" title="Link to this heading">¶</a></h3>
+<p>You can encrypt any existing table or use this procedure to change the cipher algorithm, key location or key strength or even disable encryption on a table.</p>
+<p><strong>Procedure</strong></p>
+<ol class="arabic">
+<li><p>Edit the table properties to enable encryption of one table of your choosing. Use the properties explained in <a class="reference internal" href="#encrypt-a-single-table">Encrypt a Single Table</a> if needed.</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">ALTER</span> <span class="k">TABLE</span> <span class="o">&lt;</span><span class="k">keyspace</span><span class="o">&gt;</span><span class="mf">.</span><span class="o">&lt;</span><span class="n">table_name</span><span class="o">&gt;</span> <span class="p">(</span><span class="mf">...</span><span class="o">&lt;</span><span class="n">columns</span><span class="o">&gt;</span><span class="mf">...</span><span class="p">)</span> <span class="k">WITH</span>
+  <span class="n">scylla_encryption_options</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;cipher_algorithm&#39;</span> <span class="p">:</span> <span class="o">&lt;</span><span class="n">hash</span><span class="o">&gt;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_strength&#39;</span> <span class="p">:</span> <span class="o">&lt;</span><span class="n">len</span><span class="o">&gt;</span><span class="p">,</span>
+    <span class="s1">&#39;key_provider&#39;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">provider</span><span class="o">&gt;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_file&#39;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">path</span><span class="o">&gt;</span>
+  <span class="p">}</span>
+<span class="p">;</span>
+</pre></div>
+</div>
+<p>Example:</p>
+<p>Continuing the example from above, this command will instruct Scylla to encrypt the table and will save the key in the location created in step 1.</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">ALTER</span> <span class="k">TABLE</span> <span class="n">data</span><span class="mf">.</span><span class="n">atrest</span> <span class="p">(</span><span class="n">pk</span> <span class="nb">text</span> <span class="k">primary</span> <span class="k">key</span><span class="p">,</span> <span class="n">c0</span> <span class="nb">int</span><span class="p">)</span> <span class="k">WITH</span>
+  <span class="n">scylla_encryption_options</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;cipher_algorithm&#39;</span> <span class="p">:</span> <span class="s1">&#39;AES/ECB/PKCS5Padding&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_strength&#39;</span> <span class="p">:</span> <span class="mf">192</span><span class="p">,</span>
+    <span class="s1">&#39;key_provider&#39;</span><span class="p">:</span> <span class="s1">&#39;LocalFileSystemKeyProviderFactory&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;secret_key_file&#39;</span><span class="p">:</span> <span class="s1">&#39;/etc/scylla/encryption_keys/data_encryption_keys&#39;</span>
+  <span class="p">}</span>
+<span class="p">;</span>
+</pre></div>
+</div>
+</li>
+<li><p>If you want to make sure that SSTables that existed before this change are also encrypted, you can either upgrade them using the <code class="docutils literal notranslate"><span class="pre">nodetool</span> <span class="pre">upgradesstables</span></code> command or wait until the next compaction. If you decide to wait, Scylla will still be able to read the old unencrypted tables. If you change the key or remove encryption, Scylla will still continue to read the old tables as long as you still have the key. If your data is encrypted and you do not have the key, your data is unreadable.</p>
+<ul>
+<li><p>If you decide to upgrade all of your old SSTables run the <a class="reference internal" href="../nodetool-commands/upgradesstables.html"><span class="doc">nodetool upgradesstables</span></a> command.</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>nodetool upgradesstables &lt;keyspace&gt; &lt;table&gt;
+</pre></div>
+</div>
+<p>For example:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>nodetool upgradesstables ks test
+</pre></div>
+</div>
+</li>
+<li><p>Repeat this command on all nodes as nodetool runs locally.</p></li>
+</ul>
+</li>
+<li><p>If you want to change the key or disable encryption, repeat the <a class="reference internal" href="#update-encryption-properties-of-existing-tables">Update Encryption Properties of Existing Tables</a> procedure using the examples below as reference.</p></li>
+</ol>
+<p><strong>Examples</strong></p>
+<p>To encrypt an existing table named test in keyspace ks:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">ALTER</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">test</span> <span class="k">WITH</span>
+  <span class="n">scylla_encryption_options</span> <span class="o">=</span> <span class="p">{</span>
+     <span class="s1">&#39;cipher_algorithm&#39;</span> <span class="p">:</span> <span class="s1">&#39;AES/ECB/PKCS5Padding&#39;</span><span class="p">,</span>
+     <span class="s1">&#39;secret_key_strength&#39;</span> <span class="p">:</span> <span class="mf">128</span><span class="p">,</span>
+     <span class="s1">&#39;key_provider&#39;</span><span class="p">:</span> <span class="s1">&#39;LocalFileSystemKeyProviderFactory&#39;</span><span class="p">,</span>
+     <span class="s1">&#39;secret_key_file&#39;</span><span class="p">:</span> <span class="s1">&#39;/etc/scylla/encryption_keys/data_encryption_keys&#39;</span>
+  <span class="p">}</span>
+<span class="p">;</span>
+</pre></div>
+</div>
+<p>To change the cipher algorithm from AES/ECB/PKCS5Padding to DES/CBC/PKCS5Padding and to change the key strength from 128 to 56 on an existing table:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">ALTER</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">test</span> <span class="k">WITH</span>
+  <span class="n">scylla_encryption_options</span> <span class="o">=</span> <span class="p">{</span>
+     <span class="s1">&#39;cipher_algorithm&#39;</span> <span class="p">:</span> <span class="s1">&#39;DES/CBC/PKCS5Padding&#39;</span><span class="p">,</span>
+     <span class="s1">&#39;secret_key_strength&#39;</span> <span class="p">:</span> <span class="mf">56</span><span class="p">,</span>
+     <span class="s1">&#39;key_provider&#39;</span><span class="p">:</span> <span class="s1">&#39;LocalFileSystemKeyProviderFactory&#39;</span><span class="p">,</span>
+     <span class="s1">&#39;secret_key_file&#39;</span><span class="p">:</span> <span class="s1">&#39;/etc/scylla/encryption_keys/data_encryption_keys&#39;</span>
+  <span class="p">}</span>
+<span class="p">;</span>
+</pre></div>
+</div>
+<p>To disable encryption on an encrypted table named test in keyspace ks:</p>
+<div class="highlight-cql notranslate"><div class="highlight"><pre><span></span><span class="k">ALTER</span> <span class="k">TABLE</span> <span class="n">ks</span><span class="mf">.</span><span class="n">test</span> <span class="k">WITH</span>
+   <span class="n">scylla_encryption_options</span> <span class="o">=</span>  <span class="p">{</span> <span class="s1">&#39;key_provider&#39;</span> <span class="p">:</span> <span class="s1">&#39;none’ };</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="create-encryption-keys">
+<h2>Create Encryption Keys<a class="headerlink" href="#create-encryption-keys" title="Link to this heading">¶</a></h2>
+<p>Depending on your key provider, you will either have the option of allowing Scylla to generate an encryption key, or you will have to provide one:</p>
+<ul class="simple">
+<li><p>KMIP Key Provider - you don’t need to generate any key yourself</p></li>
+<li><p>Replicated Key Provider - you must generate a system key yourself</p></li>
+<li><p>Local Key Provider - If you do not generate your own secret key, Scylla will create one for you</p></li>
+</ul>
+<p>When encrypting Scylla config by <code class="docutils literal notranslate"><span class="pre">configuration_encryptor</span></code>, you also need to generate a secret key and upload the key to all nodes.</p>
+<section id="use-the-key-generator-script">
+<h3>Use the key generator script<a class="headerlink" href="#use-the-key-generator-script" title="Link to this heading">¶</a></h3>
+<p>The Key Generator script generates a key in the directory of your choice.</p>
+<p><strong>Procedure</strong></p>
+<ol class="arabic">
+<li><p>Create (if it doesn’t exist) a local directory for storing the key.  Make sure that the owner of the directory is <code class="docutils literal notranslate"><span class="pre">scylla</span></code> and not another user. Make sure that the <code class="docutils literal notranslate"><span class="pre">scylla</span></code> user can read, write, and execute over the parent directory. Following this procedure makes <code class="docutils literal notranslate"><span class="pre">/etc/scylla/encryption_keys/</span></code> the parent directory of your keys.</p>
+<p>For example:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>sudo mkdir -p /etc/scylla/encryption_keys/system_keys
+sudo chown -R scylla:scylla /etc/scylla/encryption_keys
+sudo chmod -R 700 /etc/scylla/encryption_keys
+</pre></div>
+</div>
+</li>
+<li><p>Create a key using the local file key generator script making sure that the keyfile owner is scylla and not another user. Run the command:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>sudo -u scylla /bin/local_file_key_generator [options] [key-path]
+</pre></div>
+</div>
+<p>Where:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">-a,--alg</span> <span class="pre">&lt;arg&gt;</span></code> - the encryption algorithm (i.e. AES, 3DES) you want to use to encrypt the key</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-c,--append</span></code> - appends the output to the key file (default is to overwrite)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-h,--help</span></code> - displays the help menu</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-l,--length</span> <span class="pre">&lt;arg&gt;</span></code> - the length of the encryption key in bits (i.e. 128, 256)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-m,--block-mode</span> <span class="pre">&lt;arg&gt;</span></code> - the encryption algorithm block mode (i.e. CBC, EBC)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-p,--padding</span> <span class="pre">&lt;arg&gt;</span></code> - the encryption algorithm padding method (i.e. PKCS5)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">key-path</span></code> - is the directory you want to place the key into (/etc/scylla/encryption_keys, for example)</p></li>
+</ul>
+<p>For Example:</p>
+<p>To create a secret key and a system key using other encryption settings in a different location:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>sudo -u scylla /bin/local_file_key_generator -a AES -m ECB -p PKCS5 -l 192 /etc/scylla/encryption_keys/secret_key
+sudo -u scylla /bin/local_file_key_generator -a AES -m CBC -p PKCS5 -l 128 /etc/scylla/encryption_keys/system_keys/system_key
+</pre></div>
+</div>
+<p>To display the secret key parameters:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>sudo cat /etc/scylla/encryption_keys/secret_key
+</pre></div>
+</div>
+<p>Returns:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>AES/ECB/PKCS5Padding:192:8stVxW5ypYhNxsnRVS1A6suKhk0sG4Tj
+</pre></div>
+</div>
+<p>To display the system key parameters:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>sudo cat /etc/scylla/encryption_keys/system_keys/system_key
+</pre></div>
+</div>
+<p>Returns:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>AES/CBC/PKCS5Padding:128:GGpOSxTGhtPRPLrNPYvVMQ==
+</pre></div>
+</div>
+<p>Once you have created a key, copy the key to each node, using the procedure described in <a class="reference internal" href="#copy-keys-to-nodes">Copy keys to nodes</a>.</p>
+</li>
+</ol>
+</section>
+<section id="copy-keys-to-nodes">
+<h3>Copy keys to nodes<a class="headerlink" href="#copy-keys-to-nodes" title="Link to this heading">¶</a></h3>
+<p>Every key you generate needs to be copied to the nodes for use in local key providers.</p>
+<p><strong>Procedure</strong></p>
+<ol class="arabic simple">
+<li><p>Securely copy the key file, using <code class="docutils literal notranslate"><span class="pre">scp</span></code> or similar, to the same path on all nodes in the cluster. Make sure the key on each target node is moved to the same location as the source directory and that the target directory has the same permissions as the source directory.</p></li>
+<li><p>Repeat for all nodes in the cluster.</p></li>
+</ol>
+</section>
+</section>
+<section id="encrypt-system-resources">
+<h2>Encrypt System Resources<a class="headerlink" href="#encrypt-system-resources" title="Link to this heading">¶</a></h2>
+<p>System encryption is applied to semi-transient on-disk data, such as commit logs, batch logs, and hinted handoff data.
+This ensures that all temporarily stored data is encrypted until fully persisted to final SSTable on disk.
+Once this encryption is enabled, it is used for all system data.</p>
+<p><strong>Procedure</strong></p>
+<ol class="arabic">
+<li><p>Edit the scylla.yaml file - located in /etc/scylla/scylla.yaml and add the following:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>system_info_encryption:
+   enabled: &lt;true|false&gt;
+   key_provider: (optional) &lt;key provider type&gt;
+
+
+system_key_directory: &lt;path to location of system key&gt;
+</pre></div>
+</div>
+<p>Where:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">enabled</span></code> can be true or false. True is enabled; false is disabled.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">key_provider</span></code> is the name or type of key provider. Refer to <a class="reference internal" href="#key-providers">Key Providers</a> for more information.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cipher_algorithm</span></code> is one of the supported <a class="reference internal" href="#cipher-algorithms">Cipher Algorithms</a>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">secret_key_file</span></code> is the name of the key file containing the secret key (key.pem, for example)</p></li>
+</ul>
+<p>Example:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>system_info_encryption:
+   enabled: True
+   cipher_algorithm: AES
+   secret_key_strength: 128
+   key_provider: LocalFileSystemKeyProviderFactory
+   secret_key_file: /path/to/systemKey.pem
+</pre></div>
+</div>
+<p>Example for KMIP:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>system_info_encryption:
+   enabled: True
+   cipher_algorithm: AES
+   secret_key_strength: 128
+   key_provider: KmipKeyProviderFactory
+   kmip_host:  yourkmipServerIP.com
+</pre></div>
+</div>
+<p>Where:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">kmip_host</span></code> - is the address for your KMIP server</p></li>
+</ul>
+</li>
+<li><p>Do not close the yaml file. Change the system key directory location according to your settings.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">system_key_directory</span></code> is the location of the system key you created in <a class="reference internal" href="#create-encryption-keys">Create Encryption Keys</a>.</p></li>
+</ul>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>system_key_directory: /etc/scylla/encryption_keys/system_keys
+</pre></div>
+</div>
+</li>
+<li><p>Save the file.</p></li>
+<li><p>Drain the node with <a class="reference internal" href="../nodetool-commands/drain.html"><span class="doc">nodetool drain</span></a></p></li>
+<li><p>Restart the scylla-server service.</p>
+<div class="sphinx-tabs docutils container">
+<div aria-label="Tabbed content" class="closeable" role="tablist"><button aria-controls="panel-0-U3VwcG9ydGVkIE9T" aria-selected="true" class="sphinx-tabs-tab group-tab" id="tab-0-U3VwcG9ydGVkIE9T" name="U3VwcG9ydGVkIE9T" role="tab" tabindex="0">Supported OS</button><button aria-controls="panel-0-RG9ja2Vy" aria-selected="false" class="sphinx-tabs-tab group-tab" id="tab-0-RG9ja2Vy" name="RG9ja2Vy" role="tab" tabindex="-1">Docker</button></div><div aria-labelledby="tab-0-U3VwcG9ydGVkIE9T" class="sphinx-tabs-panel group-tab" id="panel-0-U3VwcG9ydGVkIE9T" name="U3VwcG9ydGVkIE9T" role="tabpanel" tabindex="0"><div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class="w"> </span>scylla-server
+</pre></div>
+</div>
+</div><div aria-labelledby="tab-0-RG9ja2Vy" class="sphinx-tabs-panel group-tab" hidden="true" id="panel-0-RG9ja2Vy" name="RG9ja2Vy" role="tabpanel" tabindex="0"><div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>some-scylla<span class="w"> </span>supervisorctl<span class="w"> </span>restart<span class="w"> </span>scylla
+</pre></div>
+</div>
+<p>(without restarting <em>some-scylla</em> container)</p>
+</div></div>
+</li>
+</ol>
+</section>
+<section id="set-the-kmip-host">
+<h2>Set the KMIP Host<a class="headerlink" href="#set-the-kmip-host" title="Link to this heading">¶</a></h2>
+<p>If you are using <a class="reference internal" href="../../glossary.html#term-Key-Management-Interoperability-Protocol-KMIP"><span class="xref std std-term">KMIP</span></a> to encrypt tables or system information, add the KMIP server information to the <code class="docutils literal notranslate"><span class="pre">scylla.yaml</span></code> configuration file.</p>
+<ol class="arabic">
+<li><p>Edit the <code class="docutils literal notranslate"><span class="pre">scylla.yaml</span></code> file located in <code class="docutils literal notranslate"><span class="pre">/etc/scylla/</span></code> and add the following in KMIP host(s) section:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1">#</span>
+<span class="c1"># kmip_hosts:</span>
+<span class="c1">#   &lt;name&gt;:</span>
+<span class="c1">#       hosts: &lt;address1[:port]&gt; [, &lt;address2[:port]&gt;...]</span>
+<span class="c1">#       certificate: &lt;identifying certificate&gt; (optional)</span>
+<span class="c1">#       keyfile: &lt;identifying key&gt; (optional; it is required if &quot;certificate&quot; is set)</span>
+<span class="c1">#       truststore: &lt;truststore for SSL connection&gt; (optional)</span>
+<span class="c1">#       certficate_revocation_list: &lt;CRL file&gt; (optional)</span>
+<span class="c1">#       priority_string: &lt;kmip tls priority string&gt;</span>
+<span class="c1">#       username: &lt;login&gt; (optional&gt;</span>
+<span class="c1">#       password: &lt;password&gt; (optional)</span>
+<span class="c1">#       max_command_retries: &lt;int&gt; (optional; default 3)</span>
+<span class="c1">#   &lt;name&gt;:</span>
+</pre></div>
+</div>
+<p>Where:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">&lt;name&gt;</span></code> - The cluster name.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">hosts</span></code> - The list of hosts specified by IP and port for the KMIP server. The KMIP connection management only supports failover, so all requests go through a single KMIP server. There is no load balancing, as currently no KMIP servers support read replication or other strategies for availability. Hosts are tried in the order they appear, and the next one in the list is tried if the previous one fails. The default number of retries is three, but you can customize it with “max_command_retries”.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">certificate</span></code> - The name of the certificate and path used to identify yourself to the KMIP server.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">keyfile</span></code> - The name of the key used to identify yourself to the KMIP server. It is generated together with the certificate.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">truststore</span></code> - The location and key for the truststore to present to the KMIP server.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">certficate_revocation_list</span></code> - The path to a PEM-encoded certificate revocation list (CRL) - a list of issued certificates that have been revoked before their expiration date.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">priority_string</span></code> - The KMIP TLS priority string.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">username</span></code> - The KMIP server user name.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">password</span></code> - The KMIP server password.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">max_command_retries</span></code> - The number of attempts to connect to the KMIP server before trying the next host in the list.</p></li>
+</ul>
+</li>
+<li><p>Save the file.</p></li>
+<li><p>Drain the node with <a class="reference internal" href="../nodetool-commands/drain.html"><span class="doc">nodetool drain</span></a></p></li>
+<li><p>Restart the scylla-server service.</p></li>
+</ol>
+<div class="sphinx-tabs docutils container">
+<div aria-label="Tabbed content" class="closeable" role="tablist"><button aria-controls="panel-1-U3VwcG9ydGVkIE9T" aria-selected="true" class="sphinx-tabs-tab group-tab" id="tab-1-U3VwcG9ydGVkIE9T" name="U3VwcG9ydGVkIE9T" role="tab" tabindex="0">Supported OS</button><button aria-controls="panel-1-RG9ja2Vy" aria-selected="false" class="sphinx-tabs-tab group-tab" id="tab-1-RG9ja2Vy" name="RG9ja2Vy" role="tab" tabindex="-1">Docker</button></div><div aria-labelledby="tab-1-U3VwcG9ydGVkIE9T" class="sphinx-tabs-panel group-tab" id="panel-1-U3VwcG9ydGVkIE9T" name="U3VwcG9ydGVkIE9T" role="tabpanel" tabindex="0"><div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class="w"> </span>scylla-server
+</pre></div>
+</div>
+</div><div aria-labelledby="tab-1-RG9ja2Vy" class="sphinx-tabs-panel group-tab" hidden="true" id="panel-1-RG9ja2Vy" name="RG9ja2Vy" role="tabpanel" tabindex="0"><div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>some-scylla<span class="w"> </span>supervisorctl<span class="w"> </span>restart<span class="w"> </span>scylla
+</pre></div>
+</div>
+<p>(without restarting <em>some-scylla</em> container)</p>
+</div></div>
+</section>
+<section id="when-a-key-is-lost">
+<h2>When a Key is Lost<a class="headerlink" href="#when-a-key-is-lost" title="Link to this heading">¶</a></h2>
+<p>It is crucial to back up all of your encryption keys in a secure way. Keep a copy of all keys in a secure location. In the event that you do lose a key, your data encrypted with that key will be unreadable.</p>
+</section>
+<section id="additional-resources">
+<h2>Additional Resources<a class="headerlink" href="#additional-resources" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="../nodetool-commands/upgradesstables.html"><span class="doc">nodetool upgradesstables</span></a></p></li>
+<li><p><a class="reference internal" href="../../cql/ddl.html#create-table-statement"><span class="std std-ref">CREATE TABLE parameters</span></a></p></li>
+</ul>
+</section>
+</section>
+
+                </div>
+                
+                    <div class="post-content">
+                        
+    <div class="feedback-container">
+        <p class="feedback-container__title">Was this page helpful?</p>
+        <span data-tooltip tabindex="1" title="Yes" data-position="top">
+            <button class="feedback-container__button" id="feedback-positive">
+                <i class="feedback-container__icon icon-docs-thumbs-up"></i>
+            </button>
+        </span>
+        <span data-tooltip tabindex="1" title="No" data-position="top">
+            <button class="feedback-container__button" id="feedback-negative">
+                <i class="feedback-container__icon icon-docs-thumbs-down"></i>
+            </button>
+        </span>
+        <div class="feedback-container__message" id="feedback-message"></div>
+    </div>
+
+    <script>
+        function resetFeedbackButtonActive() {
+            const feedbackButtons = document.getElementsByClassName('feedback-container__button');
+            for (let i = 0; i < feedbackButtons.length; i++) {
+                feedbackButtons[i].classList.remove('active');
+            }
+        }
+
+        function showMessage(liked) {
+            const feedbackMessage = document.getElementById('feedback-message');
+            const themeGithubRepository = true;
+            let message = 'Great! Thanks for your feedback.';
+            if (themeGithubRepository && !liked) {
+                message = "Thanks for your feedback! Please don't hesitate to <a href='https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Encryption at Rest&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.2/operating-scylla/security/encryption-at-rest%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation'>create an issue</a> if you have any suggestions on how we can improve.";
+            }
+            feedbackMessage.innerHTML = message;
+        }
+
+        function sendGaEvent(liked) {
+            const event_label = liked ? "positive" : "negative";
+            const event = "feedback_" + event_label;
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({
+                'event': event,
+            });
+        }
+
+        const positiveFeebackButton = document.getElementById('feedback-positive');
+        const negativeFeedbackButton = document.getElementById('feedback-negative');
+
+        positiveFeebackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(true);
+            showMessage(true);
+            positiveFeebackButton.classList.add('active');
+        });
+
+        negativeFeedbackButton.addEventListener('click', function() {
+            resetFeedbackButtonActive();
+            sendGaEvent(false);
+            showMessage(false);
+            negativeFeedbackButton.classList.add('active');
+        });
+    </script>
+
+                        <div class="content-navigation">
+    <div class="navigation navigation--prev">
+        
+            <a class="navigation__link" href="generate-certificate.html">
+                <button class="navigation__button">
+                    <i class="icon-chevron-left"></i>
+                </button>
+                <div class="navigation__title">
+                    <span class="colored">PREVIOUS</span> <br />Generating a self-signed Certificate Chain Using openssl
+                </div>
+            </a>
+        
+    </div>
+    <div class="navigation navigation--next">
+        
+            <a class="navigation__link" href="ldap-authentication.html">
+                <div class="navigation__title">
+                    <span class="colored">NEXT</span> <br />LDAP Authentication
+                </div>
+                <button class="navigation__button">
+                    <i class="icon-chevron-right"></i>
+                </button>
+            </a>
+        
+    </div>
+</div>
+                        <!-- Post content text -->
+                    </div>
+                
+
+                
+                    </div>
+                    <div class="sidebar-right large-order-3">
+                        <div class="secondary-side-nav custom-scroll-bar">
+    
+    <ul class="contribute">
+        <li class="contribute__item">
+            <a class="button button-sm" href="https://github.com/scylladb/scylladb/issues/new?title=docs:%20Issue on page Encryption at Rest&&body=I%20would%20like%20to%20report%20an%20issue%20on%20page%20https://opensource.docs.scylladb.com/branch-5.2/operating-scylla/security/encryption-at-rest%0A%0A%23%23%23%20Problem%0A%0A%23%23%23%20%20Suggest%20a%20fix&labels=documentation"
+               target="_blank">
+                <i class="icon-github" aria-hidden="true"></i>Create an issue
+            </a>
+        </li>
+        
+            <li class="contribute__item">
+                <a class="button button-sm" href="https://github.com/scylladb/scylladb/edit/master/docs/operating-scylla/security/encryption-at-rest.rst"
+                   target="_blank">
+                    <i class="icon-edit" aria-hidden="true"></i>Edit this page
+                </a>
+            </li>
+        
+    </ul>
+
+    
+        <div class="secondary-side-nav__content">
+            <p class="topic-title">On this page</p>
+            <ul>
+<li><a class="reference internal" href="#">Encryption at Rest</a><ul>
+<li><a class="reference internal" href="#introduction">Introduction</a></li>
+<li><a class="reference internal" href="#about-encryption-at-rest">About Encryption at Rest</a></li>
+<li><a class="reference internal" href="#when-is-data-encrypted">When is Data Encrypted?</a></li>
+<li><a class="reference internal" href="#when-is-data-decrypted">When is Data Decrypted?</a></li>
+<li><a class="reference internal" href="#encryption-keys">Encryption Keys</a><ul>
+<li><a class="reference internal" href="#system-keys">System Keys</a></li>
+<li><a class="reference internal" href="#table-keys">Table Keys</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#key-providers">Key Providers</a></li>
+<li><a class="reference internal" href="#cipher-algorithms">Cipher Algorithms</a></li>
+<li><a class="reference internal" href="#about-local-key-storage">About Local Key Storage</a></li>
+<li><a class="reference internal" href="#encrypt-a-single-table">Encrypt a Single Table</a><ul>
+<li><a class="reference internal" href="#update-encryption-properties-of-existing-tables">Update Encryption Properties of Existing Tables</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#create-encryption-keys">Create Encryption Keys</a><ul>
+<li><a class="reference internal" href="#use-the-key-generator-script">Use the key generator script</a></li>
+<li><a class="reference internal" href="#copy-keys-to-nodes">Copy keys to nodes</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#encrypt-system-resources">Encrypt System Resources</a></li>
+<li><a class="reference internal" href="#set-the-kmip-host">Set the KMIP Host</a></li>
+<li><a class="reference internal" href="#when-a-key-is-lost">When a Key is Lost</a></li>
+<li><a class="reference internal" href="#additional-resources">Additional Resources</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    
+</div>
+                    </div>
+                    </div>
+                
+            </div>
+            <div class="sidebar-left  large-order-1">
+                
+                    
+                        <div id="side-nav" class="side-nav custom-scroll-bar" data-closable data-toggler=".show">
+    <button class="collapsible-button">
+        <i class="icon-docs-menu-collapse"></i>
+    </button>
+    <div class="side-nav-content custom-scroll-bar">
+        <div class="side-nav__title">
+            <a href="../../index.html">ScyllaDB Open Source</a>
+        </div>
+        <div class="side-nav__search">
+            <div class="search-box">
+                <ci-search></ci-search>
+            </div>
+        </div>
+        <div class="side-nav__versions"><ul class="dropdown menu scylla-dropdown scylla-dropdown--versions" data-dropdown-menu>
+    <li class="scylla-dropdown__item">
+        <a class="scylla-dropdown__title" href="#">
+            
+                5.2
+            
+            <i class="chevron icon-docs-chevron-right"></i>
+        </a>
+        <ul class="menu scylla-dropdown__content">
+            
+                
+                    <li>
+                        <a href="../../../stable/index.html">6.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-6.1/index.html">6.1</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-6.0/index.html">6.0</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.4/index.html">5.4</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="encryption-at-rest.html">5.2</a>
+                    </li>
+                
+            
+                
+                    <li>
+                        <a href="../../../branch-5.1/operating-scylla/security/encryption-at-rest.html">5.1</a>
+                    </li>
+                
+            
+            
+        </ul>
+    </li>
+</ul></div>
+        <div class="side-nav__content">
+            <ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../getting-started/index.html">Getting Started</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/><label for="toctree-checkbox-1"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../getting-started/install-scylla/index.html">Install ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/><label for="toctree-checkbox-2"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/scylla-web-installer.html">ScyllaDB Web Installer for Linux</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/unified-installer.html">ScyllaDB Unified Installer (relocatable executable)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/air-gapped-install.html">Air-gapped Server Installation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/rpm-info.html">What is in each RPM</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/disable-housekeeping.html">ScyllaDB Housekeeping and how to disable it</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/dev-mod.html">ScyllaDB Developer Mode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/config-commands.html">ScyllaDB Configuration Reference</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/configure.html">Configure ScyllaDB</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../getting-started/requirements.html">ScyllaDB Requirements</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/><label for="toctree-checkbox-3"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/system-requirements.html">System Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/os-support.html">OS Support by Linux Distributions and Version</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/scylla-in-a-shared-environment.html">ScyllaDB in a Shared Environment</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../using-scylla/migrate-scylla.html">Migrate to ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/><label for="toctree-checkbox-4"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../procedures/cassandra-to-scylla-migration-process.html">Migration Process from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/cassandra-compatibility.html">Scylla and Apache Cassandra Compatibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/mig-tool-review.html">Migration Tools Overview</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../using-scylla/integrations/index.html">Integration Solutions</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/><label for="toctree-checkbox-5"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-spark.html">Integrate Scylla with Spark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-kairos.html">Integrate Scylla with KairosDB</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-presto.html">Integrate Scylla with Presto</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-elasticsearch.html">Integrate Scylla with Elasticsearch</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-k8.html">Integrate Scylla with Kubernetes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-janus.html">Integrate Scylla with the JanusGraph Graph Data System</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-datadog.html">Integrate Scylla with DataDog</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-kafka.html">Integrate Scylla with Kafka</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-iota.html">Integrate Scylla with IOTA Chronicle</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-spring.html">Integrate Scylla with Spring</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/sink-kafka-connector.html">Shard-Aware Kafka Connector for Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-ansible.html">Install Scylla with Ansible</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/integrations/integration-databricks.html">Integrate Scylla with Databricks</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../getting-started/tutorials.html">Tutorials</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">ScyllaDB for Administrators</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/><label for="toctree-checkbox-6"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../admin.html">Administration Guide</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../procedures/index.html">Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/><label for="toctree-checkbox-7"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../procedures/cluster-management/index.html">Cluster Management</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../procedures/backup-restore/index.html">Backup &amp; Restore</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../procedures/config-change/index.html">Change Configuration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../procedures/maintenance/index.html">Maintenance</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../procedures/tips/index.html">Best Practices</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../benchmarking-scylla.html">Benchmarking Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../procedures/cassandra-to-scylla-migration-process.html">Migrate from Cassandra to Scylla</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/install-scylla/disable-housekeeping.html">Disable Housekeeping</a></li>
+</ul>
+</li>
+<li class="toctree-l2 current has-children"><a class="reference internal" href="index.html">Security</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/><label for="toctree-checkbox-8"><i class="icon-chevron-right"></i></label><div class="break"></div><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="security-checklist.html">ScyllaDB Security Checklist</a></li>
+<li class="toctree-l3"><a class="reference internal" href="authentication.html">Enable Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="runtime-authentication.html">Enable and Disable Authentication Without Downtime</a></li>
+<li class="toctree-l3"><a class="reference internal" href="gen-cqlsh-file.html">Generate a cqlshrc File</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/password-reset.html">Reset Authenticator Password</a></li>
+<li class="toctree-l3"><a class="reference internal" href="enable-authorization.html">Enable Authorization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="authorization.html">Grant Authorization CQL Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="rbac-usecase.html">Role Based Access Control (RBAC)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="auditing.html">ScyllaDB Auditing Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="client-node-encryption.html">Encryption: Data in Transit Client to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="node-node-encryption.html">Encryption: Data in Transit Node to Node</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generate-certificate.html">Generating a self-signed Certificate Chain Using openssl</a></li>
+<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">Encryption at Rest</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ldap-authentication.html">LDAP Authentication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ldap-authorization.html">LDAP Authorization (Role Management)</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../admin-tools/index.html">Admin Tools</a><input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/><label for="toctree-checkbox-9"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../nodetool.html">Nodetool Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../cql/cqlsh.html">CQLSh</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../rest.html">REST</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/tracing.html">Tracing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/scylla-sstable.html">Scylla SStable</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/scylla-types.html">Scylla Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/sstableloader.html">SSTableLoader</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/cassandra-stress.html">cassandra-stress</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/sstabledump.html">SSTabledump</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/sstable2json.html">SSTable2json</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/logging.html">Scylla Logs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/perftune.html">Seastar Perftune</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin-tools/virtual-tables.html">Virtual Tables</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference external" href="https://monitoring.docs.scylladb.com/">ScyllaDB Monitoring Stack</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://operator.docs.scylladb.com/">ScyllaDB Operator</a></li>
+<li class="toctree-l2"><a class="reference external" href="https://manager.docs.scylladb.com/">ScyllaDB Manager</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../upgrade/index.html">Upgrade Procedures</a><input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/><label for="toctree-checkbox-10"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/upgrade-opensource/index.html">ScyllaDB Open Source Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/upgrade-to-enterprise/index.html">ScyllaDB Open Source to ScyllaDB Enterprise Upgrade</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../upgrade/ami-upgrade.html">ScyllaDB Image</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html">ScyllaDB Enterprise</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../system-configuration/index.html">System Configuration</a><input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/><label for="toctree-checkbox-11"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../getting-started/system-configuration.html">System Configuration Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../admin.html">scylla.yaml</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../system-configuration/snitch.html">ScyllaDB Snitches</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../benchmarking-scylla.html">Benchmarking ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../using-scylla/index.html">ScyllaDB for Developers</a><input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/><label for="toctree-checkbox-12"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../using-scylla/learn.html">Learn To Use ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/><label for="toctree-checkbox-13"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/">Scylla University</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/available-courses/">Course catalog</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/scylla-essentials-overview/">Scylla Essentials</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/basic-data-modeling-2/">Basic Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/">Advanced Data Modeling</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/">MMS - Learn by Example</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://iot.scylladb.com/">Care-Pet an IoT Use Case and Example</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../using-scylla/alternator/index.html">Scylla Alternator</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../using-scylla/features.html">Scylla Features</a><input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/><label for="toctree-checkbox-14"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/features-open-source.html">Scylla Open Source Features</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/features-ent.html">Scylla Enterprise Features</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../using-scylla/drivers/index.html">Scylla Drivers</a><input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/><label for="toctree-checkbox-15"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/drivers/cql-drivers/index.html">Scylla CQL Drivers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../using-scylla/drivers/dynamo-drivers/index.html">Scylla DynamoDB Drivers</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../using-scylla/workload-attributes.html">Workload Attributes</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../cql/index.html">CQL Reference</a><input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/><label for="toctree-checkbox-16"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/cqlsh.html">CQLSh: the CQL shell</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/appendices.html">Appendices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/consistency.html">Consistency Levels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/consistency-calculator.html">Consistency Level Calculator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/ddl.html">Data Definition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/dml.html">Data Manipulation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/definitions.html">Definitions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/secondary-indexes.html">Global Secondary Indexes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/secondary-indexes.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/time-to-live.html">Expiring Data with Time to Live (TTL)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/time-to-live.html#additional-information">Additional Information</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/functions.html">Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/json.html">JSON Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/mv.html">Materialized Views</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/non-reserved-keywords.html">Non-Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/reserved-keywords.html">Reserved CQL Keywords</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../cql/cql-extensions.html">ScyllaDB CQL Extensions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../architecture/index.html">ScyllaDB Architecture</a><input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/><label for="toctree-checkbox-17"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/ringarchitecture/index.html">ScyllaDB Ring Architecture</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/architecture-fault-tolerance.html">ScyllaDB Fault Tolerance</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/console-CL-full-demo.html">Consistency Level Console Demo</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../architecture/anti-entropy/index.html">ScyllaDB Anti-Entropy</a><input class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" type="checkbox"/><label for="toctree-checkbox-18"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/anti-entropy/hinted-handoff.html">Scylla Hinted Handoff</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/anti-entropy/read-repair.html">Scylla Read Repair</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../procedures/maintenance/repair.html">Scylla Repair</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../architecture/sstable/index.html">SSTable</a><input class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" type="checkbox"/><label for="toctree-checkbox-19"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/sstable/sstable2/index.html">ScyllaDB SSTable - 2.x</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../architecture/sstable/sstable3/index.html">ScyllaDB SSTable - 3.x</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/compaction/compaction-strategies.html">Compaction Strategies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../architecture/raft.html">Raft Consensus Algorithm in ScyllaDB</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../troubleshooting/index.html">Troubleshooting ScyllaDB</a><input class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" type="checkbox"/><label for="toctree-checkbox-20"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/support/index.html">Errors and Support</a><input class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" type="checkbox"/><label for="toctree-checkbox-21"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/report-scylla-problem.html">Report a Scylla problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/error-messages/index.html">Error Messages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/log-level.html">Change Log Level</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/startup/index.html">ScyllaDB Startup</a><input class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" type="checkbox"/><label for="toctree-checkbox-22"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/change-ownership.html">Ownership Problems</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/scylla-wont-start.html">Scylla will not Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/python-error-no-module-named-yaml.html">Scylla Python Script broken</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/upgrade/index.html">Upgrade</a><input class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" type="checkbox"/><label for="toctree-checkbox-23"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/missing-dotmount-files.html">Inaccessible configuration files after ScyllaDB upgrade</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/cluster/index.html">Cluster and Node</a><input class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" type="checkbox"/><label for="toctree-checkbox-24"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/failed-decommission.html">Failed Decommission Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/timeouts.html">Cluster Timeouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/node-joined-without-any-data.html">Node Joined With No Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/nodetool-memory-read-timeout.html">SocketTimeoutException</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/nodetool-nullpointerexception.html">NullPointerException</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/modeling/index.html">Data Modeling</a><input class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" type="checkbox"/><label for="toctree-checkbox-25"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/large-partition-table.html">Scylla Large Partitions Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/large-rows-large-cells-tables.html">Scylla Large Rows and Cells Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/debugging-large-partition.html">Large Partitions Hunting</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/storage/index.html">Data Storage and SSTables</a><input class="toctree-checkbox" id="toctree-checkbox-26" name="toctree-checkbox-26" type="checkbox"/><label for="toctree-checkbox-26"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/space-up.html">Space Utilization Increasing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/drop-table-space-up.html">Disk Space is not Reclaimed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/sstable-corruption.html">SSTable Corruption Problem</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/pointless-compactions.html">Pointless Compactions</a></li>
+<li class="toctree-l3"><a class="reference external" href="https://monitoring.docs.scylladb.com/stable/use-monitoring/advisor/heavyCompaction.html">Limiting Compaction</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/CQL/index.html">CQL</a><input class="toctree-checkbox" id="toctree-checkbox-27" name="toctree-checkbox-27" type="checkbox"/><label for="toctree-checkbox-27"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/time-zone.html">Time Range Query Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/copy-from-failed.html">COPY FROM Fails</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/clients-table.html">CQL Connection Table</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/reverse-queries.html">Reverse queries fail</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../troubleshooting/monitor/index.html">ScyllaDB Monitor and Manager</a><input class="toctree-checkbox" id="toctree-checkbox-28" name="toctree-checkbox-28" type="checkbox"/><label for="toctree-checkbox-28"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/manager-monitoring-integration.html">Manager and Monitoring integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../troubleshooting/reverse-dns-sshd.html">Manager lists healthy nodes as down</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../kb/index.html">Knowledge Base</a><input class="toctree-checkbox" id="toctree-checkbox-29" name="toctree-checkbox-29" type="checkbox"/><label for="toctree-checkbox-29"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cdc-experimental-upgrade.html">Upgrading from experimental CDC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/compaction.html">Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/count-all-rows.html">Counting all rows in a table is slow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cqlsh-more.html">CQL Query Does Not Display Entire Result Set</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/cqlsh-results.html">When CQLSh query returns partial results with followed by “More”</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/custom-user.html">Run Scylla and supporting services as a custom user:group</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/decode-stack-trace.html">Decoding Stack Traces</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/disk-utilization.html">Snapshots and Disk Utilization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/dpdk-hardware.html">DPDK mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/flamegraph.html">Debug your database with Flame Graphs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/gc-grace-seconds.html">How to Change gc_grace_seconds for a Table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/gossip.html">Gossip in Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/increase-permission-cache.html">Increase Permission Cache to Avoid Non-paged Queries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/lwt-differences.html">How does Scylla LWT Differ from Apache Cassandra ?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/map-cpu.html">Map CPUs to Scylla Shards</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/memory-usage.html">Scylla Memory Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/ntp.html">NTP Configuration for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/perftune-modes-sync.html">Updating the Mode in perftune.yaml After a ScyllaDB Upgrade</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/posix.html">POSIX networking for Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/quiz-administrators.html">Scylla consistency quiz for administrators</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/raid-device.html">Recreate RAID devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/rf-increase.html">How to Safely Increase the Replication Factor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/scylla-and-spark-integration.html">Scylla and Spark integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/scylla-limits-systemd.html">Increase Scylla resource limits over systemd</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/seed-nodes.html">Scylla Seed Nodes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/set-up-swap.html">How to Set up a Swap Space</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/snapshots.html">Scylla Snapshots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/static-columns.html">Scylla payload sent duplicated static columns</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/stop-local-repair.html">Stopping a local repair</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/system-limits.html">System Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/tombstones-flush.html">How to flush old tombstones from a table</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/ttl-facts.html">Time to Live (TTL) and Compaction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/unresponsive-nodes.html">Scylla Nodes are Unresponsive</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/update-pk.html">Update a Primary Key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/use-perf.html">Using the perf utility with Scylla</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../kb/yaml-address.html">Configure Scylla Networking with Multiple NIC/IP Combinations</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">ScyllaDB FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contribute.html">Contribute to ScyllaDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../glossary.html">Glossary</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../alternator/alternator.html">Alternator: DynamoDB API in Scylla</a><input class="toctree-checkbox" id="toctree-checkbox-30" name="toctree-checkbox-30" type="checkbox"/><label for="toctree-checkbox-30"><i class="icon-chevron-right"></i></label><div class="break"></div><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../alternator/getting-started.html">Getting Started With ScyllaDB Alternator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../alternator/compatibility.html">ScyllaDB Alternator for DynamoDB users</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+    </div>
+</div>
+                    
+                
+            </div>
+
+        </section>
+
+        <footer class="footer">
+    <div class="footer-group">
+        <div class="footer-top">
+            <a class="footer-logo" href="https://www.scylladb.com"></a>
+            <div class="footer-links">
+                <a class="footer-links__link" href="https://docs.scylladb.com/" target="_blank">Docs</a>
+                <a class="footer-links__link" href="https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html" target="_blank">Tutorials</a>
+                <a class="footer-links__link" href="https://university.scylladb.com/" target="_blank">University</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/contact-us/"
+                   target="_blank">Contact Us</a>
+                <a class="footer-links__link" href="https://www.scylladb.com/company/" target="_blank">About Us</a>
+            </div>
+            <div class="footer-actions">
+                <a class="footer-actions__link" href="http://slack.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="User Slack channel" data-position="bottom">
+                        <i class="icon-slack"></i>
+                    </span>
+                </a>
+                <a class="footer-actions__link" href="https://forum.scylladb.com/" target="_blank">
+                    <span data-tooltip tabindex="1" title="Community forum" data-position="bottom">
+                        <i class="icon-docs-community"></i>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        
+            <div class="footer-copyright">
+                
+                    
+                        &#169; 2026, ScyllaDB. All rights reserved.
+                    
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/tos/" target="_blank">Terms of Service</a>
+                    | <a class="footer-copyright__link" href="https://www.scylladb.com/privacy/" target="_blank">Privacy Policy</a>
+                    | ScyllaDB, and ScyllaDB Cloud, are registered trademarks of ScyllaDB, Inc.
+                
+            </div>
+        
+
+
+        <div class="footer-bottom">
+            
+                <div class="footer-bottom__last-updated">
+                    
+                        Last updated on 27 Feb 2026.
+                    
+                </div>
+            
+            <div class="footer-bottom__version">
+                Powered by
+                <a class="footer-bottom__link" href="http://sphinx-doc.org/">Sphinx 8.1.3</a> &amp;
+                <a class="footer-bottom__link" href="https://sphinx-theme.scylladb.com/">ScyllaDB Theme 1.8.10</a>
+            </div>
+        </div>
+    </div>
+    
+        <biel-button class="footer-ask-ai" project="ddfdo8m94k"
+                     header-title="ScyllaDB chatbot (beta)"
+                     button-position="bottom-right"
+                     modal-position="bottom-right"
+                     button-style="dark">
+            Ask AI
+        </biel-button>
+    
+</footer>
+
+        <noscript>
+            <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8P2JP" height="0" width="0"
+                    style="display: none; visibility: hidden"></iframe>
+        </noscript>
+    </body>
+
+</html>
