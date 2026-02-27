@@ -131,6 +131,8 @@ public:
     topology_mutation_builder& drop_first_global_topology_request_id(const std::vector<utils::UUID>&, const utils::UUID&);
     topology_mutation_builder& pause_rf_change_request(const utils::UUID&);
     topology_mutation_builder& resume_rf_change_request(const std::unordered_set<utils::UUID>&, const utils::UUID&);
+    topology_mutation_builder& start_rf_change_migrations(const utils::UUID&);
+    topology_mutation_builder& finish_rf_change_migrations(const std::unordered_set<utils::UUID>&, const utils::UUID&);
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
@@ -155,6 +157,7 @@ public:
     using builder_base::del;
     topology_request_tracking_mutation_builder& set(const char* cell, topology_request value);
     topology_request_tracking_mutation_builder& set(const char* cell, global_topology_request value);
+    topology_request_tracking_mutation_builder& abort(sstring error);
     topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt);
     topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
     topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);

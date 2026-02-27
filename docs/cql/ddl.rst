@@ -361,7 +361,7 @@ ALTER KEYSPACE with Tablets
 
 Modifying a keyspace with tablets enabled is possible and doesn't require any special CQL syntax. However, there are some limitations:
 
-- The replication factor (RF) can be increased or decreased by at most 1 at a time. To reach the desired RF value, modify the RF repeatedly.
+- Unless ``enforce_rack_list`` option is on, the replication factor (RF) can be increased or decreased by at most 1 at a time. To reach the desired RF value, modify the RF repeatedly.
 - The ``ALTER`` statement rejects the ``replication_factor`` tag. List the DCs explicitly when altering a keyspace. See :ref:`NetworkTopologyStrategy <replication-strategy>`.
 - An RF change cannot be requested while another RF change is pending for the same keyspace. Attempting to execute an ``ALTER`` statement in this scenario will fail with an explicit error. Wait for the ongoing RF change to complete before issuing another ``ALTER`` statement.
 - The ``ALTER`` statement may take longer than the regular query timeout, and even if it times out, it will continue to execute in the background.
@@ -436,6 +436,35 @@ To migrate a keyspace from a numeric replication factor to a rack-list replicati
 
   ALTER KEYSPACE Excelsior
    WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2', 'RAC3'], 'dc2' : ['RAC4']} AND tablets = { 'enabled': true };
+
+Multi RF change
+~~~~~~~~~~~~~~~~~
+
+If ``enforce_rack_list`` is set, which means that all tablet keyspaces use rack lists exclusively, you can update the replication factor by more than one in many DCs in a single ALTER KEYSPACE statement. You cannot replace a replica's rack in a single DC, but you can both add and remove replicas in many DCs at once. For example you can do the following sequence of statements:
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1']} AND tablets = { 'enabled': true };
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2', 'RAC3']} AND tablets = { 'enabled': true };
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2'], 'dc2' : ['RAC4', 'RAC5']} AND tablets = { 'enabled': true };
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : [], 'dc2' : ['RAC4', 'RAC5', 'RAC6']} AND tablets = { 'enabled': true };
+
+But the ALTER KEYSPACE below will fail, because replacing racks in a DC is not allowed:
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2']} AND tablets = { 'enabled': true };
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC3']} AND tablets = { 'enabled': true };
 
 .. _drop-keyspace-statement:
 

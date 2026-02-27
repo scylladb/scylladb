@@ -28,7 +28,12 @@ namespace data_dictionary {
 class keyspace_metadata final {
     sstring _name;
     sstring _strategy_name;
+    // If _previous_strategy_options and _next_strategy_options have value, there is ongoing rf change of this keyspace.
+    // If _previous_strategy_options.value() == _next_strategy_options.value(), the rf change of this keyspace was aborted.
+    // If _strategy_options == _next_strategy_options.value(), the rf change of this keyspace is finished.
+    std::optional<locator::replication_strategy_config_options> _previous_strategy_options;
     locator::replication_strategy_config_options _strategy_options;
+    std::optional<locator::replication_strategy_config_options> _next_strategy_options;
     std::optional<unsigned> _initial_tablets;
     std::unordered_map<sstring, schema_ptr> _cf_meta_data;
     bool _durable_writes;
@@ -44,7 +49,9 @@ public:
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
                  user_types_metadata user_types = user_types_metadata{},
-                 storage_options storage_opts = storage_options{});
+                 storage_options storage_opts = storage_options{},
+                 std::optional<locator::replication_strategy_config_options> previous_options = std::nullopt,
+                 std::optional<locator::replication_strategy_config_options> next_options = std::nullopt);
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(std::string_view name,
                  std::string_view strategy_name,
@@ -53,7 +60,9 @@ public:
                  std::optional<consistency_config_option> consistency_option,
                  bool durables_writes = true,
                  storage_options storage_opts = {},
-                 std::vector<schema_ptr> cf_defs = {});
+                 std::vector<schema_ptr> cf_defs = {},
+                 std::optional<locator::replication_strategy_config_options> previous_options = std::nullopt,
+                 std::optional<locator::replication_strategy_config_options> next_options = std::nullopt);
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(const keyspace_metadata& ksm);
     void validate(const gms::feature_service&, const locator::topology&) const;
@@ -63,8 +72,29 @@ public:
     const sstring& strategy_name() const {
         return _strategy_name;
     }
+    const std::optional<locator::replication_strategy_config_options>& previous_strategy_options_opt() const {
+        return _previous_strategy_options;
+    }
+    void set_previous_strategy_options(const locator::replication_strategy_config_options& options) {
+        _previous_strategy_options = options;
+    }
+    void clear_previous_strategy_options() {
+        _previous_strategy_options = std::nullopt;
+    }
     const locator::replication_strategy_config_options& strategy_options() const {
         return _strategy_options;
+    }
+    void set_strategy_options(const locator::replication_strategy_config_options& options) {
+        _strategy_options = options;
+    }
+    const std::optional<locator::replication_strategy_config_options>& next_strategy_options_opt() const {
+        return _next_strategy_options;
+    }
+    void set_next_strategy_options(const locator::replication_strategy_config_options& options) {
+        _next_strategy_options = options;
+    }
+    void clear_next_strategy_options() {
+        _next_strategy_options = std::nullopt;
     }
     locator::replication_strategy_config_options strategy_options_v1() const;
     std::optional<unsigned> initial_tablets() const {

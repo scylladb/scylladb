@@ -202,6 +202,10 @@ struct topology {
     // It may happen during altering from numerical RF to rack list.
     std::unordered_set<utils::UUID> paused_rf_change_requests;
 
+    // The ids of ongoing RF change requests.
+    // Here we keep the ids only for rf-changes using rack_lists.
+    std::unordered_set<utils::UUID> ongoing_rf_changes;
+
     // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
 
