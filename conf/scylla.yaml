@@ -648,10 +648,9 @@ maintenance_socket: ignore
 # e.g. for cloud users, for whom scylla's configuration should be changed only by support engineers.
 # live_updatable_config_params_changeable_via_cql: true
 
-# ****************
-# *  GUARDRAILS  *
-# ****************
-
+#
+# Guardrails options
+#
 # Guardrails to warn or fail when Replication Factor is smaller/greater than the threshold.
 # Please note that the value of 0 is always allowed,
 # which means that having no replication at all, i.e. RF = 0, is always valid.
@@ -661,6 +660,27 @@ maintenance_socket: ignore
 # minimum_replication_factor_warn_threshold:  3
 # maximum_replication_factor_warn_threshold: -1
 # maximum_replication_factor_fail_threshold: -1
+#
+# Guardrails to warn about or disallow creating a keyspace with specific replication strategy.
+# Each of these 2 settings is a list storing replication strategies considered harmful.
+# The replication strategies to choose from are:
+# 1) SimpleStrategy,
+# 2) NetworkTopologyStrategy,
+# 3) LocalStrategy,
+# 4) EverywhereStrategy
+#
+# replication_strategy_warn_list:
+#  - SimpleStrategy
+# replication_strategy_fail_list:
+#
+# Guardrail to enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.
+# enable_create_table_with_compact_storage: false
+#
+# Guardrails to limit usage of selected consistency levels for writes.
+# Adding a warning to a CQL query response can significantly increase network
+# traffic and decrease overall throughput.
+# write_consistency_levels_warned: []
+# write_consistency_levels_disallowed: []
 
 #
 # System information encryption settings
@@ -837,21 +857,6 @@ maintenance_socket: ignore
 #   template_name: <kmip key template name> (optional)
 #   key_namespace: <kmip key namespace> (optional)
 #
-
-# Guardrails to warn about or disallow creating a keyspace with specific replication strategy.
-# Each of these 2 settings is a list storing replication strategies considered harmful.
-# The replication strategies to choose from are:
-# 1) SimpleStrategy,
-# 2) NetworkTopologyStrategy,
-# 3) LocalStrategy,
-# 4) EverywhereStrategy
-#
-# replication_strategy_warn_list:
-#  - SimpleStrategy
-# replication_strategy_fail_list:
-
-# Guardrail to enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.
-# enable_create_table_with_compact_storage: false
 
 # Control tablets for new keyspaces.
 # Can be set to: disabled|enabled|enforced

@@ -91,7 +91,11 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
         , _authorized_prepared_cache_validity_in_ms_observer(_db.get_config().permissions_validity_in_ms.observe(_auth_prepared_cache_cfg_cb))
         , _lang_manager(langm)
+        , _write_consistency_levels_warned_observer(_db.get_config().write_consistency_levels_warned.observe([this](const auto& v) { _write_consistency_levels_warned = to_consistency_level_set(v); }))
+        , _write_consistency_levels_disallowed_observer(_db.get_config().write_consistency_levels_disallowed.observe([this](const auto& v) { _write_consistency_levels_disallowed = to_consistency_level_set(v); }))
         {
+    _write_consistency_levels_warned = to_consistency_level_set(_db.get_config().write_consistency_levels_warned());
+    _write_consistency_levels_disallowed = to_consistency_level_set(_db.get_config().write_consistency_levels_disallowed());
     namespace sm = seastar::metrics;
     namespace stm = statements;
     using clevel = db::consistency_level;
@@ -507,6 +511,31 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             sm::description("Counts the number of replication_strategy_fail_list guardrail violations, "
                                             "i.e. attempts to set a forbidden replication strategy in a keyspace via CREATE/ALTER KEYSPACE.")).set_skip_when_empty(),
             });
+
+    std::vector<sm::metric_definition> cql_cl_group;
+    for (auto cl = size_t(clevel::MIN_VALUE); cl <= size_t(clevel::MAX_VALUE); ++cl) {
+        cql_cl_group.push_back(
+            sm::make_counter(
+                "writes_per_consistency_level",
+                _cql_stats.writes_per_consistency_level[cl],
+                sm::description("Counts the number of writes for each consistency level."),
+                {cl_label(clevel(cl)), basic_level}).set_skip_when_empty());
+        cql_cl_group.push_back(
+            sm::make_counter(
+                "write_consistency_levels_disallowed_violations",
+                _cql_stats.write_consistency_levels_disallowed_violations[cl],
+                sm::description("Counts the number of write_consistency_levels_disallowed guardrail violations, "
+                                "i.e. attempts to write with a forbidden consistency level."),
+                {cl_label(clevel(cl)), basic_level}).set_skip_when_empty());
+        cql_cl_group.push_back(
+            sm::make_counter(
+                "write_consistency_levels_warned_violations",
+                _cql_stats.write_consistency_levels_warned_violations[cl],
+                sm::description("Counts the number of write_consistency_levels_warned guardrail violations, "
+                                "i.e. attempts to write with a discouraged consistency level."),
+                {cl_label(clevel(cl)), basic_level}).set_skip_when_empty());
+    }
+    _metrics.add_group("cql", cql_cl_group);
 
     _mnotifier.register_listener(_migration_subscriber.get());
 }
@@ -1231,6 +1260,14 @@ future<> query_processor::query_internal(
 shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
     _proxy.get_stats().replica_cross_shard_ops++;
     return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
+}
+
+query_processor::consistency_level_set query_processor::to_consistency_level_set(const query_processor::cl_option_list& levels) {
+    query_processor::consistency_level_set result;
+    for (const auto& opt : levels) {
+        result.set(static_cast<db::consistency_level>(opt));
+    }
+    return result;
 }
 
 void query_processor::update_authorized_prepared_cache_config() {

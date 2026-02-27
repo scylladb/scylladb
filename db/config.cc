@@ -267,6 +267,13 @@ const config_type& config_type_for<std::vector<enum_option<db::replication_strat
 }
 
 template <>
+const config_type& config_type_for<std::vector<enum_option<db::consistency_level_restriction_t>>>() {
+    static config_type ct(
+        "consistency level list", printable_vector_to_json<enum_option<db::consistency_level_restriction_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<enum_option<db::tri_mode_restriction_t>>() {
     static config_type ct(
         "restriction mode", printable_to_json<enum_option<db::tri_mode_restriction_t>>);
@@ -402,6 +409,23 @@ template <>
 class convert<enum_option<db::replication_strategy_restriction_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::replication_strategy_restriction_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::consistency_level_restriction_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::consistency_level_restriction_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1610,6 +1634,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Set the minimum interval in seconds between flushing all tables before each major compaction (default is 86400)."
         "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments."
         "Set to 0 to disable automatic flushing all tables before major compaction.")
+    , write_consistency_levels_warned(this, "write_consistency_levels_warned", liveness::LiveUpdate, value_status::Used, {}, "A list of consistency levels that will trigger a warning when used in write operations. Requests using these levels will contain a warning in the query response.")
+    , write_consistency_levels_disallowed(this, "write_consistency_levels_disallowed", liveness::LiveUpdate, value_status::Used, {}, "A list of consistency levels that are not allowed for write operations. Requests using these levels will fail.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")
@@ -1841,6 +1867,30 @@ std::unordered_map<sstring, locator::replication_strategy_type> db::replication_
             {"LocalStrategy", locator::replication_strategy_type::local},
             {"NetworkTopologyStrategy", locator::replication_strategy_type::network_topology},
             {"EverywhereStrategy", locator::replication_strategy_type::everywhere_topology}};
+}
+
+std::unordered_map<sstring, db::consistency_level> db::consistency_level_restriction_t::map() {
+    using cl = db::consistency_level;
+    std::unordered_map<sstring, cl> result = {
+        {"ANY", cl::ANY},
+        {"ONE", cl::ONE},
+        {"TWO", cl::TWO},
+        {"THREE", cl::THREE},
+        {"QUORUM", cl::QUORUM},
+        {"ALL", cl::ALL},
+        {"LOCAL_QUORUM", cl::LOCAL_QUORUM},
+        {"EACH_QUORUM", cl::EACH_QUORUM},
+        {"SERIAL", cl::SERIAL},
+        {"LOCAL_SERIAL", cl::LOCAL_SERIAL},
+        {"LOCAL_ONE", cl::LOCAL_ONE},
+    };
+
+    constexpr auto expected_size = static_cast<size_t>(cl::MAX_VALUE) - static_cast<size_t>(cl::MIN_VALUE) + 1;
+    if (result.size() != expected_size) {
+        on_internal_error_noexcept(dblog, format("consistency_level_option::map() has {} entries but expected {}", result.size(), expected_size));
+    }
+
+    return result;
 }
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {

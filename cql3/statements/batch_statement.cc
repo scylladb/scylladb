@@ -259,6 +259,10 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     if (options.getSerialConsistency() == null)
         throw new InvalidRequestException("Invalid empty serial consistency level");
 #endif
+
+    auto cl = options.get_consistency();
+    bool should_warn = qp.check_write_consistency_levels_guardrail(cl);
+
     for (size_t i = 0; i < _statements.size(); ++i) {
         _statements[i].statement->restrictions().validate_primary_key(options.for_statement(i));
     }
@@ -266,23 +270,31 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     if (_has_conditions) {
         ++_stats.cas_batches;
         _stats.statements_in_cas_batches += _statements.size();
-        return execute_with_conditions(qp, options, query_state);
+        return execute_with_conditions(qp, options, query_state).then([should_warn, cl] (auto result) {
+            if (should_warn) {
+                result->add_warning(format("Write with consistency level {} is warned by guardrail configuration", cl));
+            }
+            return result;
+        });
     }
 
     ++_stats.batches;
     _stats.statements_in_batches += _statements.size();
 
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
-    return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, &options, timeout, tr_state = query_state.get_trace_state(),
+    return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
                                                                                                                                permit = query_state.get_permit()] (utils::chunked_vector<mutation> ms) mutable {
-        return execute_without_conditions(qp, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
-    }).then([] (coordinator_result<> res) {
+        return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit));
+    }).then([should_warn, cl] (coordinator_result<> res) {
         if (!res) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
         }
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                make_shared<cql_transport::messages::result_message::void_message>());
+        auto result = make_shared<cql_transport::messages::result_message::void_message>();
+        if (should_warn) {
+            result->add_warning(format("Write with consistency level {} is warned by guardrail configuration", cl));
+        }
+        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(result));
     });
 }
 
