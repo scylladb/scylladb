@@ -11,7 +11,7 @@ You can use this project as a starting point for your own demo, proof of concept
 
 
 ScyllaDB Cloud example
-=====================
+=======================
 
 `This Terraform example <https://github.com/scylladb/1m-ops-demo/tree/main/scylladb-cloud>`_ 
 shows you how to set up loader machines in AWS and run a high-throughput 
