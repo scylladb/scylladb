@@ -1,0 +1,9 @@
+[Unit]
+Description=Run Scylla fstrim weekly
+
+[Timer]
+OnCalendar=Sat *-*-* 00:00:00
+RandomizedDelaySec=86400
+
+[Install]
+WantedBy=timers.target

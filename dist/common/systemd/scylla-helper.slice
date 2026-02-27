@@ -1,0 +1,17 @@
+[Unit]
+Description=Slice used to run companion programs to Scylla. Memory, CPU and IO restricted
+Before=slices.target
+
+[Slice]
+MemoryAccounting=true
+IOAccounting=true
+CPUAccounting=true
+
+CPUWeight=10
+IOWeight=10
+
+# MemoryHigh is the throttle point
+MemoryHigh=4%
+# MemoryMax is the OOM point. As Scylla reserves 7% by default, the other two percent goes to
+# the kernel and other non contained processes
+MemoryMax=5%

@@ -1,0 +1,9 @@
+#!/bin/sh
+
+# This is for existing users who already installed scylla.yaml on /var/lib/scylla/conf
+if [ -d /var/lib/scylla/conf ] && [ ! -L /var/lib/scylla/conf ]; then
+    mkdir -p /etc/scylla/
+    cp -a /var/lib/scylla/conf/* /etc/scylla/
+fi
+
+#DEBHELPER#

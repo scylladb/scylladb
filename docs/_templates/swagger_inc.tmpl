@@ -1,0 +1,28 @@
+<link rel="stylesheet" href="{{ custom_pathto('_static/api/css/swagger.css', 1) }}"/>
+<script src="{{ custom_pathto('_static/api/js/jquery-1.8.0.min.js', 1) }}" type='text/javascript'></script>
+<script> // src='lib/jquery.slideto.min.js'
+   (function(b){b.fn.slideto=function(a){a=b.extend({slide_duration:"slow",highlight_duration:3E3,highlight:true,highlight_color:"#FFFF99"},a);return this.each(function(){obj=b(this);b("body").animate({scrollTop:obj.offset().top},a.slide_duration,function(){a.highlight&&b.ui.version&&obj.effect("highlight",{color:a.highlight_color},a.highlight_duration)})})}})(jQuery);
+</script>
+<script src="{{ custom_pathto('_static/api/js/jquery.ba-bbq.min.js', 1) }}" type='text/javascript'></script>
+<script src="{{ custom_pathto('_static/api/js/handlebars.min.js', 1) }}" type='text/javascript'></script>
+<script src="{{ custom_pathto('_static/api/js/lodash.min.js', 1) }}" type='text/javascript'></script>
+<script src="{{ custom_pathto('_static/api/js/backbone.min.js', 1) }}" type='text/javascript'></script>
+<script> // src='lib/backbone-min.js'
+   // From http://stackoverflow.com/a/19431552
+   // Compatibility override - Backbone 1.1 got rid of the 'options' binding
+   // automatically to views in the constructor.
+   Backbone.View = (function(View) {
+      return View.extend({
+         constructor: function(options) {
+               this.options = options || {};
+               View.apply(this, arguments);
+         }
+      });
+   })(Backbone.View);
+</script>
+<script src="{{ custom_pathto('_static/api/js/swagger-ui.min.js', 1) }}" type='text/javascript'></script>
+<script src="{{ custom_pathto('_static/api/js/highlight.min.js', 1) }}" type='text/javascript'></script>
+<script src="{{ custom_pathto('_static/api/js/json.min.js', 1) }}" type='text/javascript'></script>
+<script src="{{ custom_pathto('_static/api/js/jsoneditor.min.js', 1) }}" type='text/javascript'></script>
+<script  src="{{ custom_pathto('_static/api/js/marked.min.js', 1) }}" type='text/javascript'></script>
+<div id="message-bar" class="swagger-ui-wrap" data-sw-translate></div>

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Scylla Housekeeping restart mode
+After=scylla-server.service
+BindsTo=scylla-server.service
+
+[Timer]
+# set OnActiveSec to 3 to safely avoid issues/1846
+OnActiveSec=3
+
+[Install]
+WantedBy=timers.target

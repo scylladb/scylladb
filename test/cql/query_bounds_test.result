@@ -1,0 +1,268 @@
+> create table foo (a int, b int, c int, PRIMARY KEY (a, b, c)) WITH CLUSTERING ORDER BY (b DESC, c ASC);
+OK
+> 
+> INSERT INTO foo (a, b, c) VALUES (0, 2, 0);
+OK
+> INSERT INTO foo (a, b, c) VALUES (0, 1, 0);
+OK
+> INSERT INTO foo (a, b, c) VALUES (0, 1, 1);
+OK
+> INSERT INTO foo (a, b, c) VALUES (0, 0, 0);
+OK
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) > (1, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
+|   0 |   1 |   1 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND (1, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   1 |   1 |
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) > (2, 0);
++-----+-----+-----+
+| a   | b   | c   |
+|-----+-----+-----|
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND (2, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   1 |   0 |
+|   0 |   1 |   1 |
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) >= (2, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) >= SCYLLA_CLUSTERING_BOUND (2, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
+|   0 |   1 |   0 |
+|   0 |   1 |   1 |
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) < (1, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) < SCYLLA_CLUSTERING_BOUND (1, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) < (2, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   1 |   0 |
+|   0 |   1 |   1 |
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) < SCYLLA_CLUSTERING_BOUND (2, 0);
++-----+-----+-----+
+| a   | b   | c   |
+|-----+-----+-----|
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) <= (2, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
+|   0 |   1 |   0 |
+|   0 |   1 |   1 |
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b, c) <= SCYLLA_CLUSTERING_BOUND (2, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
++-----+-----+-----+
+> 
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) > (1);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) > SCYLLA_CLUSTERING_BOUND (1);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) > (2);
++-----+-----+-----+
+| a   | b   | c   |
+|-----+-----+-----|
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) > SCYLLA_CLUSTERING_BOUND (2);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   1 |   0 |
+|   0 |   1 |   1 |
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) >= (2);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) >= SCYLLA_CLUSTERING_BOUND (2);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
+|   0 |   1 |   0 |
+|   0 |   1 |   1 |
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) < (1);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) < SCYLLA_CLUSTERING_BOUND (1);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) < (2);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   1 |   0 |
+|   0 |   1 |   1 |
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) < SCYLLA_CLUSTERING_BOUND (2);
++-----+-----+-----+
+| a   | b   | c   |
+|-----+-----+-----|
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) <= (2);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
+|   0 |   1 |   0 |
+|   0 |   1 |   1 |
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) <= SCYLLA_CLUSTERING_BOUND (2);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
++-----+-----+-----+
+> 
+> 
+> 
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) > (1) AND (b, c) <= (2, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   2 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) > SCYLLA_CLUSTERING_BOUND (1) AND (b, c) <= SCYLLA_CLUSTERING_BOUND (0, 0);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   0 |   0 |
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) > (2) AND (b, c) <= (2, 1);
++-----+-----+-----+
+| a   | b   | c   |
+|-----+-----+-----|
++-----+-----+-----+
+> 
+> SELECT * FROM foo WHERE a=0 AND (b) > SCYLLA_CLUSTERING_BOUND (2) AND (b, c) <= SCYLLA_CLUSTERING_BOUND(1, 1);
++-----+-----+-----+
+|   a |   b |   c |
+|-----+-----+-----|
+|   0 |   1 |   0 |
+|   0 |   1 |   1 |
++-----+-----+-----+
+> 
+> -- error checks --
+> 
+> -- wrong side of condition
+> SELECT * FROM foo WHERE a=0 AND SCYLLA_CLUSTERING_BOUND(b) > (2);
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:32 no viable alternative at input 'SCYLLA_CLUSTERING_BOUND'">
+> 
+> -- both sides of condition
+> SELECT * FROM foo WHERE a=0 AND SCYLLA_CLUSTERING_BOUND(b) > SCYLLA_CLUSTERING_BOUND(2);
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:32 no viable alternative at input 'SCYLLA_CLUSTERING_BOUND'">
+> 
+> -- too many values --
+> SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND (1, 0, 5);
+Error from server: code=2200 [Invalid query] message="Expected 2 elements in value tuple, but got 3: (1, 0, 5)"
+> 
+> -- too few values --
+> SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND (1);
+Error from server: code=2200 [Invalid query] message="Expected 2 elements in value tuple, but got 1: (1)"
+> 
+> -- missing values --
+> SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:64 : Syntax error">
+> 
+> -- not tuple  --
+> SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND 45;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:65 : Missing '('">
+> 
+> -- just wrong  --
+> SELECT * FROM foo WHERE a=0 SCYLLA_CLUSTERING_BOUND AND (b, c) > (0, 1);
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:28 : Syntax error">
+> SELECT * FROM foo WHERE a=0 AND (b, c) > (0, 1) SCYLLA_CLUSTERING_BOUND;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:48 : Syntax error">
+> 
+> -- mixing apples and make_count_rows_function
+> SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND(2, 0)  AND (b, c) < (1, 1);
+Error from server: code=2200 [Invalid query] message="Invalid combination of restrictions (SCYLLA_CLUSTERING_BOUND / plain)"
+> -- and again --
+> SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND(2, 0)  AND (b, c) < (2, 0);
+Error from server: code=2200 [Invalid query] message="Invalid combination of restrictions (SCYLLA_CLUSTERING_BOUND / plain)"

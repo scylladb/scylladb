@@ -1,0 +1,58 @@
+#!/usr/bin/stap
+
+# usage: stap -c <cmd> scylla_row_cache_report.stp
+#    or: stap -x <pid> scylla_row_cache_report.stp
+#
+global batch_start_time
+global batch_latencies;
+global partition_count;
+
+global start_time
+global latencies;
+
+
+probe process.mark("row_cache_update_one_batch_start") {
+    batch_start_time[tid()] = gettimeofday_ns()
+}
+
+probe process.mark("row_cache_update_one_batch_end") {
+    if (batch_start_time[tid()]) {
+        lat = (gettimeofday_ns() - batch_start_time[tid()]);
+        batch_latencies <<< lat;
+        partition_count <<< $arg1;
+        delete batch_start_time[tid()]
+    }
+}
+
+probe process.mark("row_cache_update_start") {
+    start_time[tid()] = gettimeofday_us()
+}
+
+probe process.mark("row_cache_update_end") {
+    if (start_time[tid()]) {
+        lat = (gettimeofday_us() - start_time[tid()]);
+        latencies <<< lat;
+        delete start_time[tid()]
+    }
+}
+
+probe begin {
+    printf("Measuring Scylla row cache update times ");
+}
+
+probe end {
+    println();
+    println("Total update time, (usec)");
+    println(@hist_log(latencies));
+    println("Time spent per partition batch (nsec)");
+    print(@hist_log(batch_latencies));
+    println("Partitions updated per batch:");
+    println(@hist_log(partition_count));
+
+    println("Total partitions updated:");
+    println(@sum(partition_count));
+    println("Average time spent per partition batch (nsec)");
+    println(@avg(batch_latencies));
+    println("Average time per partition (nsec)");
+    println(@sum(batch_latencies) / @sum(partition_count));
+}

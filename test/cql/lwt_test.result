@@ -1,0 +1,2983 @@
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> USE ks;
+OK
+> --
+> -- basic: ensure the grammar works
+> --
+> create table lwt (a int primary key, b int);
+OK
+> -- insert if not exists
+> insert into lwt (a, b) values (1, 1) if not exists;
++-------------+------+------+
+| [applied]   | a    | b    |
+|-------------+------+------|
+| True        | null | null |
++-------------+------+------+
+> select * from lwt allow filtering;
++-----+-----+
+|   a |   b |
+|-----+-----|
+|   1 |   1 |
++-----+-----+
+> -- delete if exists
+> delete from lwt where a=1 if exists;
++-------------+-----+-----+
+| [applied]   |   a |   b |
+|-------------+-----+-----|
+| True        |   1 |   1 |
++-------------+-----+-----+
+> select * from lwt allow filtering;
++-----+-----+
+| a   | b   |
+|-----+-----|
++-----+-----+
+> -- update with condition
+> update lwt set b = 2 where a=1 if b = 1;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> select * from lwt allow filtering;
++-----+-----+
+| a   | b   |
+|-----+-----|
++-----+-----+
+> -- update if exists
+> update lwt set b = 2 where a = 1 if exists;
++-------------+------+------+
+| [applied]   | a    | b    |
+|-------------+------+------|
+| False       | null | null |
++-------------+------+------+
+> select * from lwt allow filtering;
++-----+-----+
+| a   | b   |
+|-----+-----|
++-----+-----+
+> -- update if exists with a scan: proper error message
+> update lwt set b = 2 where b = 1 if exists;
+Error from server: code=2200 [Invalid query] message="Invalid where clause contains non PRIMARY KEY columns: b"
+> select * from lwt allow filtering;
++-----+-----+
+| a   | b   |
+|-----+-----|
++-----+-----+
+> -- incorrect syntax: update if *not* exists
+> update lwt set b=3 where a=2 if not exists;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:32 no viable alternative at input 'not'">
+> -- incorrect syntax: delete if *not* exists
+> delete from lwt where a=2 if not exists;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:29 no viable alternative at input 'not'">
+> --
+> -- timestamp: using timestamp clause is not allowed
+> --
+> -- check that using timestamp without LWT clause works
+> insert into lwt (a, b) values (1, 1) using timestamp 1;
+OK
+> -- with LWT, it's not allowed
+> insert into lwt (a, b) values (1, 1) if not exists using timestamp 1;
+Error from server: code=2200 [Invalid query] message="Cannot provide custom timestamp for conditional updates"
+> --
+> --
+> -- update if not exists is not allowed (grammar error), it doesn't make sense
+> update lwt set b = 2 where a = 1 if not exists;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input 'not'">
+> -- update with multiple partitions can not have conditions
+> -- Cassandra output: code=2200 [Invalid query] message="IN on the partition
+> -- key is not supported with conditional updates"
+> update lwt set b = 2 where a in (1, 2) if b = 1;
+Error from server: code=2200 [Invalid query] message="IN on the partition key is not supported with conditional updates"
+> 
+> drop table lwt;
+OK
+> --
+> -- basic: ends
+> --
+> --
+> -- clustering: tests related to lwt and clustering keys
+> --
+> -- create a table with a partitioning key and a clustering key
+> create table lwt (a int, b int, c int, primary key (a,b));
+OK
+> -- update with multiple clustering keys can not have conditions
+> -- Cassandra output: code=2200 [Invalid query] message="IN on the clustering
+> -- key is not supported with conditional updates"
+> update lwt set c = 2 where a = 1 and b in (2,3)  if c = 1;
+Error from server: code=2200 [Invalid query] message="IN on the clustering key columns is not supported with conditional updates"
+> -- update with a clustering key - should work
+> update lwt set c = 2 where a = 1 and b = 2  if c = 1;
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> -- update with a single clustering key inside IN predicate
+> -- correctly identified as a single-key update
+> update lwt set c = 2 where a = 1 and b in (2) if c = 1;
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> -- unrestricted conditional update,
+> -- Casssandra: code=2200 [Invalid query]
+> -- message="Some clustering keys are missing: b"
+> update lwt set c=3 where a=1 if c=2;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part b"
+> --  comparing columns
+> update lwt set c=3 where a=1 if c=a;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:35 no viable alternative at input ';'">
+> -- cleanup
+> drop table lwt;
+OK
+> --
+> -- clustering: ends
+> --
+> -- limitations: check grammar/feature limitations of LWT
+> --
+> create table lwt (a int, b frozen<map<int, int>>, c int, primary key (a, b));
+OK
+> insert into lwt (a, b, c) values (1, {1:1, 2:2}, 3);
+OK
+> -- Strictcly speaking this is not an LWT check, but we need to ensure that
+> -- LWT restrictions are a superposition of modification statement
+> -- restrictions
+> update lwt set c=3 where a=1 and b contains 1 if c=1;
+Error from server: code=2200 [Invalid query] message="Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering"
+> 
+> drop table lwt;
+OK
+> 
+> -- conditional updates and counters: not supported
+> create table lwt (a int primary key, b counter);
+OK
+> update lwt set  b = b+1 where a = 1;
+OK
+> update lwt set  b = b+1 where a = 1 if exists;
+Error from server: code=2200 [Invalid query] message="Conditional updates are not supported on counter tables"
+> insert into lwt (a, b) values (1,1) if not exists;
+Error from server: code=2200 [Invalid query] message="INSERT statement are not allowed on counter tables, use UPDATE instead"
+> delete from lwt where a=1 if exists;
+Error from server: code=2200 [Invalid query] message="Conditional updates are not supported on counter tables"
+> delete from lwt where a=1 if b=2;
+Error from server: code=2200 [Invalid query] message="Conditional updates are not supported on counter tables"
+> drop table lwt;
+OK
+> --
+> -- limitations: ends
+> --
+> ---
+> -- if_exists: check if exists/if not exists works
+> ---
+> create table lwt (a int primary key, b int);
+OK
+> -- insert if not exists
+> insert into lwt (a, b) values (1, 1) if not exists;
++-------------+------+------+
+| [applied]   | a    | b    |
+|-------------+------+------|
+| True        | null | null |
++-------------+------+------+
+> select * from lwt allow filtering;
++-----+-----+
+|   a |   b |
+|-----+-----|
+|   1 |   1 |
++-----+-----+
+> -- should not update
+> insert into lwt (a, b) values (1, 2) if not exists;
++-------------+-----+-----+
+| [applied]   |   a |   b |
+|-------------+-----+-----|
+| False       |   1 |   1 |
++-------------+-----+-----+
+> select * from lwt allow filtering;
++-----+-----+
+|   a |   b |
+|-----+-----|
+|   1 |   1 |
++-----+-----+
+> -- should update
+> insert into lwt (a, b) values (2, 2) if not exists;
++-------------+------+------+
+| [applied]   | a    | b    |
+|-------------+------+------|
+| True        | null | null |
++-------------+------+------+
+> select * from lwt allow filtering;
++-----+-----+
+|   a |   b |
+|-----+-----|
+|   1 |   1 |
+|   2 |   2 |
++-----+-----+
+> -- should delete
+> delete from lwt where a=2 if exists;
++-------------+-----+-----+
+| [applied]   |   a |   b |
+|-------------+-----+-----|
+| True        |   2 |   2 |
++-------------+-----+-----+
+> select * from lwt allow filtering;
++-----+-----+
+|   a |   b |
+|-----+-----|
+|   1 |   1 |
++-----+-----+
+> -- should not update
+> update lwt set b=3 where a=2 if exists;
++-------------+------+------+
+| [applied]   | a    | b    |
+|-------------+------+------|
+| False       | null | null |
++-------------+------+------+
+> select * from lwt allow filtering;
++-----+-----+
+|   a |   b |
+|-----+-----|
+|   1 |   1 |
++-----+-----+
+> -- should update
+> update lwt set b=3 where a=1 if exists;
++-------------+-----+-----+
+| [applied]   |   a |   b |
+|-------------+-----+-----|
+| True        |   1 |   1 |
++-------------+-----+-----+
+> select * from lwt allow filtering;
++-----+-----+
+|   a |   b |
+|-----+-----|
+|   1 |   3 |
++-----+-----+
+> drop table lwt;
+OK
+> --
+> -- if_exists: ends end of check for if-exists/if-not-exists
+> --
+> -- conditional updates and static columns
+> -- see also https://issues.apache.org/jira/browse/CASSANDRA-10532
+> create table lwt (id bigint, uuid uuid, stc text static, value text, primary key(id, uuid));
+OK
+> delete stc FROM lwt WHERE id=1 IF stc='key';
++-------------+-------+
+| [applied]   | stc   |
+|-------------+-------|
+| False       | null  |
++-------------+-------+
+> drop table lwt;
+OK
+> 
+> create table lwt (p int, c int, s int static, v int, primary key(p, c));
+OK
+> insert into lwt(p, c, v) values(1, 1, 1);
+OK
+> select * from lwt;
++-----+-----+------+-----+
+|   p |   c | s    |   v |
+|-----+-----+------+-----|
+|   1 |   1 | null |   1 |
++-----+-----+------+-----+
+> -- must fail: regular row conditions do not match
+> insert into lwt(p, c, v) values(1, 1, 10) if not exists;
++-------------+-----+-----+------+-----+
+| [applied]   |   p |   c | s    |   v |
+|-------------+-----+-----+------+-----|
+| False       |   1 |   1 | null |   1 |
++-------------+-----+-----+------+-----+
+> insert into lwt(p, c, s) values(1, 1, 10) if not exists;
++-------------+-----+-----+------+-----+
+| [applied]   |   p |   c | s    |   v |
+|-------------+-----+-----+------+-----|
+| False       |   1 |   1 | null |   1 |
++-------------+-----+-----+------+-----+
+> update lwt set v=10 where p=1 and c=1 if v=2;
++-------------+-----+
+| [applied]   |   v |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> delete from lwt where p=1 and c=1 if v=2;
++-------------+-----+
+| [applied]   |   v |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> select * from lwt;
++-----+-----+------+-----+
+|   p |   c | s    |   v |
+|-----+-----+------+-----|
+|   1 |   1 | null |   1 |
++-----+-----+------+-----+
+> -- must succeed: regular row conditions match
+> insert into lwt(p, c, v) values(1, 2, 2) if not exists;
++-------------+------+------+------+------+
+| [applied]   | p    | c    | s    | v    |
+|-------------+------+------+------+------|
+| True        | null | null | null | null |
++-------------+------+------+------+------+
+> update lwt set v=10 where p=1 and c=1 if v=1;
++-------------+-----+
+| [applied]   |   v |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> update lwt set v=20 where p=1 and c=2 if exists;
++-------------+-----+-----+------+-----+
+| [applied]   |   p |   c | s    |   v |
+|-------------+-----+-----+------+-----|
+| True        |   1 |   2 | null |   2 |
++-------------+-----+-----+------+-----+
+> select * from lwt;
++-----+-----+------+-----+
+|   p |   c | s    |   v |
+|-----+-----+------+-----|
+|   1 |   1 | null |  10 |
+|   1 |   2 | null |  20 |
++-----+-----+------+-----+
+> -- must fail: there is no static row in the partition
+> update lwt set s=2 where p=1 if exists;
++-------------+-----+------+------+------+
+| [applied]   |   p | c    | s    | v    |
+|-------------+-----+------+------+------|
+| False       |   1 | null | null | null |
++-------------+-----+------+------+------+
+> update lwt set s=2 where p=1 if s=1;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set v=2 where p=1 and c=1 if s=1;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> delete s from lwt where p=1 if exists;
++-------------+-----+------+------+------+
+| [applied]   |   p | c    | s    | v    |
+|-------------+-----+------+------+------|
+| False       |   1 | null | null | null |
++-------------+-----+------+------+------+
+> delete s from lwt where p=1 if s=1;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> delete v from lwt where p=1 and c=1 if s=1;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> delete s from lwt where p=1 and c=1 if s=1 and v=10;
++-------------+------+-----+
+| [applied]   | s    |   v |
+|-------------+------+-----|
+| False       | null |  10 |
++-------------+------+-----+
+> delete v from lwt where p=1 and c=1 if s=1 and v=10;
++-------------+------+-----+
+| [applied]   | s    |   v |
+|-------------+------+-----|
+| False       | null |  10 |
++-------------+------+-----+
+> delete from lwt where p=1 and c=1 if s=1;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> delete from lwt where p=1 and c=1 if s=1 and v=10;
++-------------+------+-----+
+| [applied]   | s    |   v |
+|-------------+------+-----|
+| False       | null |  10 |
++-------------+------+-----+
+> select * from lwt;
++-----+-----+------+-----+
+|   p |   c | s    |   v |
+|-----+-----+------+-----|
+|   1 |   1 | null |  10 |
+|   1 |   2 | null |  20 |
++-----+-----+------+-----+
+> -- must succeed: there is no static row in the partition (even though there are regular rows)
+> insert into lwt(p, s) values(1, 1) if not exists;
++-------------+-----+------+------+------+
+| [applied]   |   p | c    | s    | v    |
+|-------------+-----+------+------+------|
+| True        |   1 | null | null | null |
++-------------+-----+------+------+------+
+> select * from lwt;
++-----+-----+-----+-----+
+|   p |   c |   s |   v |
+|-----+-----+-----+-----|
+|   1 |   1 |   1 |  10 |
+|   1 |   2 |   1 |  20 |
++-----+-----+-----+-----+
+> -- must fail: static row conditions do not match
+> insert into lwt(p, s) values(1, 2) if not exists;
++-------------+-----+------+-----+------+
+| [applied]   |   p | c    |   s | v    |
+|-------------+-----+------+-----+------|
+| False       |   1 | null |   1 | null |
++-------------+-----+------+-----+------+
+> update lwt set s=3 where p=1 if s=2;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> update lwt set v=3 where p=1 and c=1 if s=2;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> delete s from lwt where p=1 if s=2;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> delete v from lwt where p=1 and c=1 if s=2;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> delete s from lwt where p=1 and c=1 if s=2 and v=10;
++-------------+-----+-----+
+| [applied]   |   s |   v |
+|-------------+-----+-----|
+| False       |   1 |  10 |
++-------------+-----+-----+
+> delete v from lwt where p=1 and c=1 if s=2 and v=10;
++-------------+-----+-----+
+| [applied]   |   s |   v |
+|-------------+-----+-----|
+| False       |   1 |  10 |
++-------------+-----+-----+
+> delete from lwt where p=1 and c=1 if s=2;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> delete from lwt where p=1 and c=1 if s=2 and v=10;
++-------------+-----+-----+
+| [applied]   |   s |   v |
+|-------------+-----+-----|
+| False       |   1 |  10 |
++-------------+-----+-----+
+> -- must succeed: regular row conditions match
+> delete from lwt where p=1 and c=1 if exists;
++-------------+-----+-----+-----+-----+
+| [applied]   |   p |   c |   s |   v |
+|-------------+-----+-----+-----+-----|
+| True        |   1 |   1 |   1 |  10 |
++-------------+-----+-----+-----+-----+
+> delete from lwt where p=1 and c=2 if v=20;
++-------------+-----+
+| [applied]   |   v |
+|-------------+-----|
+| True        |  20 |
++-------------+-----+
+> select * from lwt;
++-----+------+-----+------+
+|   p | c    |   s | v    |
+|-----+------+-----+------|
+|   1 | null |   1 | null |
++-----+------+-----+------+
+> -- must succeed: there is no regular rows in the partition (even though there is a static row)
+> insert into lwt(p, c, v) values(1, 1, 1) if not exists;
++-------------+------+------+------+------+
+| [applied]   | p    | c    | s    | v    |
+|-------------+------+------+------+------|
+| True        | null | null | null | null |
++-------------+------+------+------+------+
+> select * from lwt;
++-----+-----+-----+-----+
+|   p |   c |   s |   v |
+|-----+-----+-----+-----|
+|   1 |   1 |   1 |   1 |
++-----+-----+-----+-----+
+> delete from lwt where p=1 and c=1;
+OK
+> select * from lwt;
++-----+------+-----+------+
+|   p | c    |   s | v    |
+|-----+------+-----+------|
+|   1 | null |   1 | null |
++-----+------+-----+------+
+> -- must fail: there is no regular rows in the partition
+> update lwt set v=10 where p=1 and c=1 if exists;
++-------------+------+------+------+------+
+| [applied]   | p    | c    | s    | v    |
+|-------------+------+------+------+------|
+| False       | null | null | null | null |
++-------------+------+------+------+------+
+> update lwt set v=10 where p=1 and c=1 if s=1 and v=1;
++-------------+-----+------+
+| [applied]   |   s | v    |
+|-------------+-----+------|
+| False       |   1 | null |
++-------------+-----+------+
+> update lwt set s=10 where p=1 and c=1 if s=1 and v=1;
++-------------+-----+------+
+| [applied]   |   s | v    |
+|-------------+-----+------|
+| False       |   1 | null |
++-------------+-----+------+
+> delete s from lwt where p=1 and c=1 if s=1 and v=1;
++-------------+-----+------+
+| [applied]   |   s | v    |
+|-------------+-----+------|
+| False       |   1 | null |
++-------------+-----+------+
+> delete v from lwt where p=1 and c=1 if s=1 and v=1;
++-------------+-----+------+
+| [applied]   |   s | v    |
+|-------------+-----+------|
+| False       |   1 | null |
++-------------+-----+------+
+> delete from lwt where p=1 and c=1 if s=1 and v=1;
++-------------+-----+------+
+| [applied]   |   s | v    |
+|-------------+-----+------|
+| False       |   1 | null |
++-------------+-----+------+
+> select * from lwt;
++-----+------+-----+------+
+|   p | c    |   s | v    |
+|-----+------+-----+------|
+|   1 | null |   1 | null |
++-----+------+-----+------+
+> -- must succeed: the condition applies only to the static row
+> delete from lwt where p=1 and c=1 if s=1;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> delete v from lwt where p=1 and c=1 if s=1;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> update lwt set v=10 where p=1 and c=1 if s=1;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> update lwt set s=10 where p=1 if s=1;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> select * from lwt;
++-----+-----+-----+-----+
+|   p |   c |   s |   v |
+|-----+-----+-----+-----|
+|   1 |   1 |  10 |  10 |
++-----+-----+-----+-----+
+> insert into lwt(p, c, s, v) values(2, 2, 20, 20);
+OK
+> insert into lwt(p, s) values(3, 30);
+OK
+> insert into lwt(p, s) values(4, 40);
+OK
+> select * from lwt;
++-----+------+-----+------+
+|   p | c    |   s | v    |
+|-----+------+-----+------|
+|   1 | 1    |  10 | 10   |
+|   2 | 2    |  20 | 20   |
+|   4 | null |  40 | null |
+|   3 | null |  30 | null |
++-----+------+-----+------+
+> -- must succeed: static row conditions match
+> delete s from lwt where p=1 if exists;
++-------------+-----+------+-----+------+
+| [applied]   |   p | c    |   s | v    |
+|-------------+-----+------+-----+------|
+| True        |   1 | null |  10 | null |
++-------------+-----+------+-----+------+
+> delete s from lwt where p=2 if s=20;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| True        |  20 |
++-------------+-----+
+> delete s from lwt where p=3 if exists;
++-------------+-----+------+-----+------+
+| [applied]   |   p | c    |   s | v    |
+|-------------+-----+------+-----+------|
+| True        |   3 | null |  30 | null |
++-------------+-----+------+-----+------+
+> delete s from lwt where p=4 if s=40;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| True        |  40 |
++-------------+-----+
+> select * from lwt;
++-----+-----+------+-----+
+|   p |   c | s    |   v |
+|-----+-----+------+-----|
+|   1 |   1 | null |  10 |
+|   2 |   2 | null |  20 |
++-----+-----+------+-----+
+> insert into lwt(p, c, v) values(1, 1, 1);
+OK
+> insert into lwt(p, c, v, s) values(1, 2, 2, 1);
+OK
+> insert into lwt(p, c, v) values(2, 1, 1);
+OK
+> insert into lwt(p, c, v) values(2, 2, 2);
+OK
+> insert into lwt(p, c, v, s) values(2, 3, 3, 1);
+OK
+> -- must succeed: both static and regular row conditions match
+> delete v from lwt where p=1 and c=1 if v=1 and s=1;
++-------------+-----+-----+
+| [applied]   |   s |   v |
+|-------------+-----+-----|
+| True        |   1 |   1 |
++-------------+-----+-----+
+> delete s from lwt where p=1 and c=2 if v=2 and s=1;
++-------------+-----+-----+
+| [applied]   |   s |   v |
+|-------------+-----+-----|
+| True        |   1 |   2 |
++-------------+-----+-----+
+> delete from lwt where p=2 and c=3 if v=3 and s=1;
++-------------+-----+-----+
+| [applied]   |   s |   v |
+|-------------+-----+-----|
+| True        |   1 |   3 |
++-------------+-----+-----+
+> update lwt set v=2 where p=2 and c=1 if v=1 and s=1;
++-------------+-----+-----+
+| [applied]   |   s |   v |
+|-------------+-----+-----|
+| True        |   1 |   1 |
++-------------+-----+-----+
+> update lwt set s=2 where p=2 and c=2 if v=2 and s=1;
++-------------+-----+-----+
+| [applied]   |   s |   v |
+|-------------+-----+-----|
+| True        |   1 |   2 |
++-------------+-----+-----+
+> select * from lwt;
++-----+-----+------+------+
+|   p |   c | s    | v    |
+|-----+-----+------+------|
+|   1 |   1 | null | null |
+|   1 |   2 | null | 2    |
+|   2 |   1 | 2    | 2    |
+|   2 |   2 | 2    | 2    |
++-----+-----+------+------+
+> -- sanity checks
+> update lwt set v=1 where p=1 if exists;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part c"
+> update lwt set v=1 where p=1 if s=1;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part c"
+> update lwt set v=1 where p=1 if v=1;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part c"
+> update lwt set v=1 where p=1 if s=1 and v=1;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part c"
+> update lwt set s=1 where p=1 if v=1;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part c"
+> update lwt set s=1 where p=1 if v=1 and s=1;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part c"
+> update lwt set s=1 where p=1 and c=1 if s=1;
+Error from server: code=2200 [Invalid query] message="Invalid restrictions on clustering columns since the UPDATE statement modifies only static columns"
+> update lwt set s=1 where p=1 and c=1 if exists;
+Error from server: code=2200 [Invalid query] message="Invalid restrictions on clustering columns since the UPDATE statement modifies only static columns"
+> delete from lwt where p=1 if exists;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> delete from lwt where p=1 if v=10;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> delete from lwt where p=1 and c>0 if exists;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> delete from lwt where p=1 and c>0 if v=10;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> delete v from lwt where p=1 if exists;
+Error from server: code=2200 [Invalid query] message="Primary key column 'c' must be specified in order to modify column 'v'"
+> delete v from lwt where p=1 if v=10;
+Error from server: code=2200 [Invalid query] message="Primary key column 'c' must be specified in order to modify column 'v'"
+> delete v from lwt where p=1 and c>0 if exists;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> delete v from lwt where p=1 and c>0 if v=10;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> delete s from lwt where p=1 if v=1;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to use IF condition on non static columns"
+> delete s from lwt where p=1 if v=1 and s=1;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to use IF condition on non static columns"
+> delete s from lwt where p=1 and c=1 if s=1;
+Error from server: code=2200 [Invalid query] message="Invalid restrictions on clustering columns since the DELETE statement modifies only static columns"
+> delete s from lwt where p=1 and c=1 if exists;
+Error from server: code=2200 [Invalid query] message="Invalid restrictions on clustering columns since the DELETE statement modifies only static columns"
+> drop table lwt;
+OK
+> 
+> -- mixing reading operations and static column conditions in one statement
+> create table lwt(p int, c int, s int static, v list<int>, primary key(p, c));
+OK
+> insert into lwt(p, c) values(1, 1);
+OK
+> insert into lwt(p, c, v) values(1, 2, [1, 2, 3]);
+OK
+> insert into lwt(p, c, s) values(1, 3, 1);
+OK
+> update lwt set v=v-[2] where p=1 and c=2 if s=1;
++-------------+-----+
+| [applied]   |   s |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> select * from lwt;
++-----+-----+-----+--------+
+|   p |   c |   s | v      |
+|-----+-----+-----+--------|
+|   1 |   1 |   1 | null   |
+|   1 |   2 |   1 | [1, 3] |
+|   1 |   3 |   1 | null   |
++-----+-----+-----+--------+
+> drop table lwt;
+OK
+> 
+> -- todo: conditional updates and views
+> 
+> --
+> -- collections: conditional updates and sets, maps, lists, frozen
+> -- sets, maps and lists
+> --
+> create table lwt (a int, b int, setint set<int>, setsetint set<frozen<set<int>>>, primary key (a, b));
+OK
+> insert into test (a, b) values (1,1);
+Error from server: code=2200 [Invalid query] message="unconfigured table test"
+> update lwt set setint={1, 2, 3}, setsetint = {{1,2,3}, {2,3,4}, {5,6,7}} where a = 1 and b = 1 if exists;
++-------------+------+------+----------+-------------+
+| [applied]   | a    | b    | setint   | setsetint   |
+|-------------+------+------+----------+-------------|
+| False       | null | null | null     | null        |
++-------------+------+------+----------+-------------+
+> select * from lwt allow filtering;
++-----+-----+----------+-------------+
+| a   | b   | setint   | setsetint   |
+|-----+-----+----------+-------------|
++-----+-----+----------+-------------+
+> update lwt set setint=setint+{1, 2, 3}, setsetint = setsetint + {{7,8,9}} where a = 1 and b = 1 if setint = {1, 2, 3};
++-------------+----------+
+| [applied]   | setint   |
+|-------------+----------|
+| False       | null     |
++-------------+----------+
+> select * from lwt allow filtering;
++-----+-----+----------+-------------+
+| a   | b   | setint   | setsetint   |
+|-----+-----+----------+-------------|
++-----+-----+----------+-------------+
+> update lwt set setint=setint-{1, 2, 3}, setsetint = setsetint - {{1,2,3}} where a = 1 and b = 1  if exists;
++-------------+------+------+----------+-------------+
+| [applied]   | a    | b    | setint   | setsetint   |
+|-------------+------+------+----------+-------------|
+| False       | null | null | null     | null        |
++-------------+------+------+----------+-------------+
+> select * from lwt allow filtering;
++-----+-----+----------+-------------+
+| a   | b   | setint   | setsetint   |
+|-----+-----+----------+-------------|
++-----+-----+----------+-------------+
+> drop table lwt;
+OK
+> 
+> create table lwt (a int, b int, mapint map<int, int>, mapsetint map<int, frozen<set<int>>>, primary key (a, b));
+OK
+> insert into lwt (a, b) values (1,1);
+OK
+> update lwt set mapint={1: 1, 2: 1, 3: 1}, mapsetint = {1: {1}, 2: {2}, 3: {3}} where a = 1 and b = 1 if exists;
++-------------+-----+-----+----------+-------------+
+| [applied]   |   a |   b | mapint   | mapsetint   |
+|-------------+-----+-----+----------+-------------|
+| True        |   1 |   1 | null     | null        |
++-------------+-----+-----+----------+-------------+
+> select * from lwt allow filtering;
++-----+-----+-----------+-------------+
+|   a |   b | mapint    | mapsetint   |
+|-----+-----+-----------+-------------|
+|   1 |   1 | [1, 2, 3] | [1, 2, 3]   |
++-----+-----+-----------+-------------+
+> update lwt set mapsetint = mapsetint + {1: {3,4}} where a = 1 and b = 1 if mapint[2] = 1;
++-------------+-----------+
+| [applied]   | mapint    |
+|-------------+-----------|
+| True        | [1, 2, 3] |
++-------------+-----------+
+> select * from lwt allow filtering;
++-----+-----+-----------+-------------+
+|   a |   b | mapint    | mapsetint   |
+|-----+-----+-----------+-------------|
+|   1 |   1 | [1, 2, 3] | [1, 2, 3]   |
++-----+-----+-----------+-------------+
+> update lwt set mapint = mapint + {2: 1} where a = 1 and b = 1 if exists;
++-------------+-----+-----+-----------+-------------+
+| [applied]   |   a |   b | mapint    | mapsetint   |
+|-------------+-----+-----+-----------+-------------|
+| True        |   1 |   1 | [1, 2, 3] | [1, 2, 3]   |
++-------------+-----+-----+-----------+-------------+
+> update lwt set mapint = mapint - {2} where a = 1 and b = 1 if exists;
++-------------+-----+-----+-----------+-------------+
+| [applied]   |   a |   b | mapint    | mapsetint   |
+|-------------+-----+-----+-----------+-------------|
+| True        |   1 |   1 | [1, 2, 3] | [1, 2, 3]   |
++-------------+-----+-----+-----------+-------------+
+> select * from lwt allow filtering;
++-----+-----+----------+-------------+
+|   a |   b | mapint   | mapsetint   |
+|-----+-----+----------+-------------|
+|   1 |   1 | [1, 3]   | [1, 2, 3]   |
++-----+-----+----------+-------------+
+> drop table lwt;
+OK
+> 
+> create table lwt (a int, b int, listint list<int>, staticsettext set<text> static, primary key(a, b));
+OK
+> insert into lwt (a, b) values (1,1);
+OK
+> update lwt set staticsettext = {'a', 'b', 'c'} where a = 1 if exists;
++-------------+-----+------+-----------------+-----------+
+| [applied]   |   a | b    | staticsettext   | listint   |
+|-------------+-----+------+-----------------+-----------|
+| False       |   1 | null | null            | null      |
++-------------+-----+------+-----------------+-----------+
+> select * from lwt allow filtering;
++-----+-----+-----------------+-----------+
+|   a |   b | staticsettext   | listint   |
+|-----+-----+-----------------+-----------|
+|   1 |   1 | null            | null      |
++-----+-----+-----------------+-----------+
+> update lwt set staticsettext = {'d', 'e', 'f'} where a = 2 if exists;
++-------------+------+------+-----------------+-----------+
+| [applied]   | a    | b    | staticsettext   | listint   |
+|-------------+------+------+-----------------+-----------|
+| False       | null | null | null            | null      |
++-------------+------+------+-----------------+-----------+
+> select * from lwt allow filtering;
++-----+-----+-----------------+-----------+
+|   a |   b | staticsettext   | listint   |
+|-----+-----+-----------------+-----------|
+|   1 |   1 | null            | null      |
++-----+-----+-----------------+-----------+
+> update lwt set staticsettext = staticsettext + {'d'}, listint = [1, 2, 3] where a = 1 and b = 1 if exists;
++-------------+-----+-----+-----------------+-----------+
+| [applied]   |   a |   b | staticsettext   | listint   |
+|-------------+-----+-----+-----------------+-----------|
+| True        |   1 |   1 | null            | null      |
++-------------+-----+-----+-----------------+-----------+
+> select * from lwt allow filtering;
++-----+-----+-----------------+-----------+
+|   a |   b | staticsettext   | listint   |
+|-----+-----+-----------------+-----------|
+|   1 |   1 | ['d']           | [1, 2, 3] |
++-----+-----+-----------------+-----------+
+> update lwt set staticsettext = staticsettext + {'e'} where a = 1 if exists;
++-------------+-----+------+-----------------+-----------+
+| [applied]   |   a | b    | staticsettext   | listint   |
+|-------------+-----+------+-----------------+-----------|
+| True        |   1 | null | ['d']           | null      |
++-------------+-----+------+-----------------+-----------+
+> select * from lwt allow filtering;
++-----+-----+-----------------+-----------+
+|   a |   b | staticsettext   | listint   |
+|-----+-----+-----------------+-----------|
+|   1 |   1 | ['d', 'e']      | [1, 2, 3] |
++-----+-----+-----------------+-----------+
+> update lwt set listint = listint + [5] where a = 1 and b = 1 if exists;
++-------------+-----+-----+-----------------+-----------+
+| [applied]   |   a |   b | staticsettext   | listint   |
+|-------------+-----+-----+-----------------+-----------|
+| True        |   1 |   1 | ['d', 'e']      | [1, 2, 3] |
++-------------+-----+-----+-----------------+-----------+
+> select * from lwt allow filtering;
++-----+-----+-----------------+--------------+
+|   a |   b | staticsettext   | listint      |
+|-----+-----+-----------------+--------------|
+|   1 |   1 | ['d', 'e']      | [1, 2, 3, 5] |
++-----+-----+-----------------+--------------+
+> update lwt set listint = [-1] + listint, staticsettext = staticsettext - {'e'} where a = 1 and b = 1 if exists;
++-------------+-----+-----+-----------------+--------------+
+| [applied]   |   a |   b | staticsettext   | listint      |
+|-------------+-----+-----+-----------------+--------------|
+| True        |   1 |   1 | ['d', 'e']      | [1, 2, 3, 5] |
++-------------+-----+-----+-----------------+--------------+
+> select * from lwt allow filtering;
++-----+-----+-----------------+------------------+
+|   a |   b | staticsettext   | listint          |
+|-----+-----+-----------------+------------------|
+|   1 |   1 | ['d']           | [-1, 1, 2, 3, 5] |
++-----+-----+-----------------+------------------+
+> drop table lwt;
+OK
+> 
+> create table lwt (a int, b int, flistint frozen<list<int>>, smapint map<text, int> static, primary key(a, b));
+OK
+> insert into lwt (a, b) values (1,1);
+OK
+> update lwt set smapint = {'a': 1, 'b': 1, 'c': 3} where a = 1 if exists;
++-------------+-----+------+-----------+------------+
+| [applied]   |   a | b    | smapint   | flistint   |
+|-------------+-----+------+-----------+------------|
+| False       |   1 | null | null      | null       |
++-------------+-----+------+-----------+------------+
+> select * from lwt allow filtering;
++-----+-----+-----------+------------+
+|   a |   b | smapint   | flistint   |
+|-----+-----+-----------+------------|
+|   1 |   1 | null      | null       |
++-----+-----+-----------+------------+
+> update lwt set smapint = smapint + {'d': 3}, flistint = [1] where a = 1 if exists;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part b"
+> update lwt set smapint = smapint + {'d': 4}, flistint = [1] where a = 1 and b = 1 if exists;
++-------------+-----+-----+-----------+------------+
+| [applied]   |   a |   b | smapint   | flistint   |
+|-------------+-----+-----+-----------+------------|
+| True        |   1 |   1 | null      | null       |
++-------------+-----+-----+-----------+------------+
+> select * from lwt allow filtering;
++-----+-----+-----------+------------+
+|   a |   b | smapint   | flistint   |
+|-----+-----+-----------+------------|
+|   1 |   1 | ['d']     | [1]        |
++-----+-----+-----------+------------+
+> update lwt set flistint = [1, 2] where a = 1 and b = 1 if exists;
++-------------+-----+-----+-----------+------------+
+| [applied]   |   a |   b | smapint   | flistint   |
+|-------------+-----+-----+-----------+------------|
+| True        |   1 |   1 | ['d']     | [1]        |
++-------------+-----+-----+-----------+------------+
+> select * from lwt allow filtering;
++-----+-----+-----------+------------+
+|   a |   b | smapint   | flistint   |
+|-----+-----+-----------+------------|
+|   1 |   1 | ['d']     | [1, 2]     |
++-----+-----+-----------+------------+
+> update lwt set flistint = flistint + [3] where a = 1 and b = 1 if exists;
+Error from server: code=2200 [Invalid query] message="Invalid operation (flistint = flistint + [3]) for frozen collection column flistint"
+> select * from lwt allow filtering;
++-----+-----+-----------+------------+
+|   a |   b | smapint   | flistint   |
+|-----+-----+-----------+------------|
+|   1 |   1 | ['d']     | [1, 2]     |
++-----+-----+-----------+------------+
+> update lwt set flistint = [4]  where a = 1 and b = 1 if smapint['a'] = 1;
++-------------+-----------+
+| [applied]   | smapint   |
+|-------------+-----------|
+| False       | ['d']     |
++-------------+-----------+
+> update lwt set flistint = [4]  where a = 1 and b = 1;
+OK
+> drop table lwt;
+OK
+> --
+> -- collection: ends
+> --
+> --
+> -- if expr grammar
+> --
+> create table lwt (a int, c int, listint list<int>, mapint map<int, int>, setint set<int>, primary key(a));
+OK
+> -- term
+> update lwt set c=0 where a = 1 if c;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:35 no viable alternative at input ';'">
+> -- -- equality
+> update lwt set c=0 where a = 1 if c = 1;
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> -- inequality: there is na inequality
+> update lwt set c=0 where a = 1 if c != 1;
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> -- greater
+> update lwt set c=0 where a = 1 if c > 1;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   0 |
++-------------+-----+
+> -- less
+> update lwt set c=0 where a = 1 if c < 1;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| True        |   0 |
++-------------+-----+
+> -- greater equal
+> update lwt set c=0 where a = 1 if c >= 1;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   0 |
++-------------+-----+
+> -- less equal
+> update lwt set c=0 where a = 1 if c <= 1;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| True        |   0 |
++-------------+-----+
+> -- AND prediate
+> update lwt set c=0 where a = 1 if c = 1 and c = 1;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   0 |
++-------------+-----+
+> -- OR predicate: Cassandra users do not deserve it :(
+> update lwt set c=0 where a = 1 if c = 1 or c = 1;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:40 : Syntax error">
+> -- null
+> update lwt set c=0 where a = 1 if c = null;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   0 |
++-------------+-----+
+> -- in
+> update lwt set c=0 where a = 1 if c in (1);
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   0 |
++-------------+-----+
+> -- in
+> update lwt set c=0 where a = 1 if c in (1, 2);
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   0 |
++-------------+-----+
+> -- in (null)
+> update lwt set c=0 where a = 1 if c in (1, null);
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   0 |
++-------------+-----+
+> -- list contains
+> update lwt set c=0 where a = 1 if listint contains null;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:42 no viable alternative at input 'contains'">
+> -- map contains
+> update lwt set c=0 where a = 1 if mapint contains key 1;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input 'contains'">
+> -- set contains
+> update lwt set c=0 where a = 1 if setint contains key 1;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input 'contains'">
+> -- multi-value set contaias
+> update lwt set c=0 where a = 1 if setint contains key 1;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input 'contains'">
+> -- addressing map element
+> update lwt set c=0 where a = 1 if mapint[2] = 3;
++-------------+----------+
+| [applied]   | mapint   |
+|-------------+----------|
+| False       | null     |
++-------------+----------+
+> -- addressing map element
+> update lwt set c=0 where a = 1 if mapint[2];
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:43 no viable alternative at input ';'">
+> -- comparing map element and null
+> update lwt set c=0 where a = 1 if mapint[2] = null;
++-------------+----------+
+| [applied]   | mapint   |
+|-------------+----------|
+| True        | null     |
++-------------+----------+
+> -- rinse and repeat with actual data
+> insert into lwt (a, c, listint, mapint, setint) values (1, 1, [1], {1: 1}, {1});
+OK
+> update lwt set c=1 where a = 1 if c = 0;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   1 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=2 where a = 1 if c != 1;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   1 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=3 where a = 1 if c > 0;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   3 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=4 where a = 1 if c < 2;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   3 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   3 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=5 where a = 1 if c >= 1;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| True        |   3 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   5 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=6 where a = 1 if c <= 5;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| True        |   5 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   6 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=7 where a = 1 if c = 1 and c = 1;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   6 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   6 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=8 where a = 1 if c = null;
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   6 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   6 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=9 where a = 1 if c in (4);
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   6 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   6 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=10 where a = 1 if c in (4, 5);
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   6 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   6 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=11 where a = 1 if c in (5, null);
++-------------+-----+
+| [applied]   |   c |
+|-------------+-----|
+| False       |   6 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |   6 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=12 where a = 1 if mapint[1] = 1;
++-------------+----------+
+| [applied]   | mapint   |
+|-------------+----------|
+| True        | [1]      |
++-------------+----------+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |  12 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=13 where a = 1 if mapint[1] = null;
++-------------+----------+
+| [applied]   | mapint   |
+|-------------+----------|
+| False       | [1]      |
++-------------+----------+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |  12 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> drop table lwt;
+OK
+> --
+> -- conditions: null handling
+> --
+> create table lwt (a int, b int, primary key(a));
+OK
+> insert into lwt (a) values (1);
+OK
+> -- null >|<|<=|<= val = false
+> update lwt set b = 1 where a = 1 if b > 3;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set b = 1 where a = 1 if b >= 3;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set b = 1 where a = 1 if b <= 3;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set b = 1 where a = 1 if b < 3;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> -- null >|<|<=|<= null = error
+> update lwt set b = 1 where a = 1 if b > null;
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator ">""
+> update lwt set b = 1 where a = 1 if b >= null;
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator ">=""
+> update lwt set b = 1 where a = 1 if b < null;
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator "<""
+> update lwt set b = 1 where a = 1 if b <= null;
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator "<=""
+> -- cassandra doesn't allow this (ugh), but test nevertheless
+> update lwt set b = 1 where a = 1 if 3 < b;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input '3'">
+> update lwt set b = 1 where a = 1 if 3 <= b;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input '3'">
+> update lwt set b = 1 where a = 1 if 3 >= b;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input '3'">
+> update lwt set b = 1 where a = 1 if 3 > b;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input '3'">
+> update lwt set b = 1 where a = 1 if null < b;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input 'null'">
+> update lwt set b = 1 where a = 1 if null <= b;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input 'null'">
+> update lwt set b = 1 where a = 1 if null > b;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input 'null'">
+> update lwt set b = 1 where a = 1 if null >= b;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input 'null'">
+> update lwt set b = 1 where a = 1 if null = b;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:36 no viable alternative at input 'null'">
+> -- null == null = true
+> update lwt set b = 1 where a = 1 if b = null;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> select * from lwt allow filtering;
++-----+-----+
+|   a |   b |
+|-----+-----|
+|   1 |   1 |
++-----+-----+
+> -- val !=  null = true
+> update lwt set b = null where a = 1 if b != null;
++-------------+-----+
+| [applied]   |   b |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> select * from lwt allow filtering;
++-----+------+
+|   a | b    |
+|-----+------|
+|   1 | null |
++-----+------+
+> update lwt set b = null where a = 1;
+OK
+> select * from lwt allow filtering;
++-----+------+
+|   a | b    |
+|-----+------|
+|   1 | null |
++-----+------+
+> -- null != null  = false
+> update lwt set b = 1 where a = 1 if b != null;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> select * from lwt allow filtering;
++-----+------+
+|   a | b    |
+|-----+------|
+|   1 | null |
++-----+------+
+> -- null != val  = true
+> update lwt set b = 2 where a = 1 if b != 1;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> select * from lwt allow filtering;
++-----+-----+
+|   a |   b |
+|-----+-----|
+|   1 |   2 |
++-----+-----+
+> drop table lwt;
+OK
+> --
+> -- conditions: simple expression
+> --
+> create table lwt (a int, b boolean, d decimal, f double, i int, s text, t timestamp, primary key(a));
+OK
+> insert into lwt (a, b, d, f, i, s, t) values (1, true, 1, 1, 1, '', dateof(now()));
+OK
+> -- boolean test
+> update lwt set b = false where a = 1 if b = true;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| True        | True |
++-------------+------+
+> select b from lwt where a = 1;
++-------+
+| b     |
+|-------|
+| False |
++-------+
+> update lwt set b = true where a = 1 if b = true;
++-------------+-------+
+| [applied]   | b     |
+|-------------+-------|
+| False       | False |
++-------------+-------+
+> select b from lwt where a = 1;
++-------+
+| b     |
+|-------|
+| False |
++-------+
+> update lwt set b = true where a = 1 if b != true;
++-------------+-------+
+| [applied]   | b     |
+|-------------+-------|
+| True        | False |
++-------------+-------+
+> -- for whatever reason these operators are allowed for boolean values,
+> -- keep it this way
+> update lwt set b = true where a = 1 if b > true;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| False       | True |
++-------------+------+
+> update lwt set b = true where a = 1 if b < false;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| False       | True |
++-------------+------+
+> update lwt set b = true where a = 1 if b <= false;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| False       | True |
++-------------+------+
+> update lwt set b = true where a = 1 if b >= true;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| True        | True |
++-------------+------+
+> -- integer test
+> update lwt set i = 1 where a = 1 if i = 1;
++-------------+-----+
+| [applied]   |   i |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> update lwt set i = 2 where a = 1 if i != 1;
++-------------+-----+
+| [applied]   |   i |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> update lwt set i = 3 where a = 1 if i < 1;
++-------------+-----+
+| [applied]   |   i |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> update lwt set i = 4 where a = 1 if i > 1;
++-------------+-----+
+| [applied]   |   i |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> update lwt set i = 5 where a = 1 if i >= 1;
++-------------+-----+
+| [applied]   |   i |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> update lwt set i = 6 where a = 1 if i <= 1;
++-------------+-----+
+| [applied]   |   i |
+|-------------+-----|
+| False       |   5 |
++-------------+-----+
+> -- Compare with another column: cassandra doesn't allow anything but a
+> -- constant on the right hand side :(
+> update lwt set i = 7 where a = 1 if i = t;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input ';'">
+> update lwt set i = 7 where a = 1 if i = d;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input ';'">
+> update lwt set i = 7 where a = 1 if i = f;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input ';'">
+> update lwt set i = 7 where a = 1 if s = i;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input ';'">
+> -- float test
+> update lwt set f = 2 where a = 1 if f = 1;
++-------------+-----+
+| [applied]   |   f |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> update lwt set f = 3 where a = 1 if f != 1;
++-------------+-----+
+| [applied]   |   f |
+|-------------+-----|
+| True        |   2 |
++-------------+-----+
+> update lwt set f = 4 where a = 1 if f < 1;
++-------------+-----+
+| [applied]   |   f |
+|-------------+-----|
+| False       |   3 |
++-------------+-----+
+> update lwt set f = 5 where a = 1 if f > 1;
++-------------+-----+
+| [applied]   |   f |
+|-------------+-----|
+| True        |   3 |
++-------------+-----+
+> update lwt set f = 6 where a = 1 if f >= 1;
++-------------+-----+
+| [applied]   |   f |
+|-------------+-----|
+| True        |   5 |
++-------------+-----+
+> update lwt set f = 7 where a = 1 if f <= 1;
++-------------+-----+
+| [applied]   |   f |
+|-------------+-----|
+| False       |   6 |
++-------------+-----+
+> -- this is broken, obviously
+> update lwt set f = 8 where a = 1 if f != 6.0000000000000001;
++-------------+-----+
+| [applied]   |   f |
+|-------------+-----|
+| False       |   6 |
++-------------+-----+
+> -- decimal
+> update lwt set d = 2.1 where a = 1 if d = 1;
++-------------+-----+
+| [applied]   |   d |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> update lwt set d = 3.2 where a = 1 if d != 2.09999999999999999999999999999999999;
++-------------+-----+
+| [applied]   |   d |
+|-------------+-----|
+| True        | 2.1 |
++-------------+-----+
+> update lwt set d = 4.3 where a = 1 if d < 3.2;
++-------------+-----+
+| [applied]   |   d |
+|-------------+-----|
+| False       | 3.2 |
++-------------+-----+
+> update lwt set d = 5.4 where a = 1 if d > 3.2;
++-------------+-----+
+| [applied]   |   d |
+|-------------+-----|
+| False       | 3.2 |
++-------------+-----+
+> update lwt set d = 6.5 where a = 1 if d >= 3.2;
++-------------+-----+
+| [applied]   |   d |
+|-------------+-----|
+| True        | 3.2 |
++-------------+-----+
+> update lwt set d = 7.6 where a = 1 if d <= 6.5;
++-------------+-----+
+| [applied]   |   d |
+|-------------+-----|
+| True        | 6.5 |
++-------------+-----+
+> -- text
+> update lwt set s = 'i' where a = 1 if s = '';
++-------------+-----+
+| [applied]   | s   |
+|-------------+-----|
+| True        |     |
++-------------+-----+
+> -- update lwt set s = 'щ' where a = 1 if s != 'j';
+> -- wheeled charriot and left-to-right
+> -- update lwt set s = ' 𐃌   ' where a = 1 if s < 'я';
+> -- update lwt set s = 'שׁלום' where a = 1 if s >= '1';
+> select s from lwt where a = 1;
++-----+
+| s   |
+|-----|
+| i   |
++-----+
+> -- timestamp test
+> -- update lwt set t = dateof(now()) where a = 1 if t <= dateof(now());
+> drop table lwt;
+OK
+> -- map keys
+> create table lwt (a int, b map<boolean, boolean>, c list<boolean>, s set<boolean>, primary key (a));
+OK
+> insert into lwt (a, b) values (1, {true: true});
+OK
+> update lwt set b = {true:false} where a = 1 if b[true] = true;
++-------------+--------+
+| [applied]   | b      |
+|-------------+--------|
+| True        | [True] |
++-------------+--------+
+> update lwt set b = {true:false} where a = 1 if b[true] = null;
++-------------+--------+
+| [applied]   | b      |
+|-------------+--------|
+| False       | [True] |
++-------------+--------+
+> update lwt set b = {false:true} where a = 1 if b[false] = null;
++-------------+--------+
+| [applied]   | b      |
+|-------------+--------|
+| True        | [True] |
++-------------+--------+
+> update lwt set b = {false:false} where a = 1 if b[true] != null;
++-------------+---------+
+| [applied]   | b       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> update lwt set b[true] = false where a = 1 if b[true] != 1;
+Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "value(b)" of type boolean"
+> update lwt set b[false] = null where a = 1 if b[true] > null;
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator ">""
+> update lwt set b[false] = true where a = 1 if b[1] != true;
+Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "key(b)" of type boolean"
+> update lwt set b = {true:false, true:true, false:false} where a = 1 if b[null] = null;
++-------------+---------+
+| [applied]   | b       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
+> update lwt set b = {false:false} where a = 1 if b[null] = null;
++-------------+---------------+
+| [applied]   | b             |
+|-------------+---------------|
+| True        | [False, True] |
++-------------+---------------+
+> update lwt set b = b + {false:true} where a = 1 if b[null] = true;
++-------------+---------+
+| [applied]   | b       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> update lwt set b[null] = false where a = 1 if b[true] != true;
+Error from server: code=2200 [Invalid query] message="Invalid null map key"
+> update lwt set b[null] = false where a = 1 if b[true] = true;
++-------------+---------+
+| [applied]   | b       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> select b from lwt where a = 1;
++---------+
+| b       |
+|---------|
+| [False] |
++---------+
+> update lwt set b = {false:true} where a = 1 if b = {true:false};
++-------------+---------+
+| [applied]   | b       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> update lwt set b = {} where a = 1 if exists;
++-------------+-----+---------+------+------+
+| [applied]   |   a | b       | c    | s    |
+|-------------+-----+---------+------+------|
+| True        |   1 | [False] | null | null |
++-------------+-----+---------+------+------+
+> update lwt set b = {} where a = 1 if b = {};
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> select b from lwt where a = 1;
++------+
+| b    |
+|------|
+| null |
++------+
+> update lwt set b = {} where a = 1 if b = null;
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> select b from lwt where a = 1;
++------+
+| b    |
+|------|
+| null |
++------+
+> update lwt set b = null where a = 1 if b = {};
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> select b from lwt where a = 1;
++------+
+| b    |
+|------|
+| null |
++------+
+> -- lists
+> -- null value == empty list. see CASSANDRA-7155
+> update lwt set c = [false] where a = 1 if c = [];
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> -- c is null, really, so this should work
+> update lwt set c = [] where a = 1 if c = null;
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> -- check with empty list
+> update lwt set c = [false] where a = 1 if c = [];
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> update lwt set c = [false] where a = 1 if c = [false];
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
+> update lwt set c = [false] where a = 1 if c = [null];
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> update lwt set c = [false] where a = 1 if c = [null, true];
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> select c from lwt where a = 1;
++---------+
+| c       |
+|---------|
+| [False] |
++---------+
+> update lwt set c = [true, false] where a = 1 if c[0] = false;
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
+> update lwt set c = c + [true] where a = 1 if c[1] = false;
++-------------+---------------+
+| [applied]   | c             |
+|-------------+---------------|
+| True        | [True, False] |
++-------------+---------------+
+> update lwt set c = c + [false] where a = 1 if c[2] = null;
++-------------+---------------------+
+| [applied]   | c                   |
+|-------------+---------------------|
+| False       | [True, False, True] |
++-------------+---------------------+
+> update lwt set c = c + [true] where a = 1 if c[3] = null;
++-------------+---------------------+
+| [applied]   | c                   |
+|-------------+---------------------|
+| True        | [True, False, True] |
++-------------+---------------------+
+> update lwt set c = c + [true] where a = 1 if c[100000000] = null;
++-------------+---------------------------+
+| [applied]   | c                         |
+|-------------+---------------------------|
+| True        | [True, False, True, True] |
++-------------+---------------------------+
+> update lwt set c = c + [false] where a = 1 if c[100000000] = true;
++-------------+---------------------------------+
+| [applied]   | c                               |
+|-------------+---------------------------------|
+| False       | [True, False, True, True, True] |
++-------------+---------------------------------+
+> update lwt set c = c + [true, false] where a = 1 if c[null] = false;
++-------------+---------------------------------+
+| [applied]   | c                               |
+|-------------+---------------------------------|
+| False       | [True, False, True, True, True] |
++-------------+---------------------------------+
+> update lwt set c = [false] where a = 1 if c[null] = null;
++-------------+---------------------------------+
+| [applied]   | c                               |
+|-------------+---------------------------------|
+| True        | [True, False, True, True, True] |
++-------------+---------------------------------+
+> update lwt set c = [true, false, true, true, true] where a = 1 if c[null] = null;
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
+> update lwt set c = c + [false] where a = 1 if c[null] = 1;
+Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "value(c)" of type boolean"
+> update lwt set c = [true] + c where a = 1 if c = [false];
++-------------+---------------------------------+
+| [applied]   | c                               |
+|-------------+---------------------------------|
+| False       | [True, False, True, True, True] |
++-------------+---------------------------------+
+> select c from lwt where a = 1;
++---------------------------------+
+| c                               |
+|---------------------------------|
+| [True, False, True, True, True] |
++---------------------------------+
+> -- sets
+> -- null value == empty set
+> update lwt set s = {} where a = 1 if s = {};
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set s = {} where a = 1 if s = null;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set s = {false} where a = 1 if s = null;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set s = {true, false} where a = 1 if s = {false};
++-------------+---------+
+| [applied]   | s       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
+> update lwt set s = {false} where a = 1 if s = {null};
+Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
+> update lwt set s = {false} where a = 1 if s = {null, true};
+Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
+> update lwt set s = {true, false} where a = 1 if s{true} = false;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:49 no viable alternative at input '{'">
+> update lwt set s = {false} where a = 1 if s = 1;
+Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "s" of type set<boolean>"
+> update lwt set s = {true} + s where a = 1 if s = {false};
+Error from server: code=2200 [Invalid query] message="Invalid operation (s = {true} + s) for non list column s"
+> -- sets
+> -- null value == empty set
+> update lwt set s = {} where a = 1 if s = {};
++-------------+---------------+
+| [applied]   | s             |
+|-------------+---------------|
+| False       | [False, True] |
++-------------+---------------+
+> update lwt set s = {} where a = 1 if s = null;
++-------------+---------------+
+| [applied]   | s             |
+|-------------+---------------|
+| False       | [False, True] |
++-------------+---------------+
+> update lwt set s = {false} where a = 1 if s = null;
++-------------+---------------+
+| [applied]   | s             |
+|-------------+---------------|
+| False       | [False, True] |
++-------------+---------------+
+> update lwt set s = {true, false} where a = 1 if s = {false};
++-------------+---------------+
+| [applied]   | s             |
+|-------------+---------------|
+| False       | [False, True] |
++-------------+---------------+
+> update lwt set s = {false} where a = 1 if s = {null};
+Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
+> update lwt set s = {false} where a = 1 if s = {null, true};
+Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
+> update lwt set s = {true, false} where a = 1 if s{true} = false;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:49 no viable alternative at input '{'">
+> update lwt set s = {false} where a = 1 if s = 1;
+Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "s" of type set<boolean>"
+> update lwt set s = {true} + s where a = 1 if s = {false};
+Error from server: code=2200 [Invalid query] message="Invalid operation (s = {true} + s) for non list column s"
+> drop table lwt;
+OK
+> --
+> -- frozen collections
+> --
+> create table lwt (a int, b frozen<map<boolean, boolean>>, c frozen<list<boolean>>, s frozen<set<boolean>>, primary key (a));
+OK
+> insert into lwt (a, b) values (1, {true: true});
+OK
+> update lwt set b = {true:false} where a = 1 if b[true] = true;
++-------------+--------+
+| [applied]   | b      |
+|-------------+--------|
+| True        | [True] |
++-------------+--------+
+> update lwt set b = {true:false} where a = 1 if b[true] = null;
++-------------+--------+
+| [applied]   | b      |
+|-------------+--------|
+| False       | [True] |
++-------------+--------+
+> update lwt set b = {false:true} where a = 1 if b[false] = null;
++-------------+--------+
+| [applied]   | b      |
+|-------------+--------|
+| True        | [True] |
++-------------+--------+
+> update lwt set b = {false:false} where a = 1 if b[true] != null;
++-------------+---------+
+| [applied]   | b       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> update lwt set b[true] = false where a = 1 if b[true] != true;
+Error from server: code=2200 [Invalid query] message="Invalid operation (b[true] = false) for frozen collection column b"
+> update lwt set b = b + {false:true} where a = 1 if b[true] = true;
+Error from server: code=2200 [Invalid query] message="Invalid operation (b = b + {false:true}) for frozen collection column b"
+> select b from lwt where a = 1;
++---------+
+| b       |
+|---------|
+| [False] |
++---------+
+> update lwt set b = {false:true} where a = 1 if b = {true:false};
++-------------+---------+
+| [applied]   | b       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> update lwt set b = {} where a = 1 if exists;
++-------------+-----+---------+------+------+
+| [applied]   |   a | b       | c    | s    |
+|-------------+-----+---------+------+------|
+| True        |   1 | [False] | null | null |
++-------------+-----+---------+------+------+
+> update lwt set b = {} where a = 1 if b = {};
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| True        | []  |
++-------------+-----+
+> select b from lwt where a = 1;
++-----+
+| b   |
+|-----|
+| []  |
++-----+
+> update lwt set b = {} where a = 1 if b = null;
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| False       | []  |
++-------------+-----+
+> select b from lwt where a = 1;
++-----+
+| b   |
+|-----|
+| []  |
++-----+
+> update lwt set b = null where a = 1 if b = {};
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| True        | []  |
++-------------+-----+
+> select b from lwt where a = 1;
++------+
+| b    |
+|------|
+| null |
++------+
+> -- lists
+> -- null value != empty list for a frozen list
+> update lwt set c = [false] where a = 1 if c = [];
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> -- c is null, really, so this should work
+> update lwt set c = [] where a = 1 if c = null;
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> -- check with empty list
+> update lwt set c = [false] where a = 1 if c = [];
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| True        | []  |
++-------------+-----+
+> update lwt set c = [false] where a = 1 if c = [false];
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
+> update lwt set c = [false] where a = 1 if c = [null];
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> update lwt set c = [false] where a = 1 if c = [null, true];
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> -- lists with NULL are allowed, but cannot be stored
+> update lwt set c = [false, null] where a = 1 if c = [false];
+Error from server: code=2200 [Invalid query] message="Cannot store NULL in list or set"
+> select c from lwt where a = 1;
++---------+
+| c       |
+|---------|
+| [False] |
++---------+
+> -- negative list index
+> update lwt set c = [true, false] where a = 1 if c[-1] = false;
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> update lwt set c = [true, false] where a = 1 if c[-1.5] = false;
+Error from server: code=2200 [Invalid query] message="Invalid FLOAT constant (-1.5) for "index(c)" of type int"
+> update lwt set c = [true, false] where a = 1 if c[0] = false;
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
+> update lwt set c = [true] where a = 1 if c[1] = false;
++-------------+---------------+
+| [applied]   | c             |
+|-------------+---------------|
+| True        | [True, False] |
++-------------+---------------+
+> update lwt set c = [true, false] where a = 1 if c[2] = null;
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| True        | [True] |
++-------------+--------+
+> update lwt set c = [true] where a = 1 if c[100000000] = null;
++-------------+---------------+
+| [applied]   | c             |
+|-------------+---------------|
+| True        | [True, False] |
++-------------+---------------+
+> update lwt set c = [false] where a = 1 if c[null] = null;
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| True        | [True] |
++-------------+--------+
+> update lwt set c = [true] where a = 1 if c[null] = null;
++-------------+---------+
+| [applied]   | c       |
+|-------------+---------|
+| True        | [False] |
++-------------+---------+
+> update lwt set c = [true] + c where a = 1 if c = [false];
+Error from server: code=2200 [Invalid query] message="Invalid operation (c = [true] + c) for frozen list column c"
+> update lwt set c = [true,true,true,false,false,false] where a = 1 if exists;
++-------------+-----+------+--------+------+
+| [applied]   |   a | b    | c      | s    |
+|-------------+-----+------+--------+------|
+| True        |   1 | null | [True] | null |
++-------------+-----+------+--------+------+
+> update lwt set c = null where a = 1 if c[1] = true and c[5] = false and c[7] = null;
++-------------+-----------------------------------------+
+| [applied]   | c                                       |
+|-------------+-----------------------------------------|
+| True        | [True, True, True, False, False, False] |
++-------------+-----------------------------------------+
+> select c from lwt where a = 1;
++------+
+| c    |
+|------|
+| null |
++------+
+> -- sets
+> -- null value == empty set
+> update lwt set s = {} where a = 1 if s = {};
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set s = {} where a = 1 if s = null;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set s = {false} where a = 1 if s = null;
++-------------+-----+
+| [applied]   | s   |
+|-------------+-----|
+| False       | []  |
++-------------+-----+
+> update lwt set s = {true, false} where a = 1 if s = {false};
++-------------+-----+
+| [applied]   | s   |
+|-------------+-----|
+| False       | []  |
++-------------+-----+
+> update lwt set s = {false} where a = 1 if s = {null};
+Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
+> update lwt set s = {false} where a = 1 if s = {null, true};
+Error from server: code=2200 [Invalid query] message="null is not supported inside collections"
+> update lwt set s = {true, false} where a = 1 if s{true} = false;
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:49 no viable alternative at input '{'">
+> update lwt set s = s + {true} where a = 1 if s = {true, false};
+Error from server: code=2200 [Invalid query] message="Invalid operation (s = s + {true}) for frozen collection column s"
+> update lwt set s = {true, true} where a = 1 if exists;
++-------------+-----+------+------+-----+
+| [applied]   |   a | b    | c    | s   |
+|-------------+-----+------+------+-----|
+| True        |   1 | null | null | []  |
++-------------+-----+------+------+-----+
+> -- check non frozen sets are compared correctly to set literals
+> update lwt set s = {false, false} where a = 1 if  s = {true, true};
++-------------+--------+
+| [applied]   | s      |
+|-------------+--------|
+| True        | [True] |
++-------------+--------+
+> update lwt set s = {false, true} where a = 1 if  s = {true, false};
++-------------+---------+
+| [applied]   | s       |
+|-------------+---------|
+| False       | [False] |
++-------------+---------+
+> select s from lwt where a = 1;
++---------+
+| s       |
+|---------|
+| [False] |
++---------+
+> drop table lwt;
+OK
+> -- gt/le on composite collections
+> create table lwt (a int, b map<int, int>, c list<int>, s set<int>, primary key (a));
+OK
+> insert into lwt (a, b, c, s) values (1, {}, [], {});
+OK
+> -- maps
+> update lwt set b = {1:1} where a = 1 if b > {};
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator ">""
+> update lwt set b = {1:1} where a = 1 if b < {};
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator "<""
+> update lwt set b = {1:1} where a = 1 if b = {};
++-------------+------+
+| [applied]   | b    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set b = {2:2} where a = 1 if b > {1:1};
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| False       | [1] |
++-------------+-----+
+> update lwt set b = {2:2} where a = 1 if b >= {1:1};
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| True        | [1] |
++-------------+-----+
+> update lwt set b = {3:3} where a = 1 if b > {1:1};
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| True        | [2] |
++-------------+-----+
+> update lwt set b = {4:4} where a = 1 if b >= {2:3};
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| True        | [3] |
++-------------+-----+
+> update lwt set b = {4:4} where a = 1 if b >= {3:3};
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| True        | [4] |
++-------------+-----+
+> update lwt set b = {1:1} where a = 1 if b < {4:4};
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| False       | [4] |
++-------------+-----+
+> update lwt set b = {1:1} where a = 1 if b <= {4:4};
++-------------+-----+
+| [applied]   | b   |
+|-------------+-----|
+| True        | [4] |
++-------------+-----+
+> select b from lwt where a= 1;
++-----+
+| b   |
+|-----|
+| [1] |
++-----+
+> -- lists
+> update lwt set c = [1,1] where a = 1 if c > [];
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator ">""
+> update lwt set c = [1,1] where a = 1 if c < [];
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator "<""
+> update lwt set c = [1,1] where a = 1 if c = [];
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set c = [2,2] where a = 1 if c > [1,1];
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| False       | [1, 1] |
++-------------+--------+
+> update lwt set c = [2,2] where a = 1 if c >= [1,1];
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| True        | [1, 1] |
++-------------+--------+
+> update lwt set c = [3,3] where a = 1 if c > [1,1];
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| True        | [2, 2] |
++-------------+--------+
+> update lwt set c = [4,4] where a = 1 if c >= [2,3];
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| True        | [3, 3] |
++-------------+--------+
+> update lwt set c = [4,4] where a = 1 if c >= [3,3];
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| True        | [4, 4] |
++-------------+--------+
+> update lwt set c = [1,1] where a = 1 if c < [4,4];
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| False       | [4, 4] |
++-------------+--------+
+> update lwt set c = [1,1] where a = 1 if c <= [4,4];
++-------------+--------+
+| [applied]   | c      |
+|-------------+--------|
+| True        | [4, 4] |
++-------------+--------+
+> select c from lwt where a= 1;
++--------+
+| c      |
+|--------|
+| [1, 1] |
++--------+
+> -- sets
+> update lwt set s = {1} where a = 1 if s > {};
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator ">""
+> update lwt set s = {1} where a = 1 if s < {};
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator "<""
+> update lwt set s = {1} where a = 1 if s = {};
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set s = {2} where a = 1 if s > {1};
++-------------+-----+
+| [applied]   | s   |
+|-------------+-----|
+| False       | [1] |
++-------------+-----+
+> update lwt set s = {2} where a = 1 if s >= {1};
++-------------+-----+
+| [applied]   | s   |
+|-------------+-----|
+| True        | [1] |
++-------------+-----+
+> update lwt set s = {3} where a = 1 if s > {1};
++-------------+-----+
+| [applied]   | s   |
+|-------------+-----|
+| True        | [2] |
++-------------+-----+
+> update lwt set s = {4} where a = 1 if s >= {3};
++-------------+-----+
+| [applied]   | s   |
+|-------------+-----|
+| True        | [3] |
++-------------+-----+
+> update lwt set s = {1} where a = 1 if s < {4};
++-------------+-----+
+| [applied]   | s   |
+|-------------+-----|
+| False       | [4] |
++-------------+-----+
+> update lwt set s = {1} where a = 1 if s <= {4};
++-------------+-----+
+| [applied]   | s   |
+|-------------+-----|
+| True        | [4] |
++-------------+-----+
+> select s from lwt where a= 1;
++-----+
+| s   |
+|-----|
+| [1] |
++-----+
+> drop table lwt;
+OK
+> -- collections of collections
+> -- non-frozen nested sets are not supported
+> create table lwt (a int, b set<map<int,int>>, c list<set<int>>, primary key (a));
+Error from server: code=2200 [Invalid query] message="Non-frozen user types or collections are not allowed inside collections: set<map<int, int>>"
+> -- frozen collection elements are however ok
+> create table lwt (a int, b set<frozen<list<int>>>, c list<frozen<set<int>>>, primary key (a));
+OK
+> insert into lwt (a, b, c) values (1, {[1,2], [1,2]}, [{1,2}, {1,2}]);
+OK
+> -- sets
+> update lwt set b={[3,3], [4,4]} where a = 1 if b = {[1,2], [1,2]};
++-------------+----------+
+| [applied]   | b        |
+|-------------+----------|
+| True        | [[1, 2]] |
++-------------+----------+
+> update lwt set b={[5,5,5], [4,4,4]} where a = 1 if b > {[3,3], [4,4]};
++-------------+------------------+
+| [applied]   | b                |
+|-------------+------------------|
+| False       | [[3, 3], [4, 4]] |
++-------------+------------------+
+> update lwt set b={[5,5,5], [4,4,4]} where a = 1 if b >= {[3,3], [4,4]};
++-------------+------------------+
+| [applied]   | b                |
+|-------------+------------------|
+| True        | [[3, 3], [4, 4]] |
++-------------+------------------+
+> select b from lwt where a = 1;
++------------------------+
+| b                      |
+|------------------------|
+| [[4, 4, 4], [5, 5, 5]] |
++------------------------+
+> -- lists
+> update lwt set c=[{3,4}, {4,5}] where a = 1 if c = [{1,2}, {1,2}];
++-------------+------------------+
+| [applied]   | c                |
+|-------------+------------------|
+| True        | [[1, 2], [1, 2]] |
++-------------+------------------+
+> update lwt set c=[{3,4,5}, {4,5,6}] where a = 1 if c > [{3,3}, {4,4}];
++-------------+------------------+
+| [applied]   | c                |
+|-------------+------------------|
+| True        | [[3, 4], [4, 5]] |
++-------------+------------------+
+> update lwt set c=[{5,6,7}, {7,8,9}] where a = 1 if c >= [{3,3}, {5,4}];
++-------------+------------------------+
+| [applied]   | c                      |
+|-------------+------------------------|
+| True        | [[3, 4, 5], [4, 5, 6]] |
++-------------+------------------------+
+> update lwt set c=[{5,6,7}, {7,8,9}] where a = 1 if c >= [{3,4}, {4,5}];
++-------------+------------------------+
+| [applied]   | c                      |
+|-------------+------------------------|
+| True        | [[5, 6, 7], [7, 8, 9]] |
++-------------+------------------------+
+> select c from lwt where a = 1;
++------------------------+
+| c                      |
+|------------------------|
+| [[5, 6, 7], [7, 8, 9]] |
++------------------------+
+> drop table lwt;
+OK
+> -- in predicate, static columns
+> create table lwt (a int, b int, c list<int>, d set<int> static, primary key (a, b));
+OK
+> insert into lwt (a, b, c, d) values (1,1,[1],{1});
+OK
+> update lwt set d = {2,3,4,5,-1} where a = 1 if d in ({1});
++-------------+-----+
+| [applied]   | d   |
+|-------------+-----|
+| True        | [1] |
++-------------+-----+
+> update lwt set d = {2} where a = 1 if d in ({2,3,4,5});
++-------------+------------------+
+| [applied]   | d                |
+|-------------+------------------|
+| False       | [-1, 2, 3, 4, 5] |
++-------------+------------------+
+> update lwt set d = {2} where a = 1 if d in ({2,3,4,5,-1});
++-------------+------------------+
+| [applied]   | d                |
+|-------------+------------------|
+| True        | [-1, 2, 3, 4, 5] |
++-------------+------------------+
+> update lwt set c = [2,3,4,5,-1] where a = 1 and b = 1 if c in ([1]);
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| True        | [1] |
++-------------+-----+
+> update lwt set c = [2] where a = 1 and b = 1 if c in ([2,3,4,5]);
++-------------+------------------+
+| [applied]   | c                |
+|-------------+------------------|
+| False       | [2, 3, 4, 5, -1] |
++-------------+------------------+
+> -- check null handling in IN condition
+> update lwt set c = [] where a = 1 and b = 1 if c in ([2,3,4,5,-1]);
++-------------+------------------+
+| [applied]   | c                |
+|-------------+------------------|
+| True        | [2, 3, 4, 5, -1] |
++-------------+------------------+
+> update lwt set c = null where a = 1 and b = 1 if c in ([]);
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set c = null where a = 1 and b = 1 if c in ([]);
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set c = null where a = 1 and b = 1 if c in (null);
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set c = [1] where a = 1 and b = 1 if c in ();
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set c = [2] where a = 1 and b = 1 if c in ([1], null, [2]);
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> delete from lwt where a = 1;
+OK
+> update lwt set d = {2} where a = 1 if d in ();
++-------------+------+
+| [applied]   | d    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set d = {2} where a = 1 if d in (null);
++-------------+------+
+| [applied]   | d    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set d = {} where a = 1 if d in ({}, {2});
++-------------+-----+
+| [applied]   | d   |
+|-------------+-----|
+| True        | [2] |
++-------------+-----+
+> update lwt set d = {} where a = 1 if d in (null, {2});
++-------------+------+
+| [applied]   | d    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set d = null where a = 1 if d in (null, {2});
++-------------+------+
+| [applied]   | d    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set d = null where a = 1 if d in (null, {2}, {3,4}, {5});
++-------------+------+
+| [applied]   | d    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> drop table lwt;
+OK
+> 
+> -- in predicate, frozen sets/lists columns
+> create table lwt (a int, b int, c frozen<list<int>>, d frozen<set<int>> static, primary key (a, b));
+OK
+> insert into lwt (a, b, c, d) values (1,1,[1],{1});
+OK
+> update lwt set d = {2,3,4,5,-1} where a = 1 if d in ({1});
++-------------+-----+
+| [applied]   | d   |
+|-------------+-----|
+| True        | [1] |
++-------------+-----+
+> update lwt set d = {2} where a = 1 if d in ({2,3,4,5});
++-------------+------------------+
+| [applied]   | d                |
+|-------------+------------------|
+| False       | [-1, 2, 3, 4, 5] |
++-------------+------------------+
+> update lwt set d = {2} where a = 1 if d in ({2,3,4,5,-1});
++-------------+------------------+
+| [applied]   | d                |
+|-------------+------------------|
+| True        | [-1, 2, 3, 4, 5] |
++-------------+------------------+
+> update lwt set c = [2,3,4,5,-1] where a = 1 and b = 1 if c in ([1]);
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| True        | [1] |
++-------------+-----+
+> update lwt set c = [2] where a = 1 and b = 1 if c in ([2,3,4,5]);
++-------------+------------------+
+| [applied]   | c                |
+|-------------+------------------|
+| False       | [2, 3, 4, 5, -1] |
++-------------+------------------+
+> -- check null handling in IN condition
+> update lwt set c = [] where a = 1 and b = 1 if c in ([2,3,4,5,-1]);
++-------------+------------------+
+| [applied]   | c                |
+|-------------+------------------|
+| True        | [2, 3, 4, 5, -1] |
++-------------+------------------+
+> update lwt set c = null where a = 1 and b = 1 if c in ([]);
++-------------+-----+
+| [applied]   | c   |
+|-------------+-----|
+| True        | []  |
++-------------+-----+
+> update lwt set c = null where a = 1 and b = 1 if c in ([]);
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set c = null where a = 1 and b = 1 if c in (null);
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set c = [1] where a = 1 and b = 1 if c in ();
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set c = [2] where a = 1 and b = 1 if c in ([1], null, [2]);
++-------------+------+
+| [applied]   | c    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> delete from lwt where a = 1;
+OK
+> update lwt set d = {2} where a = 1 if d in ();
++-------------+------+
+| [applied]   | d    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> update lwt set d = {2} where a = 1 if d in (null);
++-------------+------+
+| [applied]   | d    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> update lwt set d = {} where a = 1 if d in ({}, {2});
++-------------+-----+
+| [applied]   | d   |
+|-------------+-----|
+| True        | [2] |
++-------------+-----+
+> update lwt set d = {} where a = 1 if d in (null, {2});
++-------------+-----+
+| [applied]   | d   |
+|-------------+-----|
+| False       | []  |
++-------------+-----+
+> update lwt set d = null where a = 1 if d in (null, {2});
++-------------+-----+
+| [applied]   | d   |
+|-------------+-----|
+| False       | []  |
++-------------+-----+
+> update lwt set d = null where a = 1 if d in (null, {2}, {3,4}, {5});
++-------------+-----+
+| [applied]   | d   |
+|-------------+-----|
+| False       | []  |
++-------------+-----+
+> drop table lwt;
+OK
+> -- LWT and slices; a slice is a Cassandra term for a clustering key range,
+> -- usually within the same partition key
+> create table lwt (a int, b int, c int, d int, primary key (a, b, c));
+OK
+> insert into lwt (a, b, c, d) values (1,1,1,1);
+OK
+> insert into lwt (a, b, c, d) values (1,1,2,0);
+OK
+> insert into lwt (a, b, c, d) values (1,1,3,1);
+OK
+> insert into lwt (a, b, c, d) values (1,2,1,1);
+OK
+> insert into lwt (a, b, c, d) values (1,2,2,0);
+OK
+> insert into lwt (a, b, c, d) values (1,2,3,1);
+OK
+> insert into lwt (a, b, c, d) values (1,3,1,1);
+OK
+> insert into lwt (a, b, c, d) values (1,3,2,0);
+OK
+> insert into lwt (a, b, c, d) values (1,3,3,1);
+OK
+> -- update
+> select d from lwt    where a = 1 and b = 1;
++-----+
+|   d |
+|-----|
+|   1 |
+|   0 |
+|   1 |
++-----+
+> update lwt set d = 7 where a = 1 and b = 1 if d = 0;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part c"
+> select d from lwt    where a = 1 and b = 1;
++-----+
+|   d |
+|-----|
+|   1 |
+|   0 |
+|   1 |
++-----+
+> select d from lwt    where a = 1 and b = 2;
++-----+
+|   d |
+|-----|
+|   1 |
+|   0 |
+|   1 |
++-----+
+> update lwt set d = 7 where a = 1 and b = 2;
+Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part c"
+> -- delete
+> select a, b, c, d from lwt where a = 1 and b = 1;
++-----+-----+-----+-----+
+|   a |   b |   c |   d |
+|-----+-----+-----+-----|
+|   1 |   1 |   1 |   1 |
+|   1 |   1 |   2 |   0 |
+|   1 |   1 |   3 |   1 |
++-----+-----+-----+-----+
+> delete from lwt            where a = 1 and b = 1 if d = 0;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> select a, b, c, d from lwt where a = 1 and b = 1;
++-----+-----+-----+-----+
+|   a |   b |   c |   d |
+|-----+-----+-----+-----|
+|   1 |   1 |   1 |   1 |
+|   1 |   1 |   2 |   0 |
+|   1 |   1 |   3 |   1 |
++-----+-----+-----+-----+
+> select a, b, c, d from lwt where a = 1 and b = 2;
++-----+-----+-----+-----+
+|   a |   b |   c |   d |
+|-----+-----+-----+-----|
+|   1 |   2 |   1 |   1 |
+|   1 |   2 |   2 |   0 |
+|   1 |   2 |   3 |   1 |
++-----+-----+-----+-----+
+> delete from lwt            where a = 1 and b = 2 if d = 1;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> select a, b, c, d from lwt where a = 1 and b = 2;
++-----+-----+-----+-----+
+|   a |   b |   c |   d |
+|-----+-----+-----+-----|
+|   1 |   2 |   1 |   1 |
+|   1 |   2 |   2 |   0 |
+|   1 |   2 |   3 |   1 |
++-----+-----+-----+-----+
+> select a, b, c, d from lwt where a = 1 and b = 3;
++-----+-----+-----+-----+
+|   a |   b |   c |   d |
+|-----+-----+-----+-----|
+|   1 |   3 |   1 |   1 |
+|   1 |   3 |   2 |   0 |
+|   1 |   3 |   3 |   1 |
++-----+-----+-----+-----+
+> delete from lwt            where a = 1 and b = 3;
+OK
+> select a, b, c, d from lwt where a = 1 and b = 3;
++-----+-----+-----+-----+
+| a   | b   | c   | d   |
+|-----+-----+-----+-----|
++-----+-----+-----+-----+
+> drop table lwt;
+OK
+> -- ok to delete if d is static
+> create table lwt (a int, b int, c int, d int static, primary key (a, b, c));
+OK
+> insert into lwt (a, b, c, d) values (1,1,1,1);
+OK
+> insert into lwt (a, b, c, d) values (1,1,2,1);
+OK
+> insert into lwt (a, b, c, d) values (1,1,3,1);
+OK
+> select a, b, c, d from lwt where a = 1 and b = 1;
++-----+-----+-----+-----+
+|   a |   b |   c |   d |
+|-----+-----+-----+-----|
+|   1 |   1 |   1 |   1 |
+|   1 |   1 |   2 |   1 |
+|   1 |   1 |   3 |   1 |
++-----+-----+-----+-----+
+> -- try to delete all - fail
+> delete from lwt            where a = 1 and b = 1 if d = 0;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> -- ok to delete static row
+> delete d from lwt          where a = 1 if d = 0;
++-------------+-----+
+| [applied]   |   d |
+|-------------+-----|
+| False       |   1 |
++-------------+-----+
+> select a, b, c, d from lwt where a = 1;
++-----+-----+-----+-----+
+|   a |   b |   c |   d |
+|-----+-----+-----+-----|
+|   1 |   1 |   1 |   1 |
+|   1 |   1 |   2 |   1 |
+|   1 |   1 |   3 |   1 |
++-----+-----+-----+-----+
+> delete d from lwt          where a = 1 if d = 1;
++-------------+-----+
+| [applied]   |   d |
+|-------------+-----|
+| True        |   1 |
++-------------+-----+
+> select a, b, c, d from lwt where a = 1;
++-----+-----+-----+------+
+|   a |   b |   c | d    |
+|-----+-----+-----+------|
+|   1 |   1 |   1 | null |
+|   1 |   1 |   2 | null |
+|   1 |   1 |   3 | null |
++-----+-----+-----+------+
+> drop table lwt;
+OK
+> --
+> -- lists, sets, maps as partition or primary keys
+> --
+> -- This is covered with tests since with collections_as_maps
+> -- flags, sets/ints in primary key will make it difficult
+> -- to find the matching cells
+> --
+> -- invalid collection type
+> create table lwt (a int, b int, c set<int>, primary key (a, b, c));
+Error from server: code=2200 [Invalid query] message="Invalid non-frozen collection type for PRIMARY KEY component c"
+> -- ok - frozen collections are allowed
+> create table lwt (a int, b int, c frozen<list<int>>, primary key (a, b, c));
+OK
+> drop table lwt;
+OK
+> -- invalid collection type
+> create table lwt (a list<int>, b int, c int, primary key (a, b, c));
+Error from server: code=2200 [Invalid query] message="Invalid non-frozen collection type for PRIMARY KEY component a"
+> --
+> -- test empty primary key range: it is impossible to construct due to
+> -- limitations of the query language
+> --
+> create table lwt (a int, b int, c int, primary key (a, b));
+OK
+> -- error: can't use token and non-token restrictions
+> update lwt set c = 1 where a = 1 and b = 1 and token(a) > 0 and token(a) < 0 if c = 1;
+Error from server: code=2200 [Invalid query] message="Columns "ColumnDefinition{name=a, type=org.apache.cassandra.db.marshal.Int32Type, kind=PARTITION_KEY, componentIndex=0, droppedAt=-9223372036854775808}" cannot be restricted by both a normal relation and a token relation"
+> -- error: can't use eq and non-eq restriction
+> update lwt set c = 1 where a = 1 and b = 1 and a < 0 if c = 1;
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
+> update lwt set c = 1 where a = 1 and b = 1 and a < 0 if c = 1;
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
+> -- error: partition key must be fully restricted
+> update lwt set c = 1 where a > 0 and a < 0 and b = 1 if c = 1;
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
+> -- error: partition key and IN is not supported
+> update lwt set c = 1 where a in () and b = 1 if c = 1;
+Error from server: code=2200 [Invalid query] message="IN on the partition key is not supported with conditional updates"
+> update lwt set c = 1 where a = 1 and b IN (1, 2) if c = 1;
+Error from server: code=2200 [Invalid query] message="IN on the clustering key columns is not supported with conditional updates"
+> update lwt set c = 1 where a = 1 and (b) IN ((1), (2)) if c = 1;
+Error from server: code=2200 [Invalid query] message="IN on the clustering key columns is not supported with conditional updates"
+> drop table lwt;
+OK
+> 
+> -- gh-10081 Conditional UPDATE fails to apply when IF includes both static
+> -- and non-static columns.
+> create table t (p int, c int, r int, s int static, primary key(p, c));
+OK
+> insert into t (p, s) values (1, 1);
+OK
+> update t set s=2, r=1 where p=1 and c=1 if s=1 and r=null;
++-------------+-----+------+
+| [applied]   |   s | r    |
+|-------------+-----+------|
+| True        |   1 | null |
++-------------+-----+------+
+> -- in case of LWT batch, each statement in the batch should
+> -- use correct regular or static row to evaluate the condition.
+> -- Specifically, the following batch must apply because
+> -- condition of statement 1 is true for regular row (1,1),
+> -- and condition of statements 2 and 3 are true for regular rows (1,2)
+> -- (1,3), which do not exist in the table, but are incarnated
+> -- to check the condition
+> begin batch
+>     update t set s=3, r=10 where p=1 and c=1 if s=2 and r=1
+>     update t set s=4, r=2 where p=1 and c=2 if s=2 and r=null
+>     update t set s=5, r=3 where p=1 and c=3 if s=2 and r=null
+> apply batch;
++-------------+-----+------+-----+------+
+| [applied]   |   p | c    |   s | r    |
+|-------------+-----+------+-----+------|
+| True        |   1 | 1    |   2 | 1    |
+| True        |   1 | null |   2 | null |
+| True        |   1 | null |   2 | null |
++-------------+-----+------+-----+------+
+> -- test select behaviour for static rows
+> -- the table contains 3 rows, right?
+> select count(*) from t;
++---------+
+|   count |
+|---------|
+|       3 |
++---------+
+> -- count(*)  returns 3 rows. So let's delete 3 rows
+> delete from t where p=1 and c = 1 if exists;
++-------------+-----+-----+-----+-----+
+| [applied]   |   p |   c |   s |   r |
+|-------------+-----+-----+-----+-----|
+| True        |   1 |   1 |   5 |  10 |
++-------------+-----+-----+-----+-----+
+> delete from t where p=1 and c = 2 if exists;
++-------------+-----+-----+-----+-----+
+| [applied]   |   p |   c |   s |   r |
+|-------------+-----+-----+-----+-----|
+| True        |   1 |   2 |   5 |   2 |
++-------------+-----+-----+-----+-----+
+> delete from t where p=1 and c = 3 if exists;
++-------------+-----+-----+-----+-----+
+| [applied]   |   p |   c |   s |   r |
+|-------------+-----+-----+-----+-----|
+| True        |   1 |   3 |   5 |   3 |
++-------------+-----+-----+-----+-----+
+> -- WAT, count(*) returns 1 row even though
+> -- there were 3 rows and we deleted 3 rows!
+> select count(*) from t;
++---------+
+|   count |
+|---------|
+|       1 |
++---------+
+> -- there is no DELETE statement syntax to
+> -- delete a static row; yep, that's right,
+> -- the row is there but you can't DELETE it!
+> delete from t where p=1 if exists;
+Error from server: code=2200 [Invalid query] message="DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns"
+> -- let's kill the sneaky static row now
+> update t set s = null where p=1 if exists;
++-------------+-----+------+-----+------+
+| [applied]   |   p | c    |   s | r    |
+|-------------+-----+------+-----+------|
+| True        |   1 | null |   5 | null |
++-------------+-----+------+-----+------+
+> -- no more sneaky static rows.
+> select count(*) from t;
++---------+
+|   count |
+|---------|
+|       0 |
++---------+
+> -- let's add a row back!
+> insert into t (p, s) values (1,1) if not exists;
++-------------+------+------+------+------+
+| [applied]   | p    | c    | s    | r    |
+|-------------+------+------+------+------|
+| True        | null | null | null | null |
++-------------+------+------+------+------+
+> -- that's right, there is a row now; what row though?
+> select count(*) from t;
++---------+
+|   count |
+|---------|
+|       1 |
++---------+
+> -- let's add more rows
+> insert into t (p, c, s) values (1,1,1) if not exists;
++-------------+------+------+------+------+
+| [applied]   | p    | c    | s    | r    |
+|-------------+------+------+------+------|
+| True        | null | null | null | null |
++-------------+------+------+------+------+
+> -- WAT, we did not add more rows?
+> select count(*) from t;
++---------+
+|   count |
+|---------|
+|       1 |
++---------+
+> -- WAT, you can't add a static row by inserting a partition
+> -- key alone, but you can add a clustering row by inserting
+> -- clustering key alone
+> insert into t (p, c) values (1,2) if not exists;
++-------------+------+------+------+------+
+| [applied]   | p    | c    | s    | r    |
+|-------------+------+------+------+------|
+| True        | null | null | null | null |
++-------------+------+------+------+------+
+> select count(*) from t;
++---------+
+|   count |
+|---------|
+|       2 |
++---------+
+> -- stop this travesty
+> drop table t;
+OK
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK
+> 

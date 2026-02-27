@@ -1,0 +1,161 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/task_manager_test",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/task_manager_test/test_module",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Register test module in task manager",
+               "type":"void",
+               "nickname":"register_test_module",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Unregister test module in task manager",
+               "type":"void",
+               "nickname":"unregister_test_module",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager_test/test_task",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Register test task",
+               "type":"string",
+               "nickname":"register_test_task",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"task_id",
+                     "description":"The uuid of a task to register",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"shard",
+                     "description":"The shard of the task",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"parent_id",
+                     "description":"The uuid of a parent task",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace the task is working on",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"The table the task is working on",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"entity",
+                     "description":"Task-specific entity description",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"user_task",
+                     "description":"A flag indicating whether a task was started by user (false by default)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Unregister test task",
+               "type":"void",
+               "nickname":"unregister_test_task",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"task_id",
+                     "description":"The uuid of a task to register",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/task_manager_test/finish_test_task/{task_id}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Finish test task",
+               "type":"void",
+               "nickname":"finish_test_task",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"task_id",
+                     "description":"The uuid of a task to finish",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"error",
+                     "description":"The error with which task fails (if it does)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      }
+   ]
+}

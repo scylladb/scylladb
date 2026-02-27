@@ -1,0 +1,12 @@
+[Unit]
+Description=Slice used to run Scylla. Maximum priority for IO and CPU
+Before=slices.target
+
+[Slice]
+MemoryAccounting=true
+IOAccounting=true
+CPUAccounting=true
+IOWeight=1000
+MemorySwapMax=0
+CPUWeight=1000
+

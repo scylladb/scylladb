@@ -1,0 +1,57 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/pkg-info.mk
+
+export PYBUILD_DISABLE=1
+ifneq ($(findstring housekeeping, $(DEB_BUILD_OPTIONS)),)
+    install_arg := --housekeeping
+else
+    install_arg :=
+endif
+
+product := $(subst -server,,$(DEB_SOURCE))
+
+libreloc_list := $(shell find scylla/libreloc/ -maxdepth 1 -type f -not -name .*.hmac -and -not -name gnutls.config -printf '-X%f ')
+libexec_list := $(shell find scylla/libexec/ -maxdepth 1 -type f -not -name scylla -and -not -name iotune -printf '-X%f ')
+override_dh_auto_configure:
+
+override_dh_auto_build:
+
+override_dh_auto_clean:
+
+override_dh_auto_install:
+	dh_auto_install
+	./scylla/install.sh --packaging --root "$(CURDIR)/debian/tmp" $(install_arg) --sysconfdir "/etc/default" --p11-trust-paths /etc/ssl/certs/ca-certificates.crt
+	# don't use default sysconfig file, use Debian version
+	cp scylla/dist/debian/sysconfig/scylla-housekeeping $(CURDIR)/debian/tmp/etc/default/
+
+override_dh_installinit:
+ifeq ($(product),scylla)
+	dh_installinit --no-start
+else
+	dh_installinit --no-start --name scylla-server
+	dh_installinit --no-start --name scylla-node-exporter
+endif
+	dh_installinit --no-start --name scylla-housekeeping-daily
+	dh_installinit --no-start --name scylla-housekeeping-restart
+	dh_installinit --no-start --name scylla-fstrim
+	dh_installinit --no-start --name scylla-tune-sched
+
+override_dh_strip:
+	# The binaries (ethtool...patchelf) don't pass dh_strip after going through patchelf. Since they are
+	# already stripped, nothing is lost if we exclude them, so that's what we do.
+	dh_strip $(libreloc_list) $(libexec_list) --dbg-package=$(product)-server-dbg
+	find $(CURDIR)/debian/$(product)-server-dbg/usr/lib/debug/.build-id/ -name "*.debug" -exec objcopy --decompress-debug-sections {} \;
+
+override_dh_makeshlibs:
+
+override_dh_shlibdeps:
+
+override_dh_fixperms:
+	dh_fixperms
+	chmod 755 $(CURDIR)/debian/$(product)-server/opt/scylladb/libreloc/ld.so
+
+override_dh_strip_nondeterminism:
+
+%:
+	dh $@

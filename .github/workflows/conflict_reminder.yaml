@@ -1,0 +1,154 @@
+name: Notify PR Authors of Conflicts
+
+permissions:
+  issues: write
+  pull-requests: write
+
+on:
+  push:
+    branches:
+      - 'master'
+      - 'branch-*'
+  schedule:
+    - cron: '0 10 * * 1'  # Runs every Monday at 10:00am
+
+jobs:
+  notify_conflict_prs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notify PR Authors of Conflicts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            console.log("Starting conflict reminder script...");
+            // Print trigger event
+            if (process.env.GITHUB_EVENT_NAME) {
+              console.log(`Workflow triggered by: ${process.env.GITHUB_EVENT_NAME}`);
+            } else {
+              console.log("Could not determine workflow trigger event.");
+            }
+            const isPushEvent = process.env.GITHUB_EVENT_NAME === 'push';
+            console.log(`isPushEvent: ${isPushEvent}`);
+            const twoMonthsAgo = new Date();
+            twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100
+            });
+            console.log(`Fetched ${prs.length} open PRs`);
+            const recentPrs = prs.filter(pr => new Date(pr.created_at) >= twoMonthsAgo);
+            const validBaseBranches = ['master'];
+            const branchPrefix = 'branch-';
+            const oneWeekAgo = new Date();
+            const conflictLabel = 'conflicts';
+            oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+            console.log(`One week ago: ${oneWeekAgo.toISOString()}`);
+
+            for (const pr of recentPrs) {
+              console.log(`Checking PR #${pr.number} on base branch '${pr.base.ref}'`);
+              const isBranchX = pr.base.ref.startsWith(branchPrefix);
+              const isMaster = validBaseBranches.includes(pr.base.ref);
+              if (!(isBranchX || isMaster)) {
+                console.log(`PR #${pr.number} skipped: base branch is not 'master' or does not start with '${branchPrefix}'`);
+                continue;
+              }
+              const updatedDate = new Date(pr.updated_at);
+              console.log(`PR #${pr.number} last updated at: ${updatedDate.toISOString()}`);
+              if (!isPushEvent && updatedDate >= oneWeekAgo) {
+                console.log(`PR #${pr.number} skipped: updated within last week`);
+                continue;
+              }
+              if (pr.assignee === null) {
+                console.log(`PR #${pr.number} skipped: no assignee`);
+                continue;
+              }
+
+              // Fetch PR details to check mergeability
+              let { data: prDetails } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+              });
+              console.log(`PR #${pr.number} mergeable: ${prDetails.mergeable}`);
+
+              // Wait and re-fetch if mergeable is null
+              if (prDetails.mergeable === null) {
+                console.log(`PR #${pr.number} mergeable is null, waiting 2 seconds and retrying...`);
+                await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2 seconds
+                prDetails = (await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                })).data;
+                console.log(`PR #${pr.number} mergeable after retry: ${prDetails.mergeable}`);
+              }
+
+              if (prDetails.mergeable === false) {
+                const hasConflictLabel = pr.labels.some(label => label.name === conflictLabel);
+                console.log(`PR #${pr.number} has conflict label: ${hasConflictLabel}`);
+
+                // Fetch comments to check for existing notifications
+                const comments = await github.paginate(github.rest.issues.listComments, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  per_page: 100,
+                });
+                
+                // Find last notification comment from the bot
+                const notificationPrefix = `@${pr.assignee.login}, this PR has merge conflicts with the base branch.`;
+                const lastNotification = comments
+                  .filter(c =>
+                    c.user.type === "Bot" &&
+                    c.body.startsWith(notificationPrefix)
+                  )
+                  .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+                // Check if we should skip notification based on recent notification
+                let shouldSkipNotification = false;
+                if (lastNotification) {
+                  const lastNotified = new Date(lastNotification.created_at);
+                  if (lastNotified >= oneWeekAgo) {
+                    console.log(`PR #${pr.number} skipped: last notification was less than 1 week ago`);
+                    shouldSkipNotification = true;
+                  }
+                }
+
+                // Additional check for push events on draft PRs with conflict labels
+                if (
+                  isPushEvent &&
+                  pr.draft === true &&
+                  hasConflictLabel &&
+                  shouldSkipNotification
+                ) {
+                  continue;
+                }
+
+                if (!hasConflictLabel) {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    labels: [conflictLabel],
+                  });
+                  console.log(`Added 'conflicts' label to PR #${pr.number}`);
+                }
+                
+                const assignee = pr.assignee.login;
+                if (assignee && !shouldSkipNotification) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    body: `@${assignee}, this PR has merge conflicts with the base branch. Please resolve the conflicts so we can merge it.`,
+                  });
+                  console.log(`Notified @${assignee} for PR #${pr.number}`);
+                }
+              } else {
+                console.log(`PR #${pr.number} is mergeable, no action needed.`);
+              }
+            }
+            console.log(`Total PRs checked: ${prs.length}`);

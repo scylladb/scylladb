@@ -1,0 +1,125 @@
+/*
+ * Copyright (C) 2018-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#pragma once
+
+#include <random>
+#include <stdexcept>
+
+#include <seastar/core/future.hh>
+#include <seastar/core/sstring.hh>
+
+#include "seastarx.hh"
+
+namespace auth::passwords {
+
+class no_supported_schemes : public std::runtime_error {
+public:
+    no_supported_schemes();
+};
+///
+/// Apache Cassandra uses a library to provide the bcrypt scheme. In ScyllaDB, we use SHA-512
+/// instead of bcrypt for performance and for historical reasons (see scylladb#24524).
+/// Currently, SHA-512 is always chosen as the hashing scheme for new passwords, but the other
+/// algorithms remain supported for CREATE ROLE WITH HASHED PASSWORD and backward compatibility.
+///
+enum class scheme {
+    bcrypt_y,
+    bcrypt_a,
+    sha_512,
+    sha_256,
+    md5
+};
+
+namespace detail {
+
+template <typename RandomNumberEngine>
+sstring generate_random_salt_bytes(RandomNumberEngine& g) {
+    static const sstring valid_bytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./";
+    static constexpr std::size_t num_bytes = 16;
+    std::uniform_int_distribution<std::size_t> dist(0, valid_bytes.size() - 1);
+    sstring result(num_bytes, 0);
+
+    for (char& c : result) {
+        c = valid_bytes[dist(g)];
+    }
+
+    return result;
+}
+
+///
+/// Test given hashing scheme on the current system.
+///
+/// \throws \ref no_supported_schemes when scheme is unsupported.
+///
+void verify_scheme(scheme scheme);
+
+std::string_view prefix_for_scheme(scheme) noexcept;
+
+///
+/// Generate a implementation-specific salt string for hashing passwords.
+///
+/// The `RandomNumberEngine` is used to generate the string, which is an implementation-specific length.
+///
+/// \throws \ref no_supported_schemes when no known hashing schemes are supported on the system.
+///
+template <typename RandomNumberEngine>
+sstring generate_salt(RandomNumberEngine& g, scheme scheme) {
+    static const sstring prefix = sstring(prefix_for_scheme(scheme));
+    return prefix + generate_random_salt_bytes(g);
+}
+
+///
+/// Hash a password combined with an implementation-specific salt string.
+/// Deprecated in favor of `hash_with_salt_async`. This function is still used
+/// when generating password hashes for storage to ensure that
+/// `hash_with_salt` and `hash_with_salt_async` produce identical results,
+/// preserving backward compatibility.
+///
+/// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
+///
+sstring hash_with_salt(const sstring& pass, const sstring& salt);
+
+///
+/// Async version of `hash_with_salt` that returns a future.
+/// If possible, hashing uses `coroutine::maybe_yield` to prevent reactor stalls.
+///
+/// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
+///
+seastar::future<sstring> hash_with_salt_async(const sstring& pass, const sstring& salt);
+
+} // namespace detail
+
+///
+/// Run a one-way hashing function on cleartext to produce encrypted text.
+///
+/// Prior to applying the hashing function, random salt is amended to the cleartext. The random salt bytes are generated
+/// according to the random number engine `g`.
+///
+/// The result is the encrypted ciphertext, and also the salt used but in a implementation-specific format.
+///
+/// \throws \ref std::system_error when the implementation-specific implementation fails to hash the cleartext.
+///
+template <typename RandomNumberEngine>
+sstring hash(const sstring& pass, RandomNumberEngine& g, scheme scheme) {
+    return detail::hash_with_salt(pass, detail::generate_salt(g, scheme));
+}
+
+///
+/// Check that cleartext matches previously hashed cleartext with salt.
+///
+/// \ref salted_hash is the result of invoking \ref hash, which is the implementation-specific combination of the hashed
+/// password and the salt that was generated for it.
+///
+/// \returns `true` if the cleartext matches the salted hash.
+///
+/// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
+///
+seastar::future<bool> check(const sstring& pass, const sstring& salted_hash);
+
+} // namespace auth::passwords

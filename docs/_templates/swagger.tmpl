@@ -1,0 +1,34 @@
+<script>
+window.addEventListener('load', function() {
+    let swaggerUi = new SwaggerUi({
+        
+        url: "{{ custom_pathto(swagger_file_path, 1) }}",
+        dom_id: "swagger-ui-{{swagger_file_name}}",
+        docExpansion: "full",
+        jsonEditor: false,
+        onComplete: function() {
+
+            document.querySelectorAll('#swagger-ui-{{swagger_file_name}} .footer').forEach(function(element) {
+                element.className = 'swagger-footer';
+            });
+
+            // Fix: Hides model signature if included from a relative file. Swagger 1.2 does not support relative imports.
+            const modelSignatures = document.querySelectorAll('.model-signature');
+            modelSignatures.forEach(model => {
+                const childDivs = model.querySelectorAll('div');
+                childDivs.forEach(div => {
+                    if (div.textContent.includes('#/utils/')) {
+                        model.style.display = 'none';
+                    }
+                });
+            });
+        },
+    });
+    swaggerUi.load();
+    });
+</script>
+<div class="swagger-section">
+    <div id="swagger-ui-{{swagger_file_name}}" class="swagger-ui-wrap">
+        <div id="loader-{{swagger_file_name}}" class="loader">Loading...</div>
+    </div>
+</div>

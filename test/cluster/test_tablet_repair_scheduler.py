@@ -1,0 +1,692 @@
+#
+# Copyright (C) 2024-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+#
+
+from test.pylib.internal_types import ServerInfo
+from test.pylib.manager_client import ManagerClient
+from test.pylib.util import wait_for_cql_and_get_hosts, Host
+from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos
+from test.pylib.rest_client import inject_error_one_shot, read_barrier
+from test.cluster.util import create_new_test_keyspace
+
+from cassandra.cluster import Session as CassandraSession
+from cassandra.query import SimpleStatement, ConsistencyLevel
+
+import pytest
+import asyncio
+import logging
+import re
+import requests
+import time
+import datetime
+
+logger = logging.getLogger(__name__)
+
+
+async def inject_error_one_shot_on(manager, error_name, servers):
+    errs = [inject_error_one_shot(manager.api, s.ip_addr, error_name) for s in servers]
+    await asyncio.gather(*errs)
+
+async def inject_error_on(manager, error_name, servers, params = {}):
+    errs = [manager.api.enable_injection(s.ip_addr, error_name, False, params) for s in servers]
+    await asyncio.gather(*errs)
+
+async def inject_error_off(manager, error_name, servers):
+    errs = [manager.api.disable_injection(s.ip_addr, error_name) for s in servers]
+    await asyncio.gather(*errs)
+
+async def guarantee_repair_time_next_second():
+    # The repair time granularity is seconds. This ensures the repair time is
+    # different than the previous one.
+    await asyncio.sleep(1)
+
+async def do_test_tablet_repair_progress_split_merge(manager: ManagerClient, do_split=False, do_merge=False):
+    nr_tablets = 16
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, tablets=nr_tablets)
+    token = 'all'
+    logs = []
+    for s in servers:
+        logs.append(await manager.server_open_log(s.server_id))
+
+    # Skip repair for the listed tablet id
+    nr_tablets_skipped = 4
+    nr_tablets_repaired = nr_tablets - nr_tablets_skipped
+    await inject_error_on(manager, "tablet_repair_skip_sched", servers, params={'value':"0,1,5,8"})
+
+    # Request to repair all tablets
+    repair_res = await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, await_completion=False)
+    logging.info(f'{repair_res=}')
+    tablet_task_id = repair_res['tablet_task_id']
+
+    async def get_task_status(desc):
+        task_status = await manager.api.get_task_status(servers[0].ip_addr, tablet_task_id)
+        completed = int(task_status['progress_completed'])
+        total = int(task_status['progress_total'])
+        logging.info(f'{desc=} {completed=} {total=} {task_status=}')
+        return completed, total
+
+    async def wait_task_progress(wanted_complete, wanted_total):
+        while True:
+            completed, total = await get_task_status("wait_task_progress")
+            if completed == wanted_complete and total == wanted_total:
+                break
+            await asyncio.sleep(1)
+
+    async def get_task_status_and_check(desc):
+        completed, total = await get_task_status(desc)
+        assert completed == nr_tablets_repaired
+        assert total == nr_tablets
+
+    # 12 out of 16 tablets should finish
+    await wait_task_progress(nr_tablets_repaired, nr_tablets)
+
+    if do_split:
+        await get_task_status_and_check("before_split")
+
+        s1_mark = await logs[0].mark()
+        await inject_error_on(manager, "tablet_force_tablet_count_increase", servers)
+        await logs[0].wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await inject_error_off(manager, "tablet_force_tablet_count_increase", servers)
+
+        await get_task_status_and_check("after_split")
+
+    if do_merge:
+        await get_task_status_and_check("before_merge")
+
+        s1_mark = await logs[0].mark()
+        await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
+        await logs[0].wait_for('Detected tablet merge for table', from_mark=s1_mark)
+        await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
+
+        await get_task_status_and_check("after_merge")
+
+    # Wait for all repair to finish after all tablets can be scheduled to run repair
+    await inject_error_off(manager, "tablet_repair_skip_sched", servers)
+    await wait_task_progress(nr_tablets, nr_tablets)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.asyncio
+async def test_tablet_repair_progress(manager: ManagerClient):
+    await do_test_tablet_repair_progress_split_merge(manager, do_split=False, do_merge=False)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.asyncio
+async def test_tablet_repair_progress_split(manager: ManagerClient):
+    await do_test_tablet_repair_progress_split_merge(manager, do_split=True)
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/26844")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_progress_merge(manager: ManagerClient):
+    await do_test_tablet_repair_progress_split_merge(manager, do_merge=True)
+
+@pytest.mark.asyncio
+async def test_tablet_manual_repair(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
+    token = -1
+
+    start = time.time()
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    duration = time.time() - start
+    map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    logging.info(f'map1={map1} duration={duration}')
+
+    await guarantee_repair_time_next_second()
+
+    start = time.time()
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    duration = time.time() - start
+    map2 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    logging.info(f'map2={map2} duration={duration}')
+
+    t1 = map1[str(token)]
+    t2 = map2[str(token)]
+    logging.info(f't1={t1} t2={t2}')
+
+    assert t2 > t1
+
+@pytest.mark.asyncio
+async def test_tombstone_gc_insert_flush(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
+    token = "all"
+    logs = []
+    for s in servers:
+        await manager.api.set_logger_level(s.ip_addr, "database", "debug")
+        await manager.api.set_logger_level(s.ip_addr, "tablets", "debug")
+        logs.append(await manager.server_open_log(s.server_id))
+
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+
+    timeout = 600
+    deadline = time.time() + timeout
+    while True:
+        done = True
+        for s in servers:
+                await read_barrier(manager.api, s.ip_addr)
+        for log in logs:
+            inserts = await log.grep(rf'.*Insert pending repair time for tombstone gc: table={table_id}.*')
+            flushes = await log.grep(rf'.*Flush pending repair time for tombstone gc: table={table_id}.*')
+            logging.info(f'{inserts=} {flushes=}');
+            logging.info(f'{len(inserts)=} {len(flushes)=}');
+            ok = len(inserts) == len(flushes) and len(inserts) > 0
+            if not ok:
+                done = False
+        if done:
+            break
+        else:
+            assert time.time() < deadline
+
+@pytest.mark.asyncio
+async def test_tablet_manual_repair_all_tokens(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
+    token = "all"
+    now = datetime.datetime.utcnow()
+    map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+
+    await guarantee_repair_time_next_second()
+
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    map2 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    logging.info(f'{map1=} {map2=}')
+    assert len(map1) == len(map2)
+    for k, v in map1.items():
+        assert v == None
+    for k, v in map2.items():
+        assert v != None
+        assert v > now
+
+@pytest.mark.asyncio
+async def test_tablet_manual_repair_async(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
+    token = "-1"
+    log = await manager.server_open_log(servers[0].server_id)
+    res = await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, await_completion=False)
+    tablet_task_id = res['tablet_task_id']
+    logging.info(f"{tablet_task_id=}")
+    res = await log.grep(rf'.*Issued tablet repair by API request table_id={table_id}.*tablet_task_id={tablet_task_id}.*')
+    logging.info(f"{res=}")
+    assert len(res) == 1
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_manual_repair_reject_parallel_requests(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
+    token = -1
+
+    await inject_error_on(manager, "tablet_repair_add_delay_in_ms", servers, params={'value':'3000'})
+
+    class asyncState:
+        error = 0
+        ok = 0
+
+    state = asyncState()
+
+    async def run_repair(state):
+        try:
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+            state.ok = state.ok + 1
+        except Exception as e:
+            logging.info(f"Got exception as expected: {e}")
+            state.error = state.error + 1
+
+    await asyncio.gather(*[run_repair(state) for i in range(3)])
+
+    # A new tablet repair request can only be issued after the first one is
+    # finished.
+    assert state.ok == 1
+    assert state.error == 2
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_error_and_retry(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+
+    # Repair should finish with one time error injection
+    token = -1
+    await inject_error_one_shot_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_error_not_finish(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+
+    token = -1
+    # Repair should not finish with error
+    await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+    try:
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, timeout=10)
+        assert False # Check the tablet repair is not supposed to finish
+    except TimeoutError:
+        logger.info("Repair timeout as expected")
+    await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_error_delete(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        # Check failed repair request can be deleted
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, timeout=900)
+
+    async def del_repair_task():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+        status = None
+        while status == None:
+            try:
+                status = await manager.api.get_task_status(servers[0].ip_addr, tablet_task_id)
+            except:
+                status == None
+        await manager.api.abort_task(servers[0].ip_addr, tablet_task_id)
+
+    await asyncio.gather(repair_task(), del_repair_task());
+    await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+def get_repair_row_from_disk(server):
+    row_num = 0
+    metrics = requests.get(f"http://{server.ip_addr}:9180/metrics").text
+    pattern = re.compile("^scylla_repair_row_from_disk_nr")
+    for metric in metrics.split('\n'):
+        if pattern.match(metric) is not None:
+            row_num += int(metric.split()[1])
+
+    return row_num
+
+def check_repairs(row_num_before: list[int], row_num_after: list[int], expected_repairs: list[int]):
+    assert len(row_num_before) == len(row_num_after)
+    for i, val_before in enumerate(row_num_before):
+        if i in expected_repairs:
+            assert val_before < row_num_after[i]
+        else:
+            assert val_before == row_num_after[i]
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("included_host_count", [2, 1, 0])
+async def test_tablet_repair_hosts_filter(manager: ManagerClient, included_host_count):
+    injection = "handle_tablet_migration_repair_fail"
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+    hosts_filter = "00000000-0000-0000-0000-000000000000"
+    if included_host_count == 1:
+        hosts_filter = f"{hosts[0].host_id}"
+    elif included_host_count == 2:
+        hosts_filter = f"{hosts[0].host_id},{hosts[1].host_id}"
+
+    row_num_before = [get_repair_row_from_disk(server) for server in servers]
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, injection, servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, hosts_filter=hosts_filter)
+
+    async def check_filter():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert len(res) == 1
+        assert res[str(token)].repair_hosts_filter.split(",").sort() == hosts_filter.split(",").sort()
+
+        await inject_error_off(manager, injection, servers)
+
+    await asyncio.gather(repair_task(), check_filter())
+
+    row_num_after = [get_repair_row_from_disk(server) for server in servers]
+    check_repairs(row_num_before, row_num_after, [0, 1] if included_host_count == 2 else [])
+
+async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
+    servers = [await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
+               await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R2'}),
+               await manager.server_add(property_file = {'dc': 'DC2', 'rack' : 'R3'})]
+    cql = manager.get_cql()
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                  "'DC1': 2, 'DC2': 1} AND tablets = {'initial': 8};")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    table_id = await manager.get_table_id(ks, "test")
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    return (servers, cql, hosts, ks, table_id)
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("dcs_filter_and_res", [("DC1", [0, 1]), ("DC2", []), ("DC3", [])])
+async def test_tablet_repair_dcs_filter(manager: ManagerClient, dcs_filter_and_res):
+    dcs_filter, expected_repairs = dcs_filter_and_res
+    servers, cql, hosts, ks, table_id = await prepare_multi_dc_repair(manager)
+
+    row_num_before = [get_repair_row_from_disk(server) for server in servers]
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, dcs_filter=dcs_filter)
+
+    async def check_filter():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert len(res) == 1
+        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+
+        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+    await asyncio.gather(repair_task(), check_filter())
+
+    row_num_after = [get_repair_row_from_disk(server) for server in servers]
+    check_repairs(row_num_before, row_num_after, expected_repairs)
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_hosts_and_dcs_filter(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await prepare_multi_dc_repair(manager)
+    dcs_filter = "DC1,DC2"
+    hosts_filter = f"{hosts[0].host_id},{hosts[2].host_id}"
+
+    row_num_before = [get_repair_row_from_disk(server) for server in servers]
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, hosts_filter=hosts_filter, dcs_filter=dcs_filter)
+
+    async def check_filter():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert len(res) == 1
+        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+
+        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+    await asyncio.gather(repair_task(), check_filter())
+
+    row_num_after = [get_repair_row_from_disk(server) for server in servers]
+    check_repairs(row_num_before, row_num_after, [0, 2])
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_multiple_rows(manager: ManagerClient):
+    cmdline = ["--hinted-handoff-enabled", "0"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair_multiple_rows(manager, cmdline=cmdline)
+    token = 'all'
+    nr_keys = 100
+    nr_cluster_keys = 100
+    rows = [(pk, ck, pk) for pk in range(nr_keys) for ck in range(nr_cluster_keys)]
+
+    await manager.server_stop_gracefully(servers[1].server_id)
+    await asyncio.gather(
+        *[
+            cql.run_async(
+                f"INSERT INTO {ks}.test (pk, ck, data) VALUES ({pk}, {ck}, {pk});"
+            )
+            for pk in range(nr_keys)
+            for ck in range(nr_cluster_keys)
+        ]
+    )
+    await manager.server_start(servers[1].server_id)
+    await inject_error_on(manager, "row_level_repair_max_fragments_nr", servers, params={'value':'9'})
+    await inject_error_on(manager, "row_level_repair_max_fragments_size", servers, params={'value':'1000'})
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.server_stop_gracefully(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[2].server_id)
+
+    hosts = await wait_for_cql_and_get_hosts(cql, [servers[1]], time.time() + 60)
+    results = await cql.run_async(SimpleStatement(f"SELECT * from {ks}.test", consistency_level=ConsistencyLevel.ONE), host=hosts[0])
+    rows_query = [(r.pk, r.ck, r.data) for r in results]
+    assert sorted(rows) == sorted(rows_query)
+
+async def run_tablet_repair_multiple_rows_merge(manager: ManagerClient, inject_error_name: str, inject_value: str):
+    cmdline = ["--hinted-handoff-enabled", "0"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair_multiple_rows(manager, cmdline=cmdline)
+    token = 'all'
+    nr_keys = 100
+    nr_cluster_keys = 100
+    rows = [(pk, ck, 3) for pk in range(nr_keys) for ck in range(nr_cluster_keys)]
+
+    async def insert_rows(value, cl = ConsistencyLevel.ONE):
+        await asyncio.gather(*[
+            cql.run_async(
+                SimpleStatement(
+                    f"INSERT INTO {ks}.test (pk, ck, data) VALUES ({pk}, {ck}, {value});",
+                    consistency_level=cl
+                )
+            )
+            for pk in range(nr_keys) for ck in range(nr_cluster_keys)
+        ])
+
+    await insert_rows(1, ConsistencyLevel.THREE)
+    await manager.server_stop_gracefully(servers[1].server_id)
+    await insert_rows(2, ConsistencyLevel.TWO)
+    await manager.server_stop_gracefully(servers[2].server_id)
+    await insert_rows(3, ConsistencyLevel.ONE)
+    await manager.server_start(servers[2].server_id)
+    await manager.server_start(servers[1].server_id)
+    await inject_error_on(manager, inject_error_name, servers, params={'value': inject_value})
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.server_stop_gracefully(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[2].server_id)
+
+    hosts = await wait_for_cql_and_get_hosts(cql, [servers[1]], time.time() + 60)
+    results = await cql.run_async(SimpleStatement(f"SELECT * from {ks}.test", consistency_level=ConsistencyLevel.ONE), host=hosts[0])
+    rows_query = [(r.pk, r.ck, r.data) for r in results]
+    assert sorted(rows) == sorted(rows_query)
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_multiple_rows_merge_fragments_nr(manager: ManagerClient):
+    await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_nr", "10")
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_multiple_rows_merge_fragments_size(manager: ManagerClient):
+    await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_size", "1000")
+
+async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: str):
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, deadline = time.time() + 60)
+    await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
+
+async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, auto_repair_threshold, config_per_table = False):
+    if not config_per_table:
+        await live_update_config(manager, servers, 'auto_repair_threshold_default_in_seconds', str(auto_repair_threshold))
+        await live_update_config(manager, servers, 'auto_repair_enabled_default', str(auto_repair_enabled).lower())
+    else:
+        raise NotImplementedError("Per-table auto-repair configuration is not supported yet.")
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_auto_repair(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    # Enable auto repair
+    await config_auto_repair(manager, servers, ks, "test", True, 1)
+
+    map1 = {}
+    map2 = {}
+
+    timeout = 300
+    start = time.time()
+    while True:
+        map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+        logger.info(f'map1={map1}')
+        has_repair_time = True
+        for k, v in map1.items():
+            if v == None:
+              has_repair_time = False
+        if has_repair_time:
+            break;
+        duration = time.time() - start
+        # check the first auto repair is finished in less than 5 minutes
+        assert duration < timeout
+        time.sleep(1)
+
+    start = time.time()
+    while True:
+        map2 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+        logger.info(f'map1={map1}, map2={map2}')
+        repair_time_updated = True
+        for k, v in map2.items():
+            if map1[k] >= v:
+                repair_time_updated = False
+        if repair_time_updated:
+            break
+        duration = time.time() - start
+        # check the second auto repair is finished in less than 5 minutes
+        assert duration < timeout
+        time.sleep(1)
+
+async def check_has_repair_time(cql, hosts, table_id, timeout = 300):
+    timeout = 300
+    start = time.time()
+    while True:
+        m = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+        has_repair_time = True
+        for k, v in m.items():
+            if v == None:
+              has_repair_time = False
+        if has_repair_time:
+            break;
+        duration = time.time() - start
+        assert duration < timeout
+        time.sleep(1)
+
+@pytest.mark.asyncio
+async def test_tablet_auto_repair_cfg_enable(manager: ManagerClient):
+    cmdline = ["--auto-repair-enabled-default", "1",  "--auto-repair-threshold-default-in-seconds", "1"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+    # Check repair is executed
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+@pytest.mark.skip(reason="no per tablet support yet")
+@pytest.mark.asyncio
+async def test_tablet_auto_repair_cfg_disable_per_table_enable(manager: ManagerClient):
+    cmdline = ["--auto-repair-enabled-default", "0",  "--auto-repair-threshold-default-in-seconds", "1"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    # Enable auto repair
+    await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=True, auto_repair_threshold=1, config_per_table=True)
+
+    # Check repair is executed
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+def parse_repair_plans(log_line):
+    """
+    Parses a log line containing repair plans with diff_seconds as float.
+    Format: [{key=value ...}, {key=value ...}]
+    """
+    # Isolate the list content between [ and ]
+    start = log_line.find('[')
+    end = log_line.rfind(']')
+
+    if start == -1 or end == -1:
+        return []
+
+    list_content = log_line[start+1:end]
+
+    # Extract individual plan strings enclosed in curly braces {}
+    plan_strings = re.findall(r'\{([^}]+)\}', list_content)
+
+    parsed_plans = []
+
+    for plan_str in plan_strings:
+        plan_data = {}
+        # Extract key=value pairs within each plan
+        pairs = re.findall(r'(\w+)=([^\s,]+)', plan_str)
+        for key, value in pairs:
+            if value.lower() == 'true':
+                plan_data[key] = True
+            elif value.lower() == 'false':
+                plan_data[key] = False
+            elif key == 'diff_seconds':
+                try:
+                    plan_data[key] = float(value)
+                except ValueError:
+                    plan_data[key] = value
+            else:
+                try:
+                    plan_data[key] = int(value)
+                except ValueError:
+                    plan_data[key] = value
+        parsed_plans.append(plan_data)
+
+    return parsed_plans
+
+def verify_sort_order(plans):
+    """
+    Verifies the list is sorted by:
+    1. is_user_req (True first)
+    2. diff_seconds (Larger first)
+    """
+    is_sorted = True
+    for i in range(len(plans) - 1):
+        curr = plans[i]
+        next_p = plans[i+1]
+        # Check 1: User Request Priority (True > False)
+        if curr['is_user_req'] < next_p['is_user_req']:
+            is_sorted = False
+        # Check 2: Diff Seconds Priority (Larger > Smaller)
+        elif curr['is_user_req'] == next_p['is_user_req']:
+            if curr['diff_seconds'] < next_p['diff_seconds']:
+                is_sorted = False
+    return is_sorted
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_user_and_auto_repair_priority(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    # Add delay so each tablet has a differnt repair_time
+    await inject_error_on(manager, "repair_tablet_repair_task_delay", servers, params={'value':'1000'})
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token="all", await_completion=True)
+
+    # No delay after the first repair
+    await inject_error_off(manager, "repair_tablet_repair_task_delay", servers)
+
+    # Schedule but do not exeucte the repair plan
+    await inject_error_on(manager, "tablet_skip_repair_plan", servers)
+
+    # Enable auto repair
+    await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=True, auto_repair_threshold=1)
+
+    # Issue user repair
+    res = await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token="-1", await_completion=False)
+    task_id = res['tablet_task_id']
+
+    # Dump repair plans
+    await inject_error_on(manager, "tablet_dump_repair_plan", servers)
+
+    async def check_repair_plan():
+        # Check order in repair plan is correct
+        found = False
+        while True:
+            for s in servers:
+                log = await manager.server_open_log(s.server_id)
+                plans = await log.grep(r"dump_repair_plans=(\[.*?\])")
+                for line, match in plans:
+                    results = parse_repair_plans(match.group(1))
+                    assert verify_sort_order(results)
+                    found = True
+            if found:
+                break
+
+    await check_repair_plan()
+
+    await inject_error_off(manager, "tablet_skip_repair_plan", servers)
+
+    await manager.api.wait_task(servers[0].ip_addr, task_id)
+
+    await check_repair_plan()

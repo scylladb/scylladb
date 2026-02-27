@@ -1,0 +1,19 @@
+> -- Error messages contain a keyspace name. Make the output stable.
+> CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+OK
+> create type ks.ut (a int);
+OK
+> create table ks.t (pk frozen<ut> primary key);
+OK
+> alter type ks.ut add b int;
+Error from server: code=2200 [Invalid query] message="Cannot add new field to type ks.ut because it is used in the partition key column pk of table ks.t"
+> drop table ks.t;
+OK
+> alter type ks.ut add c int;
+OK
+> create table ks.t2 (pk frozen<list<frozen<ut>>> primary key);
+OK
+> alter type ks.ut add d int;
+Error from server: code=2200 [Invalid query] message="Cannot add new field to type ks.ut because it is used in the partition key column pk of table ks.t2"
+> DROP KEYSPACE ks;
+OK

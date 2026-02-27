@@ -1,0 +1,131 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/raft",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/raft/trigger_snapshot/{group_id}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Triggers snapshot creation and log truncation for the given Raft group",
+               "type":"string",
+               "nickname":"trigger_snapshot",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"group_id",
+                     "description":"The ID of the group which should get snapshotted",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"timeout",
+                     "description":"Timeout in seconds after which the endpoint returns a failure. If not provided, 60s is used.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/raft/leader_host",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns host ID of the current leader of the given Raft group",
+               "type":"string",
+               "nickname":"get_leader_host",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"group_id",
+                     "description":"The ID of the group. When absent, group0 is used.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path": "/raft/read_barrier",
+         "operations": [
+            {
+               "method": "POST",
+               "summary": "Triggers read barrier for the given Raft group to wait for previously committed commands in this group to be applied locally. For example, can be used on group 0 to wait for the node to obtain latest schema changes.",
+               "type": "string",
+               "nickname": "read_barrier",
+               "produces": [
+                  "application/json"
+               ],
+               "parameters": [
+                  {
+                     "name": "group_id",
+                     "description": "The ID of the group. When absent, group0 is used.",
+                     "required": false,
+                     "allowMultiple": false,
+                     "type": "string",
+                     "paramType": "query"
+                  },
+                  {
+                     "name": "timeout",
+                     "description": "Timeout in seconds after which the endpoint returns a failure. If not provided, 60s is used.",
+                     "required": false,
+                     "allowMultiple": false,
+                     "type": "long",
+                     "paramType": "query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/raft/trigger_stepdown/",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Triggers stepdown of a leader for given Raft group or group0 if not provided (returns an error if the node is not a leader)",
+               "type":"string",
+               "nickname":"trigger_stepdown",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"group_id",
+                     "description":"The ID of the group which leader should stepdown",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"timeout",
+                     "description":"Timeout in seconds after which the endpoint returns a failure. If not provided, 60s is used.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      }
+   ]
+}

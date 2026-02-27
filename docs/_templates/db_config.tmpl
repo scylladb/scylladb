@@ -1,0 +1,22 @@
+.. -*- mode: rst -*-
+
+{% for group in data %}
+{% if group.value_status_count[value_status] > 0 %}
+.. _confgroup_{{ group.name|lower|replace(" ", "_") }}:
+
+{{ group.name }}
+{{ '-' * (group.name|length) }}
+
+{% if group.description %}
+{{ group.description | readable_desc_rst }}
+{% endif %}
+
+{% for item in group.properties %}
+{% if item.value_status == value_status %}
+.. _confprop_{{ item.name|lower|replace(" ", "_") }}:
+
+.. confval:: {{ item.name }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}

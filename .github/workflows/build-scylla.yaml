@@ -1,0 +1,39 @@
+name: Build Scylla
+
+on:
+  workflow_call:
+    inputs:
+      build_mode:
+        description: 'the build mode'
+        type: string
+        required: true
+    outputs:
+      md5sum:
+        description: 'the md5sum for scylla executable'
+        value: ${{ jobs.build.outputs.md5sum }}
+
+jobs:
+  read-toolchain:
+    uses: ./.github/workflows/read-toolchain.yaml
+  build:
+    if: github.repository == 'scylladb/scylladb'
+    needs:
+      - read-toolchain
+    runs-on: ubuntu-latest
+    container: ${{ needs.read-toolchain.outputs.image }}
+    outputs:
+      md5sum: ${{ steps.checksum.outputs.md5sum }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Generate the building system
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+          ./configure.py --mode ${{ inputs.build_mode }} --with scylla
+      - run: |
+          ninja build/${{ inputs.build_mode }}/scylla
+      - id: checksum
+        run: |
+          checksum=$(md5sum build/${{ inputs.build_mode }}/scylla | cut -c -32)
+          echo "md5sum=$checksum" >> $GITHUB_OUTPUT

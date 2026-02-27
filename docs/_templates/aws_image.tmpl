@@ -1,0 +1,23 @@
+.. -*- mode: rst -*-
+
+{{version}}
+{{ '-' * version|length }}
+
+.. collapse:: View image details
+  {% if latest %}:open:{% endif %}
+  
+  .. list-table::
+    :header-rows: 1
+
+    * - Region
+      - x86 AMI ID
+      - Launch x86
+      - ARM AMI ID
+      - Launch ARM
+  {% for row in data[1:] %}
+    * - {{ row[0] }}
+      - {{ row[2] }}
+      - `Node <https://console.aws.amazon.com/ec2/v2/home?region={{ row[1] }}#LaunchInstanceWizard:ami={{ row[2] }}>`__ {% if row|length > 4 %} / `Cluster <https://{{ row[1] }}.console.aws.amazon.com/cloudformation/home?region={{ row[1] }}#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/{{ row[4] }}&stackName=scylla-cluster&param_ScyllaDBAmi={{ row[2] }}>`__{% endif %}
+      - {{ row[3] }}
+      - `Node <https://console.aws.amazon.com/ec2/v2/home?region={{ row[1] }}#LaunchInstanceWizard:ami={{ row[3] }}>`__ {% if row|length > 5 %} / `Cluster <https://{{ row[1] }}.console.aws.amazon.com/cloudformation/home?region={{ row[1] }}#/stacks/quickcreate?templateURL=http://downloads.scylladb.com.s3.amazonaws.com/{{ row[5] }}&stackName=scylla-cluster&param_ScyllaDBAmi={{ row[3] }}>`__{% endif %}
+  {% endfor %}

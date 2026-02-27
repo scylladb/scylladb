@@ -1,0 +1,107 @@
+/*
+ * Copyright 2016-present ScyllaDB
+ *
+ * Modified by ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ */
+
+#include <seastar/core/coroutine.hh>
+#include "cql3/statements/alter_view_statement.hh"
+#include "cql3/statements/prepared_statement.hh"
+#include "cql3/statements/view_prop_defs.hh"
+#include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
+#include "validation.hh"
+#include "view_info.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "cql3/query_processor.hh"
+
+namespace cql3 {
+
+namespace statements {
+
+alter_view_statement::alter_view_statement(cf_name view_name, std::optional<view_prop_defs> properties)
+        : schema_altering_statement{std::move(view_name)}
+        , _properties{std::move(properties)}
+{
+}
+
+future<> alter_view_statement::check_access(query_processor& qp, const service::client_state& state) const
+{
+    try {
+        const data_dictionary::database db = qp.db();
+        auto&& s = db.find_schema(keyspace(), column_family());
+        if (s->is_view())  {
+            return state.has_column_family_access(keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
+        }
+    } catch (const data_dictionary::no_such_column_family& e) {
+        // Will be validated afterwards.
+    }
+    return make_ready_future<>();
+}
+
+view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const {
+    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
+    if (!schema->is_view()) {
+        throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
+    }
+
+    if (!_properties) {
+        throw exceptions::invalid_request_exception("ALTER MATERIALIZED VIEW WITH invoked, but no parameters found");
+    }
+
+    auto schema_extensions = _properties->properties()->make_schema_extensions(db.extensions());
+    _properties->validate_raw(view_prop_defs::op_type::alter, db, keyspace(), schema_extensions);
+
+    bool is_colocated = [&] {
+        if (!db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets()) {
+            return false;
+        }
+        auto base_schema = db.find_schema(schema->view_info()->base_id());
+        if (!base_schema) {
+            return false;
+        }
+        return std::ranges::equal(
+            schema->partition_key_columns(),
+            base_schema->partition_key_columns(),
+            [](const column_definition& a, const column_definition& b) { return a.name() == b.name(); });
+    }();
+
+    if (is_colocated) {
+        auto gc_opts = _properties->properties()->get_tombstone_gc_options(schema_extensions);
+        if (gc_opts && gc_opts->mode() == tombstone_gc_mode::repair) {
+            throw exceptions::invalid_request_exception("The 'repair' mode for tombstone_gc is not allowed on co-located materialized view tables.");
+        }
+    }
+
+    auto builder = schema_builder(schema);
+    _properties->apply_to_builder(view_prop_defs::op_type::alter, builder, std::move(schema_extensions),
+            db, keyspace(), is_colocated);
+
+    return view_ptr(builder.build());
+}
+
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>> alter_view_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
+    auto m = co_await service::prepare_view_update_announcement(qp.proxy(), prepare_view(qp.db()), ts);
+
+    using namespace cql_transport;
+    auto ret = ::make_shared<event::schema_change>(
+            event::schema_change::change_type::UPDATED,
+            event::schema_change::target_type::TABLE,
+            keyspace(),
+            column_family());
+
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+}
+
+std::unique_ptr<cql3::statements::prepared_statement>
+alter_view_statement::prepare(data_dictionary::database db, cql_stats& stats) {
+    return std::make_unique<prepared_statement>(audit_info(), make_shared<alter_view_statement>(*this));
+}
+
+}
+
+}

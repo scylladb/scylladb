@@ -1,0 +1,52 @@
+type: Topology
+pool_size: 4
+cluster:
+  initial_size: 0
+extra_scylla_config_options:
+    authenticator: AllowAllAuthenticator
+    authorizer: AllowAllAuthorizer
+    enable_user_defined_functions: False
+    rf_rack_valid_keyspaces: True
+    tablets_mode_for_new_keyspaces: enabled
+run_first:
+  - test_group0_schema_versioning
+  - test_tablets_migration
+  - test_zero_token_nodes_topology_ops
+  - test_raft_cluster_features
+  - test_raft_ignore_nodes
+  - test_tablets
+  - test_tablets2
+  - test_cluster_features
+  - test_topology_remove_decom
+  - test_mutation_schema_change
+  - test_keyspace_rf
+skip_in_release:
+  - test_raft_cluster_features
+  - test_cluster_features
+  - dtest/limits_test
+  - dtest/schema_management_test
+skip_in_debug:
+  - test_shutdown_hang
+  - test_replace
+  - test_node_shutdown_waits_for_pending_requests
+  - test_cdc_generation_clearing
+  - test_cdc_generation_publishing
+run_in_release:
+  - test_gossiper
+run_in_dev:
+  - test_raft_ignore_nodes
+  - test_group0_schema_versioning
+  - test_zero_token_nodes_no_replication
+  - test_not_enough_token_owners
+  - test_replace_alive_node
+  - dtest/error_example_test
+  - dtest/alternator_tests
+  - dtest/bypass_cache_test
+  - dtest/auth_roles_test
+  - dtest/audit_test
+  - dtest/commitlog_test
+  - dtest/cfid_test
+  - dtest/rebuild_test
+  - dtest/guardrails_test
+run_in_debug:
+  - random_failures/test_random_failures

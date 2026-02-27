@@ -1,0 +1,17 @@
+/*
+ * Copyright (C) 2023-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#include "debug.hh"
+
+namespace debug {
+
+seastar::sharded<replica::database>* volatile the_database = nullptr;
+seastar::scheduling_group streaming_scheduling_group;
+seastar::scheduling_group gossip_scheduling_group;
+
+}

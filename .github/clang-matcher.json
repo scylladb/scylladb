@@ -1,0 +1,18 @@
+{
+    "problemMatcher": [
+        {
+            "owner": "clang",
+            "pattern": [
+                {
+                    "regexp": "^([^:]+):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*?)\\s+\\[(.*?)\\]$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5,
+                    "code": 6
+                }
+            ]
+        }
+    ]
+}

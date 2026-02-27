@@ -1,0 +1,8 @@
+# Those tests are testing header files so we have no choice but to instrument them
+source:test/boost/small_vector_test\.cc=allow
+source:test/boost/anchorless_list_test\.cc=allow
+
+# Don't instrument files that are part of the testing framework itself.
+source:test/*\.*=skip
+
+default:allow

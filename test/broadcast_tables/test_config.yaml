@@ -1,0 +1,4 @@
+type: Python
+extra_scylla_cmdline_options:
+  - "--experimental-features=broadcast-tables"
+  - "--enable-user-defined-functions=false"

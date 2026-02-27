@@ -1,0 +1,151 @@
+/*
+ * Copyright (C) 2017-present ScyllaDB
+ *
+ * Modified by ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ */
+
+#pragma once
+
+#include "schema/schema.hh"
+
+#include "data_dictionary/data_dictionary.hh"
+#include "cql3/statements/index_target.hh"
+#include "cql3/statements/index_prop_defs.hh"
+#include <seastar/core/metrics.hh>
+#include <seastar/core/shared_ptr.hh>
+#include "utils/estimated_histogram.hh"
+
+#include <string_view>
+#include <vector>
+
+namespace cql3::expr {
+
+enum class oper_t;
+
+}
+
+namespace gms {
+
+class feature_service;
+
+}
+
+namespace secondary_index {
+
+sstring index_table_name(const sstring& index_name);
+
+/*!
+ * \brief a reverse of index_table_name
+ * It gets a table_name and return the index name that was used
+ * to create that table.
+ */
+sstring index_name_from_table_name(const sstring& table_name);
+
+/// Given a list of base-table schemas, return all their secondary indexes, except that specified in cf_to_exclude.
+std::set<sstring>
+existing_index_names(std::span<const schema_ptr> tables, std::string_view cf_to_exclude);
+
+/// Given a base-table keyspace and table name, return the first available index
+/// name (containing index_name_root if specified).
+/// If needed, a running counder is appended to the index name, if it is already
+/// taken (existing_names contains it).
+sstring get_available_index_name(
+        std::string_view ks_name,
+        std::string_view cf_name,
+        std::optional<sstring> index_name_root,
+        const std::set<sstring>& existing_names,
+        std::function<bool(std::string_view, std::string_view)> has_schema);
+
+class index {
+    index_metadata _im;
+    cql3::statements::index_target::target_type _target_type;
+    sstring _target_column;
+public:
+    index(const sstring& target_column, const index_metadata& im);
+    bool depends_on(const column_definition& cdef) const;
+    struct supports_expression_v {
+        enum class value_type {
+            UsualYes,
+            CollectionYes,
+            No,
+        };
+        value_type value;
+        operator bool() const {
+            return value != value_type::No;
+        }
+        static constexpr supports_expression_v from_bool(bool b) {
+            return {b ? value_type::UsualYes : value_type::No};
+        }
+        static constexpr supports_expression_v from_bool_collection(bool b) {
+            return {b ? value_type::CollectionYes : value_type::No};
+        }
+        friend bool operator==(supports_expression_v, supports_expression_v) = default;
+    };
+
+    supports_expression_v supports_expression(const column_definition& cdef, const cql3::expr::oper_t op) const;
+    supports_expression_v supports_subscript_expression(const column_definition& cdef, const cql3::expr::oper_t op) const;
+    const index_metadata& metadata() const;
+    const sstring& target_column() const {
+        return _target_column;
+    }
+    cql3::statements::index_target::target_type target_type() const {
+        return _target_type;
+    }
+};
+
+class custom_index {
+public:
+    virtual ~custom_index() = default;
+    /// Returns a custom description of the index, or std::nullopt if the default index description logic should be used instead.
+    virtual std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const = 0;
+    virtual bool view_should_exist() const = 0;
+    virtual void validate(const schema &schema, const cql3::statements::index_specific_prop_defs &properties,
+            const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs,
+        const data_dictionary::database& db) const = 0;
+    virtual table_schema_version index_version(const schema& schema) = 0;
+};
+
+struct stats {
+
+private:
+    seastar::metrics::metric_groups metrics;
+    utils::time_estimated_histogram query_latency;
+public:
+    stats(const sstring& ks_name, const sstring& index_name);
+    stats(const stats&) = delete;
+    stats& operator=(const stats&) = delete;
+    void add_latency(std::chrono::steady_clock::duration d);
+};
+
+class secondary_index_manager {
+    data_dictionary::table _cf;
+    /// The key of the map is the name of the index as stored in system tables.
+    std::unordered_map<sstring, index> _indices;
+    std::unordered_map<sstring, lw_shared_ptr<stats>> _metrics;
+public:
+    secondary_index_manager(data_dictionary::table cf);
+    void reload();
+    std::vector<index_metadata> get_dependent_indices(const column_definition& cdef) const;
+    std::vector<index> list_indexes() const;
+    bool is_index(view_ptr) const;
+    bool is_index(const schema& s) const;
+    bool is_global_index(const schema& s) const;
+    lw_shared_ptr<stats> get_index_stats(const sstring& index_name) const {
+        auto it = _metrics.find(index_name);
+        if (it != _metrics.end()) {
+            return it->second;
+        }
+        return nullptr;
+    }
+    std::optional<sstring> custom_index_class(const schema& s) const;
+    static std::optional<std::function<std::unique_ptr<custom_index>()>> get_custom_class_factory(const sstring& class_name);
+    static std::optional<std::unique_ptr<custom_index>> get_custom_class(const index_metadata& im);
+private:
+    void add_index(const index_metadata& im);
+};
+
+}

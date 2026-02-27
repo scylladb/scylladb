@@ -1,0 +1,198 @@
+/*
+ * Copyright (C) 2020-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#include "test/lib/test_utils.hh"
+
+#include <seastar/util/file.hh>
+#include <seastar/core/format.hh>
+#include <seastar/util/backtrace.hh>
+#include "test/lib/log.hh"
+#include "test/lib/simple_schema.hh"
+#include "utils/to_string.hh"
+#include "replica/database.hh"
+#include "seastarx.hh"
+#include <random>
+#include <sys/resource.h>
+
+namespace tests {
+
+namespace {
+
+std::string format_msg(std::string_view test_function_name, bool ok, std::source_location sl, std::string_view msg) {
+    return fmt::format("{}(): {} @ {}() {}:{:d}{}{}", test_function_name, ok ? "OK" : "FAIL", sl.function_name(), sl.file_name(), sl.line(), msg.empty() ? "" : ": ", msg);
+}
+
+}
+
+bool do_check(bool condition, std::source_location sl, std::string_view msg) {
+    if (condition) {
+        testlog.trace("{}", format_msg(__FUNCTION__, condition, sl, msg));
+    } else {
+        testlog.error("{}", format_msg(__FUNCTION__, condition, sl, msg));
+    }
+    return condition;
+}
+
+void do_require(bool condition, std::source_location sl, std::string_view msg) {
+    if (condition) {
+        testlog.trace("{}", format_msg(__FUNCTION__, condition, sl, msg));
+    } else {
+        auto formatted_msg = format_msg(__FUNCTION__, condition, sl, msg);
+        testlog.error("{}", formatted_msg);
+        throw_with_backtrace<std::runtime_error>(std::move(formatted_msg));
+    }
+
+}
+
+void fail(std::string_view msg, std::source_location sl) {
+    throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, false, sl, msg));
+}
+
+std::string getenv_safe(std::string_view name) {
+    auto v = std::getenv(std::string(name).c_str());
+    if (!v) {
+        throw std::logic_error(fmt::format("Environment variable {} not set", name));
+    }
+    return std::string(v);
+}
+
+std::string getenv_or_default(std::span<const std::string_view> names, std::string_view def) {
+    for (auto n : names) {
+        auto v = std::getenv(std::string(n).c_str());
+        if (v) {
+            return std::string(v);
+        }
+    }
+    return std::string(def);
+}
+
+std::string getenv_or_default(std::initializer_list<const std::string_view> names, std::string_view def) {
+    return getenv_or_default(std::span(names), def);
+}
+
+std::string getenv_or_default(std::string_view name, std::string_view def) {
+    return getenv_or_default(std::ranges::single_view{name}, def);
+}
+
+tmp_set_env::tmp_set_env(std::string_view var, std::string_view value)
+    : _var(var)
+    , _old(getenv_or_default(_var))
+    , _was_set(std::getenv(_var.data()) != nullptr)
+{
+    ::setenv(_var.c_str(), value.data(), 1);
+}
+
+tmp_set_env::tmp_set_env(tmp_set_env&&) = default;
+
+tmp_set_env::~tmp_set_env() {
+    if (_was_set) {
+        ::setenv(_var.c_str(), _old.c_str(), 1);
+    } else {
+        ::unsetenv(_var.c_str());
+    }
+}
+
+bool check_run_test(std::string_view var, bool defval) {
+    auto do_test = getenv_or_default(var, std::to_string(defval));
+
+    if (!strcasecmp(do_test.data(), "0") || !strcasecmp(do_test.data(), "false")) {
+        BOOST_TEST_MESSAGE(fmt::format("Skipping test. Set {}=1 to run", var));
+        return false;
+    }
+    return true;
+}
+
+extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test::test_unit_id) {
+    if (::getenv("SCYLLA_TEST_ENV")) {
+        return true;
+    }
+
+    testlog.info("Test environment is not configured. "
+        "Check test/pylib/minio_server.py for an example of how to configure the environment for it to run.");
+    return false;
+}
+
+}
+
+sstring make_random_string(size_t size) {
+    static thread_local std::default_random_engine rng;
+    std::uniform_int_distribution<char> dist;
+    sstring str = uninitialized_string(size);
+    for (auto&& b : str) {
+        b = dist(rng);
+    }
+    return str;
+}
+
+sstring make_random_numeric_string(size_t size) {
+    static thread_local std::default_random_engine rng;
+    std::uniform_int_distribution<char> dist('0', '9');
+    sstring str = uninitialized_string(size);
+    for (auto&& b : str) {
+        b = dist(rng);
+    }
+    return str;
+}
+
+namespace tests {
+
+void adjust_rlimit() {
+    // Tests should use 1024 file descriptors, but don't punish them
+    // with weird behavior if they do.
+    //
+    // Since this more of a courtesy, don't make the situation worse if
+    // getrlimit/setrlimit fail for some reason.
+    struct rlimit lim;
+    int r = getrlimit(RLIMIT_NOFILE, &lim);
+    if (r == -1) {
+        return;
+    }
+    if (lim.rlim_cur < lim.rlim_max) {
+        lim.rlim_cur = lim.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &lim);
+    }
+}
+
+future<bool> compare_files(std::string fa, std::string fb) {
+    auto cont_a = co_await util::read_entire_file_contiguous(fa);
+    auto cont_b = co_await util::read_entire_file_contiguous(fb);
+    co_return cont_a == cont_b;
+}
+
+future<> touch_file(std::string name) {
+    auto f = co_await open_file_dma(name, open_flags::create);
+    co_await f.close();
+}
+
+std::mutex boost_logger_mutex;
+
+// Helper to get directory a table keeps its data in.
+// Only suitable for tests, that work with local storage type.
+fs::path table_dir(const replica::table& cf) {
+    return std::get<data_dictionary::storage_options::local>(cf.get_storage_options().value).dir;
+}
+
+void copy_directory(fs::path src_dir, fs::path dst_dir, fs::copy_options opts) {
+    if (!fs::exists(dst_dir)) {
+        fs::create_directory(dst_dir);
+    }
+    auto src_dir_components = std::distance(src_dir.begin(), src_dir.end());
+    using rdi = fs::recursive_directory_iterator;
+    // Boost 1.55.0 doesn't support range for on recursive_directory_iterator
+    // (even though previous and later versions do support it)
+    for (auto&& dirent = rdi{src_dir}; dirent != rdi(); ++dirent) {
+        auto&& path = dirent->path();
+        auto new_path = dst_dir;
+        for (auto i = std::next(path.begin(), src_dir_components); i != path.end(); ++i) {
+            new_path /= *i;
+        }
+        fs::copy(path, new_path, opts);
+    }
+}
+
+}
