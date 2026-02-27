@@ -46,7 +46,7 @@ future<> alter_view_statement::check_access(query_processor& qp, const service::
 view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     if (!schema->is_view()) {
-        throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
+        throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table. (Did you mean ALTER TABLE)?");
     }
 
     if (!_properties) {

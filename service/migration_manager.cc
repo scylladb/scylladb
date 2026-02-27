@@ -891,7 +891,7 @@ future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(
         auto& old_cfm = db.find_column_family(ks_name, cf_name);
         auto& schema = old_cfm.schema();
         if (schema->is_view()) {
-            co_await coroutine::return_exception(exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View"));
+            co_await coroutine::return_exception(exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View. (Did you mean DROP MATERIALIZED VIEW)?"));
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
 
@@ -1011,7 +1011,7 @@ future<utils::chunked_vector<mutation>> prepare_view_update_announcement(storage
         auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
         auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
         if (!old_view->is_view()) {
-            co_await coroutine::return_exception(exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table"));
+            co_await coroutine::return_exception(exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table. (Did you mean ALTER TABLE)?"));
         }
         mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
         auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, true);
@@ -1057,10 +1057,10 @@ future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_p
     try {
         auto& view = db.find_column_family(ks_name, cf_name).schema();
         if (!view->is_view()) {
-            throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Table");
+            throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Table. (Did you mean DROP TABLE)?");
         }
         if (db.find_column_family(view->view_info()->base_id()).get_index_manager().is_index(view_ptr(view))) {
-            throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Index");
+            throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Index. (Did you mean DROP INDEX)?");
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());

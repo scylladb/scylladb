@@ -307,7 +307,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     
     auto s = validation::validate_column_family(db, ks, name);
     if (s->is_view()) { 
-        throw exceptions::invalid_request_exception("Cannot use DESC TABLE on materialized View");
+        throw exceptions::invalid_request_exception("Cannot use DESC TABLE on materialized View. (Did you mean DESC MATERIALIZED VIEW)?");
     }
 
     auto schema = table->schema();
