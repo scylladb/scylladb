@@ -192,9 +192,7 @@ class TestHelper(Tester):
         return self.get_sstables(table, indexes)
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestScrubIndexes(TestHelper):
     """
     Test that we scrub indexes as well as their parent tables
@@ -338,9 +336,7 @@ class TestScrubIndexes(TestHelper):
         assert initial_users == users, "List of users before and after scrub are different"
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestScrub(TestHelper):
     """
     Generic tests for scrubbing

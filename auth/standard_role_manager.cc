@@ -34,7 +34,6 @@
 #include <seastar/core/loop.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "service/raft/raft_group0_client.hh"
-#include "utils/class_registrator.hh"
 #include "service/migration_manager.hh"
 #include "password_authenticator.hh"
 #include "utils/managed_string.hh"
@@ -43,14 +42,6 @@ namespace auth {
 
 
 static logging::logger log("standard_role_manager");
-
-static const class_registrator<
-        role_manager,
-        standard_role_manager,
-        cql3::query_processor&,
-        ::service::raft_group0_client&,
-        ::service::migration_manager&,
-        cache&> registration("org.apache.cassandra.auth.CassandraRoleManager");
 
 static db::consistency_level consistency_for_role(std::string_view role_name) noexcept {
     if (role_name == meta::DEFAULT_SUPERUSER_NAME) {
@@ -123,7 +114,6 @@ standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::servic
     , _migration_manager(mm)
     , _cache(cache)
     , _stopped(make_ready_future<>())
-    , _superuser(password_authenticator::default_superuser(qp.db().get_config()))
 {}
 
 std::string_view standard_role_manager::qualified_java_name() const noexcept {
@@ -186,6 +176,9 @@ future<> standard_role_manager::create_legacy_metadata_tables_if_missing() const
 }
 
 future<> standard_role_manager::legacy_create_default_role_if_missing() {
+    if (_superuser.empty()) {
+        on_internal_error(log, "Legacy auth default superuser name is empty");
+    }
     try {
         const auto exists = co_await legacy::default_role_row_satisfies(_qp, &has_can_login, _superuser);
         if (exists) {
@@ -209,6 +202,9 @@ future<> standard_role_manager::legacy_create_default_role_if_missing() {
 }
 
 future<> standard_role_manager::maybe_create_default_role() {
+    if (_superuser.empty()) {
+        co_return;
+    }
     auto has_superuser = [this] () -> future<bool> {
         const sstring query = seastar::format("SELECT * FROM {}.{} WHERE is_superuser = true ALLOW FILTERING", get_auth_ks_name(_qp), meta::roles_table::name);
         auto results = co_await _qp.execute_internal(query, db::consistency_level::LOCAL_ONE,
@@ -300,6 +296,8 @@ future<> standard_role_manager::migrate_legacy_metadata() {
 
 future<> standard_role_manager::start() {
     return once_among_shards([this] () -> future<> {
+        _superuser = password_authenticator::default_superuser(_qp);
+
         if (legacy_mode(_qp)) {
             co_await create_legacy_metadata_tables_if_missing();
         }

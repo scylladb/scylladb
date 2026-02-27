@@ -34,6 +34,9 @@
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
 #include "db/auth_version.hh"
+#include "db/consistency_level_type.hh"
+#include "db/config.hh"
+#include "utils/enum_option.hh"
 #include "service/storage_proxy_fwd.hh"
 
 
@@ -142,6 +145,30 @@ private:
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
     lang::manager& _lang_manager;
+
+    using cl_option_list = std::vector<enum_option<db::consistency_level_restriction_t>>;
+
+    /// Efficient bitmask-based set of consistency levels.
+    using consistency_level_set = enum_set<super_enum<db::consistency_level,
+        db::consistency_level::ANY,
+        db::consistency_level::ONE,
+        db::consistency_level::TWO,
+        db::consistency_level::THREE,
+        db::consistency_level::QUORUM,
+        db::consistency_level::ALL,
+        db::consistency_level::LOCAL_QUORUM,
+        db::consistency_level::EACH_QUORUM,
+        db::consistency_level::SERIAL,
+        db::consistency_level::LOCAL_SERIAL,
+        db::consistency_level::LOCAL_ONE>>;
+
+
+    consistency_level_set _write_consistency_levels_warned;
+    consistency_level_set _write_consistency_levels_disallowed;
+    utils::observer<cl_option_list> _write_consistency_levels_warned_observer;
+    utils::observer<cl_option_list> _write_consistency_levels_disallowed_observer;
+
+    static consistency_level_set to_consistency_level_set(const cl_option_list& levels);
 public:
     static const sstring CQL_VERSION;
 
@@ -492,6 +519,21 @@ public:
             db::consistency_level,
             int32_t page_size = -1,
             service::node_local_only node_local_only = service::node_local_only::no) const;
+
+    enum class write_consistency_guardrail_state { NONE, WARN, FAIL };
+    inline write_consistency_guardrail_state check_write_consistency_levels_guardrail(db::consistency_level cl) {
+        _cql_stats.writes_per_consistency_level[size_t(cl)]++;
+
+        if (_write_consistency_levels_disallowed.contains(cl)) [[unlikely]] {
+            _cql_stats.write_consistency_levels_disallowed_violations++;
+            return write_consistency_guardrail_state::FAIL;
+        }
+        if (_write_consistency_levels_warned.contains(cl)) [[unlikely]] {
+            _cql_stats.write_consistency_levels_warned_violations++;
+            return write_consistency_guardrail_state::WARN;
+        }
+        return write_consistency_guardrail_state::NONE;
+    }
 
 private:
     // Keep the holder until you stop using the `remote` services.

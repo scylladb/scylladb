@@ -34,7 +34,7 @@ def scylla_path(build_mode):
 
 @pytest.mark.parametrize("mode", ["read"])
 async def test_perf_simple_query(scylla_path, mode, tmp_path):
-    args = [scylla_path, "perf-simple-query", "--duration", "1", "--partitions", "1000", "--stop-on-error", "false"]
+    args = [scylla_path, "perf-simple-query", "--duration", "1", "--partitions", "1000", "--stop-on-error", "false", "--memory", "2G", "--smp", "2", "--overprovisioned"]
     await run(args)
 
 
@@ -51,7 +51,9 @@ async def test_perf_cql_raw(scylla_path, tmp_path, workload):
         '--seed-provider-parameters', 'seeds=' + host,
         "--workload", workload,
         "--duration", "1",
+        "--memory", "2G",
         "--smp", "2",
+        "--overprovisioned",
         "--workdir", str(tmp_path),
         "--developer-mode", "1",
         "--partitions", "1000",
@@ -79,7 +81,9 @@ async def test_perf_alternator(scylla_path, tmp_path, workload):
         "--alternator-write-isolation", "only_rmw_uses_lwt",
         "--workload", workload,
         "--duration", "1",
+        "--memory", "2G",
         "--smp", "2",
+        "--overprovisioned",
         "--workdir", str(tmp_path),
         "--developer-mode", "1",
         "--partitions", "1000",
@@ -102,7 +106,9 @@ async def test_perf_cql_raw_remote(scylla_path, tmp_path, workload, manager):
         "--workload", workload,
         "--duration", "1",
         "--remote-host", host,
+        "--memory", "1G",
         "--smp", "1",
+        "--overprovisioned",
         "--partitions", "1000",
         "--continue-after-error", "true"
     ]
@@ -123,7 +129,9 @@ async def test_perf_alternator_remote(scylla_path, tmp_path, workload, manager):
         "--workload", workload,
         "--duration", "1",
         "--remote-host", host,
+        "--memory", "1G",
         "--smp", "1",
+        "--overprovisioned",
         "--partitions", "1000",
         "--continue-after-error", "true"
     ]

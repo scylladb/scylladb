@@ -778,6 +778,7 @@ compaction_manager::get_incremental_repair_read_lock(compaction::compaction_grou
         cmlog.debug("Get get_incremental_repair_read_lock for {} started", reason);
     }
     compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = cs.gate.hold();
     auto ret = co_await cs.incremental_repair_lock.hold_read_lock();
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_read_lock for {} done", reason);
@@ -791,6 +792,7 @@ compaction_manager::get_incremental_repair_write_lock(compaction::compaction_gro
         cmlog.debug("Get get_incremental_repair_write_lock for {} started", reason);
     }
     compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = cs.gate.hold();
     auto ret = co_await cs.incremental_repair_lock.hold_write_lock();
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_write_lock for {} done", reason);
@@ -1040,7 +1042,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
         _compaction_controller.set_max_shares(max_shares);
     }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(_shared_tombstone_gc_state) {
+{
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
     // Bandwidth throttling is node-wide, updater is needed on single shard
@@ -1064,7 +1066,7 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _compaction_max_shares_observer(_cfg.max_shares.observe([] (const float& max_shares) {}))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(_shared_tombstone_gc_state) {
+{
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     // No metric registration because this constructor is supposed to be used only by the testing
     // infrastructure.
@@ -1519,8 +1521,8 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction_g
             | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier))
             | std::ranges::to<std::unordered_set>());
     };
-    const auto threshold = utils::get_local_injector().inject_parameter<size_t>("set_sstable_count_reduction_threshold")
-        .value_or(size_t(std::max(schema->max_compaction_threshold(), 32)));
+    const auto injected_threshold = utils::get_local_injector().inject_parameter<size_t>("set_sstable_count_reduction_threshold");
+    const auto threshold = injected_threshold.value_or(size_t(std::max(schema->max_compaction_threshold(), 32)));
 
     auto count = co_await num_runs_for_compaction();
     if (count <= threshold) {
@@ -1536,7 +1538,7 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction_g
     auto& cstate = get_compaction_state(&t);
     try {
         while (can_perform_regular_compaction(t) && co_await num_runs_for_compaction() > threshold) {
-            co_await cstate.compaction_done.wait();
+            co_await cstate.compaction_done.when();
         }
     } catch (const broken_condition_variable&) {
         co_return;
@@ -2387,6 +2389,8 @@ future<> compaction_manager::remove(compaction_group_view& t, sstring reason) no
     if (!c_state.gate.is_closed()) {
         auto close_gate = c_state.gate.close();
         co_await stop_ongoing_compactions(reason, &t);
+        // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
+        co_await c_state.incremental_repair_lock.write_lock();
         co_await std::move(close_gate);
     }
 

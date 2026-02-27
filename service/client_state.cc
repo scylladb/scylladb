@@ -55,15 +55,28 @@ void service::client_state::validate_login() const {
 }
 
 void service::client_state::ensure_not_anonymous() const {
+    if (_bypass_auth_checks) {
+        return;
+    }
     validate_login();
     if (auth::is_anonymous(*_user)) {
         throw exceptions::unauthorized_exception("You have to be logged in and not anonymous to perform this request");
     }
 }
 
+future<bool> service::client_state::has_superuser() const {
+    if (_bypass_auth_checks) {
+        co_return true;
+    }
+    if (!_user) {
+        co_return false;
+    }
+    co_return co_await auth::has_superuser(*_auth_service, *_user);
+}
+
 future<> service::client_state::has_all_keyspaces_access(
                 auth::permission p) const {
-    if (_is_internal) {
+    if (_bypass_auth_checks) {
         co_return;
     }
     validate_login();
@@ -142,7 +155,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
     }
-    if (_is_internal) {
+    if (_bypass_auth_checks) {
         co_return;
     }
 
@@ -256,7 +269,7 @@ sstring service::client_state::generate_authorization_error_msg(const auth::comm
 
 template <typename Cmd>
 future<bool> service::client_state::check_has_permission(Cmd cmd) const {
-    if (_is_internal) {
+    if (_bypass_auth_checks) {
         co_return true;
     }
 

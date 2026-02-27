@@ -39,7 +39,7 @@ Description: debugging symbols for %{product}-server
 
 Package: %{product}-kernel-conf
 Architecture: any
-Depends: procps
+Depends: procps, sed
 Replaces: scylla-enterprise-kernel-conf (<< 2025.1.0~)
 Breaks: scylla-enterprise-kernel-conf (<< 2025.1.0~)
 Description: Scylla kernel tuning configuration

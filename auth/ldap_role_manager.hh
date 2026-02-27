@@ -57,8 +57,7 @@ class ldap_role_manager : public role_manager {
             cache& cache ///< Passed to standard_role_manager.
     );
 
-    /// Retrieves LDAP configuration entries from qp and invokes the other constructor.  Required by
-    /// class_registrator<role_manager>.
+    /// Retrieves LDAP configuration entries from qp and invokes the other constructor.
     ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache);
 
     /// Thrown when query-template parsing fails.

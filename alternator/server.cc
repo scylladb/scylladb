@@ -710,7 +710,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         ++_executor._stats.requests_blocked_memory;
     }
     auto units = co_await std::move(units_fut);
-    SCYLLA_ASSERT(req->content_stream);
+    throwing_assert(req->content_stream);
     chunked_content content = co_await read_entire_stream(*req->content_stream, request_content_length_limit);
     // If the request had no Content-Length, we reserved too many units
     // so need to return some

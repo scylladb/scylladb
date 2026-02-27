@@ -186,7 +186,7 @@ This package contains the main scylla configuration file.
 %package kernel-conf
 Group:          Applications/Databases
 Summary:        Scylla configuration package for the Linux kernel
-Requires:       kmod
+Requires:       kmod sed
 # tuned overwrites our sysctl settings
 Obsoletes:      tuned >= 2.11.0
 Provides:       scylla-enterprise-kernel-conf = %{version}-%{release}
@@ -220,6 +220,7 @@ fi
 %{_unitdir}/scylla-tune-sched.service
 /opt/scylladb/kernel_conf/*
 %ghost /etc/sysctl.d/99-scylla-perfevent.conf
+%ghost /etc/sysctl.d/99-scylla-tcp.conf
 
 
 %package node-exporter

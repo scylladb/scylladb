@@ -6,10 +6,10 @@
 import logging
 import asyncio
 
+from test.pylib.host_registry import HostRegistry
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import IPAddress
 from test.cluster.util import new_test_keyspace, new_test_table
-from test.pylib.host_registry import HostRegistry
 from cassandra.cluster import ConsistencyLevel
 
 logger = logging.getLogger(__name__)
@@ -108,9 +108,8 @@ async def do_test_internode_compression_between_datacenters(manager: ManagerClie
 
     logger.info("Creating a new cluster of 2 nodes in 1st DC and 1 node in 2nd DC")
 
-    hosts = HostRegistry()
     dcs = [('dc1','rack1'), ('dc1', 'rack2'), ('dc2', 'rack3')]
-    proxy_addrs = [ (await hosts.lease_host(),dc,rack) for dc,rack in dcs]
+    proxy_addrs = [ (await HostRegistry().lease_host(),dc,rack) for dc,rack in dcs]
     seeds = [IPAddress(addr) for addr,_,_ in proxy_addrs]
     seeds = [proxy_addrs[0][0]]
     config = {"internode_compression": compression, "ssl_storage_port": 0 }
@@ -162,7 +161,12 @@ async def do_test_internode_compression_between_datacenters(manager: ManagerClie
 
     await asyncio.gather(*[manager.server_stop(s.server_id) for s,_ in servers])
     await asyncio.gather(*[p.stop() for p in proxies])
-
+    # these will all except, because we just stopped them above
+    for coro in proxy_futs:
+        try:
+            await coro
+        except:
+            pass
 
 async def test_internode_compression_compress_packets_between_nodes(request, manager: ManagerClient) -> None:
     def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy):

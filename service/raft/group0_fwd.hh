@@ -57,7 +57,7 @@ enum class group0_upgrade_state : uint8_t {
     // Schema changes may still arrive from other nodes for some time. However, if no failures occur
     // during the upgrade procedure, eventually all nodes should enter `synchronize` state. Then
     // the nodes ensure that schema is synchronized across the entire cluster before entering `use_post_raft_procedures`.
-    synchronize = 2,
+    synchronize = 2, // Deprecated
 
     // In `use_post_raft_procedures` state the upgrade is finished. The node performs schema changes
     // using group 0, i.e. by constructing appropriate Raft commands and sending them to the Raft group 0 cluster.
@@ -65,8 +65,6 @@ enum class group0_upgrade_state : uint8_t {
 };
 
 inline constexpr uint8_t group0_upgrade_state_last = 3;
-
-std::ostream& operator<<(std::ostream&, group0_upgrade_state);
 
 struct wrong_destination {
     raft::server_id reached_id;
@@ -85,3 +83,24 @@ using raft_ticker_type = seastar::timer<lowres_clock>;
 static constexpr raft_ticker_type::duration raft_tick_interval = std::chrono::milliseconds(100);
 
 } // namespace service
+
+
+template <> struct fmt::formatter<service::group0_upgrade_state> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const service::group0_upgrade_state& s, fmt::format_context& ctx) const {
+        switch (s) {
+            case service::group0_upgrade_state::recovery:
+                return fmt::format_to(ctx.out(), "recovery");
+                break;
+            case service::group0_upgrade_state::use_post_raft_procedures:
+                return fmt::format_to(ctx.out(), "use_post_raft_procedures");
+                break;
+            case service::group0_upgrade_state::synchronize:
+                return fmt::format_to(ctx.out(), "synchronize");
+                break;
+            case service::group0_upgrade_state::use_pre_raft_procedures:
+                return fmt::format_to(ctx.out(), "use_pre_raft_procedures");
+                break;
+        }
+    }
+};

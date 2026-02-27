@@ -436,6 +436,8 @@ future<> server_impl::wait_for_next_tick(seastar::abort_source* as) {
 }
 
 future<> server_impl::wait_for_leader(seastar::abort_source* as) {
+    check_not_aborted();
+
     if (_fsm->current_leader()) {
         co_return;
     }
@@ -454,6 +456,8 @@ future<> server_impl::wait_for_leader(seastar::abort_source* as) {
 }
 
 future<> server_impl::wait_for_state_change(seastar::abort_source* as) {
+    check_not_aborted();
+
     if (!_state_change_promise) {
         _state_change_promise.emplace();
     }
@@ -748,6 +752,8 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
     }
     _stats.add_command++;
 
+    check_not_aborted();
+
     logger.trace("[{}] an entry is submitted", id());
     if (!_config.enable_forwarding) {
         if (const auto leader = _fsm->current_leader(); leader != _id) {
@@ -858,6 +864,8 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
 }
 
 future<> server_impl::modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) {
+    check_not_aborted();
+
     utils::get_local_injector().inject("raft/throw_commit_status_unknown_in_modify_config", [] {
         throw raft::commit_status_unknown();
     });
@@ -1553,6 +1561,7 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
             co_return stop_iteration::no;
         }
         read_idx = std::get<index_t>(res);
+        _fsm->maybe_update_commit_idx_for_read(read_idx);
         co_return stop_iteration::yes;
     });
 

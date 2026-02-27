@@ -9,10 +9,13 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/coroutine.hh>
 
+#include "db/config.hh"
 #include "raft/raft.hh"
 #include "utils/UUID_gen.hh"
 
 #include "service/raft/raft_sys_table_storage.hh"
+#include "service/strong_consistency/raft_groups_storage.hh"
+#include "dht/fixed_shard.hh"
 
 #include "test/lib/cql_test_env.hh"
 #include "cql3/query_processor.hh"
@@ -46,9 +49,10 @@ static bool operator==(const log_entry& lhs, const log_entry& rhs) {
 
 } // namespace raft
 
-using namespace service;
+using namespace service::strong_consistency;
 
 static raft::group_id gid{utils::UUID_gen::min_time_UUID()};
+static constexpr shard_id test_shard = 0;
 
 // Create a test log with entries of each kind to test that these get
 // serialized/deserialized properly
@@ -75,10 +79,31 @@ static std::vector<raft::log_entry_ptr> create_test_log() {
     };
 }
 
-SEASTAR_TEST_CASE(test_store_load_term_and_vote) {
-    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+// Factory functions to create storage instances with uniform interface
+static service::raft_sys_table_storage make_sys_table_storage(cql3::query_processor& qp, raft::group_id group_id) {
+    return service::raft_sys_table_storage(qp, group_id, raft::server_id::create_random_id());
+}
+
+static raft_groups_storage make_groups_storage(cql3::query_processor& qp, raft::group_id group_id) {
+    return raft_groups_storage(qp, group_id, raft::server_id::create_random_id(), test_shard);
+}
+
+static future<> do_with_cql_env_strongly_consistent(std::function<future<>(cql_test_env&)> func) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+    db_cfg.experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env(std::move(func), std::move(db_cfg_ptr));
+}
+
+//
+// Templated test implementations for common storage tests
+//
+
+template <typename StorageFactory>
+future<> test_store_load_term_and_vote_impl(StorageFactory&& make_storage) {
+    return do_with_cql_env_strongly_consistent([make_storage = std::forward<StorageFactory>(make_storage)] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
+        auto storage = make_storage(qp, gid);
 
         raft::term_t vote_term(1);
         auto vote_id = raft::server_id::create_random_id();
@@ -91,10 +116,11 @@ SEASTAR_TEST_CASE(test_store_load_term_and_vote) {
     });
 }
 
-SEASTAR_TEST_CASE(test_store_load_snapshot) {
-    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+template <typename StorageFactory>
+future<> test_store_load_snapshot_impl(StorageFactory&& make_storage) {
+    return do_with_cql_env_strongly_consistent([make_storage = std::forward<StorageFactory>(make_storage)] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
+        auto storage = make_storage(qp, gid);
 
         raft::term_t snp_term(1);
         raft::index_t snp_idx(1);
@@ -121,10 +147,11 @@ SEASTAR_TEST_CASE(test_store_load_snapshot) {
     });
 }
 
-SEASTAR_TEST_CASE(test_store_load_log_entries) {
-    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+template <typename StorageFactory>
+future<> test_store_load_log_entries_impl(StorageFactory&& make_storage) {
+    return do_with_cql_env_strongly_consistent([make_storage = std::forward<StorageFactory>(make_storage)] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
+        auto storage = make_storage(qp, gid);
 
         std::vector<raft::log_entry_ptr> entries = create_test_log();
         co_await storage.store_log_entries(entries);
@@ -137,10 +164,11 @@ SEASTAR_TEST_CASE(test_store_load_log_entries) {
     });
 }
 
-SEASTAR_TEST_CASE(test_truncate_log) {
-    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+template <typename StorageFactory>
+future<> test_truncate_log_impl(StorageFactory&& make_storage) {
+    return do_with_cql_env_strongly_consistent([make_storage = std::forward<StorageFactory>(make_storage)] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
+        auto storage = make_storage(qp, gid);
 
         std::vector<raft::log_entry_ptr> entries = create_test_log();
         co_await storage.store_log_entries(entries);
@@ -155,10 +183,11 @@ SEASTAR_TEST_CASE(test_truncate_log) {
     });
 }
 
-SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
-    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+template <typename StorageFactory>
+future<> test_store_snapshot_truncate_log_tail_impl(StorageFactory&& make_storage) {
+    return do_with_cql_env_strongly_consistent([make_storage = std::forward<StorageFactory>(make_storage)] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
-        raft_sys_table_storage storage(qp, gid, raft::server_id::create_random_id());
+        auto storage = make_storage(qp, gid);
 
         std::vector<raft::log_entry_ptr> entries = create_test_log();
         co_await storage.store_log_entries(entries);
@@ -187,5 +216,143 @@ SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
         for (size_t i = 0, end = loaded_entries.size(); i != end; ++i) {
             BOOST_CHECK(*entries[i + 1] == *loaded_entries[i]);
         }
+    });
+}
+
+template <typename StorageFactory>
+future<> test_storage_bootstrap_impl(StorageFactory&& make_storage) {
+    return do_with_cql_env_strongly_consistent([make_storage = std::forward<StorageFactory>(make_storage)] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id bootstrap_gid{utils::UUID_gen::get_time_UUID()};
+        auto storage = make_storage(qp, bootstrap_gid);
+
+        raft::config_member srv1{raft::server_address{
+                raft::server_id::create_random_id(), {}
+            }, raft::is_voter::yes};
+        raft::config_member srv2{raft::server_address{
+                raft::server_id::create_random_id(), {}
+            }, raft::is_voter::yes};
+        raft::configuration initial_cfg({srv1, srv2});
+
+        co_await storage.bootstrap(initial_cfg, false);
+
+        auto snap = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(snap.id);
+        BOOST_CHECK_EQUAL(snap.idx, raft::index_t{0});
+        BOOST_CHECK_EQUAL(snap.config.current.size(), 2);
+    });
+}
+
+//
+// raft_sys_table_storage tests
+//
+
+SEASTAR_TEST_CASE(test_sys_table_store_load_term_and_vote) {
+    return test_store_load_term_and_vote_impl(make_sys_table_storage);
+}
+
+SEASTAR_TEST_CASE(test_sys_table_store_load_snapshot) {
+    return test_store_load_snapshot_impl(make_sys_table_storage);
+}
+
+SEASTAR_TEST_CASE(test_sys_table_store_load_log_entries) {
+    return test_store_load_log_entries_impl(make_sys_table_storage);
+}
+
+SEASTAR_TEST_CASE(test_sys_table_truncate_log) {
+    return test_truncate_log_impl(make_sys_table_storage);
+}
+
+SEASTAR_TEST_CASE(test_sys_table_store_snapshot_truncate_log_tail) {
+    return test_store_snapshot_truncate_log_tail_impl(make_sys_table_storage);
+}
+
+SEASTAR_TEST_CASE(test_sys_table_storage_bootstrap) {
+    return test_storage_bootstrap_impl(make_sys_table_storage);
+}
+
+//
+// raft_groups_storage tests
+//
+
+SEASTAR_TEST_CASE(test_groups_store_load_term_and_vote) {
+    return test_store_load_term_and_vote_impl(make_groups_storage);
+}
+
+SEASTAR_TEST_CASE(test_groups_store_load_snapshot) {
+    return test_store_load_snapshot_impl(make_groups_storage);
+}
+
+SEASTAR_TEST_CASE(test_groups_store_load_log_entries) {
+    return test_store_load_log_entries_impl(make_groups_storage);
+}
+
+SEASTAR_TEST_CASE(test_groups_truncate_log) {
+    return test_truncate_log_impl(make_groups_storage);
+}
+
+SEASTAR_TEST_CASE(test_groups_store_snapshot_truncate_log_tail) {
+    return test_store_snapshot_truncate_log_tail_impl(make_groups_storage);
+}
+
+// Verify partitioner round-trip: token_for_shard -> shard_of returns the original shard
+SEASTAR_TEST_CASE(test_fixed_shard_partitioner_shard_mapping) {
+    for (uint16_t shard = 0; shard < 256; ++shard) {
+        uint64_t group_id_hash = 0x123456789ABCDEF0ULL + shard;
+        auto token = dht::fixed_shard_partitioner::token_for_shard(shard, group_id_hash);
+        unsigned computed_shard = dht::fixed_shard_partitioner::shard_of(token);
+        BOOST_CHECK_EQUAL(shard, computed_shard);
+    }
+
+    // Edge cases
+    auto zero_hash_token = dht::fixed_shard_partitioner::token_for_shard(0, 0);
+    BOOST_CHECK_EQUAL(0u, dht::fixed_shard_partitioner::shard_of(zero_hash_token));
+
+    auto max_shard_token = dht::fixed_shard_partitioner::token_for_shard(dht::fixed_shard_partitioner::max_shard, 0xFFFFFFFFFFFFFFFFULL);
+    BOOST_CHECK_EQUAL(dht::fixed_shard_partitioner::max_shard, dht::fixed_shard_partitioner::shard_of(max_shard_token));
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_groups_storage_bootstrap) {
+    return test_storage_bootstrap_impl(make_groups_storage);
+}
+
+// Verify raft group storages of different shards do not interfere with each other
+SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id iso_gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage0(qp, iso_gid, raft::server_id::create_random_id(), 0);
+        raft_groups_storage storage1(qp, iso_gid, raft::server_id::create_random_id(), 1);
+
+        // Log entries
+        std::vector<raft::log_entry_ptr> entries = create_test_log();
+        co_await storage0.store_log_entries(entries);
+
+        auto loaded0 = co_await storage0.load_log();
+        BOOST_CHECK_EQUAL(entries.size(), loaded0.size());
+
+        auto loaded1 = co_await storage1.load_log();
+        BOOST_CHECK_EQUAL(0u, loaded1.size());
+
+        // Vote/term
+        co_await storage0.store_term_and_vote(raft::term_t(100), raft::server_id::create_random_id());
+
+        auto vote0 = co_await storage0.load_term_and_vote();
+        BOOST_CHECK_EQUAL(raft::term_t(100), vote0.first);
+
+        auto vote1 = co_await storage1.load_term_and_vote();
+        BOOST_CHECK_EQUAL(raft::term_t{}, vote1.first);
+
+        // Commit index
+        co_await storage0.store_commit_idx(raft::index_t(42));
+
+        auto idx0 = co_await storage0.load_commit_idx();
+        BOOST_CHECK_EQUAL(raft::index_t(42), idx0);
+
+        auto idx1 = co_await storage1.load_commit_idx();
+        BOOST_CHECK_EQUAL(raft::index_t(0), idx1);
     });
 }

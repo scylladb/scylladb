@@ -66,7 +66,7 @@ async def test_refresh_with_streaming_scopes(build_mode: str, manager: ManagerCl
     _, keys, _ = await create_dataset(manager, ks, cf, topology, logger, num_keys=10, min_tablet_count=5)
 
     # validate replicas assertions hold on fresh dataset
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
 
     _, sstables = await take_snapshot(ks, servers, manager, logger)
 
@@ -126,7 +126,7 @@ async def test_refresh_with_streaming_scopes(build_mode: str, manager: ManagerCl
 
             await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, primary_replica_only=pro, load_fn=do_refresh)
 
-            await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=pro)
+            await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
             await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
     shutil.rmtree(tmpbackup)

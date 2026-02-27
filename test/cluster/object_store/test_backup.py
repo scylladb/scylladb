@@ -5,6 +5,7 @@ import logging
 import asyncio
 import subprocess
 import tempfile
+import itertools
 
 import pytest
 import time
@@ -41,16 +42,24 @@ def create_ks_and_cf(cql):
     return ks, cf
 
 
-async def prepare_snapshot_for_backup(manager: ManagerClient, server, snap_name='backup'):
-    cql = manager.get_cql()
-    print('Create keyspace')
-    ks, cf = create_ks_and_cf(cql)
-    print('Flush keyspace')
-    await manager.api.flush_keyspace(server.ip_addr, ks)
-    print('Take keyspace snapshot')
-    await manager.api.take_snapshot(server.ip_addr, ks, snap_name)
+async def take_snapshot(ks, servers, manager, logger):
+    logger.info(f'Take snapshot and collect sstables lists')
+    snap_name = unique_name('backup_')
+    sstables = dict()
+    await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+    await asyncio.gather(*(manager.api.take_snapshot(s.ip_addr, ks, snap_name) for s in servers))
+    for s in servers:
+        workdir = await manager.server_get_workdir(s.server_id)
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
+        logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
+        sstables[s] = tocs
 
-    return ks, cf
+    return snap_name,sstables
+
+async def take_snapshot_on_one_server(ks, server, manager, logger):
+    snap_name, sstables = await take_snapshot(ks, [server], manager, logger)
+    return snap_name, sstables[server]
 
 
 @pytest.mark.asyncio
@@ -66,16 +75,15 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
+    assert len(files) > 0
     workdir = await manager.server_get_workdir(server.server_id)
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 0
 
     print('Backup snapshot')
     prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix, move_files=move_files)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix, move_files=move_files)
     print(f'Started task {tid}')
     status = await manager.api.get_task_status(server.ip_addr, tid)
     print(f'Status: {status}, waiting to finish')
@@ -84,7 +92,7 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
     assert (status['progress_total'] > 0) and (status['progress_completed'] == status['progress_total'])
 
     # all components in the "backup" snapshot should have been moved into bucket if move_files
-    assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup')) == 0 if move_files else len(files)
+    assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}')) == 0 if move_files else len(files)
 
     objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
     for f in files:
@@ -110,12 +118,8 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    backup_snap_name = 'backup'
-    ks, cf = await prepare_snapshot_for_backup(manager, server, snap_name = backup_snap_name)
-
-    workdir = await manager.server_get_workdir(server.server_id)
-    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    backup_snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
     assert len(files) > 0
 
     prefix = f'{cf}/backup'
@@ -142,11 +146,12 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
            }
     cmd = ['--logger-log-level', 'sstables_manager=debug']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
 
     prefix = f'{cf}/backup'
 
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert status is not None
     assert status['state'] == 'failed'
@@ -164,7 +169,7 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
         return True
     await wait_for(endpoint_appeared_in_config, deadline=time.time() + 60)
 
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert status is not None
     assert status['state'] == 'done'
@@ -182,12 +187,11 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
+    assert len(files) > 1
     workdir = await manager.server_get_workdir(server.server_id)
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 1
 
     await manager.api.enable_injection(server.ip_addr, breakpoint_name, one_shot=True)
     log = await manager.server_open_log(server.server_id)
@@ -198,7 +202,7 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
     # If we just use {cf}/backup, files like "schema.cql" and "manifest.json" will remain after previous test
     # case, and we will count these erroneously.
     prefix = f'{cf_dir}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
 
     print(f'Started task {tid}, aborting it early')
     await log.wait_for(breakpoint_name + ': waiting', from_mark=mark)
@@ -264,9 +268,8 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
 
     # This test is sensitive not to share the bucket with any other test
     # that can run in parallel, so generate some unique name for the snapshot
-    snap_name = unique_name('backup_')
-    print(f'Create and backup keyspace (snapshot name is {snap_name})')
-    ks, cf = await prepare_snapshot_for_backup(manager, server, snap_name)
+    ks, cf = create_ks_and_cf(cql)
+    snap_name, toc_names = await take_snapshot_on_one_server(ks, server, manager, logger)
 
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
 
@@ -295,8 +298,6 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
     #    - 1-TOC.txt
     #    - 2-TOC.txt
     #    - ...
-    old_files = list_sstables();
-    toc_names = [f'{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
 
     prefix = f'{cf}/{snap_name}'
     tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, f'{prefix}')
@@ -338,7 +339,8 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
         # There is no guarantee we'll generate the same amount of sstables as was in the original
         # backup (?). But, since we are not stressing the server here (not provoking memtable flushes),
         # we should in principle never generate _more_ sstables than originated the backup.
-        assert len(old_files) >= len(files)
+        tocs = [f'{entry.name}' for entry in files if entry.name.endswith('TOC.txt')]
+        assert len(toc_names) >= len(tocs)
         assert len(sstable_names) <= len(db_objects)
     else:
         assert len(files) > 0
@@ -382,36 +384,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         num_keys = 10000
         await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), str(i))) for i in range(num_keys)))
 
-        # Flush keyspace on all servers
-        logger.info("Flushing keyspace on all servers...")
-        for server in servers:
-            await manager.api.flush_keyspace(server.ip_addr, keyspace)
-
-        # Take snapshot for keyspace
-        snapshot_name = unique_name('backup_')
-        logger.info(f"Taking snapshot '{snapshot_name}' for keyspace '{keyspace}'...")
-        for server in servers:
-            await manager.api.take_snapshot(server.ip_addr, keyspace, snapshot_name)
-
-        # Collect snapshot files from each server
-        async def get_snapshot_files(server, snapshot_name):
-            workdir = await manager.server_get_workdir(server.server_id)
-            data_path = os.path.join(workdir, 'data', keyspace)
-            cf_dirs = os.listdir(data_path)
-            if not cf_dirs:
-                raise RuntimeError(f"No column family directories found in {data_path}")
-            # Assumes that there is only one column family directory under the keyspace.
-            cf_dir = cf_dirs[0]
-            snapshot_path = os.path.join(data_path, cf_dir, 'snapshots', snapshot_name)
-            return [
-                f.name for f in os.scandir(snapshot_path)
-                if f.is_file() and f.name.endswith('TOC.txt')
-            ]
-
-        sstables = {}
-        for server in servers:
-            snapshot_files = await get_snapshot_files(server, snapshot_name)
-            sstables[server.server_id] = snapshot_files
+        snapshot_name, sstables = await take_snapshot(keyspace, servers, manager, logger)
 
         # Backup the keyspace on each server to S3
         prefix = f"{table}/{snapshot_name}"
@@ -449,7 +422,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
                 object_storage.address,
                 object_storage.bucket_name,
                 prefix,
-                sstables[server.server_id]
+                sstables[server]
             )
             restore_task_ids[server.server_id] = restore_tid
 
@@ -543,21 +516,6 @@ async def do_restore_server(manager, logger, ks, cf, s, toc_names, scope, primar
     tid = await manager.api.restore(s.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, prefix, toc_names, scope, primary_replica_only=primary_replica_only)
     status = await manager.api.wait_task(s.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
-
-async def take_snapshot(ks, servers, manager, logger):
-    logger.info(f'Take snapshot and collect sstables lists')
-    snap_name = unique_name('backup_')
-    sstables = dict()
-    for s in servers:
-        await manager.api.flush_keyspace(s.ip_addr, ks)
-        await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
-        workdir = await manager.server_get_workdir(s.server_id)
-        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
-        logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
-        sstables[s] = tocs
-
-    return snap_name,sstables
 
 async def check_streaming_directions(logger, servers, topology, host_ids, scope, primary_replica_only, log_marks):
     host_ids_per_dc = defaultdict(list)
@@ -677,7 +635,7 @@ async def collect_mutations(cql, server, manager, ks, cf):
         ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
     return ret
 
-async def check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=None, expected_replicas = None):
+async def check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas = None):
     '''Check that each mutation is replicated to the expected number of replicas'''
     if expected_replicas is None:
         expected_replicas = topology.rf * topology.dcs
@@ -691,7 +649,7 @@ async def check_mutation_replicas(cql, manager, servers, keys, topology, logger,
     for k in random.sample(keys, 10):
         if not str(k) in mutations:
             logger.info(f'Mutations: {mutations}')
-            assert False, f"Key '{k}' not found in mutations. {topology=} {scope=} {primary_replica_only=}"
+            assert False, f"Key '{k}' not found in mutations. {topology=}"
 
         if len(mutations[str(k)]) != expected_replicas:
             logger.info(f'Mutations: {mutations}')
@@ -730,48 +688,46 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerCl
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
 
-    ks = 'ks'
-    cf = 'cf'
-
     num_keys = 10
     original_min_tablet_count=5
 
     scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
+    pros = [ True, False ] # Primary Replica Only
     restored_min_tablet_counts = [original_min_tablet_count] if build_mode == 'debug' else [2, original_min_tablet_count, 10]
     
-    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=original_min_tablet_count)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(create_schema(ks, 'test', min_tablet_count=original_min_tablet_count))
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
 
-    # validate replicas assertions hold on fresh dataset
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
+        # validate replicas assertions hold on fresh dataset
+        await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
-    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
-    prefix = f'{cf}/{snap_name}'
+        snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+        prefix = f'test/{snap_name}'
 
-    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+        await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, 'test', object_storage, manager, logger) for s in servers))
 
-    for scope in scopes:
+    for scope, pro, restored_min_tablet_count in itertools.product(scopes, pros, restored_min_tablet_counts):
+        if scope == 'node' and pro == True:
+            continue
         # We can support rack-aware restore with rack lists, if we restore the rack-list per dc as it was at backup time.
         # Otherwise, with numeric replication_factor we'd pick arbitrary subset of the racks when the keyspace
         # is initially created and an arbitrary subset or the rack at restore time.
         if scope == 'rack' and topology.rf != topology.racks:
             logger.info(f'Skipping scope={scope} test since rf={topology.rf} != racks={topology.racks} and it cannot be supported with numeric replication_factor')
             continue
-        pros = [False] if scope == 'node' else [True, False]
-        for pro in pros:
-            for restored_min_tablet_count in restored_min_tablet_counts:
-                logger.info(f'Re-initialize keyspace with min_tablet_count={restored_min_tablet_count} from min_tablet_count=5')
-                cql.execute(f'DROP KEYSPACE {ks}')
-                cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-                schema = create_schema(ks, cf, restored_min_tablet_count)
-                cql.execute(schema)
 
-                log_marks = await mark_all_logs(manager, servers)
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+            await cql.run_async(create_schema(ks, 'test', min_tablet_count=restored_min_tablet_count))
 
-                await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
+            log_marks = await mark_all_logs(manager, servers)
 
-                await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=pro)
-                if restored_min_tablet_count == original_min_tablet_count:
-                    await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
+            await do_load_sstables(ks, 'test', servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
+            await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+            if restored_min_tablet_count == original_min_tablet_count:
+                await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
@@ -914,7 +870,7 @@ async def test_restore_primary_replica_same_domain(manager: ManagerClient, objec
 
     await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=2)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(servers):
@@ -976,7 +932,7 @@ async def test_restore_primary_replica_different_domain(manager: ManagerClient, 
 
     await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=1)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(servers):

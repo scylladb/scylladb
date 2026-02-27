@@ -96,8 +96,6 @@ class raft_group0_client {
 
     // `_upgrade_state` is a cached (perhaps outdated) version of the upgrade state stored on disk.
     group0_upgrade_state _upgrade_state{group0_upgrade_state::recovery}; // loaded from disk in `init()`
-    seastar::rwlock _upgrade_lock;
-    seastar::condition_variable _upgraded;
 
     std::unordered_map<utils::UUID, std::optional<service::broadcast_tables::query_result>> _results;
 
@@ -167,26 +165,10 @@ public:
 
     // Returns the current group 0 upgrade state.
     //
-    // The possible transitions are: `use_pre_raft_procedures` -> `synchronize` -> `use_post_raft_procedures`.
-    // Once entering a state, we cannot rollback (even after a restart - the state is persisted).
     //
-    // An exception to these rules is manual recovery, represented by `recovery` state.
-    // It can be entered by the user manually modifying the system.local table through CQL
-    // and restarting the node. In this state the node will not join group 0 or start the group 0 Raft server,
-    // it will perform all operations as in `use_pre_raft_procedures`, and not attempt to perform the upgrade.
-    //
-    // If the returned state is `use_pre_raft_procedures`, the returned `rwlock::holder`
-    // prevents the state from being changed (`set_group0_upgrade_state` will wait).
-    //
-    // When performing an operation that assumes the state to be `use_pre_raft_procedures`
-    // (e.g. a schema change using the old method), keep the holder until your operation finishes.
-    //
-    // Note that we don't need to hold the lock during `synchronize` or `use_post_raft_procedures`:
-    // in `synchronize` group 0 operations are disabled, and `use_post_raft_procedures` is the final
-    // state so it won't change (unless through manual recovery - which should not be required
-    // in the final state anyway). Thus, when `synchronize` or `use_post_raft_procedures` is returned,
-    // the holder does not actually hold any lock.
-    future<std::pair<rwlock::holder, group0_upgrade_state>> get_group0_upgrade_state();
+    // Possible values now are: recovery (maintenance mode only) and use_post_raft_procedures
+    // Other value are no longer supported and if discovered during boot the boot will fail
+    group0_upgrade_state get_group0_upgrade_state();
 
     // Ensures that nobody holds any `rwlock::holder`s returned from `get_group0_upgrade_state()`
     // then changes the state to `s`.
@@ -194,9 +176,6 @@ public:
     // Should only be called either by the upgrade algorithm or the bootstrap procedure
     // and follow the correct sequence of states.
     future<> set_group0_upgrade_state(group0_upgrade_state s);
-
-    // Wait until group 0 upgrade enters the `use_post_raft_procedures` state.
-    future<> wait_until_group0_upgraded(abort_source&);
 
     future<semaphore_units<>> hold_read_apply_mutex(abort_source&);
 

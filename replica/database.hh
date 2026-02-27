@@ -971,6 +971,8 @@ public:
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;
 private:
+    void update_tombstone_gc_rf_one();
+
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
     future<> stop_compaction_groups(storage_group& sg);
     future<> flush_compaction_groups(storage_group& sg);
@@ -1356,6 +1358,8 @@ public:
     // If leave_unsealead is set, all the destination sstables will be left unsealed.
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed);
 
+    tombstone_gc_state get_tombstone_gc_state() const;
+
     friend class compaction_group;
     friend class compaction::compaction_task_impl;
 
@@ -1366,8 +1370,6 @@ public:
     future<compaction_reenablers_and_lock_holders> get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
             const service::frozen_topology_guard& guard, dht::token_range range);
     future<uint64_t> estimated_partitions_in_range(dht::token_range tr) const;
-private:
-    future<std::vector<compaction::compaction_group_view*>> get_compaction_group_views_for_repair(dht::token_range range);
 };
 
 lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);

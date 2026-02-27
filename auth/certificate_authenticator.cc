@@ -13,14 +13,11 @@
 #include <boost/regex.hpp>
 #include <fmt/ranges.h>
 
-#include "utils/class_registrator.hh"
 #include "utils/to_string.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 
-static const auto CERT_AUTH_NAME = "com.scylladb.auth.CertificateAuthenticator";
-const std::string_view auth::certificate_authenticator_name(CERT_AUTH_NAME);
 
 static logging::logger clogger("certificate_authenticator");
 
@@ -29,13 +26,6 @@ static const std::string cfg_query_attr = "query";
 
 static const std::string cfg_source_subject = "SUBJECT";
 static const std::string cfg_source_altname = "ALTNAME";
-
-static const class_registrator<auth::authenticator
-    , auth::certificate_authenticator
-    , cql3::query_processor&
-    , ::service::raft_group0_client&
-    , ::service::migration_manager&
-    , auth::cache&> cert_auth_reg(CERT_AUTH_NAME);
 
 enum class auth::certificate_authenticator::query_source {
     subject, altname
@@ -99,7 +89,7 @@ future<> auth::certificate_authenticator::stop() {
 }
 
 std::string_view auth::certificate_authenticator::qualified_java_name() const {
-    return certificate_authenticator_name;
+    return "com.scylladb.auth.CertificateAuthenticator";
 }
 
 bool auth::certificate_authenticator::require_authentication() const {

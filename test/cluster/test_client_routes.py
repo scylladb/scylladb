@@ -25,7 +25,7 @@ async def wait_for_expected_client_routes_size(cql, expected_routes_size):
         if len(client_routes) == expected_size:
             return client_routes
         return None
-    await wait_for(lambda: expected_client_routes_size(cql, expected_routes_size), time.time() + 10)
+    await wait_for(lambda: expected_client_routes_size(cql, expected_routes_size), time.time() + 60)
 
 def generate_connection_id(i):
     # Make the string longer than 30 characters to make sure that in C++ the string has a heap allocation
@@ -107,7 +107,7 @@ async def test_client_routes_upgrade(request, manager: ManagerClient):
     servers = await manager.servers_add(num_servers, config={'error_injections_at_startup': config})
     cql, hosts = await manager.get_ready_cql(servers)
     # Empty `system.client_routes` is there even if the feature is disabled.
-    wait_for_expected_client_routes_size(cql, 0)
+    await wait_for_expected_client_routes_size(cql, 0)
 
     with pytest.raises(HTTPError) as exc:
         await manager.api.client.post("/v2/client-routes", host=servers[0].ip_addr, json=[generate_client_routes_entry(0)])
@@ -132,7 +132,7 @@ async def test_client_routes_upgrade(request, manager: ManagerClient):
                 raise exc
         return None
 
-    wait_for(client_routes_ready, time.time() + 10)
+    await wait_for(client_routes_ready, time.time() + 60)
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def wait_for_expected_event_num(expected_num, received_events):
         if len(received_events) == num:
             return num
         return None
-    await wait_for(lambda: expected_event_num(expected_num), time.time() + 10)
+    await wait_for(lambda: expected_event_num(expected_num), time.time() + 60)
 
 @pytest.mark.asyncio
 async def test_events(request, manager: ManagerClient, monkeypatch):

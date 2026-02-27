@@ -807,3 +807,80 @@ async def test_repair_sigsegv_with_diff_shard_count(manager: ManagerClient, use_
         else:
             logger.info("Starting vnode repair")
             await manager.api.repair(servers[1].ip_addr, ks, "test")
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/27365
+# Incremental repair vs tablet merge
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_incremental_repair_tablet_merge_compaction_group_gone(manager: ManagerClient):
+    cmdline = ['--logger-log-level', 'repair=debug']
+    servers, cql, hosts, ks, table_id, logs, _, _, _, _ = await preapre_cluster_for_incremental_repair(manager, cmdline=cmdline)
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_log = await manager.server_open_log(coord_serv.server_id)
+
+    # Trigger merge and wait until the merge fiber starts
+    s1_mark = await coord_log.mark()
+    await inject_error_on(manager, "merge_completion_fiber", servers)
+    await inject_error_on(manager, "tablet_force_tablet_count_decrease_once", servers)
+    await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
+    await coord_log.wait_for(f'Detected tablet merge for table', from_mark=s1_mark)
+    await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
+    await coord_log.wait_for(f'merge_completion_fiber: waiting for message', from_mark=s1_mark)
+
+    # Trigger repair and wait for the inc repair prepare preparation to start
+    s1_mark = await coord_log.mark()
+    await inject_error_on(manager, "wait_after_prepare_sstables_for_incremental_repair", servers)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token=-1, await_completion=False, incremental_mode='incremental')
+    # Wait for preparation to start.
+    await coord_log.wait_for('Disabling compaction for range', from_mark=s1_mark)
+    # Without the serialization, sleep to increase chances of preparation finishing before merge fiber.
+    # With the serialization, preparation will wait for merge fiber to finish.
+    await asyncio.sleep(0.1)
+
+    # Continue to execute the merge fiber so that the compaction group is removed
+    await inject_error_on(manager, "replica_merge_completion_wait", servers)
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, "merge_completion_fiber")
+
+    await coord_log.wait_for(f'Merge completion fiber finished', from_mark=s1_mark)
+
+    # Continue the repair to trigger use-after-free
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, "wait_after_prepare_sstables_for_incremental_repair")
+
+    await coord_log.wait_for(f'Finished tablet repair', from_mark=s1_mark)
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/27365
+# Incremental repair vs table drop
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_incremental_repair_table_drop_compaction_group_gone(manager: ManagerClient):
+    cmdline = ['--logger-log-level', 'repair=debug']
+    servers, cql, hosts, ks, table_id, logs, _, _, _, _ = await preapre_cluster_for_incremental_repair(manager, cmdline=cmdline)
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_log = await manager.server_open_log(coord_serv.server_id)
+
+    # Trigger merge and wait until the merge fiber starts
+    s1_mark = await coord_log.mark()
+
+    # Trigger repair and wait for the inc repair prepare preparation to start
+    s1_mark = await coord_log.mark()
+    await inject_error_on(manager, "wait_after_prepare_sstables_for_incremental_repair", servers)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token=-1, await_completion=False, incremental_mode='incremental')
+    # Wait for preparation to finish.
+    await coord_log.wait_for('Re-enabled compaction for range', from_mark=s1_mark)
+
+    s1_mark = await coord_log.mark()
+    drop_future = cql.run_async(f"DROP TABLE {ks}.test;")
+    await coord_log.wait_for(f'Stopping.*ongoing compactions for table {ks}.test', from_mark=s1_mark)
+    await asyncio.sleep(0.2)
+
+    # Continue the repair to trigger use-after-free
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, "wait_after_prepare_sstables_for_incremental_repair")
+
+    await drop_future

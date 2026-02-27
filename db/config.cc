@@ -267,6 +267,13 @@ const config_type& config_type_for<std::vector<enum_option<db::replication_strat
 }
 
 template <>
+const config_type& config_type_for<std::vector<enum_option<db::consistency_level_restriction_t>>>() {
+    static config_type ct(
+        "consistency level list", printable_vector_to_json<enum_option<db::consistency_level_restriction_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<enum_option<db::tri_mode_restriction_t>>() {
     static config_type ct(
         "restriction mode", printable_to_json<enum_option<db::tri_mode_restriction_t>>);
@@ -402,6 +409,23 @@ template <>
 class convert<enum_option<db::replication_strategy_restriction_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::replication_strategy_restriction_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::consistency_level_restriction_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::consistency_level_restriction_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1066,7 +1090,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port.")
     , native_transport_port(this, "native_transport_port", "cql_port", value_status::Used, 9042,
         "Port on which the CQL native transport listens for clients.")
-    , maintenance_socket(this, "maintenance_socket", value_status::Used, "ignore",
+    , maintenance_socket(this, "maintenance_socket", value_status::Used, "workdir",
         "The Unix Domain Socket the node uses for maintenance socket.\n"
         "The possible options are:\n"
         "\tignore         the node will not open the maintenance socket.\n"
@@ -1292,7 +1316,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , fd_initial_value_ms(this, "fd_initial_value_ms", value_status::Used, 2 * 1000, "The initial failure_detector interval time in milliseconds.")
     , shutdown_announce_in_ms(this, "shutdown_announce_in_ms", value_status::Used, 2 * 1000, "Time a node waits after sending gossip shutdown message in milliseconds. Same as -Dcassandra.shutdown_announce_in_ms in cassandra.")
     , developer_mode(this, "developer_mode", value_status::Used, DEVELOPER_MODE_DEFAULT, "Relax environment checks. Setting to true can reduce performance and reliability significantly.")
-    , skip_wait_for_gossip_to_settle(this, "skip_wait_for_gossip_to_settle", value_status::Used, -1, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.")
+    , skip_wait_for_gossip_to_settle(this, "skip_wait_for_gossip_to_settle", value_status::Deprecated, -1, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.")
     , force_gossip_generation(this, "force_gossip_generation", liveness::LiveUpdate, value_status::Used, -1 , "Force gossip to use the generation number provided by user.")
     , experimental_features(this, "experimental_features", value_status::Used, {}, experimental_features_help_string())
     , lsa_reclamation_step(this, "lsa_reclamation_step", value_status::Used, 1, "Minimum number of segments to reclaim in a single step.")
@@ -1610,6 +1634,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Set the minimum interval in seconds between flushing all tables before each major compaction (default is 86400)."
         "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments."
         "Set to 0 to disable automatic flushing all tables before major compaction.")
+    , write_consistency_levels_warned(this, "write_consistency_levels_warned", liveness::LiveUpdate, value_status::Used, {}, "A list of consistency levels that will trigger a warning when used in write operations. Requests using these levels will contain a warning in the query response.")
+    , write_consistency_levels_disallowed(this, "write_consistency_levels_disallowed", liveness::LiveUpdate, value_status::Used, {}, "A list of consistency levels that are not allowed for write operations. Requests using these levels will fail.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")
@@ -1841,6 +1867,30 @@ std::unordered_map<sstring, locator::replication_strategy_type> db::replication_
             {"LocalStrategy", locator::replication_strategy_type::local},
             {"NetworkTopologyStrategy", locator::replication_strategy_type::network_topology},
             {"EverywhereStrategy", locator::replication_strategy_type::everywhere_topology}};
+}
+
+std::unordered_map<sstring, db::consistency_level> db::consistency_level_restriction_t::map() {
+    using cl = db::consistency_level;
+    std::unordered_map<sstring, cl> result = {
+        {"ANY", cl::ANY},
+        {"ONE", cl::ONE},
+        {"TWO", cl::TWO},
+        {"THREE", cl::THREE},
+        {"QUORUM", cl::QUORUM},
+        {"ALL", cl::ALL},
+        {"LOCAL_QUORUM", cl::LOCAL_QUORUM},
+        {"EACH_QUORUM", cl::EACH_QUORUM},
+        {"SERIAL", cl::SERIAL},
+        {"LOCAL_SERIAL", cl::LOCAL_SERIAL},
+        {"LOCAL_ONE", cl::LOCAL_ONE},
+    };
+
+    constexpr auto expected_size = static_cast<size_t>(cl::MAX_VALUE) - static_cast<size_t>(cl::MIN_VALUE) + 1;
+    if (result.size() != expected_size) {
+        on_internal_error_noexcept(dblog, format("consistency_level_option::map() has {} entries but expected {}", result.size(), expected_size));
+    }
+
+    return result;
 }
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {

@@ -25,6 +25,7 @@ target_sources(scylla_auth
     service.cc
     standard_role_manager.cc
     transitional.cc
+    maintenance_socket_authenticator.cc
     maintenance_socket_role_manager.cc)
 target_include_directories(scylla_auth
   PUBLIC

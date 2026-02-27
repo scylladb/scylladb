@@ -130,6 +130,14 @@ public:
     virtual std::vector<shared_ptr<functions::function>> used_functions() const { return {}; }
 
     query::partition_slice::option_set get_query_options();
+protected:
+    // Result of add_column: index in _columns and whether it was added now (or existed already).
+    struct add_column_result {
+        uint32_t index;
+        bool added;
+    };
+    // Adds a column to the _columns if not already present, returns add_column_result.
+    add_column_result add_column(const column_definition& c);
 private:
     static bool processes_selection(const std::vector<prepared_selector>& prepared_selectors);
 

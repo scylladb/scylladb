@@ -1297,6 +1297,11 @@ schema_builder& schema_builder::with_sharder(unsigned shard_count, unsigned shar
     return *this;
 }
 
+schema_builder& schema_builder::with_sharder(const dht::static_sharder& sharder) {
+    _raw._sharder = sharder;
+    return *this;
+}
+
 
 schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
         std::optional<table_id> id, data_type rct)

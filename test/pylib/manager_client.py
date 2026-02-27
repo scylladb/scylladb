@@ -391,11 +391,13 @@ class ManagerClient:
             if expected_crash:
                 self.ignore_cores_log_patterns.append(re.escape(expected_error))
 
+        if not connect_driver:
+            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
+
         logger.debug("ManagerClient starting %s", server_id)
         data = {
             "expected_error": expected_error,
             "seeds": seeds,
-            "connect_driver": connect_driver,
             "expected_server_up_state": expected_server_up_state.name,
             "cmdline_options_override": cmdline_options_override,
             "append_env_override": append_env_override,
@@ -524,11 +526,14 @@ class ManagerClient:
                          seeds: Optional[List[IPAddress]] = None,
                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT,
                          server_encryption: str = "none",
-                         expected_server_up_state: Optional[ServerUpState] = None,
+                         expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
                          connect_driver: bool = True) -> ServerInfo:
         """Add a new server"""
         if expected_error is not None:
             self.ignore_log_patterns.append(re.escape(expected_error))
+
+        if not connect_driver:
+            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
 
         try:
             data = self._create_server_add_data(

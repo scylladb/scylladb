@@ -7,14 +7,17 @@ import errno
 import fcntl
 import os
 import random
+import threading
 from pathlib import Path
 from test.pylib.pool import Pool
-from typing import NewType, Awaitable, Optional
+from typing import NewType, Optional
 
 Host = NewType('Host', str)
 
 
 class HostRegistry:
+    _instance = None
+    _initialized = False
     """A Scylla servers needs a unique IP address and working directory
     which we need to manage and share across many running tests. Store
     all shared external resources within this class to make sure
@@ -26,7 +29,15 @@ class HostRegistry:
     across all hosts in a single run.
     """
 
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self) -> None:
+        if HostRegistry._initialized:
+            return
+        HostRegistry._initialized = True
 
         # Imagine multiple instances of test.py run concurrently.
         # Each will be trying to start and stop Scylla servers.
@@ -46,24 +57,31 @@ class HostRegistry:
         # should try again with another subnet. If the file isn't
         # locked, it remains from some previous invocation and can be
         # locked and reused.
-        while True:
-            # Avoid 127.0.*.* since CCM (a different test framework)
-            # assumes it will be available for it to run Scylla
-            # instances. 127.255.255.255 is also illegal.
-            self.subnet = "127.{}.{}".format(random.randrange(1, 254),
-                                             random.randrange(0, 255))
-            self.lock_filename: Optional[Path] = Path(os.getenv('TMPDIR', '/tmp')) / ('scylla-' + self.subnet)
-            self.lock_file = self.lock_filename.open('w')
-            try:
-                fcntl.lockf(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError as e:
-                if e.errno != errno.EACCES and e.errno != errno.EAGAIN:
-                    raise
-                self.lock_file.close()
-                self.lock_filename.unlink()
-
-            self.lock_file.close()
+        worker_id = os.getenv('PYTEST_XDIST_WORKER', 'gw0')
+        second_octet = int(worker_id[2:]) + 1
+        # HostRegistry is a singleton, so there should be no possibility to mess and overlap in IP for one use
+        # however, when there are several users using the same machine for testing, they can overlap,
+        # so this simple retry should help to eliminate the overlap and just find another random IP
+        max_attempts = 20
+        for attempt in range(max_attempts):
+            with threading.Lock():
+                # Avoid 127.0.*.* since CCM (a different test framework)
+                # assumes it will be available for it to run Scylla
+                # instances. 127.255.255.255 is also illegal.
+                self.subnet = "127.{}.{}".format(second_octet, random.randrange(0, 255))
+                self.lock_filename: Optional[Path] = Path(os.getenv('TMPDIR', '/tmp')) / ('scylla-' + self.subnet)
+                self.lock_file = self.lock_filename.open('w')
+                try:
+                    fcntl.lockf(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as e:
+                    self.lock_file.close()
+                    if e.errno not in (errno.EACCES, errno.EAGAIN):
+                        raise
+        else:
+            raise RuntimeError(
+                f"Failed to acquire a subnet lock after {max_attempts} attempts"
+            )
 
         self.subnet += ".{}"
         self.next_host_id = 0
@@ -90,4 +108,3 @@ class HostRegistry:
 
     async def release_host(self, host: Host) -> None:
         return await self.pool.put(host, is_dirty=False)
-

@@ -19,6 +19,7 @@
 #include "gms/inet_address.hh"
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
+#include "auth/maintenance_socket_authenticator.hh"
 #include "auth/maintenance_socket_role_manager.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/signal.hh>
@@ -1617,7 +1618,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gcfg.ring_delay_ms = cfg->ring_delay_ms();
                 gcfg.shadow_round_ms = cfg->shadow_round_ms();
                 gcfg.shutdown_announce_ms = cfg->shutdown_announce_in_ms();
-                gcfg.skip_wait_for_gossip_to_settle = cfg->skip_wait_for_gossip_to_settle();
                 gcfg.group0_id = group0_id;
                 gcfg.host_id = host_id;
                 gcfg.failure_detector_timeout_ms = cfg->failure_detector_timeout_in_ms;
@@ -1677,7 +1677,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             service::raft_group0 group0_service{
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
-                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client, dbcfg.gossip_scheduling_group};
+                    gossiper.local(), feature_service.local(), group0_client, dbcfg.gossip_scheduling_group};
 
             checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg {
@@ -2094,17 +2094,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (cfg->maintenance_socket() != "ignore") {
                 checkpoint(stop_signal, "starting maintenance auth service");
-                auth::service_config maintenance_auth_config;
-                maintenance_auth_config.authorizer_java_name = sstring{auth::allow_all_authorizer_name};
-                maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
-                maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
-
-                maintenance_auth_service.start(std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes, std::ref(auth_cache)).get();
+                maintenance_auth_service.start(std::ref(qp), std::ref(group0_client), std::ref(mm_notifier),
+                        auth::make_authorizer_factory(auth::allow_all_authorizer_name, qp, group0_client, mm),
+                        auth::make_maintenance_socket_authenticator_factory(qp, group0_client, mm, auth_cache),
+                        auth::make_maintenance_socket_role_manager_factory(qp, group0_client, mm, auth_cache),
+                        maintenance_socket_enabled::yes, std::ref(auth_cache)).get();
 
                 cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
 
                 start_auth_service(maintenance_auth_service, stop_maintenance_auth_service, "maintenance auth service");
-                start_cql(*cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
             }
 
             checkpoint(stop_signal, "starting REST API");
@@ -2133,6 +2131,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (cfg->maintenance_mode()) {
                 checkpoint(stop_signal, "entering maintenance mode");
+
+                // Notify maintenance auth service that maintenance mode is starting
+                maintenance_auth_service.invoke_on_all([](auth::service& svc) {
+                    auth::set_maintenance_mode(svc);
+                    return make_ready_future<>();
+                }).get();
+
+                start_cql(*cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
 
                 ss.local().start_maintenance_mode().get();
 
@@ -2261,6 +2267,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
             stop_signal.ready(false);
 
+            if (cfg->maintenance_socket() != "ignore") {
+                // Enable role operations now that node joined the cluster
+                maintenance_auth_service.invoke_on_all([](auth::service& svc) {
+                    return auth::ensure_role_operations_are_enabled(svc);
+                }).get();
+
+                start_cql(*cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
+            }
+
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
@@ -2349,10 +2364,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 vb.init_virtual_table();
             }).get();
 
-            const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
-            const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
-            const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
-
             // Reproducer of scylladb/scylladb#24792.
             auto i24792_reproducer = defer([] {
                 if (utils::get_local_injector().enter("reload_service_level_cache_after_auth_service_is_stopped")) {
@@ -2361,12 +2372,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting auth service");
-            auth::service_config auth_config;
-            auth_config.authorizer_java_name = qualified_authorizer_name;
-            auth_config.authenticator_java_name = qualified_authenticator_name;
-            auth_config.role_manager_java_name = qualified_role_manager_name;
-
-            auth_service.start(std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no, std::ref(auth_cache)).get();
+            auth_service.start(std::ref(qp), std::ref(group0_client), std::ref(mm_notifier),
+                    auth::make_authorizer_factory(cfg->authorizer(), qp, group0_client, mm),
+                    auth::make_authenticator_factory(cfg->authenticator(), qp, group0_client, mm, auth_cache),
+                    auth::make_role_manager_factory(cfg->role_manager(), qp, group0_client, mm, auth_cache),
+                    maintenance_socket_enabled::no, std::ref(auth_cache)).get();
 
             std::any stop_auth_service;
             // Has to be called after node joined the cluster (join_cluster())
@@ -2415,7 +2425,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
             bm_cfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
 
-            bm.start(std::ref(qp), std::ref(sys_ks), bm_cfg).get();
+            bm.start(std::ref(qp), std::ref(sys_ks), std::ref(feature_service), bm_cfg).get();
             auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [&bm] {
                 bm.stop().get();
             });
@@ -2447,11 +2457,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_view_backlog_broker = defer_verbose_shutdown("view update backlog broker", [] {
                 view_backlog_broker.stop().get();
             });
-
-            if (!ss.local().raft_topology_change_enabled()) {
-                startlog.info("Waiting for gossip to settle before accepting client requests...");
-                gossiper.local().wait_for_gossip_to_settle().get();
-            }
 
             checkpoint(stop_signal, "allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();

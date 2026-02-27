@@ -327,9 +327,6 @@ future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, t
         auto tinfo = tablets.get_tablet_info(tb);
         tinfo.replicas = co_await reallocate_tablets(s, tm, load, tablets, tb);
         if (tablets.has_raft_info()) {
-            for (auto& r: tinfo.replicas) {
-                r.shard  = 0;
-            }
             if (!tablets.get_tablet_raft_info(tb).group_id) {
                 tablets.set_tablet_raft_info(tb, tablet_raft_info {
                     .group_id = raft::group_id{utils::UUID_gen::get_time_UUID()}

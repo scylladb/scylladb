@@ -770,13 +770,6 @@ system_distributed_keyspace::get_cdc_desc_v1_timestamps(context ctx) {
     co_return res;
 }
 
-bool system_distributed_keyspace::workload_prioritization_tables_exists() {
-    auto wp_table = get_updated_service_levels(_qp.db(), true);
-    auto table = _qp.db().try_find_table(NAME, wp_table->cf_name());
-
-    return table && table->schema()->equal_columns(*wp_table);
-}
-
 future<qos::service_levels_info> system_distributed_keyspace::get_service_levels(qos::query_context ctx) const {
     return qos::get_service_levels(_qp, NAME, SERVICE_LEVELS, db::consistency_level::ONE, ctx);
 }

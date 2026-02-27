@@ -932,8 +932,7 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
     const row& existing_row = existing.cells();
     const row& updated_row = update.cells();
 
-    const bool base_has_nonexpiring_marker = update.marker().is_live() && !update.marker().is_expiring();
-    return std::ranges::all_of(_base->regular_columns(), [this, &updated_row, &existing_row, base_has_nonexpiring_marker] (const column_definition& cdef) {
+    return std::ranges::all_of(_base->regular_columns(), [this, &updated_row, &existing_row] (const column_definition& cdef) {
         const auto view_it = _view->columns_by_name().find(cdef.name());
         const bool column_is_selected = view_it != _view->columns_by_name().end();
 
@@ -941,7 +940,7 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
         // as part of its PK, there are NO virtual columns corresponding to the unselected columns in the view.
         // Because of that, we don't generate view updates when the value in an unselected column is created
         // or changes.
-        if (!column_is_selected && _base_info.has_base_non_pk_columns_in_view_pk) {
+        if (!column_is_selected) {
             return true;
         }
 
@@ -950,40 +949,20 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
             return false;
         }
 
-        // We cannot skip if the value was created or deleted, unless we have a non-expiring marker
+        // We cannot skip if the value was created or deleted
         const auto* existing_cell = existing_row.find_cell(cdef.id);
         const auto* updated_cell = updated_row.find_cell(cdef.id);
         if (existing_cell == nullptr || updated_cell == nullptr) {
-            return existing_cell == updated_cell || (!column_is_selected && base_has_nonexpiring_marker);
+            return existing_cell == updated_cell;
         }
         atomic_cell_view existing_cell_view = existing_cell->as_atomic_cell(cdef);
         atomic_cell_view updated_cell_view = updated_cell->as_atomic_cell(cdef);
 
         // We cannot skip when a selected column is changed
-        if (column_is_selected) {
-            if (view_it->second->is_view_virtual()) {
-                return atomic_cells_liveness_equal(existing_cell_view, updated_cell_view);
-            }
-            return compare_atomic_cell_for_merge(existing_cell_view, updated_cell_view) == 0;
+        if (view_it->second->is_view_virtual()) {
+            return atomic_cells_liveness_equal(existing_cell_view, updated_cell_view);
         }
-
-        // With non-expiring row marker, liveness checks below are not relevant
-        if (base_has_nonexpiring_marker) {
-            return true;
-        }
-
-        if (existing_cell_view.is_live() != updated_cell_view.is_live()) {
-            return false;
-        }
-
-        // We cannot skip if the change updates TTL
-        const bool existing_has_ttl = existing_cell_view.is_live_and_has_ttl();
-        const bool updated_has_ttl = updated_cell_view.is_live_and_has_ttl();
-        if (existing_has_ttl || updated_has_ttl) {
-            return existing_has_ttl == updated_has_ttl && existing_cell_view.expiry() == updated_cell_view.expiry();
-        }
-
-        return true;
+        return compare_atomic_cell_for_merge(existing_cell_view, updated_cell_view) == 0;
     });
 }
 
@@ -1460,7 +1439,7 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
+    const auto gc_state = _base.get_tombstone_gc_state();
     auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
@@ -1489,7 +1468,7 @@ void view_update_builder::generate_update(static_row&& update, const tombstone& 
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
+    const auto gc_state = _base.get_tombstone_gc_state();
     auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
@@ -3321,7 +3300,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
             step.pslice,
             batch_size,
             query::max_partitions,
-            tombstone_gc_state(nullptr));
+            tombstone_gc_state::no_gc());
     auto consumer = compact_for_query<view_builder::consumer>(compaction_state, view_builder::consumer{*this, _vug.shared_from_this(), step, now});
     auto built = step.reader.consume_in_thread(std::move(consumer));
     if (auto ds = std::move(*compaction_state).detach_state()) {

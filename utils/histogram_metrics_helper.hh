@@ -19,17 +19,21 @@
 template<uint64_t Min, uint64_t Max, size_t Precision>
 seastar::metrics::histogram to_metrics_histogram(const utils::approx_exponential_histogram<Min, Max, Precision>& hist) {
     seastar::metrics::histogram res;
-    static constexpr size_t MIN_ID = log2ceil(Min) * Precision + 1;
+    static constexpr uint64_t SCALED_MIN = utils::approx_exponential_histogram<Min, Max, Precision>::SCALED_MIN;
+    static constexpr size_t MIN_ID = log2ceil(SCALED_MIN) * Precision + 1;
     static constexpr size_t Schema = log2floor(Precision);
-    res.buckets.resize(hist.size() - 1);
+    res.buckets.reserve(hist.size() - 1);
     uint64_t cummulative_count = 0;
 
     res.native_histogram = seastar::metrics::native_histogram_info{Schema, MIN_ID};
     for (size_t i = 0; i < hist.NUM_BUCKETS - 1; i++) {
-        auto& v = res.buckets[i];
-        v.upper_bound = hist.get_bucket_lower_limit(i + 1);
+        double upper_bound = hist.get_bucket_lower_limit(i + 1);
         cummulative_count += hist.get(i);
-        v.count = cummulative_count;
+        if (!res.buckets.empty() && res.buckets.back().upper_bound == upper_bound) {
+            res.buckets.back().count = cummulative_count;
+        } else {
+            res.buckets.push_back(seastar::metrics::histogram_bucket{cummulative_count, upper_bound});
+        }
     }
     // The count serves as the infinite bucket
     res.sample_count = cummulative_count + hist.get(hist.NUM_BUCKETS - 1);

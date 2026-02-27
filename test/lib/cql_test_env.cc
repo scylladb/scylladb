@@ -66,7 +66,6 @@
 #include "repair/row_level.hh"
 #include "utils/assert.hh"
 #include "utils/only_on_shard0.hh"
-#include "utils/class_registrator.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "streaming/stream_manager.hh"
 #include "debug.hh"
@@ -591,6 +590,10 @@ private:
                 schema_builder::restore_schema_initializers_checkpoint(schema_initializer_checkpoint);
             });
 
+            replica::set_strongly_consistent_tables_enabled(cfg->check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES
+            ));
+
             gms::feature_config fcfg;
             fcfg.disabled_features = get_disabled_features_from_db_config(*cfg, cfg_in.disabled_features);
             _feature_service.start(fcfg).get();
@@ -879,7 +882,6 @@ private:
             gms::gossip_config gcfg;
             gcfg.cluster_name = "Test Cluster";
             gcfg.seeds = std::move(seeds);
-            gcfg.skip_wait_for_gossip_to_settle = 0;
             gcfg.shutdown_announce_ms = 0;
             _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map)).get();
             auto stop_ms_fd_gossiper = defer_verbose_shutdown("gossiper", [this] {
@@ -935,7 +937,7 @@ private:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), _group0_registry.local(), _ms,
-                    _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
+                    _gossiper.local(), _feature_service.local(), group0_client, scheduling_groups.gossip_scheduling_group};
 
             auto compression_dict_updated_callback = [] (std::string_view) { return make_ready_future<>(); };
 
@@ -1138,16 +1140,11 @@ private:
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             _db.local().check_rf_rack_validity(_token_metadata.local().get());
 
-            const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
-            const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
-            const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
-
-            auth::service_config auth_config;
-            auth_config.authorizer_java_name = qualified_authorizer_name;
-            auth_config.authenticator_java_name = qualified_authenticator_name;
-            auth_config.role_manager_java_name = qualified_role_manager_name;
-
-            _auth_service.start(std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(_auth_cache)).get();
+            _auth_service.start(std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier),
+                    auth::make_authorizer_factory(cfg->authorizer(), _qp, group0_client, _mm),
+                    auth::make_authenticator_factory(cfg->authenticator(), _qp, group0_client, _mm, _auth_cache),
+                    auth::make_role_manager_factory(cfg->role_manager(), _qp, group0_client, _mm, _auth_cache),
+                    maintenance_socket_enabled::no, std::ref(_auth_cache)).get();
 
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local(), _sys_ks.local());
@@ -1178,7 +1175,7 @@ private:
             bmcfg.replay_timeout = cfg_in.batchlog_replay_timeout.value_or(2s);
             bmcfg.delay = cfg_in.batchlog_delay;
             bmcfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
-            _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), bmcfg).get();
+            _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), std::ref(_feature_service), bmcfg).get();
             auto stop_bm = defer_verbose_shutdown("batchlog manager", [this] {
                 _batchlog_manager.stop().get();
             });
@@ -1205,6 +1202,18 @@ private:
                         config,
                         auth::authentication_options(),
                         mc).get();
+
+                if (cfg->authenticator() == "PasswordAuthenticator") {
+                    auth::authentication_options auth_opts;
+                    auth_opts.credentials = auth::password_option{"cassandra"};
+                    auth::create_role(
+                        _auth_service.local(),
+                        "cassandra",
+                        config,
+                        auth_opts,
+                        mc).get();
+                }
+
                 std::move(mc).commit(group0_client, as, ::service::raft_timeout{}).get();
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.

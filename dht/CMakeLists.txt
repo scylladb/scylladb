@@ -4,6 +4,7 @@ add_library(scylla_dht STATIC)
 target_sources(scylla_dht
   PRIVATE
     boot_strapper.cc
+    fixed_shard.cc
     i_partitioner.cc
     murmur3_partitioner.cc
     range_streamer.cc

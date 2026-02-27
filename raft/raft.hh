@@ -505,7 +505,7 @@ using add_entry_reply = std::variant<entry_id, transient_error, commit_status_un
 // std::monostate {} if the leader cannot execute the barrier because
 // it did not commit any entries yet
 // raft::not_a_leader if the node is not a leader
-// index_t index that is safe to read without breaking linearizability
+// index_t index that is safe to read once applied without breaking linearizability
 using read_barrier_reply = std::variant<std::monostate, index_t, raft::not_a_leader>;
 
 using rpc_message = std::variant<append_request,

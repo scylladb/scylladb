@@ -75,6 +75,10 @@ namespace utils {
  * 128            | 256            | 512            | 1024
  * 128 160 192 224| 256 320 384 448| 512 640 768 896|
  *
+ * When Min < Precision, values are scaled by a power-of-2 factor during indexing so
+ * bucket math stays in integers. Bucket limits are then scaled back to the original
+ * units, which may cause early bucket limits to repeat for integer values.
+ *
  * To get the exponential part of an index you divide by the Precision.
  * The linear part of the index is Modulus the precision.
  *
@@ -107,18 +111,23 @@ namespace utils {
  * ================================
  * For Min, Max and Precision, choose numbers that are a power of 2.
  *
- * Limitation: You must set the MIN value to be higher or equal to the Precision.
+ * Min can be smaller than Precision. In that case, values are scaled by a power-of-2
+ * factor during indexing to avoid fractional bucket steps, and bucket limits are scaled
+ * back to the original units.
  *
  */
 template<uint64_t Min, uint64_t Max, size_t Precision>
-requires (Min >= Precision && Min < Max && log2floor(Max) == log2ceil(Max) && log2floor(Min) == log2ceil(Min) && log2floor(Precision) == log2ceil(Precision))
+requires (Min < Max && log2floor(Max) == log2ceil(Max) && log2floor(Min) == log2ceil(Min) && log2floor(Precision) == log2ceil(Precision))
 class approx_exponential_histogram {
 public:
-
-    static constexpr unsigned NUM_EXP_RANGES = log2floor(Max/Min);
-    static constexpr size_t NUM_BUCKETS = NUM_EXP_RANGES * Precision + 1;
     static constexpr unsigned PRECISION_BITS = log2floor(Precision);
-    static constexpr unsigned BASESHIFT = log2floor(Min);
+    static constexpr unsigned MIN_BITS = log2floor(Min);
+    static constexpr unsigned SHIFT = (PRECISION_BITS > MIN_BITS) ? (PRECISION_BITS - MIN_BITS) : 0;
+    static constexpr uint64_t SCALED_MIN = Min << SHIFT;
+    static constexpr uint64_t SCALED_MAX = Max << SHIFT;
+    static constexpr unsigned NUM_EXP_RANGES = log2floor(SCALED_MAX / SCALED_MIN);
+    static constexpr size_t NUM_BUCKETS = NUM_EXP_RANGES * Precision + 1;
+    static constexpr unsigned BASESHIFT = log2floor(SCALED_MIN);
     static constexpr uint64_t LOWER_BITS_MASK = Precision - 1;
 private:
     std::array<uint64_t, NUM_BUCKETS> _buckets;
@@ -138,7 +147,8 @@ public:
             return Max;
         }
         int16_t exp_rang = (bucket_id >> PRECISION_BITS);
-        return (Min << exp_rang) +  ((bucket_id & LOWER_BITS_MASK) << (exp_rang + BASESHIFT - PRECISION_BITS));
+        uint64_t limit = (SCALED_MIN << exp_rang) + ((bucket_id & LOWER_BITS_MASK) << (exp_rang + BASESHIFT - PRECISION_BITS));
+        return limit >> SHIFT;
     }
 
     /*!
@@ -155,7 +165,7 @@ public:
 
     /*!
      * \brief Find the bucket index for a given value
-     * The position of a value that is lower or equal to Min will always be 0.
+     * The position of a value that is lower than Min will always be 0.
      * The position of a value that is higher or equal to MAX will always be NUM_BUCKETS - 1.
      */
     uint16_t find_bucket_index(uint64_t val) const {
@@ -165,9 +175,10 @@ public:
         if (val <= Min) {
             return 0;
         }
-        uint16_t range = log2floor(val);
-        val >>= range - PRECISION_BITS; // leave the top most N+1 bits where N is the resolution.
-        return ((range - BASESHIFT) << PRECISION_BITS) + (val & LOWER_BITS_MASK);
+        uint64_t scaled_val = val << SHIFT;
+        uint16_t range = log2floor(scaled_val);
+        scaled_val >>= range - PRECISION_BITS;
+        return ((range - BASESHIFT) << PRECISION_BITS) + (scaled_val & LOWER_BITS_MASK);
     }
 
     /*!

@@ -314,30 +314,32 @@ async def test_repair_timtestamp_difference(manager):
         for other_node in other_nodes:
             await manager.api.enable_injection(other_node.ip_addr, "database_apply", False, {})
 
-        await manager.driver_connect(node)
-
         query = f"UPDATE ks.tbl USING TIMESTAMP {timestamp} SET v = '{v}' WHERE pk = {pk} AND ck = {ck}"
         manager.get_cql().execute(SimpleStatement(query, consistency_level=ConsistencyLevel.ONE))
 
         for other_node in other_nodes:
             await manager.api.disable_injection(other_node.ip_addr, "database_apply")
 
+        await manager.api.flush_keyspace(node.ip_addr, "ks")
+
     await write(node1, update1_timestamp)
     await write(node2, update2_timestamp)
 
     async def check(expected_timestamps):
         for host, expected_timestamp in expected_timestamps.items():
-            rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS(ks.tbl) WHERE pk = {pk} AND ck = {ck} ALLOW FILTERING", host=host))
+            rows = list(await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS(ks.tbl) WHERE pk = {pk} AND ck = {ck} AND mutation_source > 'sstable:' ALLOW FILTERING", host=host))
             assert len(rows) == 1
-            assert json.loads(rows[0].metadata)['v']['timestamp'] == expected_timestamp
+            assert json.loads(rows[0].metadata)['columns']['v']['timestamp'] == expected_timestamp
 
     logger.info("Checking timestamps before repair")
-    check({host1: update1_timestamp, host2: update2_timestamp})
+    await check({host1: update1_timestamp, host2: update2_timestamp})
 
     await manager.api.repair(node1.ip_addr, "ks", "tbl")
 
+    await asyncio.gather(*[manager.api.keyspace_compaction(node.ip_addr, "ks") for node in nodes])
+
     logger.info("Checking timestamps after repair")
-    check({host1: update2_timestamp, host2: update2_timestamp})
+    await check({host1: update2_timestamp, host2: update2_timestamp})
 
 @pytest.mark.asyncio
 async def test_small_table_optimization_repair(manager):

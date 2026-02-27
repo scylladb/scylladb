@@ -177,11 +177,10 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         sharded<netw::messaging_service>& ms,
         gms::gossiper& gs,
         gms::feature_service& feat,
-        db::system_keyspace& sys_ks,
         raft_group0_client& client,
         seastar::scheduling_group sg)
     : _shutdown_gate("raft_group0::shutdown")
-    , _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _sys_ks(sys_ks), _client(client), _sg(sg)
+    , _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _client(client), _sg(sg)
     , _status_for_monitoring(status_for_monitoring::normal)
 {
     register_metrics();
@@ -207,33 +206,13 @@ void raft_group0::init_rpc_verbs(raft_group0& shard0_this) {
                 return shard0_this._raft_gr.get_server(gid).modify_config(std::move(add), std::move(del), nullptr);
             });
         });
-
-    ser::group0_rpc_verbs::register_get_group0_upgrade_state(&shard0_this._ms.local(),
-        [&shard0_this] (const rpc::client_info&) -> future<group0_upgrade_state> {
-            return smp::submit_to(0, [&shard0_this]() -> future<group0_upgrade_state> {
-                const auto [holder, state] = co_await shard0_this._client.get_group0_upgrade_state();
-                co_return state;
-            });
-        });
 }
 
 future<> raft_group0::uninit_rpc_verbs(netw::messaging_service& ms) {
     return when_all_succeed(
         ser::group0_rpc_verbs::unregister_group0_peer_exchange(&ms),
-        ser::group0_rpc_verbs::unregister_group0_modify_config(&ms),
-        ser::group0_rpc_verbs::unregister_get_group0_upgrade_state(&ms)
+        ser::group0_rpc_verbs::unregister_group0_modify_config(&ms)
     ).discard_result();
-}
-
-static future<group0_upgrade_state> send_get_group0_upgrade_state(netw::messaging_service& ms, const locator::host_id addr, abort_source& as) {
-    auto state = co_await ser::group0_rpc_verbs::send_get_group0_upgrade_state(&ms, addr, as);
-    auto state_int = static_cast<int8_t>(state);
-    if (state_int > group0_upgrade_state_last) {
-        on_internal_error(upgrade_log, format(
-            "send_get_group0_upgrade_state: unknown value for `group0_upgrade_state` received from node {}: {}",
-            addr, state_int));
-    }
-    co_return state;
 }
 
 const raft::server_id& raft_group0::load_my_id() {
@@ -241,9 +220,9 @@ const raft::server_id& raft_group0::load_my_id() {
 }
 
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
-                                                            service::migration_manager& mm, bool topology_change_enabled) {
+                                                            service::migration_manager& mm) {
     auto state_machine = std::make_unique<group0_state_machine>(
-            _client, mm, qp.proxy(), ss, _gossiper, _feat, topology_change_enabled);
+            _client, mm, qp.proxy(), ss, _gossiper, _feat);
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id);
     // Keep a reference to a specific RPC class.
@@ -464,13 +443,13 @@ void raft_group0::destroy() {
     }
 }
 
-future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
+future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
     SCYLLA_ASSERT(group0_id != raft::group_id{});
     // The address map may miss our own id in case we connect
     // to an existing Raft Group 0 leader.
     auto my_id = load_my_id();
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
-    auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm, topology_change_enabled);
+    auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm);
     auto& persistence = srv_for_group0.persistence;
     auto& server = *srv_for_group0.server;
     co_await with_scheduling_group(_sg, [this, &srv_for_group0] (this auto self) -> future<> {
@@ -529,14 +508,14 @@ utils::observer<bool> raft_group0::observe_leadership(std::function<void(bool)> 
 }
 
 future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_ptr<service::group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
-                                  db::system_keyspace& sys_ks, bool topology_change_enabled, const join_node_request_params& params) {
+                                  db::system_keyspace& sys_ks, const join_node_request_params& params) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     SCYLLA_ASSERT(!joined_group0());
 
     auto group0_id = raft::group_id{co_await sys_ks.get_raft_group0_id()};
     if (group0_id) {
         // Group 0 ID present means we've already joined group 0 before.
-        co_return co_await start_server_for_group0(group0_id, ss, qp, mm, topology_change_enabled);
+        co_return co_await start_server_for_group0(group0_id, ss, qp, mm);
     }
 
     raft::server* server = nullptr;
@@ -574,7 +553,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 // created in the Raft-based recovery procedure). The persistent topology state is present on that node
                 // when it creates the new group 0. Also, it joins the new group 0 using legacy_handshaker, so there is
                 // no need to create a join request.
-                if (topology_change_enabled && !qp.db().get_config().recovery_leader.is_set()) {
+                if (!qp.db().get_config().recovery_leader.is_set()) {
                     co_await ss.raft_initialize_discovery_leader(params);
                 }
 
@@ -593,10 +572,8 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 [] { std::raise(SIGSTOP); });
 
             // Populates correct upgrade state value before starting raft server, so that reads always get correct values.
-            if (topology_change_enabled) {
-                co_await ss.initialize_done_topology_upgrade_state();
-            }
-            
+            co_await ss.initialize_done_topology_upgrade_state();
+
             // Bootstrap the initial configuration
             co_await raft_sys_table_storage(qp, group0_id, my_id)
                     .bootstrap(std::move(initial_configuration), nontrivial_snapshot);
@@ -604,7 +581,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
             utils::get_local_injector().inject("stop_after_bootstrapping_initial_raft_configuration",
                 [] { std::raise(SIGSTOP); });
 
-            co_await start_server_for_group0(group0_id, ss, qp, mm, topology_change_enabled);
+            co_await start_server_for_group0(group0_id, ss, qp, mm);
             server = &_raft_gr.group0();
             // FIXME if we crash now or after getting added to the config but before storing group 0 ID,
             // we'll end with a bootstrapped server that possibly added some entries, but we won't remember that we have such a server
@@ -694,20 +671,10 @@ struct group0_members {
     }
 };
 
-static future<bool> wait_for_peers_to_enter_synchronize_state(
-        const group0_members& members0, netw::messaging_service&, abort_source&, gate::holder pause_shutdown);
-static future<bool> anyone_finished_upgrade(
-        const group0_members& members0, netw::messaging_service&, abort_source&);
-static future<bool> synchronize_schema(
-        replica::database&, netw::messaging_service&,
-        const group0_members& members0, service::migration_manager&,
-        const noncopyable_function<future<bool>()>& can_finish_early,
-        abort_source&);
-
 future<bool> raft_group0::use_raft() {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
-    if (((co_await _client.get_group0_upgrade_state()).second) == group0_upgrade_state::recovery) {
+    if (_client.get_group0_upgrade_state() == group0_upgrade_state::recovery) {
         group0_log.warn("setup_group0: Raft RECOVERY mode, skipping group 0 setup.");
         co_return false;
     }
@@ -734,51 +701,39 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
     if (group0_id) {
         // Group 0 ID is present => we've already joined group 0 earlier.
         group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
-        co_await start_server_for_group0(group0_id, ss, qp, mm, false);
+        co_await start_server_for_group0(group0_id, ss, qp, mm);
 
         // Start group 0 leadership monitor fiber.
         _leadership_monitor = leadership_monitor_fiber();
 
         // If we're not restarting in the middle of the Raft upgrade procedure, we must disable
         // migration_manager schema pulls.
-        auto start_state = (co_await _client.get_group0_upgrade_state()).second;
-        if (start_state == group0_upgrade_state::use_post_raft_procedures) {
-            group0_log.info(
-                "Disabling migration_manager schema pulls because Raft is fully functioning in this cluster.");
-            co_await mm.disable_schema_pulls();
-        } else {
-            // We'll disable them once we complete the upgrade procedure.
+        auto start_state = _client.get_group0_upgrade_state();
+        if (start_state != group0_upgrade_state::use_post_raft_procedures) {
+            throw std::runtime_error("The cluster is not yet fully upgraded to use raft. This means that you try to upgrade"
+                " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
+        }
+        group0_log.info("Disabling migration_manager schema pulls because Raft is fully functioning in this cluster.");
+        co_await mm.disable_schema_pulls();
+        if (!ss.raft_topology_change_enabled()) {
+            throw std::runtime_error("The cluster uses gossip based topology operations. "
+                "This is no longer supported. To upgrade a node please enable topology coordinator");
         }
     } else if (qp.db().get_config().recovery_leader.is_set()) {
         group0_log.info("Disabling migration_manager schema pulls in the Raft-based recovery procedure");
         co_await mm.disable_schema_pulls();
     } else {
-        // Scylla has bootstrapped earlier but group 0 ID is not present and we are not recovering from majority loss
-        // using the Raft-based procedure. This means we're upgrading.
-        // Upgrade will start through a feature listener created after we enter NORMAL state.
-        //
-        // See `raft_group0::finish_setup_after_join`.
-        upgrade_log.info(
-            "setup_group0: Scylla bootstrap completed before but group 0 ID not present."
-            " Internal upgrade-to-raft procedure will automatically start after every node finishes"
-            " upgrading to the new Scylla version.");
+        throw std::runtime_error("The node is bootstrapped already but Raft group0 is not present. This means that you try to upgrade"
+            " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
     }
 }
 
 future<> raft_group0::setup_group0(
         db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes, shared_ptr<group0_handshaker> handshaker,
-        std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled,
+        service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
         const join_node_request_params& params) {
     if (!co_await use_raft()) {
         // The node is in the RECOVERY mode. We are in Maintenance Mode or the gossip-based recovery procedure.
-        co_return;
-    }
-
-    if (_sys_ks.bootstrap_complete() && !ss.raft_topology_change_enabled()) {
-        // The node is restarting in the gossip-based topology. There are two possible cases:
-        // - the node is performing a normal restart and group 0 has already been set up,
-        // - the node has just left the RECOVERY mode (a part of the gossip-based recovery procedure) and the internal
-        // upgrade-to-raft procedure will set up group 0 in finish_setup_after_join.
         co_return;
     }
 
@@ -793,7 +748,7 @@ future<> raft_group0::setup_group0(
     std::vector<gms::inet_address> seeds(initial_contact_nodes.begin(), initial_contact_nodes.end());
 
     group0_log.info("setup_group0: joining group 0...");
-    co_await join_group0(std::move(seeds), std::move(handshaker), ss, qp, mm, sys_ks, topology_change_enabled, params);
+    co_await join_group0(std::move(seeds), std::move(handshaker), ss, qp, mm, sys_ks, params);
     group0_log.info("setup_group0: successfully joined group 0.");
 
     // Start group 0 leadership monitor fiber.
@@ -803,55 +758,17 @@ future<> raft_group0::setup_group0(
         throw std::runtime_error{"injection: stop_after_joining_group0"};
     });
 
-    // Enter `synchronize` upgrade state in case the cluster we're joining has recently enabled Raft
-    // and is currently in the middle of `upgrade_to_group0()`. For that procedure to finish
-    // every member of group 0 (now including us) needs to enter `synchronize` state.
-    co_await _client.set_group0_upgrade_state(group0_upgrade_state::synchronize);
-
-    group0_log.info("setup_group0: ensuring that the cluster has fully upgraded to use Raft...");
-    auto& group0_server = _raft_gr.group0();
-    group0_members members0{group0_server};
-
-    // Perform a Raft read barrier so we know the set of group 0 members and our group 0 state is up-to-date.
-    co_await group0_server.read_barrier(&_abort_source);
-
-    auto cfg = group0_server.get_configuration();
-    if (!cfg.is_joint() && cfg.current.size() == 1) {
-        group0_log.info("setup_group0: we're the only member of the cluster.");
-    } else if (ss.raft_topology_change_enabled()) {
-        group0_log.info("setup_group0: cluster uses raft for topology. No need to sync schema.");
-    } else {
-        // We're joining an existing cluster - we're not the only member.
-        //
-        // Wait until one of group 0 members enters `group0_upgrade_state::use_post_raft_procedures`
-        // or all members enter `group0_upgrade_state::synchronize`.
-        //
-        // In a fully upgraded cluster this should finish immediately (if the network works well) - everyone is in `use_post_raft_procedures`.
-        // In a cluster that is currently in the middle of `upgrade_to_group0`, this will cause us to wait until the procedure finishes.
-        group0_log.info("setup_group0: waiting for peers to synchronize state...");
-        if (co_await wait_for_peers_to_enter_synchronize_state(members0, _ms.local(), _abort_source, _shutdown_gate.hold())) {
-            // Everyone entered `synchronize` state. That means we're bootstrapping in the middle of `upgrade_to_group0`.
-            // We need to finish upgrade as others do.
-            auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms.local()), std::ref(_abort_source));
-            co_await synchronize_schema(qp.db().real_database(), _ms.local(), members0, mm, can_finish_early, _abort_source);
-        }
-    }
-
-    co_await utils::get_local_injector().inject("sleep_in_synchronize",  [](auto& handler) -> future<> {
-        co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
-    });
-
     group0_log.info("setup_group0: the cluster is ready to use Raft. Finishing.");
     co_await _client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
 }
 
-future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
+future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
     if (joined_group0()) {
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
         auto my_id = load_my_id();
         if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
-            if (!ss.raft_topology_change_enabled() || !_feat.group0_limited_voters) {
-                // still using the gossip topology, or limited voters feature not enabled yet
+            if (!_feat.group0_limited_voters) {
+                // limited voters feature not enabled yet
                 // - need to become a voter in here
                 group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
                 // Just bootstrapped and joined as non-voter. Become a voter.
@@ -877,24 +794,10 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
         // We're either upgrading or in recovery mode.
     }
 
-    // Note: even if we joined group 0 before, it doesn't necessarily mean we finished with the whole
-    // upgrade procedure which has follow-up steps after joining group 0, hence we need to prepare
-    // the listener below (or fire the upgrade procedure if the feature is already enabled) even if
-    // we're already a member of group 0 by this point.
-    // `upgrade_to_group0()` will correctly detect and handle which case we're in: whether the procedure
-    // has already finished or we restarted in the middle after a crash.
-
     if (!_feat.supports_raft_cluster_mgmt) {
-        group0_log.info("finish_setup_after_join: SUPPORTS_RAFT feature not yet enabled, scheduling upgrade to start when it is.");
+        throw std::runtime_error("finish_setup_after_join: SUPPORTS_RAFT feature not yet enabled, but was expected to be enabled at this point."
+            " If you are trying to upgrade a node pf a cluster that is not using Raft yet, this is no longer supported.");
     }
-
-    // The listener may fire immediately, create a thread for that case.
-    co_await seastar::async([this, &ss, &qp, &mm, topology_change_enabled] {
-        _raft_support_listener = _feat.supports_raft_cluster_mgmt.when_enabled([this, &ss, &qp, &mm, topology_change_enabled] {
-            group0_log.info("finish_setup_after_join: SUPPORTS_RAFT feature enabled. Starting internal upgrade-to-raft procedure.");
-            upgrade_to_group0(ss, qp, mm, topology_change_enabled).get();
-        });
-    });
 }
 
 bool raft_group0::is_member(raft::server_id id, bool include_voters_only) {
@@ -904,14 +807,6 @@ bool raft_group0::is_member(raft::server_id id, bool include_voters_only) {
 
     auto cfg = _raft_gr.group0().get_configuration();
     return cfg.contains(id) && (!include_voters_only || cfg.can_vote(id));
-}
-
-future<> raft_group0::become_nonvoter(abort_source& as, std::optional<raft_timeout> timeout) {
-    co_return co_await modify_voters({}, {load_my_id()}, as, timeout);
-}
-
-future<> raft_group0::make_nonvoter(raft::server_id node, abort_source& as, std::optional<raft_timeout> timeout) {
-    co_return co_await modify_voters({}, {node}, as, timeout);
 }
 
 future<> raft_group0::modify_voters(const std::unordered_set<raft::server_id>& voters_add, const std::unordered_set<raft::server_id>& voters_del,
@@ -930,10 +825,6 @@ future<> raft_group0::modify_voters(const std::unordered_set<raft::server_id>& v
         on_internal_error(group0_log, "called modify_voters with the same node in both voters and non-voters sets");
     }
 
-    if (!(co_await raft_upgrade_complete())) {
-        on_internal_error(group0_log, "called modify_voters before Raft upgrade finished");
-    }
-
     if (!voters_add.empty()) {
         group0_log.info("making servers {} voters ...", voters_add);
     }
@@ -949,89 +840,6 @@ future<> raft_group0::modify_voters(const std::unordered_set<raft::server_id>& v
     if (!voters_del.empty()) {
         group0_log.info("servers {} are now non-voters.", voters_del);
     }
-}
-
-future<> raft_group0::leave_group0() {
-    if (!(co_await raft_upgrade_complete())) {
-        on_internal_error(group0_log, "called leave_group0 before Raft upgrade finished");
-    }
-
-    auto my_id = load_my_id();
-
-    group0_log.info("leaving group 0 (my id = {})...", my_id);
-    // Note: if this gets stuck due to a failure, the DB admin can abort.
-    // FIXME: this gets stuck without failures if we're the leader (#10833)
-    co_return co_await remove_from_raft_config(my_id);
-    group0_log.info("left group 0.");
-}
-
-future<> raft_group0::remove_from_group0(raft::server_id node) {
-    if (!(co_await raft_upgrade_complete())) {
-        on_internal_error(group0_log, "called remove_from_group0 before Raft upgrade finished");
-    }
-
-    group0_log.info("remove_from_group0({}): removing the server from group 0 configuration...", node);
-
-    co_await remove_from_raft_config(node);
-
-    group0_log.info("remove_from_group0({}): finished removing from group 0 configuration.", node);
-}
-
-future<bool> raft_group0::wait_for_raft() {
-    SCYLLA_ASSERT(this_shard_id() == 0);
-
-    auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
-    if (upgrade_state == group0_upgrade_state::recovery) {
-        group0_log.warn("In Raft RECOVERY mode.");
-        co_return false;
-    }
-
-    if (!_feat.supports_raft_cluster_mgmt) {
-        // The Raft feature is not yet enabled.
-        //
-        // In that case we assume the cluster is in a partially-upgraded state (some nodes still use a version
-        // without the raft/group 0 code enabled) and skip the reconfiguration.
-        //
-        // In theory we could be wrong: the cluster may have just upgraded but the user managed to start
-        // a topology operation before we noticed it. Removing a node at this point could cause `upgrade_to_group0`
-        // on other nodes to get stuck because it requires contacting all peers which may include the removed node.
-        //
-        // This is unlikely and shouldn't happen if rolling upgrade is performed correctly.
-        // If it does happen, there's always the possibility of performing the manual group 0 recovery procedure.
-        group0_log.warn(
-            "Raft feature not enabled yet. Assuming that the cluster is partially upgraded"
-            " and skipping group 0 reconfiguration. However, if you already finished the rolling upgrade"
-            " procedure, this means that the node just hasn't noticed it yet. The internal upgrade-to-raft procedure"
-            " may get stuck. If that happens, manual recovery will be required."
-            " Consult the documentation for more details: {}",
-            raft_upgrade_doc);
-        co_return false;
-    }
-
-    if (upgrade_state != group0_upgrade_state::use_post_raft_procedures) {
-        // The feature is enabled but `upgrade_to_group0` did not finish yet.
-        // The upgrade procedure requires everyone to participate. In order to not block the cluster
-        // from doing the upgrades, we'll wait until we finish our procedure before doing the reconfiguration.
-        //
-        // Note: in theory it could happen that a node is removed/leaves the cluster immediately after
-        // it finishes upgrade, causing others to get stuck (trying to contact the node that left).
-        // It's unlikely and can be recovered from using the manual group 0 recovery procedure.
-        group0_log.info("Waiting until cluster fully upgrades to use Raft before proceeding...");
-        co_await _client.wait_until_group0_upgraded(_abort_source);
-        group0_log.info("Cluster finished Raft upgrade procedure.");
-    }
-
-    // We're fully upgraded, we must have joined group 0.
-    if (!joined_group0()) {
-        on_internal_error(group0_log,
-            "We're fully upgraded to use Raft but didn't join group 0. Please report a bug.");
-    }
-
-    group0_log.info("Performing a group 0 read barrier...");
-    co_await _raft_gr.group0().read_barrier(&_abort_source);
-    group0_log.info("Finished group 0 read barrier.");
-
-    co_return true;
 }
 
 future<> raft_group0::modify_raft_voter_status(const std::unordered_set<raft::server_id>& voters_add, const std::unordered_set<raft::server_id>& voters_del,
@@ -1082,11 +890,6 @@ future<> raft_group0::remove_from_raft_config(raft::server_id id) {
 
 bool raft_group0::joined_group0() const {
     return std::holds_alternative<raft::group_id>(_group0);
-}
-
-future<bool> raft_group0::raft_upgrade_complete() const {
-    auto upgrade_state = (co_await _client.get_group0_upgrade_state()).second;
-    co_return upgrade_state == group0_upgrade_state::use_post_raft_procedures;
 }
 
 future<group0_peer_exchange> raft_group0::peer_exchange(discovery::peer_list peers) {
@@ -1295,564 +1098,6 @@ struct sleep_with_exponential_backoff {
     }
 };
 
-
-// Precondition: we joined group 0 and the server is running.
-// Assumes we don't leave group 0 while running.
-static future<> wait_until_every_peer_joined_group0(db::system_keyspace& sys_ks, const group0_members& members0, abort_source& as) {
-
-    for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
-        // We fetch both config and peers on each iteration; we don't assume that they don't change.
-        // No new node should join while the procedure is running, but nodes may leave.
-
-        auto current_config = members0.get_host_ids();
-        if (current_config.empty()) {
-            // Not all addresses are known
-            continue;
-        }
-        std::sort(current_config.begin(), current_config.end());
-
-        auto peers = co_await sys_ks.load_peers_ids();
-        std::sort(peers.begin(), peers.end());
-
-        std::vector<locator::host_id> missing_peers;
-        std::set_difference(peers.begin(), peers.end(), current_config.begin(), current_config.end(), std::back_inserter(missing_peers));
-
-        if (missing_peers.empty()) {
-            if (!members0.is_joint()) {
-                co_return;
-            }
-
-            upgrade_log.info("group 0 configuration is joint: {}.", current_config);
-            continue;
-        }
-
-        upgrade_log.info(
-            "group 0 configuration does not contain all peers yet."
-            " Missing peers: {}. Current group 0 config: {}.",
-            missing_peers, current_config);
-    }
-}
-
-// Check if anyone entered `use_post_raft_procedures`.
-// This is a best-effort single round-trip check; we don't retry if some nodes fail to answer.
-static future<bool> anyone_finished_upgrade(
-        const group0_members& members0, netw::messaging_service& ms, abort_source& as) {
-    static constexpr auto max_concurrency = 10;
-    static constexpr auto rpc_timeout = std::chrono::seconds{5};
-
-    auto current_config = members0.get_host_ids();
-    bool finished = false;
-    co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const locator::host_id& node) -> future<> {
-        try {
-            auto state = co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(ms), node));
-            if (state == group0_upgrade_state::use_post_raft_procedures) {
-                finished = true;
-            }
-        } catch (abort_requested_exception&) {
-            upgrade_log.warn("anyone_finished_upgrade: abort requested during `send_get_group0_upgrade_state({})`", node);
-            throw;
-        } catch (...) {
-            // XXX: are there possible fatal errors which should cause us to abort the entire procedure?
-            upgrade_log.warn("anyone_finished_upgrade: `send_get_group0_upgrade_state({})` failed: {}", node, std::current_exception());
-        }
-    });
-    co_return finished;
-}
-
-// Check if it's possible to reach everyone through `get_group0_upgrade_state` RPC.
-static future<> check_remote_group0_upgrade_state_dry_run(
-        const noncopyable_function<future<std::vector<locator::host_id>>()>& get_host_ids,
-        netw::messaging_service& ms, abort_source& as) {
-    static constexpr auto rpc_timeout = std::chrono::seconds{5};
-    static constexpr auto max_concurrency = 10;
-
-    for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
-        // Note: we strive to get a response from everyone in a 'single round-trip',
-        // so we don't skip nodes which responded in earlier iterations.
-        // We contact everyone in each iteration even if some of these guys already answered.
-        // We fetch peers again on every attempt to handle the possibility of leaving nodes.
-        auto cluster_config = co_await get_host_ids();
-        if (cluster_config.empty()) {
-            continue;
-        }
-
-        bool retry = false;
-        co_await max_concurrent_for_each(cluster_config, max_concurrency, [&] (const locator::host_id& node) -> future<> {
-            try {
-                upgrade_log.info("check_remote_group0_upgrade_state_dry_run: `send_get_group0_upgrade_state({})`", node);
-                co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(ms), node));
-            } catch (abort_requested_exception&) {
-                upgrade_log.warn("check_remote_group0_upgrade_state_dry_run: abort requested during `send_get_group0_upgrade_state({})`", node);
-                throw;
-            } catch (...) {
-                // XXX: are there possible fatal errors which should cause us to abort the entire procedure?
-                upgrade_log.warn(
-                        "check_remote_group0_upgrade_state_dry_run: `send_get_group0_upgrade_state({})` failed: {}",
-                        node, std::current_exception());
-                retry = true;
-            }
-        });
-
-        if (!retry) {
-            co_return;
-        }
-    }
-}
-
-future<> raft_group0::wait_for_all_nodes_to_finish_upgrade(abort_source& as) {
-    static constexpr auto rpc_timeout = std::chrono::seconds{5};
-    static constexpr auto max_concurrency = 10;
-
-    for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
-        group0_members members0{_raft_gr.group0()};
-        auto current_config = members0.get_host_ids();
-        if (current_config.empty()) {
-            continue;
-        }
-
-        std::unordered_set<locator::host_id> pending_nodes{current_config.begin(), current_config.end()};
-        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const locator::host_id& node) -> future<> {
-            try {
-                upgrade_log.info("wait_for_everybody_to_finish_upgrade: `send_get_group0_upgrade_state({})`", node);
-                const auto upgrade_state = co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(_ms.local()), node));
-                if (upgrade_state == group0_upgrade_state::use_post_raft_procedures) {
-                    pending_nodes.erase(node);
-                }
-            } catch (abort_requested_exception&) {
-                upgrade_log.warn("wait_for_everybody_to_finish_upgrade: abort requested during `send_get_group0_upgrade_state({})`", node);
-                throw;
-            } catch (...) {
-                upgrade_log.warn(
-                        "wait_for_everybody_to_finish_upgrade: `send_get_group0_upgrade_state({})` failed: {}",
-                        node, std::current_exception());
-            }
-        });
-
-        if (pending_nodes.empty()) {
-            co_return;
-        } else {
-            upgrade_log.warn("wait_for_everybody_to_finish_upgrade: nodes {} didn't finish upgrade yet", pending_nodes);
-        }
-    }
-}
-
-// Wait until all members of group 0 enter `group0_upgrade_state::synchronize` or some node enters
-// `group0_upgrade_state::use_post_raft_procedures` (the latter meaning upgrade is finished and we can also finish).
-//
-// Precondition: we're in `synchronize` state.
-//
-// Returns `true` if we finished because everybody entered `synchronize`.
-// Returns `false` if we finished because somebody entered `use_post_raft_procedures`.
-static future<bool> wait_for_peers_to_enter_synchronize_state(
-        const group0_members& members0, netw::messaging_service& ms, abort_source& as, gate::holder pause_shutdown) {
-    static constexpr auto rpc_timeout = std::chrono::seconds{5};
-    static constexpr auto max_concurrency = 10;
-
-    auto entered_synchronize = make_lw_shared<std::unordered_set<locator::host_id>>();
-
-    // This is a work-around for boost tests where RPC module is not listening so we cannot contact ourselves.
-    // But really, except the (arguably broken) test code, we don't need to be treated as an edge case. All nodes are symmetric.
-    // For production code this line is unnecessary.
-    entered_synchronize->insert(ms.host_id());
-
-    for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
-        // We fetch the config again on every attempt to handle the possibility of removing failed nodes.
-        auto current_members_set = members0.get_members();
-
-        ::tracker<bool> tracker;
-        auto retry = make_lw_shared<bool>(false);
-
-        auto sub = as.subscribe([tracker] () mutable noexcept {
-            tracker.set_exception(std::make_exception_ptr(abort_requested_exception{}));
-        });
-        if (!sub) {
-            upgrade_log.warn("wait_for_peers_to_enter_synchronize_state: abort requested");
-            throw abort_requested_exception{};
-        }
-
-        (void) [] (netw::messaging_service& ms, abort_source& as, gate::holder pause_shutdown,
-                   raft::config_member_set current_members_set, group0_members members0,
-                   lw_shared_ptr<std::unordered_set<locator::host_id>> entered_synchronize,
-                   lw_shared_ptr<bool> retry, ::tracker<bool> tracker) -> future<> {
-            co_await max_concurrent_for_each(current_members_set, max_concurrency, [&] (const raft::config_member& member) -> future<> {
-                locator::host_id node{member.addr.id.uuid()};
-
-                if (entered_synchronize->contains(node)) {
-                    co_return;
-                }
-
-                try {
-                    auto state = co_await with_timeout(as, rpc_timeout, std::bind_front(send_get_group0_upgrade_state, std::ref(ms), node));
-                    if (tracker.finished()) {
-                        // A response from another node caused us to finish already.
-                        co_return;
-                    }
-
-                    switch (state) {
-                        case group0_upgrade_state::use_post_raft_procedures:
-                            upgrade_log.info("wait_for_peers_to_enter_synchronize_state: {} confirmed that they finished upgrade.", node);
-                            tracker.set_value(true);
-                            break;
-                        case group0_upgrade_state::synchronize:
-                            entered_synchronize->insert(node);
-                            break;
-                        default:
-                            upgrade_log.info("wait_for_peers_to_enter_synchronize_state: node {} not in synchronize state yet...", node);
-                            *retry = true;
-                    }
-                } catch (abort_requested_exception&) {
-                    upgrade_log.warn("wait_for_peers_to_enter_synchronize_state: abort requested during `send_get_group0_upgrade_state({})`", node);
-                    tracker.set_exception(std::current_exception());
-                } catch (...) {
-                    // XXX: are there possible fatal errors which should cause us to abort the entire procedure?
-                    upgrade_log.warn(
-                            "wait_for_peers_to_enter_synchronize_state: `send_get_group0_upgrade_state({})` failed: {}",
-                            node, std::current_exception());
-                    *retry = true;
-                }
-            });
-
-            tracker.set_value(false);
-        }(ms, as, pause_shutdown, std::move(current_members_set), members0, entered_synchronize, retry, tracker);
-
-        auto finish_early = co_await tracker.get();
-        if (finish_early) {
-            co_return false;
-        }
-
-        if (!*retry) {
-            co_return true;
-        }
-    }
-}
-
-// Returning nullopt means we finished early (`can_finish_early` returned true).
-static future<std::optional<std::unordered_map<locator::host_id, table_schema_version>>>
-collect_schema_versions_from_group0_members(
-        netw::messaging_service& ms, const group0_members& members0,
-        const noncopyable_function<future<bool>()>& can_finish_early,
-        abort_source& as) {
-    static constexpr auto rpc_timeout = std::chrono::seconds{5};
-    static constexpr auto max_concurrency = 10;
-
-    std::unordered_map<locator::host_id, table_schema_version> versions;
-    for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
-
-        // We fetch the config on each iteration; some nodes may leave.
-        auto current_config = members0.get_members() |
-                    std::views::transform([] (auto m) { return locator::host_id{m.addr.id.uuid()}; }) |
-                    std::ranges::to<std::vector<locator::host_id>>();
-
-        if (current_config.empty()) {
-            continue;
-        }
-
-        bool failed = false;
-        co_await max_concurrent_for_each(current_config, max_concurrency, [&] (locator::host_id& node) -> future<> {
-            if (versions.contains(node)) {
-                // This node was already contacted in a previous iteration.
-                co_return;
-            }
-
-            try {
-                upgrade_log.info("synchronize_schema: `send_schema_check({})`", node);
-                versions.emplace(node,
-                    co_await with_timeout(as, rpc_timeout, [&ms, node] (abort_source& as) mutable {
-                            return ser::migration_manager_rpc_verbs::send_schema_check(&ms, node, as);
-                        }));
-            } catch (abort_requested_exception&) {
-                upgrade_log.warn("synchronize_schema: abort requested during `send_schema_check({})`", node);
-                throw;
-            } catch (...) {
-                // XXX: are there possible fatal errors which should cause us to abort the entire procedure?
-                upgrade_log.warn("synchronize_schema: `send_schema_check({})` failed: {}", node, std::current_exception());
-                failed = true;
-            }
-        });
-
-        if (failed) {
-            upgrade_log.warn("synchronize_schema: there were some failures when collecting remote schema versions.");
-        } else if (members0.is_joint()) {
-            upgrade_log.warn("synchronize_schema: group 0 configuration is joint: {}.", current_config);
-        } else {
-            co_return versions;
-        }
-
-        upgrade_log.info("synchronize_schema: checking if we can finish early before retrying...");
-
-        if (co_await can_finish_early()) {
-            co_return std::nullopt;
-        }
-
-        upgrade_log.info("synchronize_schema: could not finish early.");
-    }
-}
-
-// Returning `true` means we synchronized schema.
-// `false` means we finished early after calling `can_finish_early`.
-//
-// Postcondition for synchronizing schema (i.e. we return `true`):
-// Let T0 be the point in time when this function starts.
-// There is a schema version X and a point in time T > T0 such that:
-//     - the local schema version at T was X,
-//     - for every member of group 0 configuration there was a point in time T'
-//       such that T > T' > T0 and the schema version at this member at T' was X.
-//
-// Assuming that merging schema mutations is an associative, commutative and idempotent
-// operation, everybody pulling from everybody (or verifying they have the same mutations)
-// should cause everybody to arrive at the same result.
-static future<bool> synchronize_schema(
-        replica::database& db, netw::messaging_service& ms,
-        const group0_members& members0,
-        service::migration_manager& mm,
-        const noncopyable_function<future<bool>()>& can_finish_early,
-        abort_source& as) {
-    static constexpr auto max_concurrency = 10;
-
-    bool last_pull_successful = false;
-    size_t num_attempts_after_successful_pull = 0;
-
-    for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
-        upgrade_log.info("synchronize_schema: collecting schema versions from group 0 members...");
-        auto remote_versions = co_await collect_schema_versions_from_group0_members(ms, members0, can_finish_early, as);
-        if (!remote_versions) {
-            upgrade_log.info("synchronize_schema: finished early.");
-            co_return false;
-        }
-        upgrade_log.info("synchronize_schema: collected remote schema versions.");
-
-        auto my_version = db.get_version();
-        upgrade_log.info("synchronize_schema: my version: {}", my_version);
-
-        auto matched = std::erase_if(*remote_versions, [my_version] (const auto& p) { return p.second == my_version; });
-        upgrade_log.info("synchronize_schema: schema mismatches: {}. {} nodes had a matching version.", *remote_versions, matched);
-
-        if (remote_versions->empty()) {
-            upgrade_log.info("synchronize_schema: finished.");
-            co_return true;
-        }
-
-        // Note: if we successfully merged schema from everyone in earlier iterations, but our schema versions
-        // are still not matching, that means our version is strictly more up-to-date than someone else's version.
-        // In that case we could switch to a push mode instead of pull mode (we push schema mutations to them);
-        // on the other hand this would further complicate the code and I assume that the regular schema synchronization
-        // mechanisms (gossiping schema digests and triggering pulls on the other side) should deal with this case,
-        // even though it may potentially take a bit longer than a pro-active approach. Furthermore, the other side
-        // is also executing `synchronize_schema` at some point, so having this problem should be extremely unlikely.
-        if (last_pull_successful) {
-            if ((++num_attempts_after_successful_pull) > 3) {
-                upgrade_log.error(
-                        "synchronize_schema: we managed to pull schema from every other node, but our schema versions"
-                        " are still different. The other side must have an outdated version and fail to pull it for some"
-                        " reason. If this message keeps showing up, the internal upgrade-to-raft procedure is stuck;"
-                        " try performing a rolling restart of your cluster."
-                        " If that doesn't fix the problem, the system may require manual fixing of schema tables.");
-            }
-        }
-
-        last_pull_successful = true;
-        co_await max_concurrent_for_each(*remote_versions, max_concurrency, [&] (const auto& p) -> future<> {
-            auto& [addr, _] = p;
-
-            try {
-                upgrade_log.info("synchronize_schema: `merge_schema_from({})`", addr);
-                co_await mm.merge_schema_from(addr);
-            } catch (const rpc::closed_error& e) {
-                upgrade_log.warn("synchronize_schema: `merge_schema_from({})` failed due to connection error: {}", addr, e);
-                last_pull_successful = false;
-            } catch (timed_out_error&) {
-                upgrade_log.warn("synchronize_schema: `merge_schema_from({})` timed out", addr);
-                last_pull_successful = false;
-            } catch (abort_requested_exception&) {
-                upgrade_log.warn("synchronize_schema: abort requested during `merge_schema_from({})`", addr);
-                throw;
-            } catch (...) {
-                // We assume that every other exception type indicates a fatal error and happens because `merge_schema_from`
-                // failed to apply schema mutations from a remote, which is not something we can automatically recover from.
-                upgrade_log.error(
-                        "synchronize_schema: fatal error in `merge_schema_from({})`: {}."
-                        "\nCannot finish the upgrade procedure."
-                        " Please fix your schema tables manually and try again by restarting the node.",
-                        addr, std::current_exception());
-                throw;
-            }
-        });
-
-        if (co_await can_finish_early()) {
-            upgrade_log.info("synchronize_schema: finishing early.");
-            co_return false;
-        }
-    }
-}
-
-static auto warn_if_upgrade_takes_too_long() {
-    auto as = std::make_unique<abort_source>();
-    auto task = [] (abort_source& as) -> future<> {
-        static constexpr auto warn_period = std::chrono::minutes{1};
-
-        while (!as.abort_requested()) {
-            try {
-                co_await sleep_abortable(warn_period, as);
-            } catch (const sleep_aborted&) {
-                co_return;
-            }
-
-            upgrade_log.warn(
-                "Raft upgrade procedure taking longer than expected. Please check if all nodes are live and the network is healthy."
-                " If the upgrade procedure does not progress even though the cluster is healthy, try performing a rolling restart of the cluster."
-                " If that doesn't help or some nodes are dead and irrecoverable, manual recovery may be required."
-                " Consult the relevant documentation: {}", raft_upgrade_doc);
-        }
-    }(*as);
-
-    return defer([task = std::move(task), as = std::move(as)] () mutable {
-        // Stop in background.
-        as->request_abort();
-        (void)std::move(task).then([as = std::move(as)] {});
-    });
-}
-
-future<> raft_group0::upgrade_to_group0(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
-    SCYLLA_ASSERT(this_shard_id() == 0);
-
-    auto start_state = (co_await _client.get_group0_upgrade_state()).second;
-    switch (start_state) {
-        case group0_upgrade_state::recovery:
-            upgrade_log.info("RECOVERY mode. Not attempting upgrade.");
-            co_return;
-        case group0_upgrade_state::use_post_raft_procedures:
-            upgrade_log.info("Already upgraded.");
-            co_return;
-        case group0_upgrade_state::synchronize:
-            upgrade_log.warn(
-                "Restarting upgrade in `synchronize` state."
-                " A previous upgrade attempt must have been interrupted or failed.");
-            break;
-        case group0_upgrade_state::use_pre_raft_procedures:
-            upgrade_log.info("starting in `use_pre_raft_procedures` state.");
-            break;
-    }
-
-    (void)[] (raft_group0& self, abort_source& as, group0_upgrade_state start_state, gate::holder pause_shutdown, service::storage_service& ss, cql3::query_processor& qp,
-                service::migration_manager& mm, bool topology_change_enabled) -> future<> {
-        auto warner = warn_if_upgrade_takes_too_long();
-        try {
-            co_await self.do_upgrade_to_group0(start_state, ss, qp, mm, topology_change_enabled);
-            co_await self._client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
-            upgrade_log.info("Raft upgrade finished. Disabling migration_manager schema pulls.");
-            co_await mm.disable_schema_pulls();
-        } catch (...) {
-            upgrade_log.error(
-                "Raft upgrade failed: {}.\nTry restarting the node to retry upgrade."
-                " If the procedure gets stuck, manual recovery may be required."
-                " Consult the relevant documentation: {}", std::current_exception(), raft_upgrade_doc);
-        }
-    }(std::ref(*this), std::ref(_abort_source), start_state, _shutdown_gate.hold(), ss, qp, mm, topology_change_enabled);
-}
-
-// `start_state` is either `use_pre_raft_procedures` or `synchronize`.
-future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
-    SCYLLA_ASSERT(this_shard_id() == 0);
-
-    // Check if every peer knows about the upgrade procedure.
-    //
-    // In a world in which post-conditions and invariants are respected, the fact that `SUPPORTS_RAFT` feature
-    // is enabled would guarantee this. However, the cluster features mechanism is unreliable and there are
-    // scenarios where the feature gets enabled even though not everybody supports it. Attempts to fix this
-    // only unmask more issues; see #11225. In general, fixing the gossiper/features subsystem is a big
-    // project and we don't want this to block the Raft group 0 project (and we probably want to eventually
-    // move most application states - including supported feature sets - to group 0 anyway).
-    //
-    // Work around that by ensuring that everybody is able to answer to the `get_group0_upgrade_state` call
-    // before we proceed to the `join_group0` step, which doesn't tolerate servers leaving in the middle;
-    // once a node is selected as one of the seeds of the discovery algorithm, it must answer. This 'dry run'
-    // step, on the other hand, allows nodes to leave and will unblock as soon as all remaining peers are
-    // ready to answer.
-    upgrade_log.info("Waiting until everyone is ready to start upgrade...");
-    auto get_host_ids = [this]() -> future<std::vector<locator::host_id>> {
-        auto current_config = co_await _sys_ks.load_peers_ids();
-        current_config.push_back(_gossiper.my_host_id());
-        co_return current_config;
-    };
-    co_await check_remote_group0_upgrade_state_dry_run(get_host_ids, _ms.local(), _abort_source);
-
-    if (!joined_group0()) {
-        upgrade_log.info("Joining group 0...");
-        auto handshaker = make_legacy_handshaker(raft::is_voter::yes); // Voter
-        co_await join_group0(co_await _sys_ks.load_peers(), std::move(handshaker), ss, qp, mm, _sys_ks, topology_change_enabled, join_node_request_params{});
-    } else {
-        upgrade_log.info(
-            "We're already a member of group 0."
-            " Apparently we're restarting after a previous upgrade attempt failed.");
-    }
-
-    // Start group 0 leadership monitor fiber.
-    _leadership_monitor = leadership_monitor_fiber();
-
-    group0_members members0{_raft_gr.group0()};
-
-    // After we joined, we shouldn't be removed from group 0 until the end of the procedure.
-    // The implementation of `leave_group0` waits until upgrade finishes before leaving the group.
-    // There is no guarantee that `remove_from_group0` from another node (that has
-    // finished upgrading) won't remove us after we enter `synchronize` but before we leave it;
-    // but then we're not needed for anything anymore and we can be shutdown,
-    // and we won't do anything harmful to other nodes while in `synchronize`, worst case being
-    // that we get stuck.
-
-    upgrade_log.info("Waiting until every peer has joined Raft group 0...");
-    co_await wait_until_every_peer_joined_group0(_sys_ks, members0, _abort_source);
-    upgrade_log.info("Every peer is a member of Raft group 0.");
-
-    if (start_state == group0_upgrade_state::use_pre_raft_procedures) {
-        // We perform a schema synchronization step before entering `synchronize` upgrade state.
-        //
-        // This step is not necessary for correctness: we will make sure schema is synchronized
-        // after every node enters `synchronize`, where schema changes are disabled.
-        //
-        // However, it's good for reducing the chance that we get stuck later. If we manage to ensure that schema
-        // is synchronized now, there's a high chance that after entering `synchronize` state we won't have
-        // to do any additional schema pulls (only verify quickly that the schema is still in sync).
-        upgrade_log.info("Waiting for schema to synchronize across all nodes in group 0...");
-        auto can_finish_early = [] { return make_ready_future<bool>(false); };
-        co_await synchronize_schema(qp.db().real_database(), _ms.local(), members0, mm, can_finish_early, _abort_source);
-
-        // Before entering `synchronize`, perform a round-trip of `get_group0_upgrade_state` RPC calls
-        // to everyone as a dry run, just to check that nodes respond to this RPC.
-        // Obviously we may lose connectivity immediately after this function finishes,
-        // causing later steps to fail, but if network/RPC module is already broken, better to detect
-        // it now than after entering `synchronize` state. And if this steps succeeds, then there's
-        // a very high chance that the following steps succeed as well (we would need to be very unlucky otherwise).
-        upgrade_log.info("Performing a dry run of remote `get_group0_upgrade_state` calls...");
-        co_await check_remote_group0_upgrade_state_dry_run(
-                [members0] {
-                    return make_ready_future<std::vector<locator::host_id>>(members0.get_host_ids());
-                }, _ms.local(), _abort_source);
-
-        utils::get_local_injector().inject("group0_upgrade_before_synchronize",
-            [] { throw std::runtime_error("error injection before group 0 upgrade enters synchronize"); });
-
-        upgrade_log.info("Entering synchronize state.");
-        upgrade_log.warn("Schema changes are disabled in synchronize state."
-                " If a failure makes us unable to proceed, manual recovery will be required.");
-        co_await _client.set_group0_upgrade_state(group0_upgrade_state::synchronize);
-    }
-
-    upgrade_log.info("Waiting for all peers to enter synchronize state...");
-    if (!(co_await wait_for_peers_to_enter_synchronize_state(members0, _ms.local(), _abort_source, _shutdown_gate.hold()))) {
-        upgrade_log.info("Another node already finished upgrade. We can finish early.");
-        co_return;
-    }
-
-    upgrade_log.info("All peers in synchronize state. Waiting for schema to synchronize...");
-    auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms.local()), std::ref(_abort_source));
-    if (!(co_await synchronize_schema(qp.db().real_database(), _ms.local(), members0, mm, can_finish_early, _abort_source))) {
-        upgrade_log.info("Another node already finished upgrade. We can finish early.");
-        co_return;
-    }
-
-    upgrade_log.info("Schema synchronized.");
-}
-
 void raft_group0::register_metrics() {
     namespace sm = seastar::metrics;
     _metrics.add_group("raft_group0", {
@@ -1861,25 +1106,6 @@ void raft_group0::register_metrics() {
     });
 }
 
-std::ostream& operator<<(std::ostream& os, group0_upgrade_state state) {
-    switch (state) {
-        case group0_upgrade_state::recovery:
-            os << "recovery";
-            break;
-        case group0_upgrade_state::use_post_raft_procedures:
-            os << "use_post_raft_procedures";
-            break;
-        case group0_upgrade_state::synchronize:
-            os << "synchronize";
-            break;
-        case group0_upgrade_state::use_pre_raft_procedures:
-            os << "use_pre_raft_procedures";
-            break;
-    }
-
-    return os;
-}
-
-
 } // end of namespace service
+
 
