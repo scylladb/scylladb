@@ -2025,7 +2025,7 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_internode_and_intra_merge_colocatio
         // RackB: NodeC (balanced, with intra-node misalignment for co-location)
         auto rackA = topo.rack();
         auto hostA = topo.add_node(node_state::normal, 2, rackA);
-        auto hostB = topo.add_node(node_state::normal, 2, rackA);
+        [[maybe_unused]] auto hostB = topo.add_node(node_state::normal, 2, rackA);
 
         auto rackB = topo.start_new_rack();
         auto hostC = topo.add_node(node_state::normal, 2, rackB);
@@ -2201,7 +2201,7 @@ SEASTAR_THREAD_TEST_CASE(test_colocation_skipped_on_excluded_nodes) {
         auto host1 = topo.add_node(node_state::normal, 2, rack1);
 
         // host2 has 1 shard so that rack2 doesn't need co-location and if any, it will be on host1
-        auto host2 = topo.add_node(node_state::normal, 1, rack2);
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, 1, rack2);
 
         auto ks_name = add_keyspace_racks(e, {{topo.dc(), {rack1.rack, rack2.rack}}}, 8);
         auto table1 = add_table(e, ks_name).get();
@@ -2248,7 +2248,7 @@ SEASTAR_THREAD_TEST_CASE(test_no_intranode_migration_on_draining_node) {
         // host which is decommissioned has more shards so that it has spare streaming capacity
         // to be used by potential intra-node migration.
         auto host1 = topo.add_node(node_state::normal, 5, rack1);
-        auto host2 = topo.add_node(node_state::normal, 1, rack1);
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, 1, rack1);
 
         auto ks_name = add_keyspace_racks(e, {{topo.dc(), {rack1.rack}}}, 16);
         auto table1 = add_table(e, ks_name).get();
@@ -2609,11 +2609,11 @@ SEASTAR_THREAD_TEST_CASE(test_replacing_last_node_in_rack_with_rack_list_rf) {
         auto rack2 = topo.start_new_rack();
         auto dc = topo.dc();
 
-        auto host1 = topo.add_node(node_state::normal, 1, rack1);
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, 1, rack1);
         auto host2 = topo.add_node(node_state::normal, 1, rack2);
 
         auto ks_name = add_keyspace_racks(e, {{dc, {rack1.rack, rack2.rack}}});
-        auto table = add_table(e, ks_name).get();
+        [[maybe_unused]] auto table = add_table(e, ks_name).get();
 
         topo.set_node_state(host2, node_state::left);
 
@@ -2635,9 +2635,9 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_shrinks_respecting_rack_allocation)
         auto rack3 = topo.start_new_rack();
         auto dc = topo.dc();
 
-        auto host1 = topo.add_node(node_state::normal, 1, rack1);
-        auto host2 = topo.add_node(node_state::normal, 1, rack2);
-        auto host3 = topo.add_node(node_state::normal, 1, rack3);
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, 1, rack1);
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, 1, rack2);
+        [[maybe_unused]] auto host3 = topo.add_node(node_state::normal, 1, rack3);
 
         auto& stats = topo.get_shared_load_stats();
         auto ks1 = add_keyspace_racks(e, {{dc, {rack1.rack}}});
@@ -2671,7 +2671,6 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_shrinks_respecting_rack_allocation)
 
         auto& stm = e.shared_token_metadata().local();
         auto tmptr = stm.get();
-        auto& tm_topo = tmptr->get_topology();
 
         auto& tmeta = stm.get()->tablets();
         BOOST_REQUIRE_EQUAL(2, tmeta.get_tablet_map(t1_1).tablet_count());
@@ -4363,9 +4362,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_ignores_hosts_with_incomplete_stats)
         logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
 
         topology_builder topo(e);
-        auto host1 = topo.add_node(node_state::normal, 2);
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, 2);
         auto host2 = topo.add_node(node_state::normal, 2);
-        auto host3 = topo.add_node(node_state::normal, 2);
+        [[maybe_unused]] auto host3 = topo.add_node(node_state::normal, 2);
 
         auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
         auto table1 = add_table(e, ks_name).get();
