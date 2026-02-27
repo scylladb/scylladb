@@ -110,7 +110,7 @@ future<minimal_sst_info> sstables_loader::download_sstable(table_id tid, sstable
                 if (shards.size() != 1) {
                     on_internal_error(tall, "Fully-contained sstable must belong to one shard only");
                 }
-                tall.debug("SSTable shards {} for SSTable {}", fmt::join(shards, ", "), sst->toc_filename());
+                tall.debug("SSTable shards {} for {} (from {})", fmt::join(shards, ", "), sst->toc_filename(), sstable->toc_filename());
                 co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format};
             }
         } catch (...) {
@@ -210,6 +210,7 @@ future<std::vector<std::vector<minimal_sst_info>>> sstables_loader::get_snapshot
 future<> sstables_loader::attach_sstable(table_id tid, const minimal_sst_info& min_info) const {
     auto& db = _db.local();
     auto& table = db.find_column_family(tid);
+    tall.debug("Adding downloaded SSTables to the table {} on shard {}", table.schema()->cf_name(), this_shard_id());
     auto& sst_manager = table.get_sstables_manager();
     auto sst = sst_manager.make_sstable(
         table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
