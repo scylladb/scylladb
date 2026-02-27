@@ -11,7 +11,8 @@
 #include "types/vector.hh"
 #include "exceptions/exceptions.hh"
 #include <span>
-#include <bit>
+#include <cstring>
+#include <seastar/core/byteorder.hh>
 
 namespace cql3 {
 namespace functions {
@@ -31,13 +32,15 @@ std::vector<float> extract_float_vector(const bytes_opt& param, vector_dimension
     }
 
     std::vector<float> result;
-    result.reserve(dimension);
+    result.resize(dimension);
 
-    bytes_view view(*param);
+    // Bulk copy bytes from param to result
+    std::memcpy(result.data(), param->data(), expected_size);
+
+    // Convert endianness in-place (network byte order is big-endian)
+    uint32_t* data = reinterpret_cast<uint32_t*>(result.data());
     for (size_t i = 0; i < dimension; ++i) {
-        // read_simple handles network byte order (big-endian) conversion
-        uint32_t raw = read_simple<uint32_t>(view);
-        result.push_back(std::bit_cast<float>(raw));
+        data[i] = be_to_cpu(data[i]);
     }
 
     return result;
@@ -55,13 +58,14 @@ namespace {
 // You should only use this function if you need to preserve the original vectors and cannot normalize
 // them in advance.
 float compute_cosine_similarity(std::span<const float> v1, std::span<const float> v2) {
-    double dot_product = 0.0;
-    double squared_norm_a = 0.0;
-    double squared_norm_b = 0.0;
+    float dot_product = 0.0;
+    float squared_norm_a = 0.0;
+    float squared_norm_b = 0.0;
 
+    #pragma clang loop vectorize(enable)
     for (size_t i = 0; i < v1.size(); ++i) {
-        double a = v1[i];
-        double b = v2[i];
+        float a = v1[i];
+        float b = v2[i];
 
         dot_product += a * b;
         squared_norm_a += a * a;
@@ -79,13 +83,14 @@ float compute_cosine_similarity(std::span<const float> v1, std::span<const float
 }
 
 float compute_euclidean_similarity(std::span<const float> v1, std::span<const float> v2) {
-    double sum = 0.0;
+    float sum = 0.0;
 
+    #pragma clang loop vectorize(enable)
     for (size_t i = 0; i < v1.size(); ++i) {
-        double a = v1[i];
-        double b = v2[i];
+        float a = v1[i];
+        float b = v2[i];
 
-        double diff = a - b;
+        float diff = a - b;
         sum += diff * diff;
     }
 
@@ -98,11 +103,12 @@ float compute_euclidean_similarity(std::span<const float> v1, std::span<const fl
 // Assumes that both vectors are L2-normalized.
 // This similarity is intended as an optimized way to perform cosine similarity calculation.
 float compute_dot_product_similarity(std::span<const float> v1, std::span<const float> v2) {
-    double dot_product = 0.0;
+    float dot_product = 0.0;
 
+    #pragma clang loop vectorize(enable)
     for (size_t i = 0; i < v1.size(); ++i) {
-        double a = v1[i];
-        double b = v2[i];
+        float a = v1[i];
+        float b = v2[i];
         dot_product += a * b;
     }
 
