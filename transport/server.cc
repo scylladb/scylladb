@@ -291,6 +291,7 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
     , _sl_controller(sl_controller)
     , _gossiper(g)
     , _stats_key(stats_key)
+    , _used_by_maintenance_socket(used_by_maintenance_socket)
 {
     namespace sm = seastar::metrics;
 
@@ -661,7 +662,7 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     : generic_server::connection{server, std::move(fd), sem, std::move(initial_sem_units)}
     , _server(server)
     , _server_addr(server_addr)
-    , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr)
+    , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr, bool(server._used_by_maintenance_socket))
     , _current_scheduling_group(server.get_scheduling_group_for_new_connection())
 {
     _shedding_timer.set_callback([this] {

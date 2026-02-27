@@ -113,11 +113,21 @@ public:
     virtual future<> stop() = 0;
 
     ///
+    /// Notify that the maintenance mode is starting.
+    ///
+    virtual void set_maintenance_mode() {}
+
+    ///
     /// Ensure that superuser role exists.
     ///
     /// \returns a future once it is ensured that the superuser role exists.
     ///
     virtual future<> ensure_superuser_is_created() = 0;
+
+    ///
+    /// Ensure role management operations are enabled. Some role managers may defer initialization.
+    ///
+    virtual future<> ensure_role_operations_are_enabled() { return make_ready_future<>(); }
 
     ///
     /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.

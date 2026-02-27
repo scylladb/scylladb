@@ -212,6 +212,7 @@ private:
     qos::service_level_controller& _sl_controller;
     gms::gossiper& _gossiper;
     scheduling_group_key _stats_key;
+    maintenance_socket_enabled _used_by_maintenance_socket;
 public:
     cql_server(sharded<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,

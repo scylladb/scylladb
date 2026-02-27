@@ -142,6 +142,10 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
 
         'maintenance_socket': socket_path,
 
+        'auth_superuser_name': 'cassandra',
+        # password is 'cassandra'
+        'auth_superuser_salted_password': '$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/',
+
         'service_levels_interval_ms': 500,
 
         'server_encryption_options': {
@@ -1404,7 +1408,6 @@ class ScyllaCluster:
                            server_id: ServerNum,
                            expected_error: str | None = None,
                            seeds: list[IPAddress] | None = None,
-                           connect_driver = True,
                            expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None,
@@ -1431,8 +1434,6 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
-        if not connect_driver:
-            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
 
         def instance_auth_provider(desc: dict):
             module_path, class_name = desc["authenticator"].rsplit('.', 1)
@@ -1890,7 +1891,6 @@ class ScyllaClusterManager:
             server_id=server_id,
             expected_error=data.get("expected_error"),
             seeds=data.get("seeds"),
-            connect_driver=data.get("connect_driver"),
             expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_QUERIED")),
             cmdline_options_override=data.get("cmdline_options_override"),
             append_env_override=data.get("append_env_override"),

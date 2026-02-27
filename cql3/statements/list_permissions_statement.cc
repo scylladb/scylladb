@@ -49,7 +49,7 @@ future<> cql3::statements::list_permissions_statement::check_access(query_proces
     const auto& as = *state.get_auth_service();
     const auto user = state.user();
 
-    return auth::has_superuser(as, *user).then([this, &as, user](bool has_super) {
+    return state.has_superuser().then([this, &as, user](bool has_super) {
         if (has_super) {
             return make_ready_future<>();
         }

@@ -27,8 +27,6 @@ namespace auth {
 
 class cache;
 
-extern const std::string_view certificate_authenticator_name;
-
 class certificate_authenticator : public authenticator {
     enum class query_source;
     std::vector<std::pair<query_source, boost::regex>> _queries;

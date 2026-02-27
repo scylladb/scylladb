@@ -66,7 +66,6 @@
 #include "repair/row_level.hh"
 #include "utils/assert.hh"
 #include "utils/only_on_shard0.hh"
-#include "utils/class_registrator.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "streaming/stream_manager.hh"
 #include "debug.hh"
@@ -1138,16 +1137,11 @@ private:
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             _db.local().check_rf_rack_validity(_token_metadata.local().get());
 
-            const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
-            const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
-            const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
-
-            auth::service_config auth_config;
-            auth_config.authorizer_java_name = qualified_authorizer_name;
-            auth_config.authenticator_java_name = qualified_authenticator_name;
-            auth_config.role_manager_java_name = qualified_role_manager_name;
-
-            _auth_service.start(std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(_auth_cache)).get();
+            _auth_service.start(std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier),
+                    auth::make_authorizer_factory(cfg->authorizer(), _qp, group0_client, _mm),
+                    auth::make_authenticator_factory(cfg->authenticator(), _qp, group0_client, _mm, _auth_cache),
+                    auth::make_role_manager_factory(cfg->role_manager(), _qp, group0_client, _mm, _auth_cache),
+                    maintenance_socket_enabled::no, std::ref(_auth_cache)).get();
 
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local(), _sys_ks.local());
@@ -1205,6 +1199,18 @@ private:
                         config,
                         auth::authentication_options(),
                         mc).get();
+
+                if (cfg->authenticator() == "PasswordAuthenticator") {
+                    auth::authentication_options auth_opts;
+                    auth_opts.credentials = auth::password_option{"cassandra"};
+                    auth::create_role(
+                        _auth_service.local(),
+                        "cassandra",
+                        config,
+                        auth_opts,
+                        mc).get();
+                }
+
                 std::move(mc).commit(group0_client, as, ::service::raft_timeout{}).get();
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.

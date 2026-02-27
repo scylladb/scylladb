@@ -24,7 +24,6 @@
 #include "exceptions/exceptions.hh"
 #include "seastarx.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "utils/class_registrator.hh"
 #include "db/config.hh"
 #include "utils/exponential_backoff_retry.hh"
 
@@ -72,19 +71,9 @@ std::vector<sstring> get_attr_values(LDAP* ld, LDAPMessage* res, const char* att
     return values;
 }
 
-const char* ldap_role_manager_full_name = "com.scylladb.auth.LDAPRoleManager";
-
 } // anonymous namespace
 
 namespace auth {
-
-static const class_registrator<
-    role_manager,
-    ldap_role_manager,
-    cql3::query_processor&,
-    ::service::raft_group0_client&,
-    ::service::migration_manager&,
-    cache&> registration(ldap_role_manager_full_name);
 
 ldap_role_manager::ldap_role_manager(
         std::string_view query_template, std::string_view target_attr, std::string_view bind_name, std::string_view bind_password,
@@ -115,7 +104,7 @@ ldap_role_manager::ldap_role_manager(cql3::query_processor& qp, ::service::raft_
 }
 
 std::string_view ldap_role_manager::qualified_java_name() const noexcept {
-    return ldap_role_manager_full_name;
+    return "com.scylladb.auth.LDAPRoleManager";
 }
 
 const resource_set& ldap_role_manager::protected_resources() const {

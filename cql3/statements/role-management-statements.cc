@@ -94,7 +94,7 @@ future<> create_role_statement::check_access(query_processor& qp, const service:
             return;
         }
 
-        const bool has_superuser = auth::has_superuser(*state.get_auth_service(), *state.user()).get();
+        const bool has_superuser = state.has_superuser().get();
 
         if (_options.hashed_password && !has_superuser) {
             throw exceptions::unauthorized_exception("Only superusers can create a role with a hashed password.");
@@ -213,7 +213,7 @@ future<> alter_role_statement::check_access(query_processor& qp, const service::
         auto& as = *state.get_auth_service();
 
         const auto& user = *state.user();
-        const bool user_is_superuser = auth::has_superuser(as, user).get();
+        const bool user_is_superuser = state.has_superuser().get();
 
         if (_options.is_superuser) {
             if (!user_is_superuser) {
@@ -306,7 +306,7 @@ future<> drop_role_statement::check_access(query_processor& qp, const service::c
 
         auto& as = *state.get_auth_service();
 
-        const bool user_is_superuser = auth::has_superuser(as, *state.user()).get();
+        const bool user_is_superuser = state.has_superuser().get();
 
         const bool role_has_superuser = [this, &as] {
             try {
@@ -442,7 +442,7 @@ list_roles_statement::execute(query_processor& qp, service::query_state& state, 
     const auto& cs = state.get_client_state();
     const auto& as = *cs.get_auth_service();
 
-    return auth::has_superuser(as, *cs.user()).then([this, &cs, &as, make_results = std::move(make_results)](bool super) mutable {
+    return cs.has_superuser().then([this, &cs, &as, make_results = std::move(make_results)](bool super) mutable {
         auto& rm = as.underlying_role_manager();
         const auto& a = as.underlying_authenticator();
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
