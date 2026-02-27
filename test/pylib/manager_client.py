@@ -133,9 +133,10 @@ class ManagerClient:
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
         return cql, hosts
 
-    async def get_cql_exclusive(self, server: ServerInfo):
-        cql = self.con_gen([server.ip_addr], self.port, self.use_ssl, self.auth_provider,
-                                     WhiteListRoundRobinPolicy([server.ip_addr])).connect()
+    async def get_cql_exclusive(self, server: ServerInfo, auth_provider: Optional[AuthProvider] = None):
+        cql = self.con_gen([server.ip_addr], self.port, self.use_ssl,
+                           auth_provider if auth_provider else self.auth_provider,
+                           WhiteListRoundRobinPolicy([server.ip_addr])).connect()
         await wait_for_cql_and_get_hosts(cql, [server], time() + 60)
         return cql
 
