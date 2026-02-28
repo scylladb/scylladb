@@ -1,0 +1,260 @@
+# Copyright 2025-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+# Tests for the system:timestamp_attribute Scylla-specific feature.
+# This feature allows users to control the write timestamp of PutItem and
+# UpdateItem operations by specifying an attribute name in the table's
+# system:timestamp_attribute tag. When that attribute is present in the
+# write request with a numeric value (microseconds since Unix epoch), it
+# is used as the write timestamp. The attribute itself is not stored in
+# the item data.
+#
+# This is a Scylla-specific feature and is not tested on DynamoDB.
+
+import time
+import pytest
+from botocore.exceptions import ClientError
+from decimal import Decimal
+
+from .util import create_test_table, random_string
+
+# A large timestamp in microseconds (far future, year ~2033)
+LARGE_TS = Decimal('2000000000000000')
+# A medium timestamp in microseconds (year ~2001)
+MEDIUM_TS = Decimal('1000000000000000')
+# A small timestamp in microseconds (year ~1970+)
+SMALL_TS = Decimal('100000000000000')
+
+# Fixtures for tables with the system:timestamp_attribute tag. The tables
+# are created once per module and shared between all tests that use them,
+# to avoid the overhead of creating and deleting tables for each test.
+# Because system:timestamp_attribute is a Scylla-only feature, all tests
+# using these fixtures are implicitly Scylla-only (via scylla_only parameter).
+
+# A table with only a hash key and system:timestamp_attribute='ts' tag.
+# We explicitly set write isolation to only_rmw_uses_lwt so the tests remain
+# correct even if the server default changes to always_use_lwt in the future.
+@pytest.fixture(scope="module")
+def test_table_ts(scylla_only, dynamodb):
+    table = create_test_table(dynamodb,
+        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'},
+              {'Key': 'system:write_isolation', 'Value': 'only_rmw_uses_lwt'}],
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    yield table
+    table.delete()
+
+# A table with hash (string) and range (string) keys and system:timestamp_attribute='ts' tag.
+# We explicitly set write isolation to only_rmw_uses_lwt so the tests remain
+# correct even if the server default changes to always_use_lwt in the future.
+@pytest.fixture(scope="module")
+def test_table_ts_ss(scylla_only, dynamodb):
+    table = create_test_table(dynamodb,
+        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'},
+              {'Key': 'system:write_isolation', 'Value': 'only_rmw_uses_lwt'}],
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH'},
+            {'AttributeName': 'c', 'KeyType': 'RANGE'},
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+            {'AttributeName': 'c', 'AttributeType': 'S'},
+        ])
+    yield table
+    table.delete()
+
+# A table with hash key, system:timestamp_attribute='ts' tag, and
+# system:write_isolation='always' to test rejection in LWT_ALWAYS mode.
+# In always_use_lwt mode, every write uses LWT, so the timestamp attribute
+# feature cannot be used at all.
+@pytest.fixture(scope="module")
+def test_table_ts_lwt(scylla_only, dynamodb):
+    table = create_test_table(dynamodb,
+        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'},
+              {'Key': 'system:write_isolation', 'Value': 'always'}],
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    yield table
+    table.delete()
+
+# Test that PutItem with the timestamp attribute uses the given numeric
+# value as the write timestamp, and the timestamp attribute is NOT stored
+# in the item.
+def test_timestamp_attribute_put_item_basic(test_table_ts):
+    p = random_string()
+    # Put an item with the timestamp attribute
+    test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': LARGE_TS})
+    # Read the item back
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    # 'val' should be stored normally
+    assert item['val'] == 'hello'
+    # 'ts' (the timestamp attribute) should NOT be stored in the item
+    assert 'ts' not in item
+
+# Test that PutItem respects the write timestamp ordering: a write with a
+# larger timestamp should win over a write with a smaller timestamp,
+# regardless of wall-clock order.
+def test_timestamp_attribute_put_item_ordering(test_table_ts):
+    p = random_string()
+    # First, write item with a LARGE timestamp
+    test_table_ts.put_item(Item={'p': p, 'val': 'large_ts', 'ts': LARGE_TS})
+    # Then write item with a SMALL timestamp (should lose since SMALL < LARGE)
+    test_table_ts.put_item(Item={'p': p, 'val': 'small_ts', 'ts': SMALL_TS})
+    # The item with the larger timestamp (val='large_ts') should win
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'large_ts'
+
+    # Now try to overwrite with a LARGER timestamp (should win)
+    test_table_ts.put_item(Item={'p': p, 'val': 'latest', 'ts': LARGE_TS + 1})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'latest'
+
+# Test that UpdateItem with the timestamp attribute in AttributeUpdates
+# uses the given numeric value as the write timestamp, and the timestamp
+# attribute is NOT stored in the item.
+def test_timestamp_attribute_update_item_attribute_updates(test_table_ts):
+    p = random_string()
+    # Use UpdateItem with AttributeUpdates, setting 'val' and 'ts'
+    test_table_ts.update_item(
+        Key={'p': p},
+        AttributeUpdates={
+            'val': {'Value': 'hello', 'Action': 'PUT'},
+            'ts': {'Value': LARGE_TS, 'Action': 'PUT'},
+        }
+    )
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'hello'
+    # 'ts' should NOT be stored in the item
+    assert 'ts' not in item
+
+    # Update with a smaller timestamp - should NOT overwrite
+    test_table_ts.update_item(
+        Key={'p': p},
+        AttributeUpdates={
+            'val': {'Value': 'overwritten', 'Action': 'PUT'},
+            'ts': {'Value': SMALL_TS, 'Action': 'PUT'},
+        }
+    )
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    # The item with the larger timestamp should still win
+    assert item['val'] == 'hello'
+
+# Test that UpdateItem with the timestamp attribute in UpdateExpression
+# uses the given numeric value as the write timestamp, and the timestamp
+# attribute is NOT stored in the item.
+def test_timestamp_attribute_update_item_update_expression(test_table_ts):
+    p = random_string()
+    # Use UpdateItem with UpdateExpression to set 'val' and 'ts'
+    test_table_ts.update_item(
+        Key={'p': p},
+        UpdateExpression='SET val = :v, ts = :t',
+        ExpressionAttributeValues={':v': 'hello', ':t': LARGE_TS}
+    )
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'hello'
+    # 'ts' should NOT be stored in the item
+    assert 'ts' not in item
+
+    # Update with a smaller timestamp - should NOT overwrite
+    test_table_ts.update_item(
+        Key={'p': p},
+        UpdateExpression='SET val = :v, ts = :t',
+        ExpressionAttributeValues={':v': 'overwritten', ':t': SMALL_TS}
+    )
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    # The item with the larger timestamp should still win
+    assert item['val'] == 'hello'
+
+# Test that when the timestamp attribute is not present in the write request,
+# the operation behaves normally (no custom timestamp is applied).
+def test_timestamp_attribute_absent(test_table_ts):
+    p = random_string()
+    # Put item without the timestamp attribute
+    test_table_ts.put_item(Item={'p': p, 'val': 'hello'})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'hello'
+    # No 'ts' attribute expected either
+    assert 'ts' not in item
+
+# Test that using a condition expression (which requires LWT) together with
+# the timestamp attribute is rejected.
+def test_timestamp_attribute_with_condition_rejected(test_table_ts):
+    p = random_string()
+    # Put an initial item (no timestamp attribute, so LWT is ok)
+    test_table_ts.put_item(Item={'p': p, 'val': 'initial'})
+    # Try to put with a ConditionExpression and a timestamp - should be rejected
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts.put_item(
+            Item={'p': p, 'val': 'updated', 'ts': LARGE_TS},
+            ConditionExpression='attribute_exists(p)'
+        )
+
+# Test that using the timestamp attribute with the 'always' write isolation
+# policy is rejected, because in always_use_lwt mode every write uses LWT
+# (including unconditional ones), which is incompatible with custom timestamps.
+def test_timestamp_attribute_lwt_always_rejected(test_table_ts_lwt):
+    p = random_string()
+    # Even a plain PutItem with a timestamp is rejected in LWT_ALWAYS mode
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts_lwt.put_item(Item={'p': p, 'val': 'hello', 'ts': LARGE_TS})
+
+# Test that when the timestamp attribute has a non-numeric value, the write
+# is rejected with a ValidationException.
+def test_timestamp_attribute_non_numeric(test_table_ts):
+    p = random_string()
+    # Put item with the timestamp attribute as a string (non-numeric) - should fail
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': 'not_a_number'})
+
+# Test that the timestamp attribute tag can be set on a table with a sort key.
+def test_timestamp_attribute_with_range_key(test_table_ts_ss):
+    p = random_string()
+    c = random_string()
+    # Write with a large timestamp
+    test_table_ts_ss.put_item(Item={'p': p, 'c': c, 'val': 'large', 'ts': LARGE_TS})
+    # Write with a small timestamp (should lose)
+    test_table_ts_ss.put_item(Item={'p': p, 'c': c, 'val': 'small', 'ts': SMALL_TS})
+    item = test_table_ts_ss.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item']
+    assert item['val'] == 'large'
+    assert 'ts' not in item
+
+# Test that the timestamp attribute value is interpreted in microseconds since
+# the Unix epoch, and that writes with and without explicit timestamps interact
+# correctly.
+def test_timestamp_attribute_microseconds(test_table_ts):
+    # Get current time in microseconds from the Python client side.
+    now_us = int(time.time() * 1_000_000)
+    one_hour_us = 3600 * 1_000_000
+
+    # Part 1: write with the current time as the explicit timestamp, then
+    # overwrite without an explicit timestamp.  The second write uses the
+    # server's current time (which is >= now_us), so it should win.
+    p = random_string()
+    test_table_ts.put_item(Item={'p': p, 'val': 'old', 'ts': Decimal(str(now_us))})
+    test_table_ts.put_item(Item={'p': p, 'val': 'new'})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'new'
+
+    # Part 2: write with a timestamp one hour in the future, then overwrite
+    # without an explicit timestamp.  The server's current time (≈ now_us) is
+    # much less than now_us + one_hour_us, so the first write should win.
+    p = random_string()
+    future_us = now_us + one_hour_us
+    test_table_ts.put_item(Item={'p': p, 'val': 'future', 'ts': Decimal(str(future_us))})
+    test_table_ts.put_item(Item={'p': p, 'val': 'now'})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'future'
+
+# Test that BatchWriteItem also respects the timestamp attribute.
+def test_timestamp_attribute_batch_write(test_table_ts):
+    p = random_string()
+    # Write item via BatchWriteItem with a large timestamp
+    with test_table_ts.batch_writer() as batch:
+        batch.put_item(Item={'p': p, 'val': 'large_ts', 'ts': LARGE_TS})
+    # Write item via BatchWriteItem with a small timestamp (should lose)
+    with test_table_ts.batch_writer() as batch:
+        batch.put_item(Item={'p': p, 'val': 'small_ts', 'ts': SMALL_TS})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'large_ts'
+    assert 'ts' not in item
