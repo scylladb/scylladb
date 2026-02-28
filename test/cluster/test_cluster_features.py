@@ -56,7 +56,7 @@ async def change_support_for_test_feature_and_restart(manager: ManagerClient, sr
             injections.remove(TEST_FEATURE_ENABLE_ERROR_INJECTION)
         await manager.server_update_config(srv.server_id, ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY, list(injections))
 
-    await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in srvs))
+    await asyncio.gather(*(manager.server_stop(srv.server_id, convict=False) for srv in srvs))
     await asyncio.gather(*(adjust_feature_in_config(manager, srv, enable) for srv in srvs))
     await asyncio.gather(*(manager.server_start(srv.server_id, expected_error) for srv in srvs))
 

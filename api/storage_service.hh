@@ -84,11 +84,4 @@ void set_load_meter(http_context& ctx, httpd::routes& r, service::load_meter& lm
 void unset_load_meter(http_context& ctx, httpd::routes& r);
 seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, bool legacy_request = false);
 
-// converts string value of boolean parameter into bool
-// maps (case insensitively)
-//     "true", "yes" and "1" into true
-//     "false", "no" and "0" into false
-// otherwise throws runtime_error
-bool validate_bool_x(const sstring& param, bool default_value);
-
 } // namespace api

@@ -1294,6 +1294,7 @@ int64_t gossiper::get_endpoint_downtime(locator::host_id ep) const noexcept {
 // - on_dead callbacks
 // It is called from failure_detector
 future<> gossiper::convict(locator::host_id endpoint) {
+    co_await coroutine::switch_to(_gcfg.gossip_scheduling_group);
     auto permit = co_await lock_endpoint(endpoint, null_permit_id);
     auto state = get_endpoint_state_ptr(endpoint);
     if (!state || !is_alive(state->get_host_id())) {

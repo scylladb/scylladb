@@ -11,6 +11,7 @@
 
 #include "api/api.hh"
 #include "api/storage_service.hh"
+#include "api/validate.hh"
 #include "api/api-doc/tasks.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "compaction/compaction_manager.hh"
