@@ -68,7 +68,7 @@ async def take_snapshot(ks, servers, manager, logger):
         logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
         sstables[s] = tocs
 
-    return snap_name,sstables
+    return snap_name, sstables if len(servers) > 1 else sstables[servers[0]]
 
 
 @pytest.mark.asyncio
