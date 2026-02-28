@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "reader_concurrency_semaphore.hh"
+#include "reader_concurrency_semaphore_group.hh"
 #include "query/query-result.hh"
 #include "readers/mutation_reader.hh"
 #include "utils/assert.hh"
@@ -1043,10 +1044,28 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
         maybe_dump_reader_permit_diagnostics(*this, "kill limit triggered", &permit);
         throw utils::memory_limit_reached(format("kill limit triggered on semaphore {} by permit {}", _name, permit.description()));
     }
+
+    if (_shared_pool && _resources.memory < r.memory) {
+        ssize_t needed_from_shared = r.memory - _resources.memory;
+        if (_shared_pool->try_consume(needed_from_shared)) {
+            _borrowed_from_shared += needed_from_shared;
+            _stats.total_memory_borrowed_from_shared_pool += needed_from_shared;
+            _resources.memory += needed_from_shared;
+        }
+    }
+
     _resources -= r;
 }
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
+
+    if (_borrowed_from_shared > 0) {
+        ssize_t memory_return = std::min(r.memory, _borrowed_from_shared);
+        _shared_pool->signal(memory_return);
+        _borrowed_from_shared -= memory_return;
+        _resources.memory -= memory_return;
+    }
+
     _resources += r;
     if (_resources.count > _initial_resources.count || _resources.memory > _initial_resources.memory) [[unlikely]] {
         on_internal_error_noexcept(rcslog,
@@ -1070,9 +1089,11 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(
         utils::updateable_value<uint32_t> kill_limit_multiplier,
         utils::updateable_value<uint32_t> cpu_concurrency,
         utils::updateable_value<float> preemptive_abort_factor,
-        register_metrics metrics)
+        register_metrics metrics,
+        shared_memory_pool* shared_pool)
     : _initial_resources(count, memory)
     , _resources(count, memory)
+    , _shared_pool(shared_pool)
     , _count_observer(count.observe([this] (const int& new_count) { set_resources({new_count, _initial_resources.memory}); }))
     , _name(std::move(name))
     , _max_queue_length(max_queue_length)
@@ -1133,6 +1154,14 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(
                 sm::make_counter("total_reads_failed", _stats.total_failed_reads,
                                sm::description("Counts the total number of failed user read operations. "
                                                "Add the total_reads to this value to get the total amount of reads issued on this shard."),
+                               {class_label(_name)}),
+
+                sm::make_gauge("reads_memory_borrowed_from_shared_pool", [this] { return _borrowed_from_shared; },
+                               sm::description("Holds the current amount of memory borrowed from the shared pool."),
+                               {class_label(_name)}),
+
+                sm::make_counter("total_reads_memory_borrowed_from_shared_pool", _stats.total_memory_borrowed_from_shared_pool,
+                               sm::description("Counts the total amount of memory borrowed from the shared pool."),
                                {class_label(_name)}),
                 });
     }
@@ -1353,9 +1382,26 @@ void reader_concurrency_semaphore::close_reader(mutation_reader reader) {
 }
 
 bool reader_concurrency_semaphore::has_available_units(const resources& r) const {
+
+    if (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) {
+        return true;
+    }
+
     // Special case: when there is no active reader (based on count) admit one
     // regardless of availability of memory.
-    return (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) || _resources.count == _initial_resources.count;
+    if (_resources.count == _initial_resources.count) {
+        return true;
+    }
+
+    // If dedicated memory is insufficient, check if shared pool can help
+    if (_shared_pool && _resources.memory < r.memory) {
+        ssize_t needed_from_shared = r.memory - _resources.memory;
+        if (_shared_pool->available_memory() >= needed_from_shared) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 bool reader_concurrency_semaphore::cpu_concurrency_limit_reached() const {

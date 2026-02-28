@@ -1379,6 +1379,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Admit new reads while their remaining time is more than this factor times their timeout times when arrived to a semaphore. Its vale means\n"
             "* <= 0.0 means new reads will never get rejected during admission\n"
             "* >= 1.0 means new reads will always get rejected during admission\n")
+    , reader_concurrency_semaphore_shared_pool_percent(this, "reader_concurrency_semaphore_shared_pool_percent", liveness::MustRestart, value_status::Used, 50,
+            "Percentage of memory to allocate to the shared pool for reader concurrency semaphores. Valid values are 0-100.")
     , view_update_reader_concurrency_semaphore_serialize_limit_multiplier(this, "view_update_reader_concurrency_semaphore_serialize_limit_multiplier", liveness::LiveUpdate, value_status::Used, 2,
             "Start serializing view update reads after their collective memory consumption goes above $normal_limit * $multiplier.")
     , view_update_reader_concurrency_semaphore_kill_limit_multiplier(this, "view_update_reader_concurrency_semaphore_kill_limit_multiplier", liveness::LiveUpdate, value_status::Used, 4,
