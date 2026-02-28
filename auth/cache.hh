@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/abort_source.hh>
+#include <string_view>
 #include <unordered_set>
 #include <unordered_map>
 
@@ -19,7 +20,7 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/metrics_registration.hh>
 
-#include <absl/container/flat_hash_map.h>
+#include "absl-flat_hash_map.hh"
 
 #include "auth/permission.hh"
 #include "auth/common.hh"
@@ -42,8 +43,8 @@ public:
         std::unordered_set<role_name_t> member_of;
         std::unordered_set<role_name_t> members;
         sstring salted_hash;
-        std::unordered_map<sstring, sstring> attributes;
-        std::unordered_map<sstring, permission_set> permissions;
+        std::unordered_map<sstring, sstring, sstring_hash, sstring_eq> attributes;
+        std::unordered_map<sstring, permission_set, sstring_hash, sstring_eq> permissions;
     private:
         friend cache;
         // cached permissions include effects of role's inheritance
@@ -52,7 +53,7 @@ public:
     };
 
     explicit cache(cql3::query_processor& qp, abort_source& as) noexcept;
-    lw_shared_ptr<const role_record> get(const role_name_t& role) const noexcept;
+    lw_shared_ptr<const role_record> get(std::string_view role) const noexcept;
     void set_permission_loader(permission_loader_func loader);
     future<permission_set> get_permissions(const role_or_anonymous& role, const resource& r);
     future<> prune(const resource& r);
@@ -61,8 +62,15 @@ public:
     future<> load_roles(std::unordered_set<role_name_t> roles);
     static bool includes_table(const table_id&) noexcept;
 
+    // Returns the number of roles in the cache.
+    size_t roles_count() const noexcept;
+
+    // The callback doesn't suspend (no co_await) so it observes the state
+    // of the cache atomically.
+    void for_each_role(const std::function<void(const role_name_t&, const role_record&)>& func) const;
+
 private:
-    using roles_map = absl::flat_hash_map<role_name_t, lw_shared_ptr<role_record>>;
+    using roles_map = absl::flat_hash_map<role_name_t, lw_shared_ptr<role_record>, sstring_hash, sstring_eq>;
     roles_map _roles;
     // anonymous permissions map exists mainly due to compatibility with
     // higher layers which use role_or_anonymous to get permissions.

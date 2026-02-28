@@ -47,12 +47,22 @@ void cache::set_permission_loader(permission_loader_func loader) {
     _permission_loader = std::move(loader);
 }
 
-lw_shared_ptr<const cache::role_record> cache::get(const role_name_t& role) const noexcept {
+lw_shared_ptr<const cache::role_record> cache::get(std::string_view role) const noexcept {
     auto it = _roles.find(role);
     if (it == _roles.end()) {
         return {};
     }
     return it->second;
+}
+
+void cache::for_each_role(const std::function<void(const role_name_t&, const role_record&)>& func) const {
+    for (const auto& [name, record] : _roles) {
+        func(name, *record);
+    }
+}
+
+size_t cache::roles_count() const noexcept {
+    return _roles.size();
 }
 
 future<permission_set> cache::get_permissions(const role_or_anonymous& role, const resource& r) {
