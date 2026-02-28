@@ -3463,7 +3463,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     if (should_add_wcu) {
         rjson::add(ret, "ConsumedCapacity", std::move(consumed_capacity));
     }
-    _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    auto duration = std::chrono::steady_clock::now() - start_time;
+    _stats.api_operations.batch_write_item_latency.mark(duration);
+    for (const auto& w : per_table_wcu) {
+        w.first->api_operations.batch_write_item_latency.mark(duration);
+    }
     co_return rjson::print(std::move(ret));
 }
 
@@ -4974,7 +4978,12 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     if (!some_succeeded && eptr) {
         co_await coroutine::return_exception_ptr(std::move(eptr));
     }
-    _stats.api_operations.batch_get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    auto duration = std::chrono::steady_clock::now() - start_time;
+    _stats.api_operations.batch_get_item_latency.mark(duration);
+    for (const table_requests& rs : requests) {
+        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
+        per_table_stats->api_operations.batch_get_item_latency.mark(duration);
+    }
     if (is_big(response)) {
         co_return make_streamed(std::move(response));
     } else {
