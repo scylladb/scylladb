@@ -151,4 +151,5 @@ attribute a, modifying only a.b[3].c, and then writing back a.
     compatibility
     new-apis
     network
+    sdks
 ```
