@@ -105,7 +105,7 @@ def check_snapshot_out(res, tag, ktlist, skip_flush):
     if len(ktlist) == 0:
         keyspaces = "all keyspaces"
     else:
-        keyspaces = ", ?".join(ktlist)
+        keyspaces = ", ".join(ktlist)
 
     pattern = re.compile("Requested creating snapshot\\(s\\)"
                          f" for \\[{keyspaces}\\]"
@@ -216,7 +216,7 @@ def test_snapshot_ktlist(nodetool, option_name):
         expected_request("POST", "/storage_service/snapshots",
                          params={"tag": tag, "sf": "false", "kn": "ks1,ks2"})
     ])
-    check_snapshot_out(res.stdout, tag, ["ks1" ,"ks2"], False)
+    check_snapshot_out(res.stdout, tag, ["ks1", "ks2"], False)
 
 
 @pytest.mark.parametrize("tag", [None, "my_snapshot_tag"])
@@ -286,26 +286,38 @@ def test_snapshot_multiple_keyspace_with_table(nodetool):
              " you must specify one and only one keyspace"])
 
 
-def test_snapshot_table_with_ktlist(nodetool):
+def test_snapshot_table_with_ktlist(nodetool, cassandra_only):
     check_nodetool_fails_with(
             nodetool,
             ("snapshot", "--table", "tbl1", "-kt", "ks1.tbl1"),
             {"expected_requests": []},
-            ["error: When specifying the Keyspace columfamily list for a snapshot,"
-             " you should not specify columnfamily",
-             "error processing arguments: when specifying the keyspace-table list for a snapshot,"
-             " you should not specify table(s)"])
+            ["error: When specifying the Keyspace columfamily list for a snapshot, you should not specify columnfamily",
+             "error processing arguments: when specifying the keyspace-table list for a snapshot, you should not specify table(s)"])
 
 
-def test_snapshot_keyspace_with_ktlist(nodetool):
+def test_snapshot_keyspace_with_ktlist(nodetool, cassandra_only):
     check_nodetool_fails_with(
             nodetool,
             ("snapshot", "-kt", "ks1.tbl1", "ks1"),
             {"expected_requests": []},
-            ["error: When specifying the Keyspace columfamily list for a snapshot,"
-             " you should not specify columnfamily",
-             "error processing arguments: when specifying the keyspace-table list for a snapshot,"
-             " you should not specify keyspace(s)"])
+            ["error: When specifying the Keyspace columfamily list for a snapshot, you should not specify columnfamily",
+             "error processing arguments: when specifying the keyspace-table list for a snapshot, you should not specify keyspace(s)"])
+
+
+def test_snapshot_table_with_ktlist_scylla(nodetool, scylla_only):
+    check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "--table", "tbl1", "-kt", "ks1.tbl1"),
+            {"expected_requests": []},
+            ["error processing arguments: when specifying the keyspace-table list for a snapshot, you should not specify table(s)"])
+
+
+def test_snapshot_keyspace_with_ktlist_scylla(nodetool, scylla_only):
+    check_nodetool_fails_with(
+            nodetool,
+            ("snapshot", "-kt", "ks1.tbl1", "ks1"),
+            {"expected_requests": []},
+            ["error processing arguments: when specifying the keyspace-table list for a snapshot, you should not specify keyspace(s)"])
 
 
 def test_snapshot_keyspace_with_tables(nodetool, scylla_only):
