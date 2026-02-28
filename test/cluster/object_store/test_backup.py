@@ -84,16 +84,14 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    snap_name, files = await take_snapshot(ks, [server], manager, logger)
     workdir = await manager.server_get_workdir(server.server_id)
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 0
 
     print('Backup snapshot')
     prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix, move_files=move_files)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix, move_files=move_files)
     print(f'Started task {tid}')
     status = await manager.api.get_task_status(server.ip_addr, tid)
     print(f'Status: {status}, waiting to finish')
@@ -102,7 +100,7 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
     assert (status['progress_total'] > 0) and (status['progress_completed'] == status['progress_total'])
 
     # all components in the "backup" snapshot should have been moved into bucket if move_files
-    assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup')) == 0 if move_files else len(files)
+    assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}')) == 0 if move_files else len(files)
 
     objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
     for f in files:
@@ -128,13 +126,8 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    backup_snap_name = 'backup'
-    ks, cf = await prepare_snapshot_for_backup(manager, server, snap_name = backup_snap_name)
-
-    workdir = await manager.server_get_workdir(server.server_id)
-    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 0
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    backup_snap_name, files = await take_snapshot(ks, [server], manager, logger)
 
     prefix = f'{cf}/backup'
     tid = await manager.api.backup(server.ip_addr, ks, cf,
@@ -160,11 +153,12 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
            }
     cmd = ['--logger-log-level', 'sstables_manager=debug']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    snap_name, files = await take_snapshot(ks, [server], manager, logger)
 
     prefix = f'{cf}/backup'
 
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert status is not None
     assert status['state'] == 'failed'
@@ -182,7 +176,7 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
         return True
     await wait_for(endpoint_appeared_in_config, deadline=time.time() + 60)
 
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert status is not None
     assert status['state'] == 'done'
@@ -200,12 +194,10 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    snap_name, files = await take_snapshot(ks, [server], manager, logger)
     workdir = await manager.server_get_workdir(server.server_id)
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 1
 
     await manager.api.enable_injection(server.ip_addr, breakpoint_name, one_shot=True)
     log = await manager.server_open_log(server.server_id)
@@ -216,7 +208,7 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
     # If we just use {cf}/backup, files like "schema.cql" and "manifest.json" will remain after previous test
     # case, and we will count these erroneously.
     prefix = f'{cf_dir}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
 
     print(f'Started task {tid}, aborting it early')
     await log.wait_for(breakpoint_name + ': waiting', from_mark=mark)
