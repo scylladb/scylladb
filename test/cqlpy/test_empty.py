@@ -51,7 +51,7 @@ def test_insert_empty_string_key_with_flush(cql, table1, scylla_only):
 # In contrast with normal tables where an empty clustering key is allowed,
 # in a WITH COMPACT STORAGE table, an empty clustering key is not allowed.
 # As usual, an empty partition key is not allowed either.
-@pytest.mark.xfail(reason="issue #12749, misleading error message")
+@pytest.mark.skip(reason="Unsupported empty clustering key in COMPACT table #12749, misleading error message")
 def test_insert_empty_string_key_compact(compact_storage, cql, test_keyspace):
     schema = 'p text, c text, v text, primary key (p, c)'
     with new_test_table(cql, test_keyspace, schema, 'WITH COMPACT STORAGE') as table:
@@ -63,7 +63,7 @@ def test_insert_empty_string_key_compact(compact_storage, cql, test_keyspace):
 
 # However, in a COMPACT STORAGE table with a *compound* clustering key (more
 # than one clustering key column), setting one of them to empty *is* allowed.
-@pytest.mark.xfail(reason="issue #12749")
+@pytest.mark.skip(reason="Unsupported empty clustering key in COMPACT table #12749")
 def test_insert_empty_string_compound_clustering_key_compact(compact_storage, cql, test_keyspace):
     schema = 'p text, c1 text, c2 text, v text, primary key (p, c1, c2)'
     with new_test_table(cql, test_keyspace, schema, 'WITH COMPACT STORAGE') as table:
@@ -181,14 +181,14 @@ def test_empty_string_for_string_types_json(cql, table_all_scalar, t):
 # constant, but the string needs to follow a particular format and in
 # particular the empty string should not be allowed.
 # Reproduces #10625.
-@pytest.mark.xfail(reason="issue #10625")
+@pytest.mark.xfail(reason="Not covered corner case for key prefix optimization in filtering #10625")
 @pytest.mark.parametrize("t", ["date", "time"])
 def test_empty_string_for_fussy_string_types(cql, table_all_scalar, t):
     p = unique_key_int()
     with pytest.raises(InvalidRequest):
         cql.execute(f"INSERT INTO {table_all_scalar} (p,v{t}) VALUES ({p}, '')")
 
-@pytest.mark.xfail(reason="issue #10625")
+@pytest.mark.xfail(reason="Not covered corner case for key prefix optimization in filtering #10625")
 @pytest.mark.parametrize("t", ["date", "time"])
 def test_empty_string_for_fussy_string_types_json(cql, table_all_scalar, t):
     p = unique_key_int()
@@ -200,14 +200,14 @@ def test_empty_string_for_fussy_string_types_json(cql, table_all_scalar, t):
 # empty string doesn't make sense as an IP address or a timestamp.
 # We consider this a Cassandra bug, hence the tag "cassandra_bug" below.
 # Reproduces #10625.
-@pytest.mark.xfail(reason="issue #10625")
+@pytest.mark.xfail(reason="Not covered corner case for key prefix optimization in filtering #10625")
 @pytest.mark.parametrize("t", ["inet", "timestamp"])
 def test_empty_string_for_fussy_string_types2(cql, table_all_scalar, t, cassandra_bug):
     p = unique_key_int()
     with pytest.raises(InvalidRequest):
         cql.execute(f"INSERT INTO {table_all_scalar} (p,v{t}) VALUES ({p}, '')")
 
-@pytest.mark.xfail(reason="issue #10625")
+@pytest.mark.xfail(reason="Not covered corner case for key prefix optimization in filtering #10625")
 @pytest.mark.parametrize("t", ["inet", "timestamp"])
 def test_empty_string_for_fussy_string_types2_json(cql, table_all_scalar, t, cassandra_bug):
     p = unique_key_int()
@@ -227,7 +227,7 @@ def test_empty_string_for_other_types(cql, table_all_scalar, t):
 # Reproduces #7944 and #10625.
 # See also test_json.py::test_fromjson_{varint,int}_empty_string*
 # which reproduces the same bug but just for two specific types.
-@pytest.mark.xfail(reason="issue #7944")
+@pytest.mark.xfail(reason="fromJson() should not accept the empty string \"\" as a number #7944")
 @pytest.mark.parametrize("t", ["bigint", "blob", "boolean", "decimal", "double", "duration", "float", "int", "smallint", "timeuuid", "tinyint", "uuid", "varint"])
 def test_empty_string_for_other_types_json(cql, table_all_scalar, t, cassandra_bug):
     p = unique_key_int()

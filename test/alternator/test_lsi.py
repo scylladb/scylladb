@@ -318,7 +318,7 @@ def test_lsi_describe_indexstatus(test_table_lsi_1):
 # In addition to the basic listing of an LSI in DescribeTable tested above,
 # in this test we check additional fields that should appear in each LSI's
 # description.
-@pytest.mark.xfail(reason="issues #7550, #11466")
+@pytest.mark.xfail(reason="Alternator: missing ItemCount field in return of DescribeTable #7550, Alternator: missing IndexSizeBytes field in return of DescribeTable #11466")
 def test_lsi_describe_fields(test_table_lsi_1):
     desc = test_table_lsi_1.meta.client.describe_table(TableName=test_table_lsi_1.name)
     assert 'Table' in desc

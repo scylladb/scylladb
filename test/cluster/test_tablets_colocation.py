@@ -172,7 +172,7 @@ async def test_move_tablet(manager: ManagerClient, move_table: str):
     "with_merge",
     [
         pytest.param(False, id="no_merge"),
-        pytest.param(True, id="with_merge", marks=pytest.mark.xfail(reason="issue #17265")),
+        pytest.param(True, id="with_merge", marks=pytest.mark.xfail(reason="Lowered view consistency during tablet merge (unless replica order is preserved) issue #17265")),
     ],
 )
 async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):

@@ -93,7 +93,7 @@ def testDropWithTimestamp(cql, test_keyspace):
                [1, 4, 4, 4],
                [1, 100, 100, 100])
 
-@pytest.mark.xfail(reason="Issue #9930")
+@pytest.mark.xfail(reason="Incorrect sort order when combining IN, and ORDER BY #9930")
 def testDropAddWithDifferentKind(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int static,  PRIMARY KEY (a, b))") as table:
         execute(cql, table, "ALTER TABLE %s DROP c")
@@ -168,7 +168,7 @@ def testAlterIndexInterval(cql, test_keyspace):
 
 # Migrated from cql_tests.py:TestCQL.create_alter_options_test()
 # Reproduces #9935
-@pytest.mark.xfail(reason="Issue #9935")
+@pytest.mark.xfail(reason="Incorrect sort order when combining IN, GROUP BY and ORDER BY #9935")
 def testCreateAlterKeyspaces(cql, test_keyspace, this_dc):
     # ScyllaDB allows default parameters on CREATE KEYSPACE, so these checks
     # are no longer valid:
@@ -272,7 +272,7 @@ def testDoubleWith(cql, test_keyspace):
     for stmt in stmts:
         assert_invalid_throw(cql, test_keyspace, SyntaxException, stmt)
 
-@pytest.mark.xfail(reason="Issue #8948")
+@pytest.mark.xfail(reason="Cassandra 3.11.10 uses \"class\" instead of \"sstable_compression\" for compression settings by default #8948")
 def testAlterTableWithCompression(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b))") as table:
         [ks, cf] = table.split('.')

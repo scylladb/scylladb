@@ -338,7 +338,7 @@ def test_emptyValues(cql, test_keyspace):
 #         assertRows(execute("SELECT f([1.0, 2.0], value) FROM %s"), expected);
 #     }
 
-@pytest.mark.xfail(reason="Issue #5411")
+@pytest.mark.xfail(reason="Dist: deb - enable coredumps #5411")
 def test_token(cql , test_keyspace):
     with create_table(cql, test_keyspace, "(pk vector<int, 2> primary key)") as table:
 

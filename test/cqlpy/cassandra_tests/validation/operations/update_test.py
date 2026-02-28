@@ -427,7 +427,7 @@ def testUpdateWithStaticList(cql, test_keyspace):
 
         assertRows(execute(cql, table, "SELECT l FROM %s WHERE k = 0"), row(["v1", "v4", "v3"]))
 
-@pytest.mark.xfail(reason="#12243")
+@pytest.mark.xfail(reason="Maybe inconsistent handling of implicit timestamp<->bigint conversion #12243")
 def testUpdateWithDefaultTtl(cql, test_keyspace):
     secondsPerMinute = 60
     with create_table(cql, test_keyspace, f"(a int PRIMARY KEY, b int) WITH default_time_to_live = {10 * secondsPerMinute}") as table:

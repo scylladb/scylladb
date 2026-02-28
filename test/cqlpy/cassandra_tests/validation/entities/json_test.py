@@ -137,7 +137,7 @@ def testSelectJsonWithPagingWithFrozenUDT(cql, test_keyspace):
                           ["{\"a\": 1, \"b\": 2, \"c\": [\"1\", \"2\"]}", "[\"" + str(uuid) + "\", 4]", "4"])
 
 # Reproduces issue #7911, #7912, #7914, #7915, #7944, #7954
-@pytest.mark.xfail(reason="issues #7914, #7915, #7944, #7954")
+@pytest.mark.xfail(reason="fromJson() integer overflow should cause an error, not silent wrap-around #7914, fromJson() should accept \"true\" and \"false\" also as strings #7915, fromJson() should not accept the empty string \"\" as a number #7944, fromJson() fails to set null tuple elements #7954")
 def testFromJsonFct(cql, test_keyspace):
     abc_tuple = collections.namedtuple('abc_tuple', ['a', 'b', 'c'])
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as type_name:
@@ -683,7 +683,7 @@ class EquivalentIp:
         return f'EquivalentIp("{self.obj}")'
 
 # Reproduces issue #7972, #7988, #7997, #8001
-@pytest.mark.xfail(reason="issues #7997, #8001")
+@pytest.mark.xfail(reason="toJson() is missing a timezone on timestamp #7997, Documented unit \"µs\" not supported for assigning a \"duration\" type #8001")
 def testToJsonFct(cql, test_keyspace):
     abc_tuple = collections.namedtuple('abc_tuple', ['a', 'b', 'c'])
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as type_name:
@@ -996,7 +996,7 @@ def testSelectJsonSyntax(cql, test_keyspace):
                 ["{\"system.tojson(system.blobasint(system.intasblob(v)))\": \"1\"}"])
 
 # Reproduces issues #8085
-@pytest.mark.xfail(reason="issues #8085")
+@pytest.mark.xfail(reason="INSERT JSON with bad arguments should yield InvalidRequest error, not internal error #8085")
 def testInsertJsonSyntax(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"v\": 0}")
@@ -1062,7 +1062,7 @@ def testInsertJsonSyntaxDefaultUnset(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k=2"), [2, None, None])
 
 # Reproduces issues #8078, #8086
-@pytest.mark.xfail(reason="issues #8086")
+@pytest.mark.xfail(reason="INSERT JSON cannot handle user-defined types with case-sensitive component names #8086")
 def testCaseSensitivity(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, \"Foo\" int)") as table:
         execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"\\\"Foo\\\"\": 0}")
@@ -1120,7 +1120,7 @@ def testInsertJsonSyntaxWithCollections(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT k, lf FROM %s"), [0, [1, 2, 3]])
 
 # Reproduces issue #8087
-@pytest.mark.xfail(reason="issue #8087")
+@pytest.mark.xfail(reason="SELECT JSON incorrectly quotes strings inside map keys #8087")
 def testInsertJsonSyntaxWithNonNativeMapKeys(cql, test_keyspace):
     # JSON doesn't allow non-string keys, so we accept string representations of any type as map keys and
     # return maps with string keys when necessary.
@@ -1229,7 +1229,7 @@ def testInsertJsonSyntaxWithTuplesAndUDTs(cql, test_keyspace):
             execute(cql, table, "INSERT INTO %s JSON ?", "{\"k\": 0, \"a\": {\"a\": 0, \"b\": [1, 2, 3], \"c\": null}, \"b\": null}")
 
 # done for CASSANDRA-11146
-@pytest.mark.xfail(reason="issue #8092")
+@pytest.mark.xfail(reason="SELECT JSON missing null component after adding field to UDT definition #8092")
 def testAlterUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as type_name:
         with create_table(cql, test_keyspace, "(" +
@@ -1268,7 +1268,7 @@ def testEmptyStringJsonSerialization(cql, test_keyspace):
 # implementation not only fails to produce the right results, it reads
 # already-freed memory to do so, which crashes the debug build with the
 # sanitizer enabled.
-@pytest.mark.skip(reason="issue #8100")
+@pytest.mark.skip(reason="SELECT JSON with IN and ORDER BY does not obey the ORDER BY #8100")
 def testJsonOrdering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a INT, b INT, PRIMARY KEY(a, b))") as table:
         execute(cql, table, "INSERT INTO %s(a, b) VALUES (20, 30);")

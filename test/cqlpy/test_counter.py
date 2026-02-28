@@ -38,7 +38,7 @@ def test_counter_to_blob(cql, table1, table2):
         cql.execute(f"SELECT counterasblob(i) FROM {table1} WHERE p={p}")
     # The opposite order is allowed in Scylla because of #14319, so let's
     # split it into a second test test_counter_to_blob2:
-@pytest.mark.xfail(reason="issue #14319")
+@pytest.mark.xfail(reason="Support CAST function not only in SELECT #14319")
 def test_counter_to_blob2(cql, table1, table2):
     p = unique_key_int()
     cql.execute(f'UPDATE {table2} SET c = c + 1000 WHERE p = {p}')

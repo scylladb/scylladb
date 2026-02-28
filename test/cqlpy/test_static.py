@@ -27,7 +27,7 @@ def table1(cql, test_keyspace):
 # and we have no good explanation why Scylla's behavior is more correct than
 # Cassandra. If we later decide that we consider *both* behaviors equally
 # correct, we can change the test to accept both and make it pass.
-@pytest.mark.xfail(reason="issue #10091")
+@pytest.mark.xfail(reason="GROUP BY returns incorrect values for rows with only static column set #10091")
 def test_static_not_selected(cql, table1):
     p = unique_key_int()
     # The partition p doesn't exist, so the following select yields nothing:
