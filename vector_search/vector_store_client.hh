@@ -78,6 +78,10 @@ public:
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
             -> future<std::expected<primary_keys, ann_error>>;
 
+    /// Request the vector store service for the primary keys of the nearest neighbors
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
+            std::optional<lowres_clock::time_point> timeout_point) -> future<std::expected<primary_keys, ann_error>>;
+
 private:
     friend struct vector_store_client_tester;
 };

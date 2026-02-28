@@ -234,7 +234,16 @@ select_statement::select_statement(schema_ptr schema,
 }
 
 db::timeout_clock::duration select_statement::get_timeout(const service::client_state& state, const query_options& options) const {
-    if (_attrs->is_timeout_set()) {
+    auto timeout = get_query_timeout(state, options);
+    if (timeout) {
+        return *timeout;
+    }
+
+    return state.get_timeout_config().*get_timeout_config_selector();
+}
+
+std::optional<db::timeout_clock::duration> select_statement::get_query_timeout(const service::client_state& state, const query_options& options) const {
+     if (_attrs->is_timeout_set()) {
         return _attrs->get_timeout(options);
     }
 
@@ -244,8 +253,7 @@ db::timeout_clock::duration select_statement::get_timeout(const service::client_
             return *timeout;
         }
     }
-
-    return state.get_timeout_config().*get_timeout_config_selector();
+    return std::nullopt;
 }
 
 ::shared_ptr<const cql3::metadata> select_statement::get_result_metadata() const {
@@ -2128,12 +2136,11 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
                     fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
         }
 
-        auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-        auto aoe = abort_on_expiry(timeout);
+        auto timeout_point_from_query = get_timeout_point_from_query(state.get_client_state(), options);
         auto filter_json = _prepared_filter.to_json(options);
         uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
         auto pkeys = co_await qp.vector_store_client().ann(
-                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), fetch, filter_json, aoe.abort_source());
+                _schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), fetch, filter_json, timeout_point_from_query);
         if (!pkeys.has_value()) {
             co_await coroutine::return_exception(
                     exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
@@ -2143,7 +2150,7 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
             pkeys->erase(pkeys->begin() + limit, pkeys->end());
         }
 
-        co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
+        co_return co_await query_base_table(qp, state, options, pkeys.value(), get_base_query_timeout_point(state.get_client_state(), options, timeout_point_from_query));
     });
 
     auto page_size = options.get_page_size();
@@ -2237,6 +2244,24 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
                 command->set_row_limit(get_limit(options, _limit));
                 return this->process_results(std::move(qr.query_result), command, options, _query_start_time_point);
             }));
+}
+
+std::optional<lowres_clock::time_point> vector_indexed_table_select_statement::get_timeout_point_from_query(
+        const service::client_state& state, const query_options& options) const {
+
+    auto timeout = get_query_timeout(state, options);
+    if (timeout) {
+        return db::timeout_clock::now() + *timeout;
+    }
+    return std::nullopt;
+}
+
+lowres_clock::time_point vector_indexed_table_select_statement::get_base_query_timeout_point(
+        const service::client_state& state, const query_options& options, std::optional<lowres_clock::time_point> timeout_point_from_query) const {
+    if (timeout_point_from_query) {
+        return *timeout_point_from_query;
+    }
+    return db::timeout_clock::now() + get_timeout(state, options);
 }
 
 namespace raw {
