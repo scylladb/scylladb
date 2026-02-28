@@ -208,6 +208,11 @@ std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_ma
 
     const static std::unordered_map<std::string_view, std::function<std::unique_ptr<custom_index>()>> classes = {
         {"vector_index", vector_index_factory},
+        // Cassandra SAI compatibility: treat SAI as vector_index for vector columns.
+        // Non-vector SAI targets (e.g. ENTRIES on MAP) are translated to native
+        // secondary indexes in create_index_statement before reaching this lookup.
+        {"org.apache.cassandra.index.sai.storageattachedindex", vector_index_factory},
+        {"storageattachedindex", vector_index_factory},
     };
 
     if (auto class_it = classes.find(lower_class_name); class_it != classes.end()) {
