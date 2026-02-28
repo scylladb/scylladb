@@ -1184,3 +1184,31 @@ SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
                 co_await server->stop();
             }));
 }
+
+// Create a vector index with an additional filtering column.
+// Because the local secondary index logic was used to determine the index target column,
+// the implementation wrongly selects ck1 as the target column, leading to an exception
+// on the SELECT query:
+//     ANN ordering by vector requires the column to be indexed using 'vector_index'.
+// Reproduces SCYLLADB-635.
+SEASTAR_TEST_CASE(vector_store_client_vector_index_with_additional_filtering_column) {
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+                // Create a vector index on the embedding column, including ck1 for filtered ANN search support.
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding, ck1) USING 'vector_index'");
+
+                BOOST_CHECK_NO_THROW(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"));
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}
