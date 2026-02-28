@@ -1830,7 +1830,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "initializing strongly consistent groups manager");
             sharded<service::strong_consistency::groups_manager> groups_manager;
             groups_manager.start(std::ref(messaging), std::ref(raft_gr), std::ref(qp), 
-                std::ref(db), std::ref(feature_service)).get();
+                std::ref(db), std::ref(mm), std::ref(sys_ks), std::ref(feature_service)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
                 groups_manager.stop().get();
             });

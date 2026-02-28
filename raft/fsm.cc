@@ -8,6 +8,7 @@
 #include "fsm.hh"
 #include <random>
 #include <seastar/core/coroutine.hh>
+#include "raft/raft.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 
@@ -205,6 +206,11 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
+    if (utils::get_local_injector().enter("avoid_being_raft_leader")) {
+        become_follower(server_id{});
+        return;
+    }
+
     if (!std::holds_alternative<candidate>(_state)) {
         _output.state_changed = true;
     }
