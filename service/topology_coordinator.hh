@@ -18,6 +18,7 @@
 
 #include "utils/log.hh"
 #include "raft/raft.hh"
+#include "db/consistency_level_type.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_state_machine.hh"
 #include "db/view/view_building_state.hh"
@@ -52,6 +53,10 @@ class server;
 
 namespace cdc {
 class generation_service;
+}
+
+namespace sstables {
+class storage_manager;
 }
 
 namespace service {
@@ -127,5 +132,6 @@ public:
     }
 };
 
+future<> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring endpoint, sstring bucket, utils::chunked_vector<std::filesystem::path> manifest_prefixes, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
 
 }
