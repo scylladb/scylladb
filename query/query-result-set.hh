@@ -46,7 +46,7 @@ inline bool operator==(const non_null_data_value& x, const non_null_data_value& 
 // including regular column cells, partition keys, as well as static values.
 class result_set_row {
     schema_ptr _schema;
-    const std::unordered_map<sstring, non_null_data_value> _cells;
+    std::unordered_map<sstring, non_null_data_value> _cells;
 public:
     result_set_row(schema_ptr schema, std::unordered_map<sstring, non_null_data_value>&& cells)
         : _schema{schema}
@@ -54,15 +54,16 @@ public:
     { }
     result_set_row(result_set_row&&) = default;
     result_set_row(const result_set_row&) = delete;
+    result_set_row& operator=(result_set_row&&) = default;
     result_set_row& operator=(const result_set_row&) = delete;
     result_set_row copy() const {
-        return {_schema, std::unordered_map{_cells}};
+        return {_schema, std::unordered_map{cells()}};
     }
     // Look up a deserialized row cell value by column name
     const data_value*
     get_data_value(const sstring& column_name) const {
-        auto it = _cells.find(column_name);
-        if (it == _cells.end()) {
+        auto it = cells().find(column_name);
+        if (it == cells().end()) {
             return nullptr;
         }
         return &static_cast<const data_value&>(it->second);
@@ -103,11 +104,14 @@ public:
 // deserialized format. To obtain a result set, use the result_set_builder
 // class as a visitor to query_result::consume() function.
 class result_set {
+public:
+    using rows_type = utils::chunked_vector<result_set_row>;
+private:
     schema_ptr _schema;
-    std::vector<result_set_row> _rows;
+    rows_type _rows;
 public:
     static result_set from_raw_result(schema_ptr, const partition_slice&, const result&);
-    result_set(schema_ptr s, std::vector<result_set_row>&& rows)
+    result_set(schema_ptr s, rows_type&& rows)
         : _schema(std::move(s)), _rows{std::move(rows)}
     { }
     explicit result_set(const mutation&);
@@ -121,7 +125,7 @@ public:
         }
         return _rows[idx];
     }
-    const std::vector<result_set_row>& rows() const {
+    const rows_type& rows() const {
         return _rows;
     }
     const schema_ptr& schema() const {

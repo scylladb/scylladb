@@ -450,7 +450,7 @@ private:
     schema_ptr _s;
     const query::partition_slice& _slice;
     uint64_t _page_size = 0;
-    std::vector<query::result_set_row> _rows;
+    query::result_set::rows_type _rows;
     std::optional<dht::decorated_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
     uint64_t _last_pkey_rows = 0;
@@ -816,7 +816,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
             auto [data_results, _np2] = read_partitions_with_generic_paged_scan<data_result_builder>(db, s, page_size, std::numeric_limits<uint64_t>::max(), stateful,
                     query::full_partition_range, slice);
 
-            std::vector<query::result_set_row> expected_rows;
+            query::result_set::rows_type expected_rows;
             for (const auto& mut : expected_results) {
                 auto rs = query::result_set(mut);
                 std::ranges::copy(rs.rows() | std::views::transform([](const auto& row) { return row.copy(); }), std::back_inserter(expected_rows));
