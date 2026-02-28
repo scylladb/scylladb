@@ -282,13 +282,21 @@ std::string type_to_string(data_type type) {
     return it->second;
 }
 
-bytes get_key_column_value(const rjson::value& item, const column_definition& column) {
+std::optional<bytes> try_get_key_column_value(const rjson::value& item, const column_definition& column) {
     std::string column_name = column.name_as_text();
     const rjson::value* key_typed_value = rjson::find(item, column_name);
     if (!key_typed_value) {
-        throw api_error::validation(fmt::format("Key column {} not found", column_name));
+        return std::nullopt;
     }
     return get_key_from_typed_value(*key_typed_value, column);
+}
+
+bytes get_key_column_value(const rjson::value& item, const column_definition& column) {
+    auto value = try_get_key_column_value(item, column);
+    if (!value) {
+        throw api_error::validation(fmt::format("Key column {} not found", column.name_as_text()));
+    }
+    return std::move(*value);
 }
 
 // Parses the JSON encoding for a key value, which is a map with a single
@@ -380,20 +388,38 @@ clustering_key ck_from_json(const rjson::value& item, schema_ptr schema) {
         return clustering_key::make_empty();
     }
     std::vector<bytes> raw_ck;
-    // FIXME: this is a loop, but we really allow only one clustering key column.
+    // Note: it's possible to get more than one clustering column here, as
+    // Alternator can be used to read scylla internal tables.
     for (const column_definition& cdef : schema->clustering_key_columns()) {
-        bytes raw_value = get_key_column_value(item,  cdef);
+        auto raw_value = get_key_column_value(item,  cdef);
         raw_ck.push_back(std::move(raw_value));
     }
 
     return clustering_key::from_exploded(raw_ck);
 }
 
-position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema) {
-    auto ck = ck_from_json(item, schema);
-    if (is_alternator_keyspace(schema->ks_name())) {
-        return position_in_partition::for_key(std::move(ck));
+clustering_key_prefix ck_prefix_from_json(const rjson::value& item, schema_ptr schema) {
+    if (schema->clustering_key_size() == 0) {
+        return clustering_key_prefix::make_empty();
     }
+    std::vector<bytes> raw_ck;
+    for (const column_definition& cdef : schema->clustering_key_columns()) {
+        auto raw_value = try_get_key_column_value(item,  cdef);
+        if (!raw_value) {
+            break;
+        }
+        raw_ck.push_back(std::move(*raw_value));
+    }
+
+    return clustering_key_prefix::from_exploded(raw_ck);
+}
+
+position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema) {
+    const bool is_alternator_ks = is_alternator_keyspace(schema->ks_name());
+    if (is_alternator_ks) {
+        return position_in_partition::for_key(ck_from_json(item, schema));
+    }
+    
     const auto region_item = rjson::find(item, scylla_paging_region);
     const auto weight_item = rjson::find(item, scylla_paging_weight);
     if (bool(region_item) != bool(weight_item)) {
@@ -413,8 +439,9 @@ position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema)
         } else {
             throw std::runtime_error(fmt::format("Invalid value for weight: {}", weight_view));
         }
-        return position_in_partition(region, weight, region == partition_region::clustered ? std::optional(std::move(ck)) : std::nullopt);
+        return position_in_partition(region, weight, region == partition_region::clustered ? std::optional(ck_prefix_from_json(item, schema)) : std::nullopt);
     }
+    auto ck = ck_from_json(item, schema);
     if (ck.is_empty()) {
         return position_in_partition::for_partition_start();
     }
