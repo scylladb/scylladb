@@ -1700,19 +1700,122 @@ vector_type_impl::compare_vectors(data_type elements, vector_dimension_t dimensi
     return std::strong_ordering::equal;
 }
 
+namespace {
+
+// Visitor that deserializes all elements of a vector in a single visit() call.
+// This avoids per-element virtual dispatch through visit() which is the
+// bottleneck for high-dimensional vectors.
+template <FragmentedView View>
+struct deserialize_vector_visitor {
+    const vector_type_impl& t;
+    View& v;
+
+    data_value operator()(const counter_type_impl&) {
+        return deserialize_loop([&] (View elem) {
+            return static_cast<const long_type_impl&>(*long_type).make_value(
+                read_simple_exactly<int64_t>(elem));
+        });
+    }
+
+    data_value operator()(const bytes_type_impl& element_type) {
+        return deserialize_loop([&] (View elem) {
+            return element_type.make_value(
+                std::make_unique<bytes_type_impl::native_type>(linearized(elem)));
+        });
+    }
+
+    data_value operator()(const empty_type_impl&) {
+        return deserialize_loop([] (View) {
+            return data_value(empty_type_representation());
+        });
+    }
+
+    data_value operator()(const ascii_type_impl& element_type) {
+        return deserialize_string_simple(element_type);
+    }
+
+    data_value operator()(const utf8_type_impl& element_type) {
+        return deserialize_string_simple(element_type);
+    }
+
+    // Complex element types: fall back to per-element virtual dispatch.
+    // These are rare in practice (vectors of tuples/maps/etc are uncommon).
+    data_value operator()(const reversed_type_impl&) { return deserialize_generic(); }
+    data_value operator()(const list_type_impl&) { return deserialize_generic(); }
+    data_value operator()(const map_type_impl&) { return deserialize_generic(); }
+    data_value operator()(const set_type_impl&) { return deserialize_generic(); }
+    data_value operator()(const tuple_type_impl&) { return deserialize_generic(); }
+    data_value operator()(const user_type_impl&) { return deserialize_generic(); }
+    data_value operator()(const vector_type_impl&) { return deserialize_generic(); }
+
+    // Simple fixed-size types: deserialize_value is fully inlined by the
+    // compiler, no virtual dispatch per element.
+    // Each type is listed explicitly so that adding a new type forces
+    // a conscious decision about how to handle it here.
+    data_value operator()(const boolean_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const byte_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const date_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const decimal_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const double_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const duration_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const float_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const inet_addr_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const int32_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const long_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const short_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const simple_date_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const time_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const timestamp_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const timeuuid_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const uuid_type_impl& t) { return deserialize_simple(t); }
+    data_value operator()(const varint_type_impl& t) { return deserialize_simple(t); }
+
+private:
+    template <typename T>
+    data_value deserialize_simple(const T& element_type) {
+        return deserialize_loop([&] (View elem) -> data_value {
+            if (!elem.size_bytes()) {
+                return element_type.make_empty();
+            }
+            return element_type.make_value(deserialize_value(element_type, elem));
+        });
+    }
+
+    // String types (ascii, utf8): sstring has no constructor from empty_t,
+    // so we skip the make_empty() check. Element size 0 is already rejected
+    // by read_vector_element anyway.
+    template <typename T>
+    data_value deserialize_string_simple(const T& element_type) {
+        return deserialize_loop([&] (View elem) -> data_value {
+            return element_type.make_value(deserialize_value(element_type, elem));
+        });
+    }
+
+    data_value deserialize_generic() {
+        return deserialize_loop([&] (View elem) {
+            return t.get_elements_type()->deserialize(elem);
+        });
+    }
+
+    template <typename Func>
+    data_value deserialize_loop(Func&& func) {
+        auto value_length = t.get_elements_type()->value_length_if_fixed();
+        vector_type_impl::native_type ret;
+        ret.reserve(t.get_dimension());
+        for (size_t i = 0; i < t.get_dimension(); i++) {
+            ret.push_back(func(read_vector_element(v, value_length)));
+        }
+        return data_value::make(t.shared_from_this(),
+            std::make_unique<vector_type_impl::native_type>(std::move(ret)));
+    }
+};
+
+} // anonymous namespace
+
 template <FragmentedView View>
 data_value
 deserialize_vector(const vector_type_impl& t, View v){
-    vector_type_impl::native_type ret;
-    ret.reserve(t.get_dimension());
-
-    auto value_length = t.get_elements_type()->value_length_if_fixed();
-
-    for (size_t i = 0; i < t.get_dimension(); i++) {
-        ret.push_back(t.get_elements_type()->deserialize(read_vector_element(v, value_length)));
-    }
-
-    return data_value::make(t.shared_from_this(), std::make_unique<vector_type_impl::native_type>(std::move(ret)));
+    return visit(*t.get_elements_type(), deserialize_vector_visitor<View>{t, v});
 }
 
 static size_t vector_serialized_size(const vector_type_impl::native_type* v) {

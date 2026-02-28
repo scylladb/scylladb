@@ -32,8 +32,10 @@ public:
                         
     std::vector<managed_bytes> split_fragmented(FragmentedView auto v) const {
         std::vector<managed_bytes> elements;
+        elements.reserve(_dimension);
+        auto fixed_len = _elements_type->value_length_if_fixed();
         for (size_t i = 0; i < _dimension; ++i) {
-            auto element = read_vector_element(v, _elements_type->value_length_if_fixed());
+            auto element = read_vector_element(v, fixed_len);
             elements.push_back(managed_bytes(element));
         }
         return elements;
