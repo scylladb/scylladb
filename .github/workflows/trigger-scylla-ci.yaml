@@ -14,20 +14,19 @@ jobs:
     steps:
       - name: Verify Org Membership
         id: verify_author
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
             AUTHOR="${{ github.event.pull_request.user.login }}"
+            ASSOCIATION="${{ github.event.pull_request.author_association }}"
           else
             AUTHOR="${{ github.event.comment.user.login }}"
+            ASSOCIATION="${{ github.event.comment.author_association }}"
           fi
-          ORG="scylladb"
-          if gh api "/orgs/${ORG}/members/${AUTHOR}" --silent 2>/dev/null; then
+          if [[ "$ASSOCIATION" == "MEMBER" || "$ASSOCIATION" == "OWNER" ]]; then
             echo "member=true" >> $GITHUB_OUTPUT
           else
-            echo "::warning::${AUTHOR} is not a member of ${ORG}; skipping CI trigger."
+            echo "::warning::${AUTHOR} is not a member of scylladb (association: ${ASSOCIATION}); skipping CI trigger."
             echo "member=false" >> $GITHUB_OUTPUT
           fi
 
