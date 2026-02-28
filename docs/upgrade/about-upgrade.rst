@@ -11,9 +11,13 @@ ScyllaDB. This means that:
 
 * You should follow the upgrade policy:
 
-   * Starting with version **2025.4**, upgrades can skip minor versions as long
-     as they remain within the same major version (for example, upgrading directly
-     from 2025.1 → 2025.4 is supported).
+   * Starting with version **2025.4**, upgrades can **skip minor versions** if:
+
+       * They remain within the same major version (for example, upgrading
+         directly from *2025.1 → 2025.4* is supported).
+       * You upgrade to the next major version (for example, upgrading
+         directly from *2025.3 → 2026.1* is supported).
+
    * For versions **prior to 2025.4**, upgrades must be performed consecutively—
      each successive X.Y version must be installed in order, **without skipping
      any major or minor version** (for example, upgrading directly from 2025.1 → 2025.3

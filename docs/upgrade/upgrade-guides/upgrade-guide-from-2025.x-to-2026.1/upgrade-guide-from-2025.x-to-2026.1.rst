@@ -1,13 +1,13 @@
 .. |SCYLLA_NAME| replace:: ScyllaDB
 
 .. |SRC_VERSION| replace:: 2025.x
-.. |NEW_VERSION| replace:: 2025.4
+.. |NEW_VERSION| replace:: 2026.1
 
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2025.x to 2025.4
-.. _SCYLLA_METRICS: ../metric-update-2025.x-to-2025.4
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2025.x to 2026.1
+.. _SCYLLA_METRICS: ../metric-update-2025.x-to-2026.1
 
 =======================================================================================
 Upgrade from |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|
@@ -17,10 +17,18 @@ This document describes a step-by-step procedure for upgrading from |SCYLLA_NAME
 to |SCYLLA_NAME| |NEW_VERSION| and rollback to version |SRC_VERSION| if necessary.
 
 This guide covers upgrading ScyllaDB on Red Hat Enterprise Linux (RHEL), CentOS, Debian, 
+<<<<<<< HEAD:docs/upgrade/upgrade-guides/upgrade-guide-from-2025.x-to-2025.4/upgrade-guide-from-2025.x-to-2025.4.rst
 and Ubuntu. See :doc:`OS Support by Platform and Version </getting-started/os-support>` 
 for information about supported versions.
+||||||| parent of dfd46ad3fb (doc: add the upgrade guide from 2025.x to 2026.1):docs/upgrade/upgrade-guides/upgrade-guide-from-2025.x-to-2025.4/upgrade-guide-from-2025.x-to-2025.4.rst
+and Ubuntu. See `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_ 
+for information about supported versions.
+=======
+and Ubuntu. See `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_ 
+for information about supported versions. It also applies when using the ScyllaDB official image on EC2, GCP, or Azure.
+>>>>>>> dfd46ad3fb (doc: add the upgrade guide from 2025.x to 2026.1):docs/upgrade/upgrade-guides/upgrade-guide-from-2025.x-to-2026.1/upgrade-guide-from-2025.x-to-2026.1.rst
 
-It also applies when using the ScyllaDB official image on EC2, GCP, or Azure.
+See :doc:`About Upgrade </upgrade/about-upgrade/>` for the ScyllaDB upgrade policy.
 
 Before You Upgrade ScyllaDB
 ==============================
@@ -149,8 +157,9 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
         #. Update the ScyllaDB deb repo to |NEW_VERSION|.
 
             .. code-block:: console
+               :substitutions:
 
-               sudo wget -O /etc/apt/sources.list.d/scylla.list https://downloads.scylladb.com/deb/debian/scylla-2025.4.list
+               sudo wget -O /etc/apt/sources.list.d/scylla.list https://downloads.scylladb.com/deb/debian/|UBUNTU_SCYLLADB_LIST|
 
         #. Install the new ScyllaDB version:
 
@@ -167,8 +176,9 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
         #. Update the ScyllaDB rpm repo to |NEW_VERSION|.
 
             .. code-block:: console
+               :substitutions:
 
-               sudo curl -o /etc/yum.repos.d/scylla.repo -L https://downloads.scylladb.com/rpm/centos/scylla-2025.4.repo
+               sudo curl -o /etc/yum.repos.d/scylla.repo -L https://downloads.scylladb.com/rpm/centos/|CENTOS_SCYLLADB_REPO|
 
         #. Install the new ScyllaDB version:
 
@@ -198,11 +208,17 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
       #. Run ``scylla_setup`` without ``running io_setup``.
       #. Run ``sudo /opt/scylladb/scylla-machine-image/scylla_cloud_io_setup``.
 
+<<<<<<< HEAD:docs/upgrade/upgrade-guides/upgrade-guide-from-2025.x-to-2025.4/upgrade-guide-from-2025.x-to-2025.4.rst
 
 If you need JMX server, see
 :doc:`Install scylla-jmx Package </getting-started/installation-common/install-jmx>`
 and get new version. 
 
+||||||| parent of dfd46ad3fb (doc: add the upgrade guide from 2025.x to 2026.1):docs/upgrade/upgrade-guides/upgrade-guide-from-2025.x-to-2025.4/upgrade-guide-from-2025.x-to-2025.4.rst
+
+
+=======
+>>>>>>> dfd46ad3fb (doc: add the upgrade guide from 2025.x to 2026.1):docs/upgrade/upgrade-guides/upgrade-guide-from-2025.x-to-2026.1/upgrade-guide-from-2025.x-to-2026.1.rst
 Start the node
 --------------
 
