@@ -779,15 +779,18 @@ public:
     index_reader(shared_sstable sst, reader_permit permit,
                  tracing::trace_state_ptr trace_state = {},
                  use_caching caching = use_caching::yes,
-                 bool single_partition_read = false)
+                 bool single_partition_read = false,
+                 use_caching use_partition_index_cache = use_caching::yes)
         : _sstable(std::move(sst))
         , _permit(std::move(permit))
         , _trace_state(std::move(trace_state))
-        , _local_index_cache(caching ? nullptr
+        // When use_partition_index_cache is true, use the global shared cache (_sstable->_index_cache).
+        // When false, create a local non-shared cache that won't persist across reads.
+        , _local_index_cache(use_partition_index_cache ? nullptr
             : std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),
                                                       _sstable->manager().get_cache_tracker().region(),
                                                       _sstable->manager().get_cache_tracker().get_partition_index_cache_stats()))
-        , _index_cache(caching ? *_sstable->_index_cache : *_local_index_cache)
+        , _index_cache(use_partition_index_cache ? *_sstable->_index_cache : *_local_index_cache)
         , _alloc_section(abstract_formatter([sst = _sstable] (fmt::format_context& ctx) {
             fmt::format_to(ctx.out(), "index_reader {}", sst->get_filename());
         }))
