@@ -3221,6 +3221,83 @@ SEASTAR_TEST_CASE(test_view_update_generating_writetime) {
     });
 }
 
+SEASTAR_TEST_CASE(test_view_update_unmodified_collection) {
+    // In this test we verify that we correctly skip (or not) view updates to a view that selects
+    // a collection column. We use two MVs, similarly as in the test above test.
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+
+        auto f1 = e.local_view_builder().wait_until_built("ks", "mv1");
+        auto f2 = e.local_view_builder().wait_until_built("ks", "mv2");
+
+        e.execute_cql("CREATE TABLE t (k int, c int, a int, b list<int>, g int, primary key(k, c))").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW mv1 AS SELECT k,c,a,b FROM t "
+                         "WHERE k IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, k)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW mv2 AS SELECT k,c,a,b FROM t "
+                         "WHERE k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (c, k, a)").get();
+
+        f1.get();
+        f2.get();
+
+        auto total_t_view_updates = [&] {
+            return e.db().map_reduce0([] (replica::database& local_db) {
+                const db::view::stats& local_stats = local_db.find_column_family("ks", "t").get_view_stats();
+                return local_stats.view_updates_pushed_local + local_stats.view_updates_pushed_remote;
+            }, 0, std::plus<int64_t>()).get();
+        };
+
+        auto total_mv1_updates = [&] {
+            return e.db().map_reduce0([] (replica::database& local_db) {
+                return local_db.find_column_family("ks", "mv1").get_stats().writes.hist.count;
+            }, 0, std::plus<int64_t>()).get();
+        };
+
+        auto total_mv2_updates = [&] {
+            return e.db().map_reduce0([] (replica::database& local_db) {
+                return local_db.find_column_family("ks", "mv2").get_stats().writes.hist.count;
+            }, 0, std::plus<int64_t>()).get();
+        };
+
+        ::shared_ptr<cql_transport::messages::result_message> msg;
+
+        e.execute_cql("INSERT INTO t (k, c, a) VALUES (1, 1, 1)").get();
+        eventually([&] {
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{1, 1, 2};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
+        });
+
+        // We update an unselected column and the collection remains NULL, so we should generate an
+        // update to the virtual column in mv1 but not to mv2.
+        e.execute_cql("UPDATE t SET g=1 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{2, 1, 3};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
+        });
+
+        // We update the collection with an initial value
+        e.execute_cql("UPDATE t SET b=[1] WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{3, 2, 5};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
+        });
+
+        // We update an unselected column again with a non-NULL selected collection. Because the liveness of the updated column is unchanged
+        // and no other selected column is updated (in particular, the collection column), we should generate no view updates.
+        e.execute_cql("UPDATE t SET g=2 WHERE k=1 AND c=1;").get();
+        eventually([&] {
+            const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
+            const update_counter expected{3, 2, 5};
+
+            BOOST_REQUIRE_EQUAL(results, expected);
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_conflicting_batch) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
 

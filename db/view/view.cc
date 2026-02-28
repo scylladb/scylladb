@@ -932,8 +932,7 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
     const row& existing_row = existing.cells();
     const row& updated_row = update.cells();
 
-    const bool base_has_nonexpiring_marker = update.marker().is_live() && !update.marker().is_expiring();
-    return std::ranges::all_of(_base->regular_columns(), [this, &updated_row, &existing_row, base_has_nonexpiring_marker] (const column_definition& cdef) {
+    return std::ranges::all_of(_base->regular_columns(), [this, &updated_row, &existing_row] (const column_definition& cdef) {
         const auto view_it = _view->columns_by_name().find(cdef.name());
         const bool column_is_selected = view_it != _view->columns_by_name().end();
 
@@ -941,49 +940,29 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
         // as part of its PK, there are NO virtual columns corresponding to the unselected columns in the view.
         // Because of that, we don't generate view updates when the value in an unselected column is created
         // or changes.
-        if (!column_is_selected && _base_info.has_base_non_pk_columns_in_view_pk) {
+        if (!column_is_selected) {
             return true;
         }
 
-        //TODO(sarna): Optimize collections case - currently they do not go under optimization
-        if (!cdef.is_atomic()) {
-            return false;
-        }
-
-        // We cannot skip if the value was created or deleted, unless we have a non-expiring marker
+        // We cannot skip if the value was created or deleted
         const auto* existing_cell = existing_row.find_cell(cdef.id);
         const auto* updated_cell = updated_row.find_cell(cdef.id);
         if (existing_cell == nullptr || updated_cell == nullptr) {
-            return existing_cell == updated_cell || (!column_is_selected && base_has_nonexpiring_marker);
+            return existing_cell == updated_cell;
         }
+
+        if (!cdef.is_atomic()) {
+            return existing_cell->as_collection_mutation().data == updated_cell->as_collection_mutation().data;
+        }
+
         atomic_cell_view existing_cell_view = existing_cell->as_atomic_cell(cdef);
         atomic_cell_view updated_cell_view = updated_cell->as_atomic_cell(cdef);
 
         // We cannot skip when a selected column is changed
-        if (column_is_selected) {
-            if (view_it->second->is_view_virtual()) {
-                return atomic_cells_liveness_equal(existing_cell_view, updated_cell_view);
-            }
-            return compare_atomic_cell_for_merge(existing_cell_view, updated_cell_view) == 0;
+        if (view_it->second->is_view_virtual()) {
+            return atomic_cells_liveness_equal(existing_cell_view, updated_cell_view);
         }
-
-        // With non-expiring row marker, liveness checks below are not relevant
-        if (base_has_nonexpiring_marker) {
-            return true;
-        }
-
-        if (existing_cell_view.is_live() != updated_cell_view.is_live()) {
-            return false;
-        }
-
-        // We cannot skip if the change updates TTL
-        const bool existing_has_ttl = existing_cell_view.is_live_and_has_ttl();
-        const bool updated_has_ttl = updated_cell_view.is_live_and_has_ttl();
-        if (existing_has_ttl || updated_has_ttl) {
-            return existing_has_ttl == updated_has_ttl && existing_cell_view.expiry() == updated_cell_view.expiry();
-        }
-
-        return true;
+        return compare_atomic_cell_for_merge(existing_cell_view, updated_cell_view) == 0;
     });
 }
 
