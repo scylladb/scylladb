@@ -274,9 +274,8 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
 
     # This test is sensitive not to share the bucket with any other test
     # that can run in parallel, so generate some unique name for the snapshot
-    snap_name = unique_name('backup_')
-    print(f'Create and backup keyspace (snapshot name is {snap_name})')
-    ks, cf = await prepare_snapshot_for_backup(manager, server, snap_name)
+    ks, cf = create_ks_and_cf(cql)
+    snap_name, toc_names = await take_snapshot(ks, [server], manager, logger)
 
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
 
@@ -305,8 +304,6 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
     #    - 1-TOC.txt
     #    - 2-TOC.txt
     #    - ...
-    old_files = list_sstables();
-    toc_names = [f'{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
 
     prefix = f'{cf}/{snap_name}'
     tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, f'{prefix}')
@@ -348,7 +345,8 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
         # There is no guarantee we'll generate the same amount of sstables as was in the original
         # backup (?). But, since we are not stressing the server here (not provoking memtable flushes),
         # we should in principle never generate _more_ sstables than originated the backup.
-        assert len(old_files) >= len(files)
+        tocs = [f'{entry.name}' for entry in files if entry.name.endswith('TOC.txt')]
+        assert len(toc_names) >= len(tocs)
         assert len(sstable_names) <= len(db_objects)
     else:
         assert len(files) > 0
