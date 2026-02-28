@@ -117,6 +117,10 @@ bool is_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept {
     return !sst->requires_view_building() && !sst->is_quarantined();
 }
 
+bool is_eventually_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept {
+    return sst->requires_view_building();
+}
+
 logging::logger clogger("compaction");
 
 static const std::unordered_map<compaction_type, sstring> compaction_types = {
