@@ -436,7 +436,10 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
     stream_options.buffer_size = file_stream_buffer_size;
     stream_options.read_ahead = file_stream_read_ahead;
 
-    for (auto& info : sources) {
+    for (auto&& source_info : sources) {
+        // Keep stream_blob_info alive only at duration of streaming. Allowing the file descriptor
+        // of the sstable component to be released right after it has been streamed.
+        auto info = std::exchange(source_info, {});
         auto& filename = info.filename;
         std::optional<input_stream<char>> fstream;
         bool fstream_closed = false;
@@ -617,6 +620,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
                     ops_id, filename, targets, total_size, get_bw(total_size, start_time));
         }
     }
+    co_await utils::get_local_injector().inject("tablet_stream_files_end_wait", utils::wait_for_message(std::chrono::seconds(60)));
     if (error) {
         blogger.warn("fstream[{}] Master failed sending files_nr={} files={} targets={} send_size={} bw={} error={}",
                 ops_id, sources.size(), sources, targets, ops_total_size, get_bw(ops_total_size, ops_start_time), error);
@@ -680,15 +684,20 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     if (files.empty()) {
         co_return resp;
     }
+    auto sstable_nr = sstables.size();
+    // Release reference to sstables to be streamed here. Since one sstable is streamed at a time,
+    // a sstable - that has been compacted - can have its space released from disk right after
+    // that sstable's content has been fully streamed.
+    sstables.clear();
     blogger.debug("stream_sstables[{}] Started sending sstable_nr={} files_nr={} files={} range={}",
-            req.ops_id, sstables.size(), files.size(), files, req.range);
+            req.ops_id, sstable_nr, files.size(), files, req.range);
     auto ops_start_time = std::chrono::steady_clock::now();
     auto files_nr = files.size();
     size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), req.targets, req.table, req.ops_id, req.topo_guard);
     resp.stream_bytes = stream_bytes;
     auto duration = std::chrono::steady_clock::now() - ops_start_time;
     blogger.info("stream_sstables[{}] Finished sending sstable_nr={} files_nr={} range={} stream_bytes={} stream_time={} stream_bw={}",
-            req.ops_id, sstables.size(), files_nr, req.range, stream_bytes, duration, get_bw(stream_bytes, ops_start_time));
+            req.ops_id, sstable_nr, files_nr, req.range, stream_bytes, duration, get_bw(stream_bytes, ops_start_time));
     co_return resp;
 }
 
