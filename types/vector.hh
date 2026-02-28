@@ -29,9 +29,20 @@ public:
     }
     static std::strong_ordering compare_vectors(data_type elements_comparator, vector_dimension_t dimension,
                         managed_bytes_view o1, managed_bytes_view o2);
-                        
+
+    template <FragmentedView View>
+    std::vector<View> split_fragmented_view(View v) const {
+        std::vector<View> elements;
+        elements.reserve(_dimension);
+        for (size_t i = 0; i < _dimension; ++i) {
+            elements.push_back(read_vector_element(v, _elements_type->value_length_if_fixed()));
+        }
+        return elements;
+    }
+
     std::vector<managed_bytes> split_fragmented(FragmentedView auto v) const {
         std::vector<managed_bytes> elements;
+        elements.reserve(_dimension);
         for (size_t i = 0; i < _dimension; ++i) {
             auto element = read_vector_element(v, _elements_type->value_length_if_fixed());
             elements.push_back(managed_bytes(element));
@@ -39,16 +50,24 @@ public:
         return elements;
     }
 
-    template <typename Range> // range of managed_bytes or managed_bytes_view
-    requires requires (Range it) { {*std::begin(it)} -> std::convertible_to<managed_bytes_view>; }
+    template <typename Range>
     static managed_bytes build_value_fragmented(Range&& range, std::optional<size_t> value_length_if_fixed) {
         bool is_fixed_length = value_length_if_fixed.has_value();
         size_t size = 0;
 
+        auto get_view = [](auto&& v) {
+            if constexpr (std::convertible_to<decltype(v), managed_bytes_view>) {
+                return managed_bytes_view(v);
+            } else {
+                return v;
+            }
+        };
+
         for (auto&& v : range) {
-            size += v.size();
+            auto view = get_view(v);
+            size += view.size_bytes();
             if (!is_fixed_length) {
-                size += (size_t)unsigned_vint::serialized_size(v.size());
+                size += (size_t)unsigned_vint::serialized_size(view.size_bytes());
             }
         }
 
@@ -56,12 +75,13 @@ public:
         auto out = ret.begin();
 
         for (auto&& v : range) {
+            auto view = get_view(v);
             if (!is_fixed_length) {
-                out += unsigned_vint::serialize(v.size(), out);
+                out += unsigned_vint::serialize(view.size_bytes(), out);
             }
-            auto read_bytes = [v] (bytes_view element_bytes) {return read_simple_bytes(element_bytes, v.size());};
-            auto element = with_linearized(managed_bytes_view(v), read_bytes);
-            out = std::copy_n(element.begin(), element.size(), out);
+            with_linearized(view, [&out](bytes_view element_bytes) {
+                out = std::copy_n(element_bytes.begin(), element_bytes.size(), out);
+            });
         }
 
         return managed_bytes(ret);
