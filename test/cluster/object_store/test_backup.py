@@ -64,6 +64,7 @@ async def take_snapshot(ks, servers, manager, logger):
         workdir = await manager.server_get_workdir(s.server_id)
         cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
         tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
+        assert len(tocs) > 0
         logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
         sstables[s] = tocs
 
