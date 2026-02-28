@@ -322,7 +322,7 @@ future<> require_column_has_value(cql_test_env& e, const sstring& table_name,
     auto ckey = clustering_key::from_deeply_exploded(*schema, ck);
     auto exp = expected.type()->decompose(expected);
     auto dk = dht::decorate_key(*schema, pkey);
-    auto shard = cf.get_effective_replication_map()->shard_for_reads(*schema, dk._token);
+    auto shard = cf.get_effective_replication_map()->shard_for_reads(*schema, dk.token());
     return e.db().invoke_on(shard, [&e, dk = std::move(dk),
                                   ckey = std::move(ckey),
                                   column_name = std::move(column_name),

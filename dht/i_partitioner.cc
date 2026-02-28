@@ -95,7 +95,7 @@ std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name) {
 
 bool
 decorated_key::equal(const schema& s, const decorated_key& other) const {
-    if (_token == other._token) {
+    if (_token_data == other._token_data) {
         return _key.legacy_equal(s, other._key);
     }
     return false;
@@ -103,7 +103,7 @@ decorated_key::equal(const schema& s, const decorated_key& other) const {
 
 std::strong_ordering
 decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
-    auto r = _token <=> other._token;
+    auto r = _token_data <=> other._token_data;
     if (r != 0) {
         return r;
     } else {
@@ -113,13 +113,24 @@ decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
 
 std::strong_ordering
 decorated_key::tri_compare(const schema& s, const ring_position& other) const {
-    auto r = _token <=> other.token();
-    if (r != 0) {
-        return r;
-    } else if (other.has_key()) {
-        return _key.legacy_tri_compare(s, *other.key());
+    // decorated_key tokens are always of token_kind::key, so we need to 
+    // account for ring_position tokens that might be before_all_keys or after_all_keys
+    const auto& other_token = other.token();
+    if (other_token._kind == token_kind::key) [[likely]] {
+        auto r = _token_data <=> other_token._data;
+        if (r != 0) {
+            return r;
+        } else if (other.has_key()) {
+            return _key.legacy_tri_compare(s, *other.key());
+        }
+        return 0 <=> other.relation_to_keys();
+    } else if (other_token._kind == token_kind::before_all_keys) {
+        // decorated_key (token_kind::key) > before_all_keys
+        return std::strong_ordering::greater;
+    } else {
+        // decorated_key (token_kind::key) < after_all_keys
+        return std::strong_ordering::less;
     }
-    return 0 <=> other.relation_to_keys();
 }
 
 bool
