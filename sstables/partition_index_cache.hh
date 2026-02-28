@@ -257,14 +257,11 @@ public:
         while (partial_page || i != _cache.end()) {
             if (partial_page) {
                 auto preempted = with_allocator(_region.allocator(), [&] {
-                    while (!partial_page->empty()) {
-                        partial_page->clear_one_entry();
-                        if (need_preempt()) {
-                            return true;
-                        }
+                    while (partial_page->clear_gently() != stop_iteration::yes) {
+                        return true;
                     }
                     partial_page.reset();
-                    return false;
+                    return need_preempt();
                 });
                 if (preempted) {
                     auto key = (i != _cache.end()) ? std::optional(i->key()) : std::nullopt;

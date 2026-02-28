@@ -201,87 +201,30 @@ public:
     virtual future<std::optional<entry_info>> next_entry() = 0;
 };
 
-// Allocated inside LSA.
-class promoted_index {
-    deletion_time _del_time;
-    uint64_t _promoted_index_start;
-    uint32_t _promoted_index_size;
-    uint32_t _num_blocks;
-public:
-    promoted_index(const schema& s,
-        deletion_time del_time,
-        uint64_t promoted_index_start,
-        uint32_t promoted_index_size,
-        uint32_t num_blocks)
-            : _del_time{del_time}
-            , _promoted_index_start(promoted_index_start)
-            , _promoted_index_size(promoted_index_size)
-            , _num_blocks(num_blocks)
-    { }
-
-    [[nodiscard]] deletion_time get_deletion_time() const { return _del_time; }
-    [[nodiscard]] uint32_t get_promoted_index_size() const { return _promoted_index_size; }
-
-    // Call under allocating_section.
-    // For sstable versions >= mc the returned cursor will be of type `bsearch_clustered_cursor`.
-    std::unique_ptr<clustered_index_cursor> make_cursor(shared_sstable,
-        reader_permit,
-        tracing::trace_state_ptr,
-        file_input_stream_options,
-        use_caching);
+// Promoted index information produced by the parser.
+struct parsed_promoted_index_entry {
+    deletion_time del_time;
+    uint64_t promoted_index_start;
+    uint32_t promoted_index_size;
+    uint32_t num_blocks;
 };
+
+using promoted_index = parsed_promoted_index_entry;
 
 // A partition index element.
 // Allocated inside LSA.
-class index_entry {
-private:
-    managed_bytes _key;
-    mutable std::optional<dht::token> _token;
-    uint64_t _position;
-    managed_ref<promoted_index> _index;
+struct [[gnu::packed]] index_entry {
+    mutable int64_t raw_token;
+    uint64_t data_file_offset;
+    uint32_t key_offset;
 
-public:
-
-    key_view get_key() const {
-        return key_view{_key};
-    }
-
-    // May allocate so must be called under allocating_section.
-    decorated_key_view get_decorated_key(const schema& s) const {
-        if (!_token) {
-            _token.emplace(s.get_partitioner().get_token(get_key()));
-        }
-        return decorated_key_view(*_token, get_key());
-    }
-
-    uint64_t position() const { return _position; };
-
-    std::optional<deletion_time> get_deletion_time() const {
-        if (_index) {
-            return _index->get_deletion_time();
-        }
-
-        return {};
-    }
-
-    index_entry(managed_bytes&& key, uint64_t position, managed_ref<promoted_index>&& index)
-        : _key(std::move(key))
-        , _position(position)
-        , _index(std::move(index))
-    {}
-
-    index_entry(index_entry&&) = default;
-    index_entry& operator=(index_entry&&) = default;
-
-    // Can be nullptr
-    const managed_ref<promoted_index>& get_promoted_index() const { return _index; }
-    managed_ref<promoted_index>& get_promoted_index() { return _index; }
-    uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
-
-    size_t external_memory_usage() const {
-        return _key.external_memory_usage() + _index.external_memory_usage();
-    }
+    uint64_t position() const { return data_file_offset; }
+    dht::raw_token token() const { return dht::raw_token(raw_token); }
 };
+
+// Required for optimized LSA migration of storage of managed_vector.
+static_assert(std::is_trivially_move_assignable_v<index_entry>);
+static_assert(std::is_trivially_move_assignable_v<parsed_promoted_index_entry>);
 
 // A partition index page.
 //
@@ -289,7 +232,18 @@ public:
 // So the shallow part is in the standard allocator but all indirect objects are inside LSA.
 class partition_index_page {
 public:
-    lsa::chunked_managed_vector<managed_ref<index_entry>> _entries;
+    lsa::chunked_managed_vector<index_entry> _entries;
+    managed_bytes _key_storage;
+
+    // Stores promoted index information of index entries.
+    // The i-th element corresponds to the i-th entry in _entries.
+    // Can be smaller than _entries. If _entries[i] doesn't have a matching element in _promoted_indexes then
+    // that entry doesn't have a promoted index.
+    // It's not chunked, because promoted index is present only when there are large partitions in the page,
+    // which also means the page will have typically only 1 entry due to summary:data_file size ratio.
+    // Kept separately to avoid paying for storage cost in pages where no entry has a promoted index,
+    // which is typical in workloads with small partitions.
+    managed_vector<promoted_index> _promoted_indexes;
 public:
     partition_index_page() = default;
     partition_index_page(partition_index_page&&) noexcept = default;
@@ -298,15 +252,68 @@ public:
     bool empty() const { return _entries.empty(); }
     size_t size() const { return _entries.size(); }
 
+    stop_iteration clear_gently() {
+        // Vectors have trivial storage, so are fast to destroy.
+        return stop_iteration::yes;
+    }
+
     void clear_one_entry() {
         _entries.pop_back();
     }
 
+    bool has_promoted_index(size_t i) const {
+        return i < _promoted_indexes.size() && _promoted_indexes[i].promoted_index_size > 0;
+    }
+
+    /// Get promoted index for the i-th entry.
+    /// Call only when has_promoted_index(i) is true.
+    const promoted_index& get_promoted_index(size_t i) const {
+        return _promoted_indexes[i];
+    }
+
+    /// Get promoted index for the i-th entry.
+    /// Call only when has_promoted_index(i) is true.
+    promoted_index& get_promoted_index(size_t i) {
+        return _promoted_indexes[i];
+    }
+
+    /// Get promoted index size for the i-th entry.
+    uint32_t get_promoted_index_size(size_t i) const {
+        return has_promoted_index(i) ? get_promoted_index(i).promoted_index_size : 0;
+    }
+
+    /// Get deletion_time for partition represented by the i-th entry.
+    /// Returns disengaged optional if the entry doesn't have a promoted index, so we don't know the deletion_time.
+    /// It has to be read from the data file.
+    std::optional<deletion_time> get_deletion_time(size_t i) const {
+        if (has_promoted_index(i)) {
+            return get_promoted_index(i).del_time;
+        }
+        return {};
+    }
+
+    key_view get_key(size_t i) const {
+        auto start = _entries[i].key_offset;
+        auto end = i + 1 < _entries.size() ? _entries[i + 1].key_offset : _key_storage.size();
+        auto v = managed_bytes_view(_key_storage).prefix(end);
+        v.remove_prefix(start);
+        return key_view(v);
+    }
+
+    decorated_key_view get_decorated_key(const schema& s, size_t i) const {
+        auto key = get_key(i);
+        auto t = _entries[i].token();
+        if (!t) {
+            t = dht::raw_token(s.get_partitioner().get_token(key));
+            _entries[i].raw_token = t.value;
+        }
+        return decorated_key_view(dht::token(t), key);
+    }
+
     size_t external_memory_usage() const {
         size_t size = _entries.external_memory_usage();
-        for (auto&& e : _entries) {
-            size += sizeof(index_entry) + e->external_memory_usage();
-        }
+        size += _promoted_indexes.external_memory_usage();
+        size += _key_storage.external_memory_usage();
         return size;
     }
 };
