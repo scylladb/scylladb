@@ -11,6 +11,10 @@
 #include "mutation/mutation.hh"
 #include "query/query-result.hh"
 
+namespace service {
+class storage_proxy;
+}
+
 namespace service::strong_consistency {
 
 class groups_manager;
@@ -31,7 +35,8 @@ public:
     coordinator(groups_manager& groups_manager, replica::database& db);
 
     using mutation_gen = noncopyable_function<mutation(api::timestamp_type)>;
-    future<value_or_redirect<>> mutate(schema_ptr schema, 
+    future<value_or_redirect<>> mutate(service::storage_proxy& proxy,
+        schema_ptr schema,
         const dht::token& token,
         mutation_gen&& mutation_gen);
 

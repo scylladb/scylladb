@@ -15,7 +15,7 @@
 namespace service::strong_consistency {
 
 struct raft_command {
-    frozen_mutation mutation;
+    utils::chunked_vector<frozen_mutation> mutations;
 };
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
     raft::group_id gid,

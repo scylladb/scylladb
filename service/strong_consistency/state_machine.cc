@@ -36,7 +36,7 @@ public:
             for (const auto& c: command) {
                 auto is = ser::as_input_stream(c);
                 auto cmd = ser::deserialize(is, std::type_identity<raft_command>{});
-                muts.push_back(std::move(cmd.mutation));
+                muts.insert(muts.end(), std::make_move_iterator(cmd.mutations.begin()), std::make_move_iterator(cmd.mutations.end()));
             }
             co_await _db.apply(std::move(muts), db::no_timeout);
         } catch (...) {

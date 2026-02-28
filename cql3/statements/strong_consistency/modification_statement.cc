@@ -45,7 +45,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
     }
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
-    const auto mutate_result = co_await coordinator.get().mutate(_statement->s,
+    const auto mutate_result = co_await coordinator.get().mutate(qp.proxy(), _statement->s,
         keys[0].start()->value().token(),
         [&](api::timestamp_type ts) {
             const auto prefetch_data = update_parameters::prefetch_data(_statement->s);
