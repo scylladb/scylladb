@@ -229,9 +229,9 @@ TRUE but `TRUE AND FALSE` is FALSE.
 
 Because `x = NULL` always evaluates to NULL, a `SELECT` filter `WHERE x = NULL`
 matches no row (_matching_ means evaluating to TRUE). It does **not** match
-rows where x is missing. If you really want to match rows with missing x,
-SQL offers a different syntax `x IS NULL` (and similarly, also `x IS NOT
-NULL`), Scylla does not yet implement this syntax.
+rows where x is missing. If you want to match rows with missing x, you can use
+`x IS NULL` (and similarly, `x IS NOT NULL` for rows where x is present).
+These operators require `ALLOW FILTERING` to be specified.
 
 In contrast, Cassandra is less consistent in its handling of nulls.
 The example `x = NULL` is considered an error, not a valid expression
@@ -275,6 +275,50 @@ Scylla. The result of the pattern match is `FALSE`.
 For more details, see:
 - [Lightweight Transactions](../features/lwt.rst)
 - [How does ScyllaDB LWT Differ from Apache Cassandra?](../kb/lwt-differences.rst)
+
+## IS NULL and IS NOT NULL in WHERE clause
+
+ScyllaDB supports `IS NULL` and `IS NOT NULL` operators in the WHERE clause of SELECT
+statements. These operators allow filtering rows based on whether a column value is present or absent:
+
+- `IS NULL` returns rows where the column has no value (is null).
+- `IS NOT NULL` returns rows where the column has a value.
+
+These operators require `ALLOW FILTERING` to be specified, as they must scan the data
+to check for null values.
+
+> **Note:** Primary key columns are never null in CQL. Using `IS NULL` on a primary key column will always
+> return no rows, while `IS NOT NULL` will match all rows.
+
+**Example:**
+
+```cql
+CREATE TABLE users (id int PRIMARY KEY, name text, email text);
+INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com');
+INSERT INTO users (id, name) VALUES (2, 'Bob');
+
+SELECT * FROM users WHERE email IS NULL ALLOW FILTERING;
+
+ id | email | name
+----+-------+------
+  2 |  null |  Bob
+
+SELECT * FROM users WHERE email IS NOT NULL ALLOW FILTERING;
+
+ id | email             | name
+----+-------------------+-------
+  1 | alice@example.com | Alice
+```
+
+**Usage in Materialized Views:**
+
+`IS NOT NULL` is also used in materialized view definitions to ensure that columns
+included in the view's primary key are not null. This usage does not require `ALLOW FILTERING`.
+
+**Limitations:**
+
+- `IS NULL` and `IS NOT NULL` cannot be combined with other restrictions on the same column.
+
 
 ## REDUCEFUNC for UDA
 
