@@ -94,6 +94,7 @@
 #include "locator/util.hh"
 #include "tools/build_info.hh"
 #include "utils/labels.hh"
+#include "debug.hh"
 
 namespace bi = boost::intrusive;
 
@@ -1522,6 +1523,9 @@ public:
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm) override {
+        if (current_scheduling_group() != debug::streaming_scheduling_group) {
+            on_internal_error(dblog, format("attempted to apply hint in {} scheduling group", current_scheduling_group().name()));
+        }
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
         // becomes unavailable - this might include the current node
         return sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout);
