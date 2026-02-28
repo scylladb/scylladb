@@ -951,9 +951,8 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
             return existing_cell == updated_cell;
         }
 
-        //TODO(sarna): Optimize collections case - currently they do not go under optimization
         if (!cdef.is_atomic()) {
-            return false;
+            return existing_cell->as_collection_mutation().data == updated_cell->as_collection_mutation().data;
         }
 
         atomic_cell_view existing_cell_view = existing_cell->as_atomic_cell(cdef);

@@ -3286,12 +3286,12 @@ SEASTAR_TEST_CASE(test_view_update_unmodified_collection) {
             BOOST_REQUIRE_EQUAL(results, expected);
         });
 
-        // We update an unselected column again with a non-NULL selected collection. At this point, this case
-        // is not optimized and we generate a view update to both MVs, but we should optimize it in the future.
+        // We update an unselected column again with a non-NULL selected collection. Because the liveness of the updated column is unchanged
+        // and no other selected column is updated (in particular, the collection column), we should generate no view updates.
         e.execute_cql("UPDATE t SET g=2 WHERE k=1 AND c=1;").get();
         eventually([&] {
             const update_counter results{total_mv1_updates(), total_mv2_updates(), total_t_view_updates()};
-            const update_counter expected{4, 3, 7};
+            const update_counter expected{3, 2, 5};
 
             BOOST_REQUIRE_EQUAL(results, expected);
         });
