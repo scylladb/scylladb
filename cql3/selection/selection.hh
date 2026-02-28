@@ -125,11 +125,18 @@ public:
     static ::shared_ptr<selection> for_columns(schema_ptr schema, std::vector<const column_definition*> columns);
 
     // Adds a column to the selection and result set. Returns an index within the result set row.
-    virtual uint32_t add_column_for_post_processing(const column_definition& c);
+    virtual uint32_t add_column_for_post_processing(const column_definition& c) {
+        return add_column_to_query(c);
+    }
+    // Adds a column to the selection. Returns an index within the query result row.
+    virtual uint32_t add_column_to_query(const column_definition& c);
 
     virtual std::vector<shared_ptr<functions::function>> used_functions() const { return {}; }
 
     query::partition_slice::option_set get_query_options();
+protected:
+    // Adds a column to the _columns if not already present, returns a pair of the index and a bool indicating if it was added.
+    std::pair<uint32_t, bool> add_column(const column_definition& c);
 private:
     static bool processes_selection(const std::vector<prepared_selector>& prepared_selectors);
 
