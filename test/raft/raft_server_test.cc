@@ -110,3 +110,77 @@ SEASTAR_THREAD_TEST_CASE(test_aborting_wait_for_state_change) {
     as.request_abort();
     BOOST_CHECK_THROW((void) fut_default_ex.get(), raft::request_aborted);
 }
+
+// Reproducer of SCYLLA-841.
+SEASTAR_THREAD_TEST_CASE(test_add_entry_on_aborted_server) {
+    bool forwarding_values[] = {false, true};
+
+    for (const bool enable_forwarding : forwarding_values) {
+        const size_t command_size = sizeof(size_t);
+        raft_cluster<std::chrono::steady_clock> cluster(
+                test_case {
+                    .nodes = 2,
+                    .config = std::vector<raft::server::configuration>({
+                        raft::server::configuration {
+                            .snapshot_threshold_log_size = 0,
+                            .snapshot_trailing_size = 0,
+                            .max_log_size = command_size,
+                            .enable_forwarding = enable_forwarding,
+                            .max_command_size = command_size
+                        }
+                    })
+                },
+                ::apply_changes,
+                0,
+                0,
+                0, false, tick_delay, rpc_config{});
+
+        constexpr std::string_view error_message = "some unfunny error message";
+        int val = 0;
+
+        auto add_entry = [&val] (raft::server& server, abort_source* as) {
+            return server.add_entry(create_command(val++), raft::wait_type::committed, as);
+        };
+        auto check_default_message = [] (const raft::stopped_error& e) {
+            return std::string_view(e.what()) == "Raft instance is stopped";
+        };
+        auto check_error_message = [&error_message] (const raft::stopped_error& e) {
+            return std::string_view(e.what()) == std::format("Raft instance is stopped, reason: \"{}\"", error_message);
+        };
+
+        /* Case 1. Default error message*/ {
+            const size_t server_id = 0;
+            auto& s1 = cluster.get_server(server_id);
+            s1.start().get();
+            s1.abort().get();
+
+            abort_source as;
+
+            // Regardless of the state of the passed abort_source, we should get raft::stopped_error.
+            BOOST_CHECK_EXCEPTION(add_entry(s1, nullptr).get(), raft::stopped_error,
+                    check_default_message);
+            BOOST_CHECK_EXCEPTION(add_entry(s1, &as).get(), raft::stopped_error,
+                    check_default_message);
+            as.request_abort();
+            BOOST_CHECK_EXCEPTION(add_entry(s1, &as).get(), raft::stopped_error,
+                    check_default_message);
+        }
+
+        /* Case 2. Custom error message */ {
+            auto& s2 = cluster.get_server(1);
+            s2.start().get();
+            s2.abort(sstring(error_message)).get();
+
+            abort_source as;
+
+            // The same checks as above: we just verify that the error message is what we want.
+            BOOST_CHECK_EXCEPTION(add_entry(s2, nullptr).get(), raft::stopped_error,
+                    check_error_message);
+            BOOST_CHECK_EXCEPTION(add_entry(s2, &as).get(), raft::stopped_error,
+                    check_error_message);
+            as.request_abort();
+            BOOST_CHECK_EXCEPTION(add_entry(s2, &as).get(), raft::stopped_error,
+                    check_error_message);
+        }
+    }
+}
