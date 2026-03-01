@@ -20,6 +20,8 @@ namespace db {
 
 namespace service {
 
+extern logging::logger rtlogger;
+
 topology_mutation_builder::topology_mutation_builder(api::timestamp_type ts) :
         _s(db::system_keyspace::topology()),
         _m(_s, partition_key::from_singular(*_s, db::system_keyspace::TOPOLOGY)),
@@ -35,7 +37,9 @@ topology_node_mutation_builder::topology_node_mutation_builder(topology_mutation
 template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::apply_atomic(const char* cell, const data_value& value) {
     const column_definition* cdef = self().schema().get_column_definition(cell);
-    SCYLLA_ASSERT(cdef);
+    if (!cdef) {
+        on_internal_error(rtlogger, format("column {} not found in the topology table", cell));
+    }
     self().row().apply(*cdef, atomic_cell::make_live(*cdef->type, self().timestamp(), cdef->type->decompose(value), self().ttl()));
     return self();
 }
@@ -45,7 +49,9 @@ template<std::ranges::range C>
 requires std::convertible_to<std::ranges::range_value_t<C>, data_value>
 Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, collection_apply_mode apply_mode, const C& c) {
     const column_definition* cdef = self().schema().get_column_definition(cell);
-    SCYLLA_ASSERT(cdef);
+    if (!cdef) {
+        on_internal_error(rtlogger, format("column {} not found in the topology table", cell));
+    }
     auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
 
     std::set<bytes, serialized_compare> cset(vtype->as_less_comparator());
@@ -70,7 +76,9 @@ Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, co
 template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::del(const char* cell) {
     auto cdef = self().schema().get_column_definition(cell);
-    SCYLLA_ASSERT(cdef);
+    if (!cdef) {
+        on_internal_error(rtlogger, format("column {} not found in the topology table", cell));
+    }
     if (!cdef->type->is_multi_cell()) {
         self().row().apply(*cdef, atomic_cell::make_dead(self().timestamp(), gc_clock::now()));
     } else {
