@@ -774,16 +774,18 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
 struct event_id {
     cdc::stream_id stream;
     utils::UUID timestamp;
+    size_t index = 0;
 
     static constexpr auto marker = 'E';
 
-    event_id(cdc::stream_id s, utils::UUID ts)
+    event_id(cdc::stream_id s, utils::UUID ts, size_t index)
         : stream(s)
         , timestamp(ts)
+        , index(index)
     {}
     
     friend std::ostream& operator<<(std::ostream& os, const event_id& id) {
-        fmt::print(os, "{}{}:{}", marker, id.stream.to_bytes(), id.timestamp);
+        fmt::print(os, "{}{}:{}:{}", marker, id.stream.to_bytes(), id.timestamp, id.index);
         return os;
     }
 };
@@ -795,7 +797,19 @@ struct rapidjson::internal::TypeHelper<ValueType, alternator::event_id>
 {};
 
 namespace alternator {
-    
+    namespace {
+        struct managed_bytes_ptr_hash {
+            size_t operator()(const managed_bytes *k) const noexcept {
+                return std::hash<managed_bytes>{}(*k);
+            }
+        };
+        struct managed_bytes_ptr_equal {
+            bool operator()(const managed_bytes *a, const managed_bytes *b) const noexcept {
+                return *a == *b;
+            }
+        };
+    }
+
 future<executor::request_return_type> executor::get_records(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.get_records++;
     auto start_time = std::chrono::steady_clock::now();
@@ -866,6 +880,12 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
     auto pks = schema->partition_key_columns();
     auto cks = schema->clustering_key_columns();
+    
+    auto base_cks = base->clustering_key_columns();
+    if (base_cks.size() > 1) {
+        throw api_error::internal(fmt::format("CDC log table with invalid clustering key count - must be at most one, have {}", base_cks.size()));
+    }
+    const bytes *clustering_key_column_name = !base_cks.empty() ? &base_cks.front().name() : nullptr;
 
     std::transform(pks.begin(), pks.end(), std::back_inserter(columns), [](auto& c) { return &c; });
     std::transform(cks.begin(), cks.end(), std::back_inserter(columns), [](auto& c) { return &c; });
@@ -920,42 +940,40 @@ future<executor::request_return_type> executor::get_records(client_state& client
             return cdef->name->name() == eor_column_name;
         })
     );
+    auto clustering_key_index = clustering_key_column_name ? std::distance(metadata.get_names().begin(), 
+        std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [&](const lw_shared_ptr<cql3::column_specification>& cdef) {
+            return cdef->name->name() == *clustering_key_column_name;
+        })
+    ) : 0;
 
     std::optional<utils::UUID> timestamp;
-    auto dynamodb = rjson::empty_object();
-    auto record = rjson::empty_object();
+    struct Record {
+        rjson::value record;
+        rjson::value dynamodb;
+    };
+    const managed_bytes empty_managed_bytes;
+    std::unordered_map<const managed_bytes*, Record, managed_bytes_ptr_hash, managed_bytes_ptr_equal> records_map;
     const auto dc_name = _proxy.get_token_metadata_ptr()->get_topology().get_datacenter();
 
     using op_utype = std::underlying_type_t<cdc::operation>;
-
-    auto maybe_add_record = [&] {
-        if (!dynamodb.ObjectEmpty()) {
-            rjson::add(record, "dynamodb", std::move(dynamodb));
-            dynamodb = rjson::empty_object();
-        }
-        if (!record.ObjectEmpty()) {
-            rjson::add(record, "awsRegion", rjson::from_string(dc_name));
-            rjson::add(record, "eventID", event_id(iter.shard.id, *timestamp));
-            rjson::add(record, "eventSource", "scylladb:alternator");
-            rjson::add(record, "eventVersion", "1.1");
-            rjson::push_back(records, std::move(record));
-            record = rjson::empty_object();
-            --limit;
-        }
-    };
 
     for (auto& row : result_set->rows()) {
         auto op = static_cast<cdc::operation>(value_cast<op_utype>(data_type_for<op_utype>()->deserialize(*row[op_index])));
         auto ts = value_cast<utils::UUID>(data_type_for<utils::UUID>()->deserialize(*row[ts_index]));
         auto eor = row[eor_index].has_value() ? value_cast<bool>(boolean_type->deserialize(*row[eor_index])) : false;
+        const managed_bytes* cs_ptr = clustering_key_column_name ? &*row[clustering_key_index] : &empty_managed_bytes;
+        auto records_it = records_map.emplace(cs_ptr, Record{});
+        auto &record = records_it.first->second;
 
-        if (!dynamodb.HasMember("Keys")) {
+        if (records_it.second) {
+            record.dynamodb = rjson::empty_object();
+            record.record = rjson::empty_object();
             auto keys = rjson::empty_object();
             describe_single_item(*selection, row, key_names, keys);
-            rjson::add(dynamodb, "Keys", std::move(keys));
-            rjson::add(dynamodb, "ApproximateCreationDateTime", utils::UUID_gen::unix_timestamp_in_sec(ts).count());
-            rjson::add(dynamodb, "SequenceNumber", sequence_number(ts));
-            rjson::add(dynamodb, "StreamViewType", type);
+            rjson::add(record.dynamodb, "Keys", std::move(keys));
+            rjson::add(record.dynamodb, "ApproximateCreationDateTime", utils::UUID_gen::unix_timestamp_in_sec(ts).count());
+            rjson::add(record.dynamodb, "SequenceNumber", sequence_number(ts));
+            rjson::add(record.dynamodb, "StreamViewType", type);
             // TODO: SizeBytes
         }
 
@@ -979,6 +997,10 @@ future<executor::request_return_type> executor::get_records(client_state& client
          * flags on CDC log, instead we use data to 
          * drive what is returned. This is (afaict)
          * consistent with dynamo streams
+         * 
+         * Note: BatchWriteItem will generate multiple records with
+         * the same timestamp, so we need to unpack them based on
+         * clustering key.
          */
         switch (op) {
         case cdc::operation::pre_image:
@@ -987,14 +1009,14 @@ future<executor::request_return_type> executor::get_records(client_state& client
             auto item = rjson::empty_object();
             describe_single_item(*selection, row, attr_names, item, nullptr, true);
             describe_single_item(*selection, row, key_names, item);
-            rjson::add(dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
+            rjson::add(record.dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
             break;
         }
         case cdc::operation::update:
-            rjson::add(record, "eventName", "MODIFY");
+            rjson::add(record.record, "eventName", "MODIFY");
             break;
         case cdc::operation::insert:
-            rjson::add(record, "eventName", "INSERT");
+            rjson::add(record.record, "eventName", "INSERT");
             break;
         case cdc::operation::service_row_delete:
         case cdc::operation::service_partition_delete:
@@ -1002,28 +1024,41 @@ future<executor::request_return_type> executor::get_records(client_state& client
             auto user_identity = rjson::empty_object();
             rjson::add(user_identity, "Type", "Service");
             rjson::add(user_identity, "PrincipalId", "dynamodb.amazonaws.com");
-            rjson::add(record, "userIdentity", std::move(user_identity));
-            rjson::add(record, "eventName", "REMOVE");
+            rjson::add(record.record, "userIdentity", std::move(user_identity));
+            rjson::add(record.record, "eventName", "REMOVE");
             break;
         }
         default:
-            rjson::add(record, "eventName", "REMOVE");
+            rjson::add(record.record, "eventName", "REMOVE");
             break;
         }
         if (eor) {
-            maybe_add_record();
+            size_t index = 0;
+            for (auto& [_, rec] : records_map) {
+                rjson::add(rec.record, "awsRegion", rjson::from_string(dc_name));
+                rjson::add(rec.record, "eventID", event_id(iter.shard.id, *timestamp, index++));
+                rjson::add(rec.record, "eventSource", "scylladb:alternator");
+                rjson::add(rec.record, "eventVersion", "1.1");
+
+                rjson::add(rec.record, "dynamodb", std::move(rec.dynamodb));
+                rjson::push_back(records, std::move(rec.record));
+            }
+
+            records_map.clear();
             timestamp = ts;
-            if (limit == 0) {
+            if (records.Size() >= limit) {
+                // Note: we might have more than limit rows here - BatchWriteItem will emit multiple items
+                // with the same timestamp and we have no way of resume iteration midway through those,
+                // so we return all of them here.
                 break;
             }
         }
     }
 
     auto ret = rjson::empty_object();
-    auto nrecords = records.Size();
     rjson::add(ret, "Records", std::move(records));
 
-    if (nrecords != 0) {
+    if (timestamp) {
         // #9642. Set next iterators threshold to > last
         shard_iterator next_iter(iter.table, iter.shard, *timestamp, false);
         // Note that here we unconditionally return NextShardIterator,
