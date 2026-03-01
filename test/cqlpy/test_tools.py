@@ -1826,11 +1826,26 @@ textwrap.dedent("""
     None,
 )
 
+scylla_sstable_query_nested_udt = scylla_sstable_query_simple_table_param(
+textwrap.dedent("""
+    CREATE TABLE {}.{} (
+        pk int PRIMARY KEY,
+        col_nested_udt list<frozen<my_type>>
+    ) WITH
+        compaction = {{'class': 'NullCompactionStrategy'}};
+"""),
+    "INSERT INTO {}.{} (pk, col_nested_udt) VALUES (?, ?)",
+    (0, [my_udt(10, 'aasdad')]),
+    "CREATE TYPE {}.my_type (field_1 int, field_2 text)",
+    "DROP TYPE {}.my_type",
+)
+
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 @pytest.mark.parametrize("test_table", [
         scylla_sstable_query_simple_all_types_param,
         scylla_sstable_query_simple_collection_types_param,
         scylla_sstable_query_simple_counter_param,
+        scylla_sstable_query_nested_udt,
 ])
 def test_scylla_sstable_query_data_types(request, cql, test_keyspace, test_table, scylla_path, scylla_data_dir, temp_workdir):
     """Check read-all queries with all data-types.
