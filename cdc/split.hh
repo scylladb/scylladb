@@ -66,14 +66,12 @@ public:
     // Tells processor we have reached end of record - last part
     // of a given timestamp batch
     virtual void end_record() = 0;
-
-    virtual const row_states_map& clustering_row_states() const = 0;
 };
 
 bool should_split(const mutation& base_mutation, const per_request_options& options);
 void process_changes_with_splitting(const mutation& base_mutation, change_processor& processor,
-        bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility);
+        bool enable_preimage, bool enable_postimage);
 void process_changes_without_splitting(const mutation& base_mutation, change_processor& processor,
-        bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility);
+        bool enable_preimage, bool enable_postimage);
 
 }
