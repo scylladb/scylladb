@@ -898,6 +898,63 @@ By default, each input sstable is filtered individually. Use ``--merge`` to filt
 
 Output sstables use the latest supported sstable format (can be changed with ``--sstable-version``).
 
+split
+^^^^^
+
+Split SSTable(s) into multiple output SSTables based on token boundaries.
+
+This operation divides SSTable(s) according to the specified split tokens, creating one output SSTable per token range.
+This is useful for redistributing data across different token ranges, such as when preparing data for different nodes or shards.
+
+Tokens should be provided via the ``--split-token`` (or ``-t``) option. Multiple tokens can be specified by repeating the option.
+The tokens will be sorted automatically to ensure proper ordering.
+
+For N split tokens, N+1 output SSTables will be generated:
+
+* First SSTable: from minimum token to first split token
+* Middle SSTables: between consecutive split tokens
+* Last SSTable: from last split token to maximum token
+
+By default, each input SSTable is split individually. Use ``--merge`` to split the combined content of all input SSTables, producing a single set of output SSTables.
+
+Output SSTables use the latest supported sstable format (can be changed with ``--sstable-version``) and are written to the directory specified by ``--output-dir``.
+
+**Examples:**
+
+Split a single SSTable at token boundaries 100 and 500:
+
+.. code-block:: console
+
+   scylla sstable split --split-token 100 --split-token 500 /path/to/md-123456-big-Data.db
+
+Or using the short-hand form:
+
+.. code-block:: console
+
+   scylla sstable split -t 100 -t 500 /path/to/md-123456-big-Data.db
+
+This will create 3 output SSTables:
+
+* One containing partitions with tokens < 100
+* One containing partitions with tokens >= 100 and < 500
+* One containing partitions with tokens >= 500
+
+Split multiple SSTables individually:
+
+.. code-block:: console
+
+   scylla sstable split -t 100 -t 500 /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
+
+This will split each input SSTable separately, creating 6 output SSTables total (3 per input).
+
+Split multiple SSTables as a combined stream:
+
+.. code-block:: console
+
+   scylla sstable split --merge -t 100 -t 500 /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
+
+This will merge both input SSTables first, then split the combined data, creating 3 output SSTables.
+
 Examples
 --------
 Dumping the content of the SStable:
