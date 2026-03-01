@@ -911,7 +911,7 @@ async def test_lwt_shutdown(manager: ManagerClient):
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='debug', reason='dev is enough')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablets_merge_waits_for_lwt(manager: ManagerClient):
+async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout):
     """
     This is a regression test for #26437:
     1. A cluster with one node, a table with rf=1 and two tablets on the same shard.
@@ -975,7 +975,7 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient):
         m = await log0.mark()
 
         logger.info("Wait for tablet merge to complete")
-        await wait_for_tablet_count(manager, s0, ks, 'test', lambda c: c == 1, 1, timeout_s=15)
+        await wait_for_tablet_count(manager, s0, ks, 'test', lambda c: c == 1, 1, scale_timeout=scale_timeout, timeout_s=15)
 
         logger.info("Ensure the guard decided to retain the erm")
         m, _ = await log0.wait_for("tablet_metadata_guard::check: retain the erm and abort the guard",
