@@ -1,7 +1,8 @@
 import os
 import tempfile
 import pathlib
-from test.pylib.util import read_last_line
+import pytest
+from test.pylib.util import read_last_line, scale_timeout_by_mode
 
 def test_read_last_line():
     test_cases = [
@@ -26,3 +27,18 @@ def test_read_last_line():
             file_path = pathlib.Path(f.name)
             actual = read_last_line(file_path, test_case[2]) if len(test_case) == 3 else read_last_line(file_path)
             assert(actual == test_case[1])
+
+
+@pytest.mark.parametrize(
+    "mode,base_timeout,expected",
+    [
+        ("debug", 10, 30),
+        ("sanitize", 10, 30),
+        ("release", 10, 10),
+        ("dev", 10, 20),
+        ("coverage", 10, 10),
+        ("custom_exe", 10, 10),
+    ],
+)
+def test_scale_timeout_by_mode(mode, base_timeout, expected):
+    assert scale_timeout_by_mode(mode, base_timeout) == expected
