@@ -90,44 +90,94 @@ static sstring stream_label(const schema& log_schema) {
 }
 
 namespace alternator {
+// stream arn has certain format (see https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)
+// we need to follow it as Kinesis Client Library does check
+// NOTE: we're holding inside a name of cdc log table, not a user table
+class stream_arn {
+    std::string _arn;
+    std::string_view _table_name;
+public:
+    // ARN to get table name from
+    stream_arn(std::string arn) : _arn(std::move(arn)) {
+        auto parts = parse_arn(_arn, "StreamArn", "stream", "/stream/");
+        _table_name = parts.table_name;
+    }
+    // NOTE: it must be a schema of a CDC log table, not a base table, because that's what we are encoding in ARN and returning to users.
+    stream_arn(schema_ptr s) {
+        auto creation_time = get_table_creation_time(*s);
+        auto now = std::chrono::system_clock::time_point{ std::chrono::duration_cast<std::chrono::system_clock::duration>(std::chrono::duration<double>(creation_time)) };
 
-// stream arn _has_ to be 37 or more characters long. ugh...
-// see https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_streams_DescribeStream.html#API_streams_DescribeStream_RequestSyntax
+        // KCL checks for arn / aws / dynamodb and account-id being a number
+        _arn = fmt::format("arn:aws:dynamodb:{}:000000000000:table/{}/stream/{:%FT%T}", s->ks_name(), s->cf_name(), now);
+        auto index = _arn.find(":000000000000:table/") + std::string_view{":000000000000:table/"}.size();
+        _table_name = std::string_view{ _arn }.substr(index, s->cf_name().size());
+    }
+
+    std::string_view unparsed() const { return _arn; }
+    std::string_view table_name() const { return _table_name; }
+    friend std::ostream& operator<<(std::ostream& os, const stream_arn& arn) {
+        os << arn._arn;
+        return os;
+    }
+};
+
+// NOTE: this will return schema for cdc log table, not the base table.
+static schema_ptr get_schema_from_arn(service::storage_proxy& proxy, const stream_arn& arn)
+{
+    if (!cdc::is_log_name(arn.table_name())) {
+        throw api_error::resource_not_found(fmt::format("{} as found in ARN {} is not a valid name for a CDC table", arn.table_name(), arn.unparsed()));
+    }
+    // list_streams and friends encode cdc table as `stream_arn`
+    // and that's what we're getting back here as well.
+    // to build keyspace name we need base table name
+    auto ks_name = sstring{ executor::KEYSPACE_NAME_PREFIX } + cdc::base_name(arn.table_name());
+    try {
+        return proxy.data_dictionary().find_schema(ks_name, arn.table_name());
+    } catch(data_dictionary::no_such_column_family&) {
+        throw api_error::resource_not_found(fmt::format("`{}` is not a valid StreamArn - table {} not found", arn.unparsed(), arn.table_name()));
+    }
+}
+
+// ShardId. Must be between 28 and 65 characters inclusive.
 // UUID is 36 bytes as string (including dashes). 
-// Prepend a version/type marker -> 37
-class stream_arn : public utils::UUID {
+// Prepend a version/type marker (`S`) -> 37
+class stream_shard_id : public utils::UUID {
 public:
     using UUID = utils::UUID;
     static constexpr char marker = 'S';
 
-    stream_arn() = default;
-    stream_arn(const UUID& uuid)
+    stream_shard_id() = default;
+    stream_shard_id(const UUID& uuid)
         : UUID(uuid)
     {}
-    stream_arn(const table_id& tid)
+    stream_shard_id(const table_id& tid)
         : UUID(tid.uuid())
     {}
-    stream_arn(std::string_view v)
+    stream_shard_id(std::string_view v)
         : UUID(v.substr(1))
     {
         if (v[0] != marker) {
             throw std::invalid_argument(std::string(v));
         }
     }
-    friend std::ostream& operator<<(std::ostream& os, const stream_arn& arn) {
+    friend std::ostream& operator<<(std::ostream& os, const stream_shard_id& arn) {
         const UUID& uuid = arn;
         return os << marker << uuid;
     }
-    friend std::istream& operator>>(std::istream& is, stream_arn& arn) {
+    friend std::istream& operator>>(std::istream& is, stream_shard_id& arn) {
         std::string s;
         is >> s;
-        arn = stream_arn(s);
+        arn = stream_shard_id(s);
         return is;
     }
 };
 
 } // namespace alternator
 
+template<typename ValueType>
+struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_shard_id>
+    : public from_string_helper<ValueType, alternator::stream_shard_id>
+{};
 template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
     : public from_string_helper<ValueType, alternator::stream_arn>
@@ -139,7 +189,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     _stats.api_operations.list_streams++;
 
     auto limit = rjson::get_opt<int>(request, "Limit").value_or(100);
-    auto streams_start = rjson::get_opt<stream_arn>(request, "ExclusiveStartStreamArn");
+    auto streams_start = rjson::get_opt<stream_shard_id>(request, "ExclusiveStartStreamArn");
     auto table = find_table(_proxy, request);
     auto db = _proxy.data_dictionary();
 
@@ -188,7 +238,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     auto ret = rjson::empty_object();
     auto streams = rjson::empty_array();
 
-    std::optional<stream_arn> last;
+    std::optional<stream_shard_id> last;
 
     for (;limit > 0 && i != e; ++i) {
         auto s = i->schema();
@@ -202,7 +252,8 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
             rjson::value new_entry = rjson::empty_object();
 
             last = i->schema()->id();
-            rjson::add(new_entry, "StreamArn", *last);
+            auto arn = stream_arn(i->schema());
+            rjson::add(new_entry, "StreamArn", arn);
             rjson::add(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::add(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
             rjson::push_back(streams, std::move(new_entry));
@@ -438,12 +489,11 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     // I.e. unparsable arn -> error. 
     auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
 
-    schema_ptr schema, bs;
+    schema_ptr bs;
     auto db = _proxy.data_dictionary();
+    auto schema = get_schema_from_arn(_proxy, stream_arn);
 
     try {
-        auto cf = db.find_column_family(table_id(stream_arn));
-        schema = cf.schema();
         bs = cdc::get_base_table(db.real_database(), *schema);
     } catch (...) {        
     }
@@ -483,7 +533,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     stream_view_type type = cdc_options_to_steam_view_type(opts);
 
-    rjson::add(stream_desc, "StreamArn", alternator::stream_arn(schema->id()));
+    rjson::add(stream_desc, "StreamArn", alternator::stream_arn(schema));
     rjson::add(stream_desc, "StreamViewType", type);
     rjson::add(stream_desc, "TableName", rjson::from_string(table_name(*bs)));
 
@@ -723,12 +773,9 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
     auto db = _proxy.data_dictionary();
 
-    schema_ptr schema = nullptr;
     std::optional<shard_id> sid;
-
+    auto schema = get_schema_from_arn(_proxy, stream_arn);
     try {
-        auto cf = db.find_column_family(table_id(stream_arn));
-        schema = cf.schema();
         sid = rjson::get<shard_id>(request, "ShardId");
     } catch (...) {
     }
@@ -763,7 +810,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
             break;
     }
 
-    shard_iterator iter(stream_arn, *sid, threshold, inclusive_of_threshold);
+    shard_iterator iter(schema->id().uuid(), *sid, threshold, inclusive_of_threshold);
 
     auto ret = rjson::empty_object();
     rjson::add(ret, "ShardIterator", iter);
@@ -1107,7 +1154,7 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
     if (opts.enabled()) {
         auto db = sp.data_dictionary();
         auto cf = db.find_table(schema.ks_name(), cdc::log_name(schema.cf_name()));
-        stream_arn arn(cf.schema()->id());
+        stream_arn arn(cf.schema());
         rjson::add(descr, "LatestStreamArn", arn);
         rjson::add(descr, "LatestStreamLabel", rjson::from_string(stream_label(*cf.schema())));
 

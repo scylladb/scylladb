@@ -301,4 +301,27 @@ future<> verify_permission(bool enforce_authorization, bool warn_authorization, 
  */
 executor::body_writer make_streamed(rjson::value&&);
 
+// returns table creation time in milliseconds since epoch for `db_clock`
+double get_table_creation_time(const schema &schema);
+
+// result of parsing ARN (Amazon Resource Name)
+// ARN format is `arn:<partition>:<service>:<region>:<account-id>:<resource-type>/<resource-id>/<postfix>`
+// we ignore partition, service and accound-id
+// resouce-type must be string "table"
+// resouce-id will be returned as table_name
+// region will be returned as keyspace_name
+// postfix is a string after resouce-id and will be returned as is (whole), including separator.
+struct arn_parts {
+    std::string_view keyspace_name;
+    std::string_view table_name;
+    std::string_view postfix;
+};
+// arn - arn to parse
+// arn_field_name - used only when reporting an error (in error messages), for example "Incorrect resource identifier `<arn_field_name>`"
+// type_name - used only when reporting an error (in error messages), for example "... is not a valid <type_name> ARN ..."
+// expected_postfix - optional filter of postfix value (part of ARN after resource-id, including separator, see comments for struct arn_parts).
+//    If is empty - then postfix value must be empty as well
+//    if not empty - postfix value must contain starts with expected_postfix, but might be longer
+arn_parts parse_arn(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix);
+
 }
