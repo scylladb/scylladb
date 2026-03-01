@@ -77,16 +77,6 @@ inline size_t iovec_len(const std::vector<iovec>& iov)
 namespace s3 {
 
 static logging::logger s3l("s3");
-// "Each part must be at least 5 MB in size, except the last part."
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-static constexpr size_t aws_minimum_part_size = 5_MiB;
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
-static constexpr size_t aws_maximum_part_size = 5_GiB;
-// "Part numbers can be any number from 1 to 10,000, inclusive."
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-static constexpr unsigned aws_maximum_parts_in_piece = 10'000;
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingObjects.html
-static constexpr size_t aws_maximum_object_size = aws_maximum_parts_in_piece * aws_maximum_part_size;
 
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     auto in = std::move(in_);
@@ -1033,7 +1023,7 @@ future<> client::upload_sink_base::close() {
 class client::upload_sink final : public client::upload_sink_base {
     memory_data_sink_buffers _bufs;
     future<> maybe_flush() {
-        if (_bufs.size() >= aws_minimum_part_size) {
+        if (_bufs.size() >= minimum_part_size) {
             co_await upload_part(std::move(_bufs));
         }
     }
@@ -1141,7 +1131,7 @@ class client::upload_jumbo_sink final : public upload_sink_base {
 public:
     upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
         : upload_sink_base(std::move(cln), std::move(object_name), std::nullopt, as)
-        , _maximum_parts_in_piece(max_parts_per_piece.value_or(aws_maximum_parts_in_piece))
+        , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
         , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), piece_tag))
     {}
 
@@ -1627,7 +1617,7 @@ public:
         _progress.total += file_size;
         // use multipart upload when possible in order to transmit parts in
         // parallel to improve throughput
-        if (file_size > aws_minimum_part_size) {
+        if (file_size > minimum_part_size) {
             auto [num_parts, part_size] = calc_part_size(file_size, _part_size);
             _part_etags.resize(num_parts);
             co_await multi_part_upload(std::move(f), file_size, part_size);
@@ -1928,19 +1918,19 @@ future<> client::bucket_lister::close() noexcept {
 
 // returns pair<num_of_parts, part_size>
 std::pair<unsigned, size_t> calc_part_size(size_t total_size, size_t part_size) {
-    if (total_size > aws_maximum_object_size) {
-        on_internal_error(s3l, fmt::format("object size too large: {} is larger than maximum S3 object size: {}", total_size, aws_maximum_object_size));
+    if (total_size > maximum_object_size) {
+        on_internal_error(s3l, fmt::format("object size too large: {} is larger than maximum S3 object size: {}", total_size, maximum_object_size));
     }
     if (part_size > 0) {
-        if (part_size > aws_maximum_part_size) {
-            on_internal_error(s3l, fmt::format("part_size too large: {} is larger than maximum part size: {}", part_size, aws_maximum_part_size));
+        if (part_size > maximum_part_size) {
+            on_internal_error(s3l, fmt::format("part_size too large: {} is larger than maximum part size: {}", part_size, maximum_part_size));
         }
-        if (part_size < aws_minimum_part_size) {
-            on_internal_error(s3l, fmt::format("part_size too small: {} is smaller than minimum part size: {}", part_size, aws_minimum_part_size));
+        if (part_size < minimum_part_size) {
+            on_internal_error(s3l, fmt::format("part_size too small: {} is smaller than minimum part size: {}", part_size, minimum_part_size));
         }
         const size_t num_parts = div_ceil(total_size, part_size);
-        if (num_parts > aws_maximum_parts_in_piece) {
-            on_internal_error(s3l, fmt::format("too many parts: {} > {}", num_parts, aws_maximum_parts_in_piece));
+        if (num_parts > maximum_parts_in_piece) {
+            on_internal_error(s3l, fmt::format("too many parts: {} > {}", num_parts, maximum_parts_in_piece));
         }
         return {num_parts, part_size};
     }
@@ -1948,11 +1938,11 @@ std::pair<unsigned, size_t> calc_part_size(size_t total_size, size_t part_size) 
     // value was determined empirically by running `perf_s3_client` with various part sizes to find the optimal one.
     static constexpr size_t default_part_size = 50_MiB;
     const size_t num_parts = div_ceil(total_size, default_part_size);
-    if (num_parts <= aws_maximum_parts_in_piece) {
+    if (num_parts <= maximum_parts_in_piece) {
         return {num_parts, default_part_size};
     }
 
-    part_size = align_up(div_ceil(total_size, aws_maximum_parts_in_piece), 1_MiB);
+    part_size = align_up(div_ceil(total_size, maximum_parts_in_piece), 1_MiB);
     return {div_ceil(total_size, part_size), part_size};
 }
 

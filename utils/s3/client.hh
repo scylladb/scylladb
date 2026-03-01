@@ -25,6 +25,16 @@ using namespace seastar;
 class memory_data_sink_buffers;
 
 namespace s3 {
+// "Each part must be at least 5 MB in size, except the last part."
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+static constexpr size_t minimum_part_size = 5_MiB;
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+static constexpr size_t maximum_part_size = 5_GiB;
+// "Part numbers can be any number from 1 to 10,000, inclusive."
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+static constexpr unsigned maximum_parts_in_piece = 10'000;
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingObjects.html
+static constexpr size_t maximum_object_size = maximum_parts_in_piece * maximum_part_size;
 
 using s3_clock = std::chrono::steady_clock;
 
@@ -38,8 +48,8 @@ public:
         if (__builtin_add_overflow(_offset, len, &t)) [[unlikely]] {
             throw std::overflow_error(fmt::format("Range offset {} + length {} exceeds maximum uint64_t", _offset, len));
         }
-        if (_offset + len > _max_object_size) [[unlikely]] {
-            throw std::overflow_error(fmt::format("Range offset {} + length {} exceeds maximum object size {}", _offset, len, _max_object_size));
+        if (_offset + len > maximum_object_size) [[unlikely]] {
+            throw std::overflow_error(fmt::format("Range offset {} + length {} exceeds maximum object size {}", _offset, len, maximum_object_size));
         }
     }
     explicit constexpr range(uint64_t offset) : _offset(offset) {}
@@ -48,12 +58,12 @@ public:
         if (__builtin_add_overflow(_offset, offset, &t)) [[unlikely]] {
             throw std::overflow_error(fmt::format("Range offset {} + length {} exceeds maximum uint64_t", _offset, offset));
         }
-        if (_offset + offset > _max_object_size) [[unlikely]] {
-            throw std::overflow_error(fmt::format("Range offset {} + length {} exceeds maximum object size {}", _offset, offset, _max_object_size));
+        if (_offset + offset > maximum_object_size) [[unlikely]] {
+            throw std::overflow_error(fmt::format("Range offset {} + length {} exceeds maximum object size {}", _offset, offset, maximum_object_size));
         }
 
         _offset += offset;
-        if (_length != _max_object_size) [[unlikely]] {
+        if (_length != maximum_object_size) [[unlikely]] {
             if (__builtin_sub_overflow(_length, offset, &t)) {
                 throw std::underflow_error(fmt::format("Range length {} - offset {} exceeds minimum uint64_t", _length, offset));
             }
@@ -63,17 +73,14 @@ public:
     }
     std::partial_ordering operator<=>(const range& other) const noexcept = default;
     [[nodiscard]] sstring to_header_string() const noexcept {
-        return fmt::format("bytes={}-{}", _offset, _length != _max_object_size ? fmt::format("{}", _offset + _length - 1) : "");
+        return fmt::format("bytes={}-{}", _offset, _length != maximum_object_size ? fmt::format("{}", _offset + _length - 1) : "");
     }
     [[nodiscard]] uint64_t offset() const noexcept { return _offset; }
     [[nodiscard]] uint64_t length() const noexcept { return _length; }
 
-    // 5TiB is the largest object size supported by S3
-    static constexpr uint64_t _max_object_size{5_TiB};
-
 private:
     uint64_t _offset;
-    uint64_t _length{_max_object_size};
+    uint64_t _length{maximum_object_size};
 };
 static constexpr range full_range{0};
 
@@ -259,6 +266,6 @@ template <>
 struct fmt::formatter<s3::range> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const s3::range& range, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}-{}", range._offset, range._length != s3::range::_max_object_size ? fmt::format("{}", range._length) : "∞");
+        return fmt::format_to(ctx.out(), "{}-{}", range._offset, range._length != s3::maximum_object_size ? fmt::format("{}", range._length) : "∞");
     }
 };
