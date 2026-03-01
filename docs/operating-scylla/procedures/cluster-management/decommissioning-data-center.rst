@@ -40,11 +40,13 @@ Prerequisites
 Procedure
 ---------
 
-#. Run the ``nodetool repair -pr`` command on each node in the data-center that is going to be decommissioned. This will verify that all the data is in sync between the decommissioned data-center and the other data-centers in the cluster.
+#. If there are vnode keyspaces in this DC, run the ``nodetool repair -pr`` command on each node in the data-center that is going to be decommissioned. This will verify that all the data is in sync between the decommissioned data-center and the other data-centers in the cluster.
 
    For example:
 
    If the ASIA-DC cluster is to be removed, then, run the ``nodetool repair -pr`` command on all the nodes in the ASIA-DC
+
+#. If there are tablet keyspaces in this DC, run the ``nodetool cluster repair`` on an arbitrary node. The reason for running repair is to ensure that any updates stored only on the about-to-be-decommissioned replicas are propagated to the other replicas, before the replicas on the decommissioned datacenter are dropped.
 
 #. ALTER every cluster KEYSPACE, so that the keyspaces will no longer replicate data to the decommissioned data-center.
 
@@ -72,6 +74,20 @@ Procedure
    .. code-block:: shell
 
       cqlsh> ALTER KEYSPACE nba WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3};
+
+   For tablet keyspaces, update the replication factor one by one:
+
+   .. code-block:: shell
+
+      cqlsh> DESCRIBE nba2
+      cqlsh> CREATE KEYSPACE nba2 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 2, 'EUROPE-DC' : 3} AND tablets = { 'enabled': true };
+
+   .. code-block:: shell
+
+      cqlsh> ALTER KEYSPACE nba2 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 1, 'EUROPE-DC' : 3} AND tablets = { 'enabled': true };
+      cqlsh> ALTER KEYSPACE nba2 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3} AND tablets = { 'enabled': true };
+
+   .. note:: If ``rf_rack_valid_keyspaces`` option is set, the DC cannot be removed. To proceed, first restart all nodes in the cluster disabling this option, then follow the procedure described above.
 
 #. Run :doc:`nodetool decommission </operating-scylla/nodetool-commands/decommission>` on every node in the data center that is to be removed.
    Refer to :doc:`Remove a Node from a ScyllaDB Cluster - Down Scale </operating-scylla/procedures/cluster-management/remove-node>` for further information.
