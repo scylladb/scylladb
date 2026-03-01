@@ -96,6 +96,9 @@ std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, st
     if (!cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
         disabled.insert("STRONGLY_CONSISTENT_TABLES"s);
     }
+    if (!cfg.check_experimental(db::experimental_features_t::feature::KV_STORAGE)) {
+        disabled.insert("KV_STORAGE"s);
+    }
     if (!cfg.table_digest_insensitive_to_expiry()) {
         disabled.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);
     }

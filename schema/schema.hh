@@ -561,6 +561,7 @@ public:
         compaction::compaction_strategy_type compaction_strategy = compaction::compaction_strategy_type::incremental;
         std::map<sstring, sstring> compaction_strategy_options;
         bool compaction_enabled = true;
+        bool kv_storage_enabled = false;
         ::caching_options caching_options;
         std::optional<std::map<sstring, sstring>> tablet_options;
 
@@ -774,6 +775,10 @@ public:
 
     bool compaction_enabled() const {
         return _raw._props.compaction_enabled;
+    }
+
+    bool kv_storage_enabled() const {
+        return _raw._props.kv_storage_enabled;
     }
 
     const cdc::options& cdc_options() const {

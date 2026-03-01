@@ -3147,7 +3147,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         co_return ret;
     }
 
-    const bool strongly_consistent_tables = _db.features().strongly_consistent_tables;
+    const bool tablet_balancing_not_supported = _db.features().strongly_consistent_tables || _db.features().kv_storage;
 
     for (auto& row : *rs) {
         if (!row.has("host_id")) {
@@ -3384,7 +3384,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.session = service::session_id(some_row.get_as<utils::UUID>("session"));
         }
 
-        if (strongly_consistent_tables) {
+        if (tablet_balancing_not_supported) {
             ret.tablet_balancing_enabled = false;
         } else if (some_row.has("tablet_balancing_enabled")) {
             ret.tablet_balancing_enabled = some_row.get_as<bool>("tablet_balancing_enabled");

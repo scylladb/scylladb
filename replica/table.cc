@@ -218,6 +218,22 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
 }
 
 mutation_reader
+table::make_logstor_mutation_reader(schema_ptr s,
+                                   reader_permit permit,
+                                   const dht::partition_range& pr,
+                                   const query::partition_slice& slice,
+                                   tracing::trace_state_ptr trace_state,
+                                   streamed_mutation::forwarding fwd,
+                                   mutation_reader::forwarding fwd_mr) const {
+    if (pr.is_singular() && pr.start()->value().has_key()) {
+        const dht::decorated_key& key = pr.start()->value().as_decorated_key();
+        return _logstor->make_reader_for_key(std::move(s), std::move(permit), key, slice, std::move(trace_state));
+    } else {
+        throw std::runtime_error("Range queries over key-value storage are not supported");
+    }
+}
+
+mutation_reader
 table::make_mutation_reader(schema_ptr s,
                            reader_permit permit,
                            const dht::partition_range& range,
@@ -227,6 +243,10 @@ table::make_mutation_reader(schema_ptr s,
                            mutation_reader::forwarding fwd_mr) const {
     if (_virtual_reader) [[unlikely]] {
         return (*_virtual_reader).make_mutation_reader(s, std::move(permit), range, slice, trace_state, fwd, fwd_mr);
+    }
+
+    if (_logstor) [[unlikely]] {
+        return make_logstor_mutation_reader(s, std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
     }
 
     std::vector<mutation_reader> readers;
@@ -4104,6 +4124,12 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     co_return rp;
 }
 
+future<> table::discard_kv_storage() {
+    if (_logstor) {
+        co_await _logstor->truncate_table(_schema->id());
+    }
+}
+
 void table::mark_ready_for_writes(db::commitlog* cl) {
     if (!_readonly) {
         on_internal_error(dblog, ::format("table {}.{} is already writable", _schema->ks_name(), _schema->cf_name()));
@@ -4363,6 +4389,14 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
         return (*_virtual_writer)(freeze(m));
     }
 
+    if (_logstor) [[unlikely]] {
+        logstor::group_id gid {
+            .table = _schema->id(),
+            .compaction_group_id = compaction_group_for_token(m.token()).group_id(),
+        };
+        return _logstor->write(m, gid);
+    }
+
     auto& cg = compaction_group_for_token(m.token());
     auto holder = cg.async_gate().hold();
     return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h), &cg, holder = std::move(holder)] () mutable {
@@ -4375,6 +4409,14 @@ template void table::do_apply(compaction_group& cg, db::rp_handle&&, const mutat
 future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     if (_virtual_writer) [[unlikely]] {
         return (*_virtual_writer)(m);
+    }
+
+    if (_logstor) [[unlikely]] {
+        logstor::group_id gid {
+            .table = _schema->id(),
+            .compaction_group_id = compaction_group_for_key(m.key(), m_schema).group_id(),
+        };
+        return _logstor->write(m.unfreeze(m_schema), gid);
     }
 
     auto& cg = compaction_group_for_key(m.key(), m_schema);
@@ -4579,6 +4621,9 @@ table::enable_auto_compaction() {
     // FIXME: unmute backlog. turn table backlog back on.
     //      see table::disable_auto_compaction() notes.
     _compaction_disabled_by_user = false;
+    if (_logstor) {
+        _logstor->enable_auto_compaction(_schema->id());
+    }
     trigger_compaction();
 }
 
@@ -4612,9 +4657,13 @@ table::disable_auto_compaction() {
     //   for new submissions
     _compaction_disabled_by_user = true;
     return with_gate(_async_gate, [this] {
-        return parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
-            return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
-        });
+        if (_logstor) {
+            return _logstor->disable_auto_compaction(_schema->id());
+        } else {
+            return parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
+                return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
+            });
+        }
     });
 }
 
