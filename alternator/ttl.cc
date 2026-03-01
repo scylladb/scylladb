@@ -761,7 +761,7 @@ static future<bool> scan_table(
                 // by tasking another node to take over scanning of the dead node's primary
                 // ranges. What we do here is that this node will also check expiration
                 // on its *secondary* ranges - but only those whose primary owner is down.
-                auto tablet_secondary_replica = tablet_map.get_secondary_replica(*tablet); // throws if no secondary replica
+                auto tablet_secondary_replica = tablet_map.get_secondary_replica(*tablet, erm->get_topology()); // throws if no secondary replica
                 if (tablet_secondary_replica.host == my_host_id && tablet_secondary_replica.shard == this_shard_id()) {
                     if (!gossiper.is_alive(tablet_primary_replica.host)) {
                         co_await scan_tablet(*tablet, proxy, abort_source, page_sem, expiration_stats, scan_ctx, tablet_map);

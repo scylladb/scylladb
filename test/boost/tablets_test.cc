@@ -4611,4 +4611,257 @@ SEASTAR_THREAD_TEST_CASE(test_tablets_describe_ring) {
     }, cfg).get();
 }
 
+<<<<<<< HEAD
+||||||| parent of e463d528fe (test: add unit test for tablet_map::get_secondary_replica())
+SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        auto dc1 = topo.dc();
+        auto rack1 = topo.rack();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        auto rack2 = topo.start_new_rack();
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+
+        tablet_id tablet{0};
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tablet = tid;
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        bool once = false;
+        rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet) == nullptr);
+    }, std::move(cfg_in)).get();
+}
+
+void run_tablet_manual_repair_rf1(cql_test_env& e) {
+    topology_builder topo(e);
+
+    unsigned shard_count = 1;
+    auto dc1 = topo.dc();
+    auto rack1 = topo.rack();
+    [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+    auto rack2 = topo.start_new_rack();
+    [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+
+    auto ks_name = add_keyspace(e, {{dc1, 1}}, 1);
+    auto table1 = add_table(e, ks_name).get();
+
+    tablet_id tablet{0};
+    mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+        tablet_map tmap(1);
+        auto tid = tmap.first_tablet();
+        tablet = tid;
+        tablet_info ti{
+            tablet_replica_set {
+                tablet_replica{host1, 0},
+            }
+        };
+        ti.repair_task_info = ti.repair_task_info.make_user_repair_request();
+        tmap.set_tablet(tid, std::move(ti));
+        tmeta.set_tablet_map(table1, std::move(tmap));
+        co_return;
+    });
+
+    auto& stm = e.shared_token_metadata().local();
+    bool once = false;
+    rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
+    BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet)->transition == tablet_transition_kind::repair);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_off) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(false);
+    do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_on) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
+}
+
+=======
+SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        auto dc1 = topo.dc();
+        auto rack1 = topo.rack();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        auto rack2 = topo.start_new_rack();
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+
+        tablet_id tablet{0};
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tablet = tid;
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        bool once = false;
+        rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet) == nullptr);
+    }, std::move(cfg_in)).get();
+}
+
+void run_tablet_manual_repair_rf1(cql_test_env& e) {
+    topology_builder topo(e);
+
+    unsigned shard_count = 1;
+    auto dc1 = topo.dc();
+    auto rack1 = topo.rack();
+    [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+    auto rack2 = topo.start_new_rack();
+    [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+
+    auto ks_name = add_keyspace(e, {{dc1, 1}}, 1);
+    auto table1 = add_table(e, ks_name).get();
+
+    tablet_id tablet{0};
+    mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+        tablet_map tmap(1);
+        auto tid = tmap.first_tablet();
+        tablet = tid;
+        tablet_info ti{
+            tablet_replica_set {
+                tablet_replica{host1, 0},
+            }
+        };
+        ti.repair_task_info = ti.repair_task_info.make_user_repair_request();
+        tmap.set_tablet(tid, std::move(ti));
+        tmeta.set_tablet_map(table1, std::move(tmap));
+        co_return;
+    });
+
+    auto& stm = e.shared_token_metadata().local();
+    bool once = false;
+    rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
+    BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet)->transition == tablet_transition_kind::repair);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_off) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(false);
+    do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_on) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
+}
+
+// Test for tablet_map::get_secondary_replica() and specifically how it
+// relates to get_primary_replica().
+// We never officially documented given a list of replicas, which replica
+// is to be considered the "primary" - it's not simply the first replica in
+// the list but the first in some reshuffling of the list, reshuffling whose
+// details changed in commits like 817fdad and d88036d. So this patch doesn't
+// enshrine what get_primary_replica() or get_secondary_replica() should
+// return. It just verifies that get_secondary_replica() returns a *different*
+// replica than get_primary_replica() if there are 2 or more replicas, or
+// throws an error when there's just one replica.
+// Reproduces SCYLLADB-777.
+SEASTAR_THREAD_TEST_CASE(test_get_secondary_replica) {
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+    auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+    locator::topology::config cfg = {
+        .this_endpoint = inet_address("127.0.0.1"),
+        .this_host_id = h1,
+        .local_dc_rack = endpoint_dc_rack::default_location,
+    };
+    auto topo = locator::topology(cfg);
+    topo.add_or_update_endpoint(h1, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_or_update_endpoint(h2, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_or_update_endpoint(h3, endpoint_dc_rack::default_location, node::state::normal);
+
+    // With 1 replica, get_secondary_replica should throw.
+    {
+        tablet_map tmap(1);
+        auto tid = tmap.first_tablet();
+        tmap.set_tablet(tid, tablet_info {
+            tablet_replica_set {
+                tablet_replica {h1, 0},
+            }
+        });
+        BOOST_REQUIRE_THROW(tmap.get_secondary_replica(tid, topo), std::runtime_error);
+    }
+
+    // With 2 replicas, get_secondary_replica should return a different replica
+    // than get_primary_replica for every tablet.
+    {
+        tablet_map tmap(4);
+        for (auto tid : tmap.tablet_ids()) {
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 0},
+                }
+            });
+        }
+        for (auto tid : tmap.tablet_ids()) {
+            auto primary = tmap.get_primary_replica(tid, topo);
+            auto secondary = tmap.get_secondary_replica(tid, topo);
+            BOOST_REQUIRE(primary != secondary);
+        }
+    }
+
+    // With 3 replicas, same check.
+    {
+        tablet_map tmap(4);
+        for (auto tid : tmap.tablet_ids()) {
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 0},
+                    tablet_replica {h3, 0},
+                }
+            });
+        }
+        for (auto tid : tmap.tablet_ids()) {
+            auto primary = tmap.get_primary_replica(tid, topo);
+            auto secondary = tmap.get_secondary_replica(tid, topo);
+            BOOST_REQUIRE(primary != secondary);
+        }
+    }
+
+    topo.clear_gently().get();
+}
+
+>>>>>>> e463d528fe (test: add unit test for tablet_map::get_secondary_replica())
 BOOST_AUTO_TEST_SUITE_END()
