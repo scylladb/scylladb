@@ -12,10 +12,16 @@
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "gms/feature_service.hh"
+#include "gms/gossiper.hh"
 #include "service/raft/raft_rpc.hh"
+#include "service/raft/raft_group0.hh"
+#include "service/raft/raft_timeout.hh"
 #include "service/storage_proxy.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "idl/strong_consistency/groups_manager.dist.hh"
+#include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include <seastar/core/abort_source.hh>
 
@@ -107,7 +113,8 @@ auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
 
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
-        replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features)
+        replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
+        gms::gossiper& gossiper)
     : _ms(ms)
     , _raft_gr(raft_gr)
     , _qp(qp)
@@ -115,7 +122,9 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _mm(mm)
     , _sys_ks(sys_ks)
     , _features(features)
+    , _gossiper(gossiper)
 {
+    init_messaging_service();
 }
 
 future<> groups_manager::start_raft_group(global_tablet_id tablet,
@@ -217,7 +226,7 @@ void groups_manager::schedule_raft_groups_deletion(bool all) {
     }
 }
 
-future<> groups_manager::wait_for_groups_to_start() {
+future<> groups_manager::wait_for_groups_to_start(lowres_clock::time_point timeout) {
     while (true) {
         const auto it = std::ranges::find_if(_raft_groups, [](const auto& p) {
             auto& state = p.second;
@@ -229,8 +238,67 @@ future<> groups_manager::wait_for_groups_to_start() {
 
         const auto& [id, state] = *it;
         logger.info("waiting for group {} to start", id);
-        co_await state.server_control_op.get_future();
+        co_await state.server_control_op.get_future(timeout);
     }
+}
+
+void groups_manager::init_messaging_service() {
+    ser::groups_manager_rpc_verbs::register_wait_for_raft_groups_to_start(&_ms,
+        [this] (rpc::opt_time_point timeout, raft::server_id dst_id, table_id table) -> future<> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            co_await _mm.get_group0_barrier().trigger();
+            co_await container().invoke_on_all([timeout] (groups_manager& gm) {
+                return gm.wait_for_groups_to_start(*timeout);
+            });
+        }
+    );
+}
+
+future<> groups_manager::uninit_messaging_service() {
+    return ser::groups_manager_rpc_verbs::unregister(&_ms);
+}
+
+future<> groups_manager::wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout) {
+    auto& cf = _db.find_column_family(table);
+    auto erm = cf.get_effective_replication_map();
+    auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(table);
+    if (!tmap.has_raft_info()) {
+        on_internal_error(logger, format("Table {} does not have raft info", table));
+    }
+
+    std::unordered_set<locator::host_id> hosts;
+    for (const auto& tablet_info : tmap.tablets()) {
+        for (const auto& replica : tablet_info.replicas) {
+            hosts.insert(replica.host);
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    logger.debug("wait_for_table_raft_groups_on_all_hosts: waiting for raft groups to start on {} hosts", hosts.size());
+
+    const auto my_id = erm->get_token_metadata().get_my_id();
+    auto live_members = _gossiper.get_live_members();
+
+    co_await coroutine::parallel_for_each(hosts, [&](locator::host_id host) -> future<> {
+        if (host == my_id) {
+            co_await container().invoke_on_all([timeout](groups_manager& gm) {
+                return gm.wait_for_groups_to_start(timeout);
+            });
+        } else if (live_members.contains(host)) {
+            auto dst = raft::server_id(host.uuid());
+            try {
+                co_await ser::groups_manager_rpc_verbs::send_wait_for_raft_groups_to_start(
+                        &_ms, host, timeout, dst, table);
+            } catch (...) {
+                static thread_local logger::rate_limit rate_limit{std::chrono::seconds(5)};
+                logger.log(log_level::warn, rate_limit,
+                    "wait_for_table_raft_groups_on_all_hosts: failed to complete on node {}: {}",
+                    host, std::current_exception());
+            }
+        }
+    });
 }
 
 future<> groups_manager::leader_info_updater(raft_group_state& state, global_tablet_id tablet, raft::group_id gid) {
@@ -372,11 +440,13 @@ future<> groups_manager::start() {
 
     if (_pending_tm) {
         update(std::move(_pending_tm));
-        co_await wait_for_groups_to_start();
+        co_await wait_for_groups_to_start(lowres_clock::now() + std::chrono::seconds(30));
     }
 }
 
 future<> groups_manager::stop() {
+    co_await uninit_messaging_service();
+
     if (!_started) {
         co_return;
     }

@@ -22,6 +22,7 @@
 #include "service/mapreduce_service.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
+#include "service/strong_consistency/coordinator.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -1166,6 +1167,11 @@ future<> query_processor::announce_schema_statement(const statements::schema_alt
         co_return;
     }
     co_await remote_.get().mm.announce(std::move(m), std::move(guard), description);
+}
+
+future<> query_processor::wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout) {
+    auto [sc_coord, holder] = acquire_strongly_consistent_coordinator();
+    co_await sc_coord.get().wait_for_table_raft_groups_on_all_hosts(table, timeout);
 }
 
 query_processor::migration_subscriber::migration_subscriber(query_processor* qp) : _qp{qp} {

@@ -415,4 +415,8 @@ auto coordinator::query(schema_ptr schema,
     }
 }
 
+future<> coordinator::wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout) {
+    return _groups_manager.wait_for_table_raft_groups_on_all_hosts(table, timeout);
+}
+
 }

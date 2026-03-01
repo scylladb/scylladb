@@ -76,6 +76,8 @@ public:
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
+    future<::shared_ptr<messages::result_message>> execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
+
     virtual future<> grant_permissions_to_creator(const service::client_state&, service::group0_batch&) const override;
 
     schema_ptr get_cf_meta_data(const data_dictionary::database) const;

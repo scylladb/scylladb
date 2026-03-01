@@ -17,6 +17,10 @@ namespace db {
 class system_keyspace;
 }
 
+namespace gms {
+class gossiper;
+}
+
 namespace service {
 class migration_manager;
 }
@@ -78,6 +82,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     service::migration_manager& _mm;
     db::system_keyspace& _sys_ks;
     gms::feature_service& _features;
+    gms::gossiper& _gossiper;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
@@ -93,12 +98,13 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 
-    future<> wait_for_groups_to_start();
+    void init_messaging_service();
+    future<> uninit_messaging_service();
 
 public:
-    groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr, 
+    groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
         cql3::query_processor& qp, replica::database& _db, service::migration_manager& mm, db::system_keyspace& sys_ks,
-        gms::feature_service& features);
+        gms::feature_service& features, gms::gossiper& gossiper);
 
     // Called whenever a new token_metadata is published on this shard.
     // Starts raft::server instances for all strongly consistent tablets now
@@ -118,6 +124,13 @@ public:
 
     // Called during node shutdown. Waits for all raft::server instances to stop.
     future<> stop();
+
+    future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
+
+    // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
+    // until the raft groups for those tablets are started and ready to serve queries.
+    // For the local node, waits directly without an RPC.
+    future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 };
 
 /// A temporary, RAII-style handle to an active Raft group server instance,
