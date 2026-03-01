@@ -189,6 +189,8 @@ declare -A pip_packages=(
     [pytest-xdist]=""
     [pykmip]=""
     [universalasync]=""
+    [argus-alm]=""
+    [pytest-argus-reporter]=""
     [boto3-stubs[dynamodb]]=""
     [setuptools_scm]=""
 )
