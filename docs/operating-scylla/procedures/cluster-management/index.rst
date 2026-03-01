@@ -26,6 +26,7 @@ Cluster Management Procedures
    Safely Restart Your Cluster <safe-start>
    repair-based-node-operation
    Prevent Quorum Loss in Symmetrical Multi-DC Clusters <arbiter-dc>
+   Cluster Platform Migration <cluster-platform-migration>
 
 
 .. panel-box::
@@ -84,6 +85,8 @@ Cluster Management Procedures
   * :doc:`Repair Based Node Operations (RBNO) </operating-scylla/procedures/cluster-management/repair-based-node-operation>`
 
   * :doc:`Preventing Quorum Loss in Symmetrical Multi-DC Clusters <arbiter-dc>`
+
+  * :doc:`Cluster Platform Migration Using Node Cycling </operating-scylla/procedures/cluster-management/cluster-platform-migration>`
 
 .. panel-box::
   :title: Topology Changes
