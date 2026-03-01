@@ -10,11 +10,12 @@ import subprocess
 import threading
 import time
 import asyncio
+import inspect
 import logging
 import pathlib
 import os
 import universalasync
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from functools import cache
 
 import random
@@ -380,6 +381,67 @@ async def gather_safely(*awaitables: Awaitable):
     for result in results:
         if isinstance(result, BaseException):
             raise result from None
+    return results
+
+
+def _extract_gather_inputs(args: tuple[Any, ...]) -> tuple[list[Awaitable], list[str]]:
+    if len(args) == 2 and isinstance(args[0], Iterable) and not isinstance(args[0], (str, bytes)):
+        awaitables_arg, ignore_exceptions_arg = args
+        if isinstance(ignore_exceptions_arg, str):
+            ignore_patterns = [ignore_exceptions_arg]
+        else:
+            if not isinstance(ignore_exceptions_arg, Iterable):
+                raise TypeError(f"ignore_exceptions should be a string or an iterable of strings but got {type(ignore_exceptions_arg)}")
+            ignore_patterns = list(ignore_exceptions_arg)
+            if any(not isinstance(s, str) for s in ignore_patterns):
+                raise TypeError("ignore_exceptions should be an iterable of strings but got iterable with different types")
+
+        awaitables = list(awaitables_arg)
+        if any(not inspect.isawaitable(a) for a in awaitables):
+            raise TypeError("awaitables iterable should contain only awaitables")
+        return awaitables, ignore_patterns
+
+    #this case the user provided more than 2 arguments and we have to inspect them 
+    awaitables: list[Awaitable] = []
+    ignore_patterns: list[str] = []
+    saw_ignore_pattern = False
+    for arg in args:
+        if isinstance(arg, str):
+            saw_ignore_pattern = True
+            ignore_patterns.append(arg)
+            continue
+        if saw_ignore_pattern:
+            raise TypeError("awaitables must come before ignore exception strings")
+        if inspect.isawaitable(arg):
+            awaitables.append(arg)
+            continue
+        raise TypeError(f"invalid argument type for gather: {type(arg)}")
+
+    return awaitables, ignore_patterns
+
+
+async def gather_safely_and_ignore_specific_exceptions(*args: Any):
+    """
+    Same as gather_safely, but allows ignoring specific exception message fragments.
+    Matching is case-insensitive.
+
+    Supported forms:
+    - gather_safely_and_ignore_specific_exceptions(awaitables_iterable, ignore_exceptions)
+    - gather_safely_and_ignore_specific_exceptions(*awaitables, *ignore_exception_strings)
+    """
+    awaitables, ignore_patterns = _extract_gather_inputs(args)
+    normalized_ignore_patterns = [norm_pattern for pattern in ignore_patterns if (norm_pattern := pattern.casefold().strip())]
+
+    results = await asyncio.gather(*awaitables, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            result_message = str(result).casefold()
+            result_exception_type_name = type(result).__name__.casefold()
+            if not any(
+                pattern in result_message or pattern == result_exception_type_name
+                for pattern in normalized_ignore_patterns
+            ):
+                raise result from None
     return results
 
 
