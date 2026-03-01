@@ -61,4 +61,20 @@ namespace tests::proc {
         input_stream<char> cerr();
         output_stream<char> cin();
     };
+
+    enum class service_parse_state {
+        cont, success, failed
+    };
+
+    using parse_service_callback = std::function<service_parse_state(std::string_view)>;
+
+    future<std::tuple<process_fixture, int>> start_docker_service(
+        std::string_view name,
+        std::string_view image,
+        parse_service_callback stdout_parse = {},
+        parse_service_callback stderr_parse = {},
+        const std::vector<std::string>& docker_args = {},
+        const std::vector<std::string>& image_args = {},
+        int service_port = 0
+    );
 }

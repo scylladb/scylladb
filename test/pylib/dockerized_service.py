@@ -5,21 +5,26 @@
 #
 
 import shutil
-import socket
+import itertools
 import asyncio
 import pathlib
+import re
+import os
 from typing import Callable
 
 class DockerizedServer:
     """class for running an external dockerized service image, typically mock server"""
     # pylint: disable=too-many-instance-attributes
 
+    newid = itertools.count(start=1).__next__   # Sequential unique id
+
     def __init__(self, image, tmpdir, logfilenamebase, 
                  success_string : Callable[[str, int], bool] | str,
                  failure_string : Callable[[str, int], bool] | str,
                  docker_args : Callable[[str, int], list[str]] | list[str] = [],
                  image_args : Callable[[str, int], list[str]] | list[str] = [],
-                 host = '127.0.0.1'):
+                 host = '127.0.0.1',
+                 port = None):
         self.image = image
         self.host = host
         self.tmpdir = tmpdir
@@ -31,28 +36,29 @@ class DockerizedServer:
         self.logfile = None
         self.port = None
         self.proc = None
+        self.service_port = port
 
     async def start(self):
         """Starts docker image on a random port"""
         exe = pathlib.Path(next(exe for exe in [shutil.which(path) 
                                                 for path in ["podman", "docker"]] 
                                                 if exe is not None)).resolve()
-
+        sid = f"{os.getpid()}-{DockerizedServer.newid()}"
+        name = f'{self.logfilenamebase}-{sid}'
         while True:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.bind((self.host, 0))
-            port = sock.getsockname()[1]
-
-            logfilename = (pathlib.Path(self.tmpdir) 
-                           / f'{self.logfilenamebase}-{port}').with_suffix(".log")
+            logfilename = (pathlib.Path(self.tmpdir) / name).with_suffix(".log")
             self.logfile = logfilename.open("wb")
 
-            docker_args = self.docker_args(self.host, port)
-            image_args = self.image_args(self.host, port)
+            docker_args = self.docker_args(self.host, self.service_port)
+            image_args = self.image_args(self.host, self.service_port)
 
-            args = ["run", "--rm", "-p", f'{port}:{port}'] + docker_args + [self.image] + image_args
+            args = ["run", "--name", name, "--rm" ]
+            if self.service_port is None:
+                args = args + ["-P"]
+            else:
+                args = args + ["-p", str(self.service_port)]
 
-            sock.close()
+            args = args + docker_args + [self.image] + image_args
 
             proc = await asyncio.create_subprocess_exec(exe, *args, stderr=self.logfile)
             failed = False
@@ -72,11 +78,11 @@ class DockerizedServer:
                 while not done and not failed:
                     with logfilename.open("r") as f:
                         for line in f:
-                            if self.is_success_line(line, port):
+                            if self.is_success_line(line, self.service_port):
                                 print(f'Got start message: {line}')
                                 done = True
                                 break
-                            if self.is_failure_line(line, port) or "Address already in use" in line or "port is already allocated" in line:
+                            if self.is_failure_line(line, self.service_port) or "Address already in use" in line or "port is already allocated" in line:
                                 print(f'Got fail message: {line}')
                                 failed = True
                                 break
@@ -86,8 +92,24 @@ class DockerizedServer:
                 await proc.wait()
                 continue
 
+            check_proc = await asyncio.create_subprocess_exec(exe
+                                                              , *["container", "port", name]
+                                                              , stdout=asyncio.subprocess.PIPE
+            )
+            while True:
+                data = await check_proc.stdout.readline()
+                if not data:
+                    break
+                s = data.decode()
+                m = re.search(r"\d+\/\w+ -> [\w+\.\[\]\:]+:(\d+)", s)
+                if m:
+                    self.port = int(m.group(1))
+
+            await check_proc.wait()
+            if not self.port:
+                proc.kill()
+                raise RuntimeError("Could not query port from container")
             self.proc = proc
-            self.port = port
             break
 
     async def stop(self):
