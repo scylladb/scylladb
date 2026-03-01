@@ -227,6 +227,7 @@ target_sources(scylla-main
     serializer.cc
     service/direct_failure_detector/failure_detector.cc
     sstables_loader.cc
+    sstables_loader_helpers.cc
     table_helper.cc
     tasks/task_handler.cc
     tasks/task_manager.cc

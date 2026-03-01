@@ -30,6 +30,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "sstables_loader_helpers.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -203,11 +204,6 @@ private:
         return result;
     }
 
-    struct minimal_sst_info {
-        sstables::generation_type _generation;
-        sstables::sstable_version_types _version;
-        sstables::sstable_format_types _format;
-    };
     using sst_classification_info = std::vector<std::vector<minimal_sst_info>>;
 
     future<> attach_sstable(shard_id from_shard, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) const {
@@ -216,7 +212,7 @@ private:
         auto& table = db.find_column_family(ks, cf);
         auto& sst_manager = table.get_sstables_manager();
         auto sst = sst_manager.make_sstable(
-            table.schema(), table.get_storage_options(), min_info._generation, sstables::sstable_state::normal, min_info._version, min_info._format);
+            table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
         sst->set_sstable_level(0);
         auto units = co_await sst_manager.dir_semaphore().get_units(1);
         co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
@@ -244,96 +240,10 @@ private:
     }
 
     future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
-        constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
-        constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
         sst_classification_info downloaded_sstables(smp::count);
         for (const auto& sstable : sstables) {
-            auto components = sstable->all_components();
-
-            // Move the TOC to the front to be processed first since `sstables::create_stream_sink` takes care
-            // of creating behind the scene TemporaryTOC instead of usual one. This assures that in case of failure
-            // this partially created SSTable will be cleaned up properly at some point.
-            auto toc_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::TOC; });
-            if (toc_it != components.begin()) {
-                swap(*toc_it, components.front());
-            }
-
-            // Ensure the Scylla component is processed second.
-            //
-            // The sstable_sink->output() call for each component may invoke load_metadata()
-            // and save_metadata(), but these functions only operate correctly if the Scylla
-            // component file already exists on disk. If the Scylla component is written first,
-            // load_metadata()/save_metadata() become no-ops, leaving the original Scylla
-            // component (with outdated metadata) untouched.
-            //
-            // By placing the Scylla component second, we guarantee that:
-            //   1) The first component (TOC) is written and the Scylla component file already
-            //      exists on disk when subsequent output() calls happen.
-            //   2) Later output() calls will overwrite the Scylla component with the correct,
-            //      updated metadata.
-            //
-            // In short: Scylla must be written second so that all following output() calls
-            // can properly update its metadata instead of silently skipping it.
-            auto scylla_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::Scylla; });
-            if (scylla_it != std::next(components.begin())) {
-                swap(*scylla_it, *std::next(components.begin()));
-            }
-
-            auto gen = _table.get_sstable_generation_generator()();
-            auto files = co_await sstable->readable_file_for_all_components();
-            for (auto it = components.cbegin(); it != components.cend(); ++it) {
-                try {
-                    auto descriptor = sstable->get_descriptor(it->first);
-                    auto sstable_sink = sstables::create_stream_sink(
-                        _table.schema(),
-                        _table.get_sstables_manager(),
-                        _table.get_storage_options(),
-                        sstables::sstable_state::normal,
-                        sstables::sstable::component_basename(
-                            _table.schema()->ks_name(), _table.schema()->cf_name(), descriptor.version, gen, descriptor.format, it->first),
-                        sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend()});
-                    auto out = co_await sstable_sink->output(foptions, stream_options);
-
-                    input_stream src(co_await [this, &it, sstable, f = files.at(it->first)]() -> future<input_stream<char>> {
-                        const auto fis_options = file_input_stream_options{.buffer_size = 128_KiB, .read_ahead = 2};
-
-                        if (it->first != sstables::component_type::Data) {
-                            co_return input_stream<char>(
-                                co_await sstable->get_storage().make_source(*sstable, it->first, f, 0, std::numeric_limits<size_t>::max(), fis_options));
-                        }
-                        auto permit = co_await _db.local().obtain_reader_permit(_table, "download_fully_contained_sstables", db::no_timeout, {});
-                        co_return co_await (
-                            sstable->get_compression()
-                                ? sstable->data_stream(0, sstable->ondisk_data_size(), std::move(permit), nullptr, nullptr, sstables::sstable::raw_stream::yes)
-                                : sstable->data_stream(0, sstable->data_size(), std::move(permit), nullptr, nullptr, sstables::sstable::raw_stream::no));
-                    }());
-
-                    std::exception_ptr eptr;
-                    try {
-                        co_await seastar::copy(src, out);
-                    } catch (...) {
-                        eptr = std::current_exception();
-                        llog.info("Error downloading SSTable component {}. Reason: {}", it->first, eptr);
-                    }
-                    co_await src.close();
-                    co_await out.close();
-                    if (eptr) {
-                        co_await sstable_sink->abort();
-                        std::rethrow_exception(eptr);
-                    }
-                    if (auto sst = co_await sstable_sink->close()) {
-                        const auto& shards = sstable->get_shards_for_this_sstable();
-                        if (shards.size() != 1) {
-                            on_internal_error(llog, "Fully-contained sstable must belong to one shard only");
-                        }
-                        llog.debug("SSTable shards {}", fmt::join(shards, ", "));
-                        downloaded_sstables[shards.front()].emplace_back(gen, descriptor.version, descriptor.format);
-                    }
-                } catch (...) {
-                    llog.info("Error downloading SSTable component {}. Reason: {}", it->first, std::current_exception());
-                    throw;
-                }
-            }
+            auto min_info = co_await download_sstable(_db.local(), _table, sstable, llog);
+            downloaded_sstables[min_info.shard].emplace_back(min_info);
         }
         co_return downloaded_sstables;
     }
@@ -495,26 +405,9 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
     auto reversed_sstables = sstables | std::views::reverse;
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : tablets_sstables) {
-        for (const auto& sst : reversed_sstables) {
-            auto sst_first = sst->get_first_decorated_key().token();
-            auto sst_last = sst->get_last_decorated_key().token();
-
-            // SSTable entirely after tablet -> no further SSTables (larger keys) can overlap
-            if (tablet_range.after(sst_first, dht::token_comparator{})) {
-                break;
-            }
-            // SSTable entirely before tablet -> skip and continue scanning later (larger keys)
-            if (tablet_range.before(sst_last, dht::token_comparator{})) {
-                continue;
-            }
-
-            if (tablet_range.contains(dht::token_range{sst_first, sst_last}, dht::token_comparator{})) {
-                sstables_fully_contained.push_back(sst);
-            } else {
-                sstables_partially_contained.push_back(sst);
-            }
-            co_await coroutine::maybe_yield();
-        }
+        auto [fully, partially] = co_await get_sstables_for_tablet(reversed_sstables, tablet_range, [](const auto& sst) { return sst->get_first_decorated_key().token(); }, [](const auto& sst) { return sst->get_last_decorated_key().token(); });
+        sstables_fully_contained = std::move(fully);
+        sstables_partially_contained = std::move(partially);
     }
     co_return std::move(tablets_sstables);
 }
