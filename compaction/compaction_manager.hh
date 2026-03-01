@@ -55,6 +55,7 @@ class custom_compaction_task_executor;
 class regular_compaction_task_executor;
 class offstrategy_compaction_task_executor;
 class rewrite_sstables_compaction_task_executor;
+class rewrite_sstables_component_compaction_task_executor;
 class split_compaction_task_executor;
 class cleanup_sstables_compaction_task_executor;
 class validate_sstables_compaction_task_executor;
@@ -256,6 +257,12 @@ private:
     future<compaction_stats_opt> rewrite_sstables(compaction::compaction_group_view& t, compaction_type_options options, owned_ranges_ptr, get_candidates_func, tasks::task_info info,
                                                   can_purge_tombstones can_purge = can_purge_tombstones::yes, sstring options_desc = "");
 
+    future<compaction_stats_opt> rewrite_sstables_component(compaction_group_view& t,
+                                                            std::vector<sstables::shared_sstable>& sstables,
+                                                            compaction_type_options options,
+                                                            std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables,
+                                                            tasks::task_info info);
+
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
     future<> really_do_stop() noexcept;
@@ -363,6 +370,13 @@ public:
 
     // Submit a table to be scrubbed and wait for its termination.
     future<compaction_stats_opt> perform_sstable_scrub(compaction::compaction_group_view& t, compaction_type_options::scrub opts, tasks::task_info info);
+
+    future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(compaction::compaction_group_view& t,
+            tasks::task_info info,
+            std::vector<sstables::shared_sstable> sstables,
+            sstables::component_type component,
+            std::function<void(sstables::sstable&)> modifier,
+            compaction_type_options::component_rewrite::update_sstable_id update_id = compaction_type_options::component_rewrite::update_sstable_id::yes);
 
     // Submit a table for major compaction.
     future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false);
@@ -489,6 +503,7 @@ public:
     friend class compaction::regular_compaction_task_executor;
     friend class compaction::offstrategy_compaction_task_executor;
     friend class compaction::rewrite_sstables_compaction_task_executor;
+    friend class compaction::rewrite_sstables_component_compaction_task_executor;
     friend class compaction::cleanup_sstables_compaction_task_executor;
     friend class compaction::validate_sstables_compaction_task_executor;
     friend compaction_reenabler;

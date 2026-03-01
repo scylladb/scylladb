@@ -161,6 +161,7 @@ std::string_view to_string(compaction_type type) {
     case compaction_type::Reshape: return "Reshape";
     case compaction_type::Split: return "Split";
     case compaction_type::Major: return "Major";
+    case compaction_type::RewriteComponent: return "RewriteComponent";
     }
     on_internal_error_noexcept(clogger, format("Invalid compaction type {}", int(type)));
     return "(invalid)";
@@ -2048,6 +2049,7 @@ compaction_type compaction_type_options::type() const {
         compaction_type::Reshape,
         compaction_type::Split,
         compaction_type::Major,
+        compaction_type::RewriteComponent,
     };
     static_assert(std::variant_size_v<compaction_type_options::options_variant> == std::size(index_to_type));
     return index_to_type[_options.index()];
@@ -2084,6 +2086,9 @@ static std::unique_ptr<compaction> make_compaction(compaction_group_view& table_
         std::unique_ptr<compaction> operator()(compaction_type_options::split split_options) {
             return std::make_unique<split_compaction>(table_s, std::move(descriptor), cdata, std::move(split_options), progress_monitor);
         }
+        std::unique_ptr<compaction> operator()(compaction_type_options::component_rewrite) {
+            throw std::runtime_error("component_rewrite compaction should be handled separately");
+        }
     } visitor_factory{table_s, std::move(descriptor), cdata, progress_monitor};
 
     return descriptor.options.visit(visitor_factory);
@@ -2101,7 +2106,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
 
         validation_errors += co_await sst->validate(permit, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
-        }, monitor_generator(sst));
+        }, monitor_generator(sst), true);
         // Did validation actually finish because aborted?
         if (cdata.is_stop_requested()) {
             // Compaction manager will catch this exception and re-schedule the compaction.
@@ -2138,6 +2143,34 @@ future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor des
     co_return res;
 }
 
+future<compaction_result> rewrite_sstables_component(compaction_descriptor descriptor, compaction_group_view& table_s) {
+    return seastar::async([descriptor = std::move(descriptor), &table_s] () mutable {
+        compaction_result result {
+            .stats = {
+                .started_at = db_clock::now(),
+            },
+        };
+
+        const auto& options = descriptor.options.as<compaction_type_options::component_rewrite>();
+        bool update_id = static_cast<bool>(options.update_id);
+        // When rewriting a component, we cannot use the standard descriptor creator
+        // because we must preserve the sstable version.
+        auto creator = [&table_s] (sstables::shared_sstable sst) {
+            return table_s.make_sstable(sst->state(), sst->get_version());
+        };
+        result.new_sstables.reserve(descriptor.sstables.size());
+        for (auto& sst : descriptor.sstables) {
+            auto rewritten = sst->link_with_rewritten_component(creator, options.component_to_rewrite, options.modifier, update_id).get();
+            result.new_sstables.push_back(rewritten);
+        }
+
+        descriptor.replacer({std::move(descriptor.sstables), result.new_sstables});
+
+        result.stats.ended_at = db_clock::now();
+        return result;
+    });
+}
+
 future<compaction_result>
 compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor) {
     if (descriptor.sstables.empty()) {
@@ -2148,6 +2181,9 @@ compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compa
             && std::get<compaction_type_options::scrub>(descriptor.options.options()).operation_mode == compaction_type_options::scrub::mode::validate) {
         // Bypass the usual compaction machinery for dry-mode scrub
         return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, progress_monitor);
+    }
+    if (descriptor.options.type() == compaction_type::RewriteComponent) {
+        return rewrite_sstables_component(std::move(descriptor), table_s);
     }
     return compaction::run(make_compaction(table_s, std::move(descriptor), cdata, progress_monitor));
 }

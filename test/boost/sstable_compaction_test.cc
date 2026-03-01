@@ -157,8 +157,8 @@ static void assert_table_sstable_count(table_for_tests& t, size_t expected_count
     BOOST_REQUIRE(uint64_t(t->get_stats().live_sstable_count) == expected_count);
 }
 
-static void corrupt_sstable(sstables::shared_sstable sst) {
-    auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+static void corrupt_sstable(sstables::shared_sstable sst, component_type type = component_type::Data) {
+    auto f = open_file_dma(sstables::test(sst).filename(type).native(), open_flags::wo).get();
     auto close_f = deferred_close(f);
     const auto wbuf_align = f.memory_dma_alignment();
     const auto wbuf_len = f.disk_write_dma_alignment();
@@ -2487,7 +2487,7 @@ void scrub_validate_corrupted_content(compress_sstable compress) {
     });
 }
 
-void scrub_validate_corrupted_file(compress_sstable compress) {
+void scrub_validate_corrupted_file(compress_sstable compress, component_type component = component_type::Data) {
     scrub_test_framework<random_schema::yes> test(compress);
 
     auto schema = test.schema();
@@ -2498,12 +2498,12 @@ void scrub_validate_corrupted_file(compress_sstable compress) {
             tests::no_expiry_expiry_generator(),
             std::uniform_int_distribution<size_t>(10, 10)).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [component] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
-        // Corrupt the data to cause an invalid checksum.
-        corrupt_sstable(sst);
+        // Corrupt the component file to cause an invalid checksum.
+        corrupt_sstable(sst, component);
 
         compaction::compaction_type_options::scrub opts = {
             .operation_mode = compaction::compaction_type_options::scrub::mode::validate,
@@ -2629,6 +2629,13 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file) {
     for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
         testlog.info("Validating {}compressed SSTable with invalid checksums...", compress == compress_sstable::no ? "un" : "");
         scrub_validate_corrupted_file(compress);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_index) {
+    for (const auto& compress : {compress_sstable::no, compress_sstable::yes}) {
+        testlog.info("Validating {}compressed SSTable with corrupted index...", compress == compress_sstable::no ? "un" : "");
+        scrub_validate_corrupted_file(compress, component_type::Index);
     }
 }
 
@@ -6381,6 +6388,157 @@ SEASTAR_TEST_CASE(failure_when_adding_new_sstable_test) {
         // Verify both sstables are unlinked on failure.
         BOOST_REQUIRE(!file_exists(sst2->get_filename(sstables::component_type::Data).format()).get());
         BOOST_REQUIRE(!file_exists(sst3->get_filename(sstables::component_type::Data).format()).get());
+    });
+}
+
+static future<> test_perform_component_rewrite_single_sstable(compaction::compaction_type_options::component_rewrite::update_sstable_id update_id) {
+    return test_env::do_with_async([update_id] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+
+        auto mut1 = mutation(s, pk);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto original_sst = make_sstable_containing(env.make_sstable(s), {mut1});
+
+        BOOST_REQUIRE(original_sst->get_sstable_level() == 0);
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+
+        table->add_sstable_and_update_cache(original_sst).get();
+
+        auto all_sstables = table->get_sstables();
+        BOOST_REQUIRE(all_sstables->size() == 1);
+        BOOST_REQUIRE(all_sstables->contains(original_sst));
+
+        auto& cm = table->get_compaction_manager();
+
+        uint32_t new_level = 5;
+        auto modifier = [new_level] (sstable& sst) {
+            sst.mutate_sstable_level(new_level);
+        };
+
+        auto& compaction_group_view = table->compaction_group_view_for_sstable(original_sst);
+
+        std::vector<sstables::shared_sstable> sstables_to_rewrite = {original_sst};
+        auto rewritten_map = cm.perform_component_rewrite(compaction_group_view,
+                                                          tasks::task_info{},
+                                                          std::move(sstables_to_rewrite),
+                                                          component_type::Statistics,
+                                                          std::move(modifier),
+                                                          update_id).get();
+
+        BOOST_REQUIRE(rewritten_map.size() == 1);
+        auto it = rewritten_map.find(original_sst);
+        BOOST_REQUIRE(it != rewritten_map.end());
+
+        auto new_sst = it->second;
+        BOOST_REQUIRE(new_sst->get_sstable_level() == new_level);
+        BOOST_REQUIRE(new_sst->generation() != original_sst->generation());
+        if (update_id) {
+            BOOST_REQUIRE(new_sst->sstable_identifier() != original_sst->sstable_identifier());
+        } else {
+            BOOST_REQUIRE(new_sst->sstable_identifier() == original_sst->sstable_identifier());
+        }
+
+        all_sstables = table->get_sstables();
+        BOOST_REQUIRE(all_sstables->size() == 1);
+        BOOST_REQUIRE(!all_sstables->contains(original_sst));
+        BOOST_REQUIRE(all_sstables->contains(new_sst));
+    });
+}
+
+SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_with_backup) {
+    return test_perform_component_rewrite_single_sstable(compaction::compaction_type_options::component_rewrite::update_sstable_id::yes);
+}
+
+SEASTAR_TEST_CASE(test_perform_component_rewrite_single_sstable_without_backup) {
+    return test_perform_component_rewrite_single_sstable(compaction::compaction_type_options::component_rewrite::update_sstable_id::no);
+}
+
+SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        // Generate 10 sstables
+        std::vector<sstables::shared_sstable> all_sstables;
+        for (int i = 0; i < 10; ++i) {
+            auto pk = ss.make_pkey(i);
+            auto mut = mutation(s, pk);
+            mut.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+            auto sst = make_sstable_containing(env.make_sstable(s), {mut});
+            all_sstables.push_back(sst);
+        }
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+
+        table->disable_auto_compaction().get();
+
+        for (auto& sst : all_sstables) {
+            table->add_sstable_and_update_cache(sst).get();
+        }
+
+        auto current_sstables = table->get_sstables();
+        BOOST_REQUIRE(current_sstables->size() == 10);
+
+        std::vector<sstables::shared_sstable> sstables_to_rewrite;
+        std::vector<sstables::shared_sstable> sstables_to_keep;
+        for (int i = 0; i < 10; ++i) {
+            if (i % 2 == 0) {
+                sstables_to_rewrite.push_back(all_sstables[i]);
+            } else {
+                sstables_to_keep.push_back(all_sstables[i]);
+            }
+        }
+
+        BOOST_REQUIRE(sstables_to_rewrite.size() == 5);
+        BOOST_REQUIRE(sstables_to_keep.size() == 5);
+
+        std::map<compaction::compaction_group_view*, std::vector<sstables::shared_sstable>> groups;
+        for (auto& sst : sstables_to_rewrite) {
+            auto& cg_view = table->compaction_group_view_for_sstable(sst);
+            groups[&cg_view].push_back(sst);
+        }
+
+        auto& cm = table->get_compaction_manager();
+        uint32_t new_level = 3;
+
+        std::map<sstables::shared_sstable, sstables::shared_sstable> merged_rewritten_map;
+        for (auto& [cg_view, ssts] : groups) {
+            auto modifier = [new_level] (sstable& sst) {
+                sst.mutate_sstable_level(new_level);
+            };
+            auto rewritten_map = cm.perform_component_rewrite(*cg_view,
+                                                              tasks::task_info{},
+                                                              std::move(ssts),
+                                                              component_type::Statistics,
+                                                              std::move(modifier)).get();
+            merged_rewritten_map.insert(rewritten_map.begin(), rewritten_map.end());
+        }
+
+        BOOST_REQUIRE(merged_rewritten_map.size() == 5);
+        for (const auto& [old_sst, new_sst] : merged_rewritten_map) {
+            BOOST_REQUIRE(new_sst->get_sstable_level() == new_level);
+            BOOST_REQUIRE(new_sst->generation() != old_sst->generation());
+        }
+
+        // Verify the table now contains exactly 10 sstables
+        current_sstables = table->get_sstables();
+        BOOST_REQUIRE(current_sstables->size() == 10);
+
+        // Verify that the 5 rewritten sstables were replaced
+        for (const auto& [old_sst, new_sst] : merged_rewritten_map) {
+            BOOST_REQUIRE(current_sstables->contains(new_sst));
+            BOOST_REQUIRE(!current_sstables->contains(old_sst));
+        }
+
+        // Verify that the 5 sstables we didn't rewrite still exist
+        for (auto& sst : sstables_to_keep) {
+            BOOST_REQUIRE(current_sstables->contains(sst));
+        }
     });
 }
 

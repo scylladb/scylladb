@@ -46,7 +46,7 @@ future<> random_access_reader::close() noexcept {
 }
 
 file_random_access_reader::file_random_access_reader(file f, uint64_t file_size, size_t buffer_size, unsigned read_ahead)
-    : _file(std::move(f)), _file_size(file_size), _buffer_size(buffer_size), _read_ahead(read_ahead) {
+    : _file(std::move(f)), _buffer_size(buffer_size), _read_ahead(read_ahead), _file_size(file_size) {
     set(open_at(0));
 }
 
@@ -65,6 +65,32 @@ future<> file_random_access_reader::close() noexcept {
             sstlog.warn("sstable close failed: {}", ep);
             general_disk_error();
         });
+    });
+}
+
+digest_file_random_access_reader::digest_file_random_access_reader(file f, uint64_t file_size, size_t buffer_size, unsigned read_ahead)
+    : file_random_access_reader(std::move(f), file_size, buffer_size, read_ahead) {
+    _digest = crc32_utils::init_checksum();
+}
+
+future<temporary_buffer<char>> digest_file_random_access_reader::read_exactly(size_t n) noexcept {
+    return random_access_reader::read_exactly(n).then([this] (temporary_buffer<char> buf) {
+        _pos += buf.size();
+
+        if (_digest) {
+            uint32_t per_chunk_checksum = crc32_utils::init_checksum();
+
+            per_chunk_checksum = crc32_utils::checksum(per_chunk_checksum, buf.begin(), buf.size());
+            _digest = checksum_combine_or_feed<crc32_utils>(*_digest, per_chunk_checksum, buf.begin(), buf.size());
+        }
+        return buf;
+    });
+}
+
+future<> digest_file_random_access_reader::seek(uint64_t pos) noexcept {
+    _pos = pos;
+    return random_access_reader::seek(pos).then([this] {
+        _digest.reset();
     });
 }
 

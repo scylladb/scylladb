@@ -17,6 +17,7 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include "seastarx.hh"
+#include "sstables/checksum_utils.hh"
 
 namespace sstables {
 
@@ -31,9 +32,9 @@ protected:
     }
 
 public:
-    future <temporary_buffer<char>> read_exactly(size_t n) noexcept;
+    virtual future <temporary_buffer<char>> read_exactly(size_t n) noexcept;
 
-    future<> seek(uint64_t pos) noexcept;
+    virtual future<> seek(uint64_t pos) noexcept;
 
     bool eof() const noexcept { return _in->eof(); }
 
@@ -44,15 +45,34 @@ public:
 
 class file_random_access_reader : public random_access_reader {
     file _file;
-    uint64_t _file_size;
     size_t _buffer_size;
     unsigned _read_ahead;
+protected:
+    uint64_t _file_size;
 public:
     virtual input_stream<char> open_at(uint64_t pos) override;
 
     explicit file_random_access_reader(file f, uint64_t file_size, size_t buffer_size = 8192, unsigned read_ahead = 4);
 
     virtual future<> close() noexcept override;
+};
+
+class digest_file_random_access_reader : public file_random_access_reader {
+    std::optional<uint32_t> _digest;
+    uint64_t _pos = 0;
+public:
+    digest_file_random_access_reader(file f, uint64_t file_size, size_t buffer_size = 8192, unsigned read_ahead = 4);
+
+    virtual future<temporary_buffer<char>> read_exactly(size_t n) noexcept override;
+
+    virtual future<> seek(uint64_t pos) noexcept override;
+
+    std::optional<uint32_t> digest() const noexcept {
+        if (_pos != _file_size) {
+            return std::nullopt;
+        }
+        return _digest;
+    }
 };
 
 }
