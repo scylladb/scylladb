@@ -155,7 +155,6 @@ Add New DC
       UN   54.235.9.159    109.75 KB       256     ?               39798227-9f6f-4868-8193-08570856c09a    RACK1
       UN   54.146.228.25   128.33 KB       256     ?               7a4957a1-9590-4434-9746-9c8a6f796a0c    RACK1
 
-.. TODO possibly provide additional information WRT how ALTER works with tablets
 
 #. When all nodes are up and running ``ALTER`` the following Keyspaces in the new nodes:
 
@@ -171,26 +170,42 @@ Add New DC
 
       DESCRIBE KEYSPACE mykeyspace;
 
-      CREATE KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3};
+      CREATE KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3};
 
    ALTER Command
 
    .. code-block:: cql
 
-      ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
-      ALTER KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
-      ALTER KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
+      ALTER KEYSPACE mykeyspace WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
+      ALTER KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
+      ALTER KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
 
    After
 
    .. code-block:: cql
 
       DESCRIBE KEYSPACE mykeyspace;
-      CREATE KEYSPACE mykeyspace WITH REPLICATION = {'class’: 'NetworkTopologyStrategy', <exiting_dc>:3, <new_dc>: 3};
-      CREATE KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
-      CREATE KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<exiting_dc>' : 3, <new_dc> : 3};
+      CREATE KEYSPACE mykeyspace WITH REPLICATION = {'class': 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
+      CREATE KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
+      CREATE KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
 
-#. Run ``nodetool rebuild`` on each node in the new datacenter, specify the existing datacenter name in the rebuild command.
+   For tablet keyspaces, update the replication factor one by one:
+
+   .. code-block:: cql
+
+      DESCRIBE KEYSPACE mykeyspace2;
+
+      CREATE KEYSPACE mykeyspace2 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3} AND tablets = { 'enabled': true };
+
+   .. code-block:: cql
+
+      ALTER KEYSPACE mykeyspace2 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 1} AND tablets = { 'enabled': true };
+      ALTER KEYSPACE mykeyspace2 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 2} AND tablets = { 'enabled': true };
+      ALTER KEYSPACE mykeyspace2 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3} AND tablets = { 'enabled': true };
+
+   .. note:: If ``rf_rack_valid_keyspaces`` option is set, a new DC (rack) cannot be added. To proceed, first restart all nodes in the cluster disabling this option, then follow the procedure described above. If ``rf_rack_valid_keyspaces`` is disabled, no :doc:`Materialized Views </cql/mv>` are allowed.
+
+#. If any vnode keyspace was altered, run ``nodetool rebuild`` on each node in the new datacenter, specifying the existing datacenter name in the rebuild command.
 
    For example:
 
@@ -198,7 +213,7 @@ Add New DC
 
    The rebuild ensures that the new nodes that were just added to the cluster will recognize the existing datacenters in the cluster.
 
-#. Run a full cluster repair, using :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair>` on each node, or using `ScyllaDB Manager ad-hoc repair <https://manager.docs.scylladb.com/stable/repair>`_
+#. If any vnode keyspace was altered, run a full cluster repair, using :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair>` on each node, or using `ScyllaDB Manager ad-hoc repair <https://manager.docs.scylladb.com/stable/repair>`_
 
 #. If you are using ScyllaDB Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using ScyllaDB Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_ and Manager can access the new DC.
 
