@@ -252,6 +252,10 @@ public:
     //
     // The caller may pass a pointer to an abort_source to make the function abortable.
     // It it passes nullptr, the function is unabortable.
+    //
+    // Exceptions:
+    // raft::request_aborted
+    //     Thrown if abort is requested before the operation finishes.
     virtual future<> wait_for_state_change(seastar::abort_source* as) = 0;
 
     // The returned future is resolved when a leader is elected for the current term.
@@ -262,6 +266,10 @@ public:
     //
     // The caller may pass a pointer to an abort_source to make the function abortable.
     // It it passes nullptr, the function is unabortable.
+    //
+    // Exceptions:
+    // raft::request_aborted
+    //     Thrown if abort is requested before the operation finishes.
     virtual future<> wait_for_leader(seastar::abort_source* as) = 0;
 
     // Manually trigger snapshot creation and log truncation.
