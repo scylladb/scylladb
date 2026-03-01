@@ -27,6 +27,7 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/vector.hh"
+#include "utils/chunked_string.hh"
 
 BOOST_AUTO_TEST_SUITE(view_schema_test)
 
@@ -277,7 +278,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, blobval, asciival from mv_blobval where blobval = 0x000001").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {bytes_type->from_string("000001")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(bytes_type->from_string("000001"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ boolean ================
@@ -305,7 +306,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, dateval, asciival from mv_dateval where dateval = '1986-01-19'").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {simple_date_type->from_string("1986-01-19")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(simple_date_type->from_string("1986-01-19"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ decimal ================
@@ -314,7 +315,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, decimalval, asciival from mv_decimalval where decimalval = 123123.123123").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {decimal_type->from_string("123123.123123")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(decimal_type->from_string("123123.123123"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ double ================
@@ -323,7 +324,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, doubleval, asciival from mv_doubleval where doubleval = 123123.123123").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {double_type->from_string("123123.123123")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(double_type->from_string("123123.123123"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ float ================
@@ -332,7 +333,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, floatval, asciival from mv_floatval where floatval = 123123.123123").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {float_type->from_string("123123.123123")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(float_type->from_string("123123.123123"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ inet ================
@@ -341,7 +342,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, inetval, asciival from mv_inetval where inetval = '127.0.0.1'").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {inet_addr_type->from_string("127.0.0.1")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(inet_addr_type->from_string("127.0.0.1"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ int ================
@@ -359,7 +360,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, textval, asciival from mv_textval where textval = '\"some \" text'").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {utf8_type->from_string("\"some \" text")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(utf8_type->from_string("\"some \" text"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ time ================
@@ -368,7 +369,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, timeval, asciival from mv_timeval where timeval = '07:35:07.000111222'").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {time_type->from_string("07:35:07.000111222")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(time_type->from_string("07:35:07.000111222"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ timestamp ================
@@ -377,7 +378,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, timestampval, asciival from mv_timestampval where timestampval = '123123123123'").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {timestamp_type->from_string("123123123123")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(timestamp_type->from_string("123123123123"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ timeuuid ================
@@ -386,7 +387,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, timeuuidval, asciival from mv_timeuuidval where timeuuidval = D2177dD0-EAa2-11de-a572-001B779C76e3").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {timeuuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(timeuuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ uuid ================
@@ -395,7 +396,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, uuidval, asciival from mv_uuidval where uuidval = 6bddc89a-5644-11e4-97fc-56847afe9799").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ varint ================
@@ -404,7 +405,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, varintval, asciival from mv_varintval where varintval = 1234567890123456789012345678901234567890").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {varint_type->from_string("1234567890123456789012345678901234567890")}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, {to_bytes(varint_type->from_string("1234567890123456789012345678901234567890"))}, {ascii_type->decompose("ascii text")} });
         });
 
         // ================ lists ================
@@ -686,7 +687,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, udtval.a, udtval.b, udtval.c, asciival from mv_udtval where udtval = (1, 6bddc89a-5644-11e4-97fc-56847afe9799, {'foo', 'bar'})").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799")},
+                .with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {to_bytes(uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799"))},
                             make_set_value(udt_set_type, set_type_impl::native_type({sstring("bar"), sstring("foo")})).serialize(),
                             {ascii_type->decompose("ascii text")} }});
         });
@@ -696,7 +697,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, udtval.a, udtval.b, udtval.c, asciival from mv_udtval where udtval = {b: 6bddc89a-5644-11e4-97fc-56847afe9799, a: 1, c: {'foo', 'bar'}}").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799")},
+                .with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {to_bytes(uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799"))},
                             make_set_value(udt_set_type, set_type_impl::native_type({sstring("bar"), sstring("foo")})).serialize(),
                             {ascii_type->decompose("ascii text")} }});
         });
@@ -708,7 +709,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         msg = e.execute_cql("select k, udtval.a, udtval.b, udtval.c, asciival from mv_udtval where udtval = {a: null, b: 6bddc89a-5644-11e4-97fc-56847afe9799, c: {'foo', 'bar'}}").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_rows({{ {int32_type->decompose(0)}, {}, {uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799")},
+                .with_rows({{ {int32_type->decompose(0)}, {}, {to_bytes(uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799"))},
                             make_set_value(udt_set_type, set_type_impl::native_type({sstring("bar"), sstring("foo")})).serialize(),
                             {ascii_type->decompose("ascii text")} }});
         });
@@ -720,7 +721,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         msg = e.execute_cql("select k, udtval.a, udtval.b, udtval.c, asciival from mv_udtval where udtval = {a: 1, b: 6bddc89a-5644-11e4-97fc-56847afe9799}").get();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799")},
+                .with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {to_bytes(uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799"))},
                               {}, {ascii_type->decompose("ascii text")} }});
         });
     });

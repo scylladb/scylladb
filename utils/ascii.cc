@@ -9,6 +9,8 @@
  */
 
 #include "ascii.hh"
+#include "utils/managed_bytes.hh"
+#include "utils/fragment_range.hh"
 #include <seastar/core/byteorder.hh>
 
 namespace utils {
@@ -44,6 +46,15 @@ bool validate(const uint8_t *data, size_t len) {
 
     // 7-th bit should be 0
     return orall < 0x80;
+}
+
+bool validate(managed_bytes_view string) {
+    for (bytes_view frag : fragment_range(string)) {
+        if (!validate(reinterpret_cast<const uint8_t*>(frag.data()), frag.size())) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace ascii

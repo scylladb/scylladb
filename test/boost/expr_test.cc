@@ -17,6 +17,7 @@
 #include "cql3/expr/expression.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
+#include "utils/chunked_string.hh"
 #include <cassert>
 #include "cql3/query_options.hh"
 #include "types/set.hh"

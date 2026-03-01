@@ -16,6 +16,7 @@
 #include "utils/simple_hashers.hh"
 #include "gc_clock.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/random_utils.hh"
 #include "reader_concurrency_semaphore.hh"
 
 bytes text_part1("sanity");
@@ -47,6 +48,30 @@ BOOST_AUTO_TEST_CASE(sha256_hasher_sanity_check) {
     bytes hash = hasher.finalize();
     bytes expected = from_hex("62bcb3e6160172824e1939116f48ae3680df989583c6d1bfbfa84fa9a080d003");
     BOOST_REQUIRE_EQUAL(hash, expected);
+}
+
+template <typename Hasher>
+void fragmented_hash_test() {
+    const auto random_buffer = tests::random::get_bytes(512 * 1024);
+    const auto random_buffer_fragmented = managed_bytes(random_buffer);
+
+    // Sanity check that the buffer is actually fragmented, so we are testing what we intend to test.
+    BOOST_REQUIRE(!is_single_fragment(managed_bytes_view(random_buffer_fragmented)));
+
+    const auto fragmented_hash = md5_hasher::calculate(random_buffer_fragmented);
+    const auto linearized_hash = md5_hasher::calculate(std::string_view(reinterpret_cast<const char*>(random_buffer.data()), random_buffer.size()));
+
+    BOOST_CHECK_EQUAL(fragmented_hash, linearized_hash);
+}
+
+SEASTAR_TEST_CASE(md5_hasher_fragmented_buffer_hash) {
+    fragmented_hash_test<md5_hasher>();
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(sha256_hasher_fragmented_buffer_hash) {
+    fragmented_hash_test<sha256_hasher>();
+    return make_ready_future<>();
 }
 
 BOOST_AUTO_TEST_CASE(bytes_view_hasher_sanity_check) {

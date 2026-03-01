@@ -45,6 +45,7 @@
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/managed_string.hh"
+#include "utils/chunked_string.hh"
 
 #include "types/user.hh"
 #include "types/tuple.hh"
@@ -266,8 +267,11 @@ static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
     throw marshal_exception("Cannot get UTC offset for a timestamp");
 }
 
-int64_t timestamp_from_string(std::string_view s) {
+int64_t timestamp_from_string(std::string_view sv) {
     try {
+        // std::string_view is not guaranteed to be null-terminated, but std::stroll() below expects this.
+        // Copy into a std::string to ensure null-termination.
+        auto s = std::string(sv);
         std::string str;
         str.resize(s.size());
         std::transform(s.begin(), s.end(), str.begin(), ::tolower);
@@ -276,8 +280,8 @@ int64_t timestamp_from_string(std::string_view s) {
         }
 
         char* end;
-        auto v = std::strtoll(s.begin(), &end, 10);
-        if (end == s.begin() + s.size()) {
+        auto v = std::strtoll(s.data(), &end, 10);
+        if (end == s.data() + s.size()) {
             return v;
         }
 
@@ -317,9 +321,9 @@ int64_t timestamp_from_string(std::string_view s) {
         return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
     } catch (const marshal_exception& me) {
         throw marshal_exception(
-            seastar::format("unable to parse date '{}': {}", s, me.what()));
+            seastar::format("unable to parse date '{}': {}", sv, me.what()));
     } catch (...) {
-        throw marshal_exception(seastar::format("unable to parse date '{}': {}", s, std::current_exception()));
+        throw marshal_exception(seastar::format("unable to parse date '{}': {}", sv, std::current_exception()));
     }
 }
 
@@ -349,14 +353,15 @@ static uint32_t serialize(std::string_view input, int64_t days) {
     days += 1UL << 31;
     return static_cast<uint32_t>(days);
 }
-uint32_t simple_date_type_impl::from_string_view(std::string_view s) {
+uint32_t simple_date_type_impl::from_string_view(std::string_view sv) {
     char* end;
     errno = 0;
-    auto v = std::strtoll(s.begin(), &end, 10);
-    if(end != s.end()) {
+    std::string s(sv.begin(), sv.end());
+    auto v = std::strtoll(s.data(), &end, 10);
+    if(end != s.data() + s.size()) {
         static const boost::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
         boost::match_results<std::string_view::const_iterator> dsm;
-        if (!boost::regex_match(s.begin(), s.end(), dsm, date_re)) {
+        if (!boost::regex_match(sv.begin(), sv.end(), dsm, date_re)) {
         throw marshal_exception(seastar::format("Unable to coerce '{}' to a formatted date (long)", s));
         }
         auto t = get_simple_date_time(dsm);
@@ -715,15 +720,6 @@ void write_collection_value(bytes_ostream& out, atomic_cell_value_view val) {
     }
 }
 
-void write_fragmented(managed_bytes_mutable_view& out, std::string_view val) {
-    while (val.size() > 0) {
-        size_t current_n = std::min(val.size(), out.current_fragment().size());
-        memcpy(out.current_fragment().data(), val.data(), current_n);
-        val.remove_prefix(current_n);
-        out.remove_prefix(current_n);
-    }
-}
-
 template<std::integral T>
 void write_simple(managed_bytes_mutable_view& out, std::type_identity_t<T> val) {
     val = net::hton(val);
@@ -733,7 +729,7 @@ void write_simple(managed_bytes_mutable_view& out, std::type_identity_t<T> val) 
         // FIXME use write_unaligned after it's merged.
         write_unaligned<T>(p, val);
     } else if (out.size_bytes() >= sizeof(T)) {
-        write_fragmented(out, std::string_view(reinterpret_cast<const char*>(&val), sizeof(T)));
+        write_fragmented(out, single_fragmented_view(bytes_view(reinterpret_cast<const bytes::value_type*>(&val), sizeof(T))));
     } else {
         on_internal_error(tlogger, format("write_simple: attempted write of size {} to buffer of size {}", sizeof(T), out.size_bytes()));
     }
@@ -2672,41 +2668,82 @@ bool abstract_type::equal(bytes_view v1, managed_bytes_view v2) const {
 }
 
 // Count number of ':' which are not preceded by '\'.
-static std::size_t count_segments(std::string_view v) {
+static std::size_t count_segments(utils::chunked_string_view v) {
     std::size_t segment_count = 1;
     char prev_ch = '.';
-    for (char ch : v) {
-        if (ch == ':' && prev_ch != '\\') {
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        if (v[i] == ':' && prev_ch != '\\') {
             ++segment_count;
         }
-        prev_ch = ch;
+        prev_ch = v[i];
     }
     return segment_count;
 }
 
 // Split on ':', unless it's preceded by '\'.
-static std::vector<std::string_view> split_field_strings(std::string_view v) {
+static std::vector<utils::chunked_string_view> split_field_strings(utils::chunked_string_view v) {
     if (v.empty()) {
-        return std::vector<std::string_view>();
+        return std::vector<utils::chunked_string_view>();
     }
-    std::vector<std::string_view> result;
+    std::vector<utils::chunked_string_view> result;
     result.reserve(count_segments(v));
     std::size_t prev = 0;
     char prev_ch = '.';
     for (std::size_t i = 0; i < v.size(); ++i) {
         if (v[i] == ':' && prev_ch != '\\') {
-            result.push_back(v.substr(prev, i - prev));
+            result.push_back(utils::chunked_string_view(v.data().substr(prev, i - prev)));
             prev = i + 1;
         }
         prev_ch = v[i];
     }
-    result.push_back(v.substr(prev, v.size() - prev));
+    result.push_back(utils::chunked_string_view(v.data().substr(prev, v.size() - prev)));
     return result;
 }
 
 // Replace "\:" with ":" and "\@" with "@".
-static std::string unescape(std::string_view s) {
-    return boost::regex_replace(std::string(s), boost::regex("\\\\([@:])"), "$1");
+static utils::chunked_string unescape(utils::chunked_string_view s) {
+    if (s.empty()) {
+        return utils::chunked_string();
+    }
+
+    const auto is_escape_sequence_at = [&] (std::size_t i) {
+        return s[i] == '\\' && i + 1 < s.size() && (s[i + 1] == '@' || s[i + 1] == ':');
+    };
+
+    const auto escaped_chars = std::ranges::count_if(std::views::iota(std::size_t(0), s.size()), is_escape_sequence_at);
+
+    managed_bytes result(managed_bytes::initialized_later(), s.size() - escaped_chars);
+    managed_bytes_mutable_view out(result);
+
+    std::size_t start = 0;  // Start of current chunk to copy
+
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (is_escape_sequence_at(i)) {
+            // Found an escape sequence: \@ or \:
+            // Copy chunk up to (but not including) the backslash
+            if (i > start) {
+                auto chunk = s.data().substr(start, i - start);
+                write_fragmented(out, chunk);
+            }
+
+            // Copy the escaped character (@ or :)
+            char ch = s[i + 1];
+            auto single_char = single_fragmented_view(bytes_view(reinterpret_cast<const int8_t*>(&ch), 1));
+            write_fragmented(out, single_char);
+
+            // Skip past the escape sequence
+            ++i;
+            start = i + 1;
+        }
+    }
+
+    // Copy remaining chunk (or entire string if no escape sequences found)
+    if (start < s.size()) {
+        auto chunk = s.data().substr(start, s.size() - start);
+        write_fragmented(out, chunk);
+    }
+
+    return utils::chunked_string(std::move(result));
 }
 
 // Replace ":" with "\:" and "@" with "\@".
@@ -2714,19 +2751,20 @@ static std::string escape(std::string_view s) {
     return boost::regex_replace(std::string(s), boost::regex("[@:]"), "\\\\$0");
 }
 
-// Concat list of bytes into a single bytes.
-static bytes concat_fields(const std::vector<bytes>& fields, const std::vector<int32_t> field_len) {
+// Concat list of managed_bytes into a single managed_bytes.
+static managed_bytes concat_fields(const std::vector<managed_bytes>& fields, const std::vector<int32_t> field_len) {
     std::size_t result_size = 4 * fields.size();
     for (int32_t len : field_len) {
         result_size += len > 0 ? len : 0;
     }
-    bytes result{bytes::initialized_later(), result_size};
-    bytes::iterator it = result.begin();
+    managed_bytes result{managed_bytes::initialized_later(), result_size};
+    managed_bytes_mutable_view dest(result);
     for (std::size_t i = 0; i < fields.size(); ++i) {
         int32_t tmp = net::hton(field_len[i]);
-        it = std::copy_n(reinterpret_cast<const int8_t*>(&tmp), sizeof(tmp), it);
+        bytes_view len_bytes(reinterpret_cast<const int8_t*>(&tmp), sizeof(tmp));
+        write_fragmented(dest, single_fragmented_view(len_bytes));
         if (field_len[i] > 0) {
-            it = std::copy(std::begin(fields[i]), std::end(fields[i]), it);
+            write_fragmented(dest, managed_bytes_view(fields[i]));
         }
     }
     return result;
@@ -2885,150 +2923,178 @@ utils::UUID timeuuid_type_impl::from_string_view(std::string_view s) {
 
 namespace {
 struct from_string_visitor {
-    std::string_view s;
-    bytes operator()(const reversed_type_impl& r) { return r.underlying_type()->from_string(s); }
-    bytes operator()(const counter_type_impl&) { return long_type->from_string(s); }
-    template <typename T> bytes operator()(const integer_type_impl<T>& t) { return decompose_value(parse_int(t, s)); }
-    bytes operator()(const ascii_type_impl&) {
-        auto bv = bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size());
-        if (utils::ascii::validate(bv)) {
-            return to_bytes(bv);
+    utils::chunked_string_view s;
+    managed_bytes operator()(const reversed_type_impl& r) { return r.underlying_type()->from_string(s); }
+    managed_bytes operator()(const counter_type_impl&) { return long_type->from_string(s); }
+    template <typename T> managed_bytes operator()(const integer_type_impl<T>& t) {
+        return s.with_linearized([&](std::string_view sv) {
+            return managed_bytes(decompose_value(parse_int(t, sv)));
+        });
+    }
+    managed_bytes operator()(const ascii_type_impl&) {
+        auto v = managed_bytes_view(s.data());
+        if (utils::ascii::validate(v)) {
+            return managed_bytes(v);
         } else {
-            throw marshal_exception(seastar::format("Invalid ASCII character in string literal: '{}'", s));
+            throw marshal_exception(seastar::format("Invalid ASCII character in string literal: '{}'", s.ellipsize()));
         }
     }
-    bytes operator()(const string_type_impl&) {
-        return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
+    managed_bytes operator()(const string_type_impl&) {
+        return managed_bytes(s.data());
     }
-    bytes operator()(const bytes_type_impl&) { return from_hex(s); }
-    bytes operator()(const boolean_type_impl& t) {
-        sstring s_lower(s.begin(), s.end());
-        std::transform(s_lower.begin(), s_lower.end(), s_lower.begin(), ::tolower);
-        bool v;
-        if (s.empty() || s_lower == "false") {
-            v = false;
-        } else if (s_lower == "true") {
-            v = true;
-        } else {
-            throw marshal_exception(seastar::format("unable to make boolean from '{}'", s));
-        }
-        return serialize_value(t, v);
+    managed_bytes operator()(const bytes_type_impl&) {
+        return from_hex(s.data());
     }
-    bytes operator()(const timeuuid_type_impl&) {
+    managed_bytes operator()(const boolean_type_impl& t) {
+        return s.with_linearized([&](std::string_view sv) {
+            sstring s_lower(sv.begin(), sv.end());
+            std::transform(s_lower.begin(), s_lower.end(), s_lower.begin(), ::tolower);
+            bool v;
+            if (sv.empty() || s_lower == "false") {
+                v = false;
+            } else if (s_lower == "true") {
+                v = true;
+            } else {
+                throw marshal_exception(seastar::format("unable to make boolean from '{}'", sv));
+            }
+            return managed_bytes(serialize_value(t, v));
+        });
+    }
+    managed_bytes operator()(const timeuuid_type_impl&) {
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
-        return timeuuid_type_impl::from_string_view(s).serialize();
+        return s.with_linearized([&](std::string_view sv) {
+            return managed_bytes(timeuuid_type_impl::from_string_view(sv).serialize());
+        });
     }
-    bytes operator()(const timestamp_date_base_class& t) {
+    managed_bytes operator()(const timestamp_date_base_class& t) {
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
-        return serialize_value(t, timestamp_type_impl::from_string_view(s));
+        return s.with_linearized([&](std::string_view sv) {
+            return managed_bytes(serialize_value(t, timestamp_type_impl::from_string_view(sv)));
+        });
     }
-    bytes operator()(const simple_date_type_impl& t) {
+    managed_bytes operator()(const simple_date_type_impl& t) {
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
-        return serialize_value(t, simple_date_type_impl::from_string_view(s));
+        return s.with_linearized([&](std::string_view sv) {
+            return managed_bytes(serialize_value(t, simple_date_type_impl::from_string_view(sv)));
+        });
     }
-    bytes operator()(const time_type_impl& t) {
+    managed_bytes operator()(const time_type_impl& t) {
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
-        return serialize_value(t, time_type_impl::from_string_view(s));
+        return s.with_linearized([&](std::string_view sv) {
+            return managed_bytes(serialize_value(t, time_type_impl::from_string_view(sv)));
+        });
     }
-    bytes operator()(const uuid_type_impl&) {
+    managed_bytes operator()(const uuid_type_impl&) {
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
-        return uuid_type_impl::from_string_view(s).serialize();
+        return s.with_linearized([&](std::string_view sv) {
+            return managed_bytes(uuid_type_impl::from_string_view(sv).serialize());
+        });
     }
-    template <typename T> bytes operator()(const floating_type_impl<T>& t) {
+    template <typename T> managed_bytes operator()(const floating_type_impl<T>& t) {
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
-        try {
-            auto d = boost::lexical_cast<T>(s.begin(), s.size());
-            return serialize_value(t, d);
-        } catch (const boost::bad_lexical_cast& e) {
-            throw marshal_exception(seastar::format("Invalid number format '{}'", s));
-        }
+        return s.with_linearized([&](std::string_view sv) {
+            try {
+                auto d = boost::lexical_cast<T>(sv.begin(), sv.size());
+                return managed_bytes(serialize_value(t, d));
+            } catch (const boost::bad_lexical_cast& e) {
+                throw marshal_exception(seastar::format("Invalid number format '{}'", sv));
+            }
+        });
     }
-    bytes operator()(const varint_type_impl& t) {
+    managed_bytes operator()(const varint_type_impl& t) {
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
-        try {
-            std::string str(s.begin(), s.end());
-            varint_type_impl::native_type num(str);
-            return serialize_value(t, num);
-        } catch (...) {
-            throw marshal_exception(seastar::format("unable to make int from '{}'", s));
-        }
+        return s.with_linearized([&](std::string_view sv) {
+            try {
+                std::string str(sv.begin(), sv.end());
+                varint_type_impl::native_type num(str);
+                return managed_bytes(serialize_value(t, num));
+            } catch (...) {
+                throw marshal_exception(seastar::format("unable to make int from '{}'", sv));
+            }
+        });
     }
-    bytes operator()(const decimal_type_impl& t) {
+    managed_bytes operator()(const decimal_type_impl& t) {
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
-        try {
-            decimal_type_impl::native_type bd(s);
-            return serialize_value(t, bd);
-        } catch (...) {
-            throw marshal_exception(seastar::format("unable to make BigDecimal from '{}'", s));
-        }
+        return s.with_linearized([&](std::string_view sv) {
+            try {
+                decimal_type_impl::native_type bd(sv);
+                return managed_bytes(serialize_value(t, bd));
+            } catch (...) {
+                throw marshal_exception(seastar::format("unable to make BigDecimal from '{}'", sv));
+            }
+        });
     }
-    bytes operator()(const duration_type_impl& t) {
+    managed_bytes operator()(const duration_type_impl& t) {
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
 
-        try {
-            return serialize_value(t, cql_duration(s));
-        } catch (cql_duration_error const& e) {
-            throw marshal_exception(e.what());
-        }
+        return s.with_linearized([&](std::string_view sv) {
+            try {
+                return managed_bytes(serialize_value(t, cql_duration(sv)));
+            } catch (cql_duration_error const& e) {
+                throw marshal_exception(e.what());
+            }
+        });
     }
-    bytes operator()(const empty_type_impl&) { return bytes(); }
-    bytes operator()(const inet_addr_type_impl& t) {
+    managed_bytes operator()(const empty_type_impl&) { return managed_bytes(); }
+    managed_bytes operator()(const inet_addr_type_impl& t) {
         // FIXME: support host names
         if (s.empty()) {
-            return bytes();
+            return managed_bytes();
         }
-        return serialize_value(t, t.from_string_view(s));
+        return s.with_linearized([&](std::string_view sv) {
+            return managed_bytes(serialize_value(t, t.from_string_view(sv)));
+        });
     }
-    bytes operator()(const tuple_type_impl& t) {
-        std::vector<std::string_view> field_strings = split_field_strings(s);
+    managed_bytes operator()(const tuple_type_impl& t) {
+        std::vector<utils::chunked_string_view> field_strings = split_field_strings(s);
         if (field_strings.size() > t.size()) {
             throw marshal_exception(
                     format("Invalid tuple literal: too many elements. Type {} expects {:d} but got {:d}",
                             t.as_cql3_type(), t.size(), field_strings.size()));
         }
-        std::vector<bytes> fields(field_strings.size());
+        std::vector<managed_bytes> fields(field_strings.size());
         std::vector<int32_t> field_len(field_strings.size(), -1);
         for (std::size_t i = 0; i < field_strings.size(); ++i) {
             if (field_strings[i] != "@") {
-                std::string field_string = unescape(field_strings[i]);
+                auto field_string = unescape(field_strings[i]);
                 fields[i] = t.type(i)->from_string(field_string);
                 field_len[i] = fields[i].size();
             }
         }
         return concat_fields(fields, field_len);
     }
-    bytes operator()(const vector_type_impl& t) {
+    managed_bytes operator()(const vector_type_impl& t) {
         // FIXME:
         abort();
-        return bytes();
+        return managed_bytes();
     }
-    bytes operator()(const collection_type_impl&) {
+    managed_bytes operator()(const collection_type_impl&) {
         // FIXME:
         abort();
-        return bytes();
+        return managed_bytes();
     }
 };
 }
 
-bytes abstract_type::from_string(std::string_view s) const { return visit(*this, from_string_visitor{s}); }
+managed_bytes abstract_type::from_string(utils::chunked_string_view s) const { return visit(*this, from_string_visitor{s}); }
 
 static sstring tuple_to_string(const tuple_type_impl &t, const tuple_type_impl::native_type& b) {
     std::ostringstream out;

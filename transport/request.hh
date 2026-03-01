@@ -12,6 +12,7 @@
 #include "utils/utf8.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/result.hh"
+#include "utils/chunked_string.hh"
 
 namespace cql_transport {
 
@@ -37,6 +38,15 @@ private:
     };
     static utils::result_with_exception_ptr<void> validate_utf8(std::string_view s) {
         auto error_pos = utils::utf8::validate_with_error_position(to_bytes_view(s));
+        if (error_pos) {
+            return bo::failure(exceptions::protocol_exception(format("Cannot decode string as UTF8, invalid character at byte offset {}", *error_pos)));
+        }
+        return bo::success();
+    }
+
+    template<FragmentedView View>
+    static utils::result_with_exception_ptr<void> validate_utf8_fragmented(View fv) {
+        auto error_pos = utils::utf8::validate_with_error_position_fragmented(fv);
         if (error_pos) {
             return bo::failure(exceptions::protocol_exception(format("Cannot decode string as UTF8, invalid character at byte offset {}", *error_pos)));
         }
@@ -158,6 +168,28 @@ public:
             return bo::failure(std::move(check).assume_error());
         }
         return s;
+    }
+
+    // Read a long string directly into chunked_string without linearization
+    utils::result_with_exception_ptr<utils::chunked_string> read_long_chunked_string() {
+        utils::result_with_exception_ptr<int32_t> n = read_int();
+        if (!n) [[unlikely]] {
+            return bo::failure(std::move(n).assume_error());
+        }
+        utils::result_with_exception_ptr<fragmented_temporary_buffer::view> view = _in.read_view(n.assume_value(), exception_creator());
+        if (!view) [[unlikely]] {
+            return bo::failure(std::move(view).assume_error());
+        }
+        // Validate UTF-8 without linearization
+        utils::result_with_exception_ptr<void> check = validate_utf8_fragmented(view.assume_value());
+        if (!check) [[unlikely]] {
+            return bo::failure(std::move(check).assume_error());
+        }
+        // Write the fragmented view into managed_bytes
+        managed_bytes mb(managed_bytes::initialized_later(), n.assume_value());
+        managed_bytes_mutable_view dest(mb);
+        write_fragmented(dest, view.assume_value());
+        return utils::chunked_string(std::move(mb));
     }
 
     utils::result_with_exception_ptr<bytes> read_bytes() {

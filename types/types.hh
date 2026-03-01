@@ -44,6 +44,7 @@ class big_decimal;
 namespace utils {
 
 class multiprecision_int;
+class chunked_string_view;
 
 }
 
@@ -447,7 +448,7 @@ public:
         return to_string(bytes_view(b));
     }
     sstring to_string_impl(const data_value& v) const;
-    bytes from_string(std::string_view text) const;
+    managed_bytes from_string(utils::chunked_string_view text) const;
     bool is_counter() const;
     bool is_string() const;
     bool is_collection() const;

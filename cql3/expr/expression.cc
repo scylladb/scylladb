@@ -776,9 +776,9 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
             },
             [&] (const untyped_constant& uc) {
                 if (uc.partial_type == untyped_constant::type_class::string) {
-                    out = fmt::format_to(out, "'{}'", uc.raw_text);
+                    out = fmt::format_to(out, "'{}'", uc.raw_text.linearize());
                 } else {
-                    out = fmt::format_to(out, "{}", uc.raw_text);
+                    out = fmt::format_to(out, "{}", uc.raw_text.linearize());
                 }
             },
             [&] (const tuple_constructor& tc) {
@@ -2428,8 +2428,10 @@ std::map<sstring, sstring> convert_property_map(const collection_constructor& ma
             add_recognition_error(msg);
             break;
         }
-        if (!res.emplace(left->raw_text, right->raw_text).second) {
-            sstring msg = fmt::format("Multiple definition for property {}", left->raw_text);
+        const auto left_text = left->raw_text.linearize();
+        const auto right_text = right->raw_text.linearize();
+        if (!res.emplace(left_text, right_text).second) {
+            sstring msg = fmt::format("Multiple definition for property {}", left_text);
             add_recognition_error(msg);
             break;
         }
@@ -2462,8 +2464,10 @@ convert_extended_property_map(const collection_constructor& map, error_sink_fn a
         }
         auto right_str = expr::as_if<untyped_constant>(&entry_tuple->elements[1]);
         if (right_str) {
-            if (!res.emplace(left->raw_text, right_str->raw_text).second) {
-                sstring msg = fmt::format("Multiple definition for property {}", left->raw_text);
+            const auto left_text = left->raw_text.linearize();
+            const auto right_text = right_str->raw_text.linearize();
+            if (!res.emplace(left_text, right_text).second) {
+                sstring msg = fmt::format("Multiple definition for property {}", left_text);
                 add_recognition_error(msg);
                 break;
             }
@@ -2487,10 +2491,11 @@ convert_extended_property_map(const collection_constructor& map, error_sink_fn a
                     add_recognition_error(msg);
                     return "<invalid>";
                 }
-                return elem->raw_text;
+                return elem->raw_text.linearize();
             }) | std::ranges::to<std::vector<sstring>>();
-            if (!res.emplace(left->raw_text, std::move(values)).second) {
-                sstring msg = fmt::format("Multiple definition for property {}", left->raw_text);
+            const auto left_text = left->raw_text.linearize();
+            if (!res.emplace(left_text, std::move(values)).second) {
+                sstring msg = fmt::format("Multiple definition for property {}", left_text);
                 add_recognition_error(msg);
                 break;
             }

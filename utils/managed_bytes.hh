@@ -13,16 +13,12 @@
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
 #include "utils/fragment_range.hh"
+#include "utils/managed_bytes_fwd.hh"
 #include <seastar/util/alloc_failure_injector.hh>
 #include <type_traits>
 #include <utility>
 
 class bytes_ostream;
-
-template <mutable_view is_mutable_view>
-class managed_bytes_basic_view;
-using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
-using managed_bytes_mutable_view = managed_bytes_basic_view<mutable_view::yes>;
 
 // Used to store managed_bytes data in layout 3. (See the doc comment of managed_bytes).
 // Also used as the underlying storage for bytes_ostream.
@@ -511,6 +507,20 @@ bytes_opt to_bytes_opt(const managed_bytes_opt&);
 ///
 /// \note copies data
 managed_bytes_opt to_managed_bytes_opt(const bytes_opt&);
+
+template<FragmentedView View>
+managed_bytes from_hex(View view) {
+    if (view.size_bytes() % 2) {
+        throw std::invalid_argument("A hex string representing bytes must have an even length");
+    }
+    managed_bytes result{managed_bytes::initialized_later(), view.size_bytes() / 2};
+    managed_bytes_mutable_view dest(result);
+    for (auto frag : fragment_range(view)) {
+        auto v = std::string_view(reinterpret_cast<const char*>(frag.data()), frag.size());
+        write_fragmented(dest, single_fragmented_view(from_hex(v)));
+    }
+    return result;
+}
 
 template<FragmentedView View>
 inline managed_bytes::managed_bytes(View v) : managed_bytes(initialized_later(), v.size_bytes()) {

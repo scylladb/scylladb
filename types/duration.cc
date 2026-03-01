@@ -301,7 +301,7 @@ std::optional<cql_duration> parse_duration_iso8601_format(std::string_view s) {
     static const auto pattern = boost::regex("P((\\d+)Y)?((\\d+)M)?((\\d+)D)?(T((\\d+)H)?((\\d+)M)?((\\d+)S)?)?");
 
     boost::cmatch match;
-    if (!boost::regex_match(s.data(), match, pattern)) {
+    if (!boost::regex_match(s.begin(), s.end(), match, pattern)) {
         return {};
     }
 
@@ -341,7 +341,7 @@ std::optional<cql_duration> parse_duration_iso8601_alternative_format(std::strin
     static const auto pattern = boost::regex("P(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})");
 
     boost::cmatch match;
-    if (!boost::regex_match(s.data(), match, pattern)) {
+    if (!boost::regex_match(s.begin(), s.end(), match, pattern)) {
         return {};
     }
 
@@ -359,7 +359,7 @@ std::optional<cql_duration> parse_duration_iso8601_week_format(std::string_view 
     static const auto pattern = boost::regex("P(\\d+)W");
 
     boost::cmatch match;
-    if (!boost::regex_match(s.data(), match, pattern)) {
+    if (!boost::regex_match(s.begin(), s.end(), match, pattern)) {
         return {};
     }
 
@@ -395,7 +395,7 @@ cql_duration::cql_duration(std::string_view s) {
     const bool is_negative = (s.length() != 0) && (s[0] == '-');
 
     // Without any sign indicator ('-').
-    const auto ps = (is_negative ? s.cbegin() + 1 : s.cbegin());
+    const auto ps = (is_negative ? s.substr(1) : s);
 
     const auto d = parse_duration(ps);
     if (!d) {

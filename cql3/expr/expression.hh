@@ -19,6 +19,7 @@
 #include "cql3/functions/function_name.hh"
 #include "seastarx.hh"
 #include "cql3/values.hh"
+#include "utils/chunked_string.hh"
 
 class row;
 
@@ -369,7 +370,7 @@ struct bind_variable {
 struct untyped_constant {
     enum type_class { integer, floating_point, string, boolean, duration, uuid, hex, null };
     type_class partial_type;
-    sstring raw_text;
+    utils::chunked_string raw_text;
 
     friend bool operator==(const untyped_constant&, const untyped_constant&) = default;
 };
