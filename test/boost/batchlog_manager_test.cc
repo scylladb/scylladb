@@ -169,7 +169,126 @@ void check_range_tombstone_end(const fragment& f, std::optional<bound_weight> bo
     }
 }
 
+uint64_t prepare_batches(cql_test_env& env, std::string_view batchlog_table_name, uint64_t batch_count, bool replay_fails,
+        db::batchlog_manager::post_replay_cleanup cleanup) {
+    const bool is_v1 = batchlog_table_name == db::system_keyspace::BATCHLOG;
+
+    uint64_t failed_batches = 0;
+
+    auto& bm = env.batchlog_manager().local();
+
+    env.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
+
+    for (uint64_t i = 0; i != batch_count; ++i) {
+        std::vector<sstring> queries;
+        std::vector<std::string_view> query_views;
+        for (uint64_t j = 0; j != i+2; ++j) {
+            queries.emplace_back(format("INSERT INTO tbl (pk, v) VALUES ({}, 'value');", j));
+            query_views.emplace_back(queries.back());
+        }
+        const bool fail = i % 2;
+        bool injected_exception_thrown = false;
+
+        std::optional<scoped_error_injection> error_injection;
+        if (fail) {
+            ++failed_batches;
+            error_injection.emplace("storage_proxy_fail_send_batch");
+        }
+        try {
+            env.execute_batch(
+                    query_views,
+                    cql3::statements::batch_statement::type::LOGGED,
+                    std::make_unique<cql3::query_options>(db::consistency_level::ONE, std::vector<cql3::raw_value>())).get();
+        } catch (std::runtime_error& ex) {
+            if (fail) {
+                BOOST_REQUIRE_EQUAL(std::string(ex.what()), "Error injection: failing to send batch");
+                injected_exception_thrown = true;
+            } else {
+                throw;
+            }
+        }
+        BOOST_REQUIRE_EQUAL(injected_exception_thrown, fail);
+    }
+
+    // v1 (system.batchlog) is partition-oriented, while v2 (system.batchlog_v2) is row oriented. We need to switch the partition-region filter accordingly.
+    const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = {} ALLOW FILTERING", db::system_keyspace::NAME, batchlog_table_name, is_v1 ? 0 : 2);
+
+    assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, batchlog_table_name)).get())
+        .is_rows()
+        .with_size(failed_batches);
+
+    assert_that(env.execute_cql(fragments_query).get())
+        .is_rows(tests::dump_to_logs::yes)
+        .with_size(batch_count)
+        .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
+            columns.with_typed_column<sstring>("mutation_source", "memtable:0");
+        });
+
+    std::optional<scoped_error_injection> error_injection;
+    if (replay_fails) {
+        error_injection.emplace("storage_proxy_fail_replay_batch");
+    }
+
+    bm.do_batch_log_replay(cleanup).get();
+
+    assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, batchlog_table_name)).get())
+        .is_rows(tests::dump_to_logs::yes)
+        .with_size(replay_fails ? failed_batches : 0);
+
+    return failed_batches;
+}
+
 } // anonymous namespace
+
+future<> run_batchlog_v1_cleanup_with_failed_batches_test(bool replay_fails) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+
+    cql_test_config cfg;
+    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
+    cfg.batchlog_replay_timeout = 0s;
+    cfg.batchlog_delay = 9999h;
+    cfg.disabled_features.insert("BATCHLOG_V2");
+
+    return do_with_cql_env_thread([=] (cql_test_env& env) -> void {
+        const uint64_t batch_count = 8;
+        const uint64_t failed_batches = prepare_batches(env, db::system_keyspace::BATCHLOG, batch_count, replay_fails, db::batchlog_manager::post_replay_cleanup::no);
+
+        const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = 0 ALLOW FILTERING", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
+
+        const auto fragment_results = cql3::untyped_result_set(env.execute_cql(fragments_query).get());
+
+        const auto batchlog_v1_schema = env.local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
+
+        size_t live{0};
+        size_t dead{0};
+        for (const auto& row : fragment_results) {
+            const auto metadata = row.get_as<sstring>("metadata");
+            auto metadata_json = rjson::parse(metadata);
+            if (metadata_json.HasMember("tombstone") && metadata_json["tombstone"].IsObject() && metadata_json["tombstone"].HasMember("deletion_time")) {
+                ++dead;
+            } else {
+                ++live;
+            }
+        }
+
+        if (replay_fails) {
+            BOOST_REQUIRE_EQUAL(failed_batches, live);
+        } else {
+            BOOST_REQUIRE_EQUAL(0, live);
+        }
+        BOOST_REQUIRE_EQUAL(batch_count, dead + live);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_batchlog_v1_replay_fails) {
+    return run_batchlog_v1_cleanup_with_failed_batches_test(true);
+}
+
+SEASTAR_TEST_CASE(test_batchlog_v1_replay) {
+    return run_batchlog_v1_cleanup_with_failed_batches_test(false);
+}
 
 future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::batchlog_manager::post_replay_cleanup cleanup) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
@@ -182,67 +301,10 @@ future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::ba
     cfg.batchlog_delay = 9999h;
 
     return do_with_cql_env_thread([=] (cql_test_env& env) -> void {
-        auto& bm = env.batchlog_manager().local();
-
-        env.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
-
         const uint64_t batch_count = 8;
-        uint64_t failed_batches = 0;
-
-        for (uint64_t i = 0; i != batch_count; ++i) {
-            std::vector<sstring> queries;
-            std::vector<std::string_view> query_views;
-            for (uint64_t j = 0; j != i+2; ++j) {
-                queries.emplace_back(format("INSERT INTO tbl (pk, v) VALUES ({}, 'value');", j));
-                query_views.emplace_back(queries.back());
-            }
-            const bool fail = i % 2;
-            bool injected_exception_thrown = false;
-
-            std::optional<scoped_error_injection> error_injection;
-            if (fail) {
-                ++failed_batches;
-                error_injection.emplace("storage_proxy_fail_send_batch");
-            }
-            try {
-                env.execute_batch(
-                        query_views,
-                        cql3::statements::batch_statement::type::LOGGED,
-                        std::make_unique<cql3::query_options>(db::consistency_level::ONE, std::vector<cql3::raw_value>())).get();
-            } catch (std::runtime_error& ex) {
-                if (fail) {
-                    BOOST_REQUIRE_EQUAL(std::string(ex.what()), "Error injection: failing to send batch");
-                    injected_exception_thrown = true;
-                } else {
-                    throw;
-                }
-            }
-            BOOST_REQUIRE_EQUAL(injected_exception_thrown, fail);
-        }
+        const uint64_t failed_batches = prepare_batches(env, db::system_keyspace::BATCHLOG_V2, batch_count, replay_fails, cleanup);
 
         const auto fragments_query = format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE partition_region = 2 ALLOW FILTERING", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2);
-
-        assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2)).get())
-            .is_rows()
-            .with_size(failed_batches);
-
-        assert_that(env.execute_cql(fragments_query).get())
-            .is_rows()
-            .with_size(batch_count)
-            .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
-                columns.with_typed_column<sstring>("mutation_source", "memtable:0");
-            });
-
-        std::optional<scoped_error_injection> error_injection;
-        if (replay_fails) {
-            error_injection.emplace("storage_proxy_fail_replay_batch");
-        }
-
-        bm.do_batch_log_replay(cleanup).get();
-
-        assert_that(env.execute_cql(format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2)).get())
-            .is_rows()
-            .with_size(replay_fails ? failed_batches : 0);
 
         const auto fragment_results = cql3::untyped_result_set(env.execute_cql(fragments_query).get());
 
@@ -693,7 +755,7 @@ SEASTAR_TEST_CASE(test_batchlog_replay_write_time) {
 
         auto get_write_attempts = [&] () -> uint64_t {
             return env.batchlog_manager().map_reduce0([] (const db::batchlog_manager& bm) {
-                return bm.stats().write_attempts;
+                return bm.get_stats().write_attempts;
             }, uint64_t(0), std::plus<uint64_t>{}).get();
         };
 
