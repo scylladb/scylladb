@@ -12,8 +12,14 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
+<<<<<<< HEAD
 from test.cluster.conftest import skip_mode
 from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+||||||| parent of c785d242a7 (tests: extract get_topology_version helper)
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+=======
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version
+>>>>>>> c785d242a7 (tests: extract get_topology_version helper)
 from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
 
 import pytest
@@ -27,6 +33,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 import itertools
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -1833,9 +1840,27 @@ async def test_crash_on_missing_table_from_load_stats(manager: ManagerClient):
         s0_mark = await s0_log.mark()
         await s0_log.wait_for('raft topology: Refreshed table load stats for all DC', from_mark=s0_mark)
 
+
 @pytest.mark.asyncio
+<<<<<<< HEAD
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
+||||||| parent of df73f723a6 (storage_proxy: hold erms in replica handlers)
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
+=======
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablets_barrier_waits_for_replica_erms(manager: ManagerClient):
+    """
+    The test verifies that tablet replicas hold ERMS while processing requests,
+    and that the tablet's global barrier waits for all replicas to acknowledge it.
+    To do this, the test starts a read request and makes it hang on the
+    `replica_query_wait` injection, then initiates tablet migration. Finally, it
+    checks that the tablet's global barrier waits for the replica handling that
+    request to complete.
+    """
+
+>>>>>>> df73f723a6 (storage_proxy: hold erms in replica handlers)
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -1864,7 +1889,6 @@ async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
 
         replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
 
-        s0_host_id = await manager.get_host_id(servers[0].server_id)
         s1_host_id = await manager.get_host_id(servers[1].server_id)
         dst_shard = 0
 
@@ -1876,13 +1900,19 @@ async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
         replica_query = cql.run_async(f"SELECT * from {ks}.test where pk={key} BYPASS CACHE", host=hosts[1])
         await s0_log.wait_for('replica_query_wait: waiting', from_mark=s0_mark)
 
-        await manager.api.enable_injection(servers[0].ip_addr, "tablet_cleanup_completion_wait", one_shot=False)
+        version_before_move = await get_topology_version(cql, hosts[0])
 
+        s0_mark = await s0_log.mark()
         migration_task = asyncio.create_task(
             manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token))
 
         # migration should proceed once replica query times out on coordinator, causing it to be abandoned
-        await s0_log.wait_for('tablet_cleanup_completion_wait: waiting', from_mark=s0_mark)
+        new_version = version_before_move + 1
+        await s0_log.wait_for(re.escape(
+            f"Got raft_topology_cmd::barrier_and_drain, version {new_version}, "
+            f"current version {new_version}, "
+            f"stale versions (version: use_count): {{{version_before_move}: 1}}"),
+            from_mark=s0_mark)
 
         await manager.api.message_injection(servers[0].ip_addr, "replica_query_wait")
         await manager.api.disable_injection(servers[0].ip_addr, "replica_query_wait")
@@ -1893,7 +1923,6 @@ async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
         except:
             pass
 
-        await manager.api.message_injection(servers[0].ip_addr, "tablet_cleanup_completion_wait")
         logger.info("Waiting for migration to finish")
         await migration_task
         logger.info("Migration done")
