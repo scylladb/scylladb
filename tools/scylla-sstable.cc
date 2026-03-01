@@ -2294,11 +2294,11 @@ void filter_operation(schema_ptr schema, reader_permit permit, const std::vector
         fmt::print(std::cout, "Filtering {}... ", name);
 
         auto reader = make_reader(source);
+        auto close_reader = deferred_close(reader);
 
         // Peek the reader to see if it has any content after filtering.
         if (!reader.peek().get()) {
             fmt::print(std::cout, "no output\n");
-            reader.close().get();
             continue;
         }
 
@@ -2313,6 +2313,8 @@ void filter_operation(schema_ptr schema, reader_permit permit, const std::vector
                 schema,
                 writer_cfg,
                 encoding_stats{}).get();
+
+        close_reader.cancel();
 
         fmt::print(std::cout, "output written to {}\n", new_sst->get_filename());
     }
