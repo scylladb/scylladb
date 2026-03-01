@@ -547,6 +547,7 @@ enum class scylla_metadata_type : uint32_t {
     ExtTimestampStats = 9,
     SSTableIdentifier = 10,
     Schema = 11,
+    ComponentsDigests = 12,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -644,6 +645,7 @@ struct scylla_metadata {
     using ext_timestamp_stats = disk_hash<uint32_t, ext_timestamp_stats_type, int64_t>;
     using sstable_identifier = sstable_identifier_type;
     using sstable_schema = sstable_schema_type;
+    using components_digests = disk_hash<uint32_t, component_type, uint32_t>;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
@@ -656,8 +658,10 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ComponentsDigests, components_digests>
             > data;
+    std::optional<uint32_t> digest;
 
     sstable_enabled_features get_features() const {
         auto features = data.get<scylla_metadata_type::Features, sstable_enabled_features>();
@@ -691,9 +695,20 @@ struct scylla_metadata {
         auto* sid = data.get<scylla_metadata_type::SSTableIdentifier, scylla_metadata::sstable_identifier>();
         return sid ? sid->value : sstable_id::create_null_id();
     }
-
-    template <typename Describer>
-    auto describe_type(sstable_version_types v, Describer f) { return f(data); }
+    void set_sstable_identifier(sstable_id sid = sstable_id{utils::UUID_gen::get_time_UUID()}) {
+        data.set<scylla_metadata_type::SSTableIdentifier>(scylla_metadata::sstable_identifier{sid});
+    }
+    components_digests& get_or_create_components_digests() {
+        auto* cd = data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
+        if (!cd) {
+            data.set<scylla_metadata_type::ComponentsDigests>(components_digests{});
+            cd = data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
+        }
+        return *cd;
+    }
+    const components_digests* get_components_digests() const {
+        return data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
+    }
 };
 
 static constexpr int DEFAULT_CHUNK_SIZE = 65536;

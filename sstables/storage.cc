@@ -69,6 +69,8 @@ private:
     future<> touch_temp_dir(const sstable& sst);
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
     future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
+    future<> link_with_excluded_components(const sstable& sst, generation_type new_gen,
+            const std::unordered_set<component_type>& excluded_components) const override;
 
     future<> change_dir(sstring new_dir) {
         auto old_dir = std::exchange(_dir, opened_directory(new_dir));
@@ -213,13 +215,13 @@ void filesystem_storage::open(sstable& sst) {
                                     open_flags::create |
                                     open_flags::exclusive,
                                     options).get();
-    auto w = file_writer(output_stream<char>(std::move(sink)), component_name(sst, component_type::TemporaryTOC));
+    auto w = std::make_unique<crc32_digest_file_writer>(std::move(sink), sst.sstable_buffer_size, component_name(sst, component_type::TemporaryTOC));
 
     bool toc_exists = file_exists(fmt::to_string(sst.filename(component_type::TOC))).get();
     if (toc_exists) {
         // TOC will exist at this point if write_components() was called with
         // the generation of a sstable that exists.
-        w.close();
+        w->close();
         remove_file(fmt::to_string(sst.filename(component_type::TemporaryTOC))).get();
         throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {} of {}.{}", sst._generation, sst._schema->ks_name(), sst._schema->cf_name()));
     }
@@ -410,6 +412,32 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
 
 future<> filesystem_storage::create_links(const sstable& sst, const std::filesystem::path& dir) const {
     return create_links_common(sst, dir.native(), sst._generation, link_mode::default_mode);
+}
+
+future<> filesystem_storage::link_with_excluded_components(const sstable& sst, generation_type new_gen,
+        const std::unordered_set<component_type>& excluded_components) const {
+    sstlog.trace("link_with_excluded_components: {} -> generation={} excluded={}",
+            sst.get_filename(), new_gen, excluded_components);
+
+    auto dst_dir = _dir.native();
+    auto comps = sst.all_components();
+
+    auto dst_temp_toc = filename(sst, dst_dir, new_gen, component_type::TemporaryTOC);
+    co_await sst.sstable_write_io_check(idempotent_link_file, fmt::to_string(sst.filename(component_type::TOC)), std::move(dst_temp_toc));
+    co_await _dir.sync(sst._write_error_handler);
+
+    co_await parallel_for_each(comps, [&] (auto& p) {
+        auto& [comp_id, comp_name] = p;
+        if (excluded_components.contains(comp_id) || comp_id == component_type::TOC) {
+            return make_ready_future<>();
+        }
+        auto src = filename(sst, _dir.native(), sst._generation, comp_name);
+        auto dst = filename(sst, dst_dir, new_gen, comp_name);
+        return sst.sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
+    });
+
+    co_await _dir.sync(sst._write_error_handler);
+    sstlog.trace("link_with_excluded_components: {} -> generation={}: done", sst.get_filename(), new_gen);
 }
 
 future<> filesystem_storage::snapshot(const sstable& sst, sstring name) const {
@@ -686,15 +714,10 @@ void object_storage_base::open(sstable& sst) {
     sst.manager().sstables_registry().create_entry(owner(), status_creating, sst._state, std::move(desc)).get();
 
     memory_data_sink_buffers bufs;
-    sst.write_toc(
-        file_writer(
-            output_stream<char>(
-                data_sink(
-                    std::make_unique<memory_data_sink>(bufs)
-                )
-            )
-        )
-    );
+    auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
+    auto w = std::make_unique<crc32_digest_file_writer>(std::move(out), sst.sstable_buffer_size, component_name(sst, component_type::TOC));
+
+    sst.write_toc(std::move(w));
     put_object(make_object_name(sst, component_type::TOC), std::move(bufs)).get();
 }
 

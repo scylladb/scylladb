@@ -31,6 +31,7 @@ in individual sections
         | scylla_build_id
         | scylla_version
         | ext_timestamp_stats
+        | components_digests
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -65,8 +66,20 @@ if the sstable has numerical generation).  Yet, unlike the sstable that may
 change if the sstable is migrated to a different shard or node, the sstable
 identifier is stable and copied with the rest of the scylla metadata.
 
+`components_digests` (tag 12): a `map<component_type, uint32_t>` with CRC32 digests of
+all SSTable component files that are checksummed during write. Each entry maps a component
+type (e.g., Data, Index, Filter, Statistics, etc.) to its CRC32 checksum. This allows
+verifying the integrity of individual component files.
+
 The [scylla sstable dump-scylla-metadata](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst#dump-scylla-metadata) tool
 can be used to dump the scylla metadata in JSON format.
+
+## Trailing digest
+
+When the `components_digests` subcomponent is present, the `Scylla.db` file contains
+a trailing CRC32 digest appended after the serialized subcomponents data.
+This digest covers the entire serialized `data` section (i.e., all subcomponents)
+and can be used to verify the integrity of the scylla metadata itself.
 
 ## sharding_metadata subcomponent
 

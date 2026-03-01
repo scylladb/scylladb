@@ -12,6 +12,7 @@
 #include <functional>
 #include <optional>
 #include <variant>
+#include "sstables/component_type.hh"
 #include "sstables/types_fwd.hh"
 #include "sstables/sstable_set.hh"
 #include "compaction_fwd.hh"
@@ -30,6 +31,7 @@ enum class compaction_type {
     Reshape = 7,
     Split = 8,
     Major = 9,
+    RewriteComponent = 10,
 };
 
 struct compaction_completion_desc {
@@ -90,8 +92,15 @@ public:
     struct split {
         mutation_writer::classify_by_token_group classifier;
     };
+    struct component_rewrite {
+        sstables::component_type component_to_rewrite;
+        std::function<void(sstables::sstable&)> modifier;
+
+        using update_sstable_id = bool_class<class update_sstable_id_tag>;
+        update_sstable_id update_id = update_sstable_id::yes;
+    };
 private:
-    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split, major>;
+    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split, major, component_rewrite>;
 
 private:
     options_variant _options;
@@ -127,6 +136,10 @@ public:
 
     static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes, scrub::drop_unfixable_sstables drop_unfixable_sstables = scrub::drop_unfixable_sstables::no) {
         return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables});
+    }
+
+    static compaction_type_options make_component_rewrite(component_type component, std::function<void(sstables::sstable&)> modifier, component_rewrite::update_sstable_id update_id = component_rewrite::update_sstable_id::yes) {
+        return compaction_type_options(component_rewrite{.component_to_rewrite = component, .modifier = std::move(modifier), .update_id = update_id});
     }
 
     static compaction_type_options make_split(mutation_writer::classify_by_token_group classifier) {
