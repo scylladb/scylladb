@@ -647,9 +647,10 @@ public:
     /// Returns the primary replica for the tablet
     tablet_replica get_primary_replica(tablet_id id, const locator::topology& topo) const;
 
-    /// Returns the secondary replica for the tablet, which is assumed to be directly following the primary replica in the replicas vector
+    /// Returns the secondary replica for the tablet: the replica that immediately follows the primary
+    /// replica in the topology-sorted replica list.
     /// \throws std::runtime_error if the tablet has less than 2 replicas.
-    tablet_replica get_secondary_replica(tablet_id id) const;
+    tablet_replica get_secondary_replica(tablet_id id, const locator::topology& topo) const;
 
     // Returns the replica that matches hosts and dcs filters for tablet_task_info.
     std::optional<tablet_replica> maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const;
