@@ -3763,6 +3763,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         const auto& topology = sharded_db.local().get_token_metadata().get_topology();
         std::optional<int64_t> min_tablet_count;
         std::vector<snapshot_tablet_info> tablets;
+        std::unordered_set<size_t> tids;
         if (t.uses_tablets()) {
             SCYLLA_ASSERT(!tablet_counts.empty());
             min_tablet_count = *std::ranges::min_element(tablet_counts);
@@ -3774,7 +3775,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                     auto tok = sst.first_token;
                     auto tid = tm.get_tablet_id(dht::token::from_int64(tok));
                     sst.tablet_id = tid.id;
-                    if (std::none_of(tablets.begin(), tablets.end(), [tid](auto& sti) { return sti.id == tid.id; })) {
+                    if (tids.emplace(tid.id).second) {
                         auto& tinfo = tm.get_tablet_info(tid);
                         tablets.emplace_back(snapshot_tablet_info{
                             .id = tid.id,
