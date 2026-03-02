@@ -283,7 +283,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
                 auto schema = co_await create_test_table(env, "ks", "vs");
                 auto as = abort_source_timeout();
                 auto& vs = env.local_qp().vector_store_client();
-                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"bad.authority.here", std::nullopt}});
+                configure(vs)
+                        .with_dns_refresh_interval(seconds(1))
+                        .with_dns({{"bad.authority.here", std::nullopt}})
+                        .with_wait_for_client_timeout(milliseconds(100));
 
                 vs.start_background_tasks();
 

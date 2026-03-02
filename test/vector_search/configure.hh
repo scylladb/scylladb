@@ -8,6 +8,7 @@
 
 #pragma once
 #include "vector_search/vector_store_client.hh"
+#include "utils.hh"
 #include <seastar/core/future.hh>
 #include <seastar/net/inet_address.hh>
 #include <optional>
@@ -23,7 +24,7 @@ public:
     explicit configure(::vector_search::vector_store_client& vs)
         : vs_ref(vs) {
         with_dns_refresh_interval(std::chrono::seconds(2));
-        with_wait_for_client_timeout(std::chrono::milliseconds(100));
+        with_wait_for_client_timeout(STANDARD_WAIT);
         with_dns_resolver([](auto const& host) -> seastar::future<std::optional<seastar::net::inet_address>> {
             co_return seastar::net::inet_address("127.0.0.1");
         });
