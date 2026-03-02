@@ -12,10 +12,12 @@
 #include <fmt/std.h>
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
+#include "test/lib/log.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/assert.hh"
 #include "utils/to_string.hh"
 #include "bytes.hh"
+#include "cql3/query_result_printer.hh"
 
 static inline void fail(std::string_view msg, std::source_location loc) {
     throw std::runtime_error(std::format("assertion at {}:{} failed: {}", loc.file_name(), loc.line(), msg));
@@ -62,10 +64,16 @@ columns_assertions& columns_assertions::with_raw_column(const char* name, manage
     });
 }
 
-rows_assertions::rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows, std::source_location loc)
+rows_assertions::rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows, tests::dump_to_logs dump, std::source_location loc)
     : _rows(rows)
     , _loc(loc)
-{ }
+{
+    if (dump) {
+        std::stringstream ss;
+        cql3::print_query_results_text(ss, _rows->rs());
+        testlog.debug("Query results for assert_that().is_rows(dump_to_logs::yes) at {}:{}:\n{}", _loc.file_name(), _loc.line(), ss.str());
+    }
+}
 
 rows_assertions
 rows_assertions::with_size(size_t size) {
@@ -239,12 +247,12 @@ result_msg_assertions::result_msg_assertions(shared_ptr<cql_transport::messages:
     , _loc(loc)
 { }
 
-rows_assertions result_msg_assertions::is_rows() {
+rows_assertions result_msg_assertions::is_rows(tests::dump_to_logs dump) {
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(_msg);
     if (!rows) {
         fail("Expected rows in result set", _loc);
     }
-    return rows_assertions(rows, _loc);
+    return rows_assertions(rows, dump, _loc);
 }
 
 result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg, std::source_location loc) {

@@ -182,6 +182,7 @@ public:
     gms::feature removenode_with_left_token_ring { *this, "REMOVENODE_WITH_LEFT_TOKEN_RING"sv };
     gms::feature size_based_load_balancing { *this, "SIZE_BASED_LOAD_BALANCING"sv };
     gms::feature topology_noop_request { *this, "TOPOLOGY_NOOP_REQUEST"sv };
+    gms::feature batchlog_v2 { *this, "BATCHLOG_V2"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
