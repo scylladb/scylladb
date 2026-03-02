@@ -1011,8 +1011,9 @@ SEASTAR_TEST_CASE(vector_store_client_https) {
 
                 auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
-                BOOST_CHECK(keys);
-                co_return;
+                if (!keys) {
+                    BOOST_FAIL("Expected successful ANN result, but got error: " << std::visit(vector_search::error_visitor{}, keys.error()));
+                }
             },
             cfg)
             .finally(seastar::coroutine::lambda([&] -> future<> {
