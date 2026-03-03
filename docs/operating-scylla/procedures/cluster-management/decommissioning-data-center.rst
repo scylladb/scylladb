@@ -75,6 +75,7 @@ Procedure
 
       cqlsh> ALTER KEYSPACE nba WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3};
 
+<<<<<<< HEAD
    For tablet keyspaces, update the replication factor one by one:
 
    .. code-block:: shell
@@ -102,6 +103,23 @@ Procedure
 
          Consider :ref:`upgrading rf_rack_valid_keyspaces option to enforce_rack_list option <keyspace-rf-rack-valid-to-enforce-rack-list>` to ensure all tablet keyspaces use rack lists.
 
+||||||| parent of cf5571c93b (Merge '[Backport 2025.4] docs: update a documentation of adding/removing DC and rebuilding a node' from Scylladb[bot])
+=======
+   For tablet keyspaces, update the replication factor one by one:
+
+   .. code-block:: shell
+
+      cqlsh> DESCRIBE nba2
+      cqlsh> CREATE KEYSPACE nba2 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 2, 'EUROPE-DC' : 3} AND tablets = { 'enabled': true };
+
+   .. code-block:: shell
+
+      cqlsh> ALTER KEYSPACE nba2 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 1, 'EUROPE-DC' : 3} AND tablets = { 'enabled': true };
+      cqlsh> ALTER KEYSPACE nba2 WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : 3, 'ASIA-DC' : 0, 'EUROPE-DC' : 3} AND tablets = { 'enabled': true };
+
+   .. note:: If ``rf_rack_valid_keyspaces`` option is set, the DC cannot be removed. To proceed, first restart all nodes in the cluster disabling this option, then follow the procedure described above. If ``rf_rack_valid_keyspaces`` is disabled, no :doc:`Materialized Views </cql/mv>` are allowed.
+
+>>>>>>> cf5571c93b (Merge '[Backport 2025.4] docs: update a documentation of adding/removing DC and rebuilding a node' from Scylladb[bot])
 #. Run :doc:`nodetool decommission </operating-scylla/nodetool-commands/decommission>` on every node in the data center that is to be removed.
    Refer to :doc:`Remove a Node from a ScyllaDB Cluster - Down Scale </operating-scylla/procedures/cluster-management/remove-node>` for further information.
 

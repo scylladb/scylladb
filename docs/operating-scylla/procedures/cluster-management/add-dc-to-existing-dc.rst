@@ -189,6 +189,7 @@ Add New DC
       CREATE KEYSPACE system_distributed WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
       CREATE KEYSPACE system_traces WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3};
 
+<<<<<<< HEAD
    For tablet keyspaces, update the replication factor one by one:
 
    .. code-block:: cql
@@ -232,6 +233,27 @@ Add New DC
          Consider :ref:`upgrading rf_rack_valid_keyspaces option to enforce_rack_list option <keyspace-rf-rack-valid-to-enforce-rack-list>` to ensure all tablet keyspaces use rack lists.
 
 #. If any vnode keyspace was altered, run ``nodetool rebuild`` on each node in the new datacenter, specifying the existing datacenter name in the rebuild command.
+||||||| parent of cf5571c93b (Merge '[Backport 2025.4] docs: update a documentation of adding/removing DC and rebuilding a node' from Scylladb[bot])
+#. Run ``nodetool rebuild`` on each node in the new datacenter, specify the existing datacenter name in the rebuild command.
+=======
+   For tablet keyspaces, update the replication factor one by one:
+
+   .. code-block:: cql
+
+      DESCRIBE KEYSPACE mykeyspace2;
+
+      CREATE KEYSPACE mykeyspace2 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3} AND tablets = { 'enabled': true };
+
+   .. code-block:: cql
+
+      ALTER KEYSPACE mykeyspace2 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 1} AND tablets = { 'enabled': true };
+      ALTER KEYSPACE mykeyspace2 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 2} AND tablets = { 'enabled': true };
+      ALTER KEYSPACE mykeyspace2 WITH replication = { 'class' : 'NetworkTopologyStrategy', '<existing_dc>' : 3, '<new_dc>' : 3} AND tablets = { 'enabled': true };
+
+   .. note:: If ``rf_rack_valid_keyspaces`` option is set, a new DC (rack) cannot be added. To proceed, first restart all nodes in the cluster disabling this option, then follow the procedure described above. If ``rf_rack_valid_keyspaces`` is disabled, no :doc:`Materialized Views </cql/mv>` are allowed.
+
+#. If any vnode keyspace was altered, run ``nodetool rebuild`` on each node in the new datacenter, specifying the existing datacenter name in the rebuild command.
+>>>>>>> cf5571c93b (Merge '[Backport 2025.4] docs: update a documentation of adding/removing DC and rebuilding a node' from Scylladb[bot])
 
    For example:
 
