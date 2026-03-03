@@ -43,6 +43,9 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
     if (_statement->requires_read()) {
         throw exceptions::invalid_request_exception("Strongly consistent updates don't support data prefetch");
     }
+    if (_statement->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
+    }
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
     const auto mutate_result = co_await coordinator.get().mutate(_statement->s,
