@@ -32,6 +32,7 @@ from requests.exceptions import ConnectionError
 from test.cluster.dtest.alternator.utils import schemas
 from test.cluster.dtest.dtest_class import Tester, get_ip_from_node
 from test.cluster.dtest.tools.cluster import new_node
+from test.cluster.dtest.tools.cluster_topology import generate_cluster_topology
 from test.cluster.dtest.tools.sslkeygen import create_self_signed_x509_certificate
 
 if TYPE_CHECKING:
@@ -246,13 +247,14 @@ class BaseAlternator(Tester):
             self._add_api_for_node(node=node, timeout=timeout)
         return self.alternator_apis[node.name]
 
-    def prepare_dynamodb_cluster(
+    def prepare_dynamodb_cluster(  # noqa: PLR0913
         self,
         num_of_nodes: int = NUM_OF_NODES,
         is_multi_dc: bool = False,
         is_encrypted: bool = False,
         extra_config: dict | None = None,
         timeout: int = 300,
+        topo: dict[str, dict[str, int]] | None = None,
     ) -> None:
         logger.debug(f"Populating a cluster with {num_of_nodes} nodes for {"single DC" if not is_multi_dc else "multi DC"}..")
 
@@ -284,7 +286,10 @@ class BaseAlternator(Tester):
         logger.debug(f"configure_dynamodb_cluster: {cluster_config}")
         self.cluster.set_configuration_options(cluster_config)
 
-        self.cluster.populate([num_of_nodes, num_of_nodes] if is_multi_dc else num_of_nodes)
+        if topo is None:
+            dc_num = 2 if is_multi_dc else 1
+            topo = generate_cluster_topology(dc_num=dc_num, rack_num=num_of_nodes, nodes_per_rack=1, dc_name_prefix="dc")
+        self.cluster.populate(topo)
 
         if self.is_encrypted:
             create_self_signed_x509_certificate(
@@ -662,6 +667,7 @@ class BaseAlternator(Tester):
         self.create_table(table_name=table_name, node=node, **kwargs)
         new_items = self.create_items(num_of_items=num_of_items)
         return self.batch_write_actions(table_name=table_name, node=node, new_items=new_items)
+
 
 
 def random_string(length: int, chars=string.ascii_uppercase + string.digits):
