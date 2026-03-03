@@ -560,3 +560,41 @@ async def test_old_schema_when_apply_write(manager: ManagerClient):
         assert row.pk == 10
         assert row.c == 20
         assert row.new_col is None
+
+@pytest.mark.asyncio
+async def test_reject_user_provided_timestamps(manager: ManagerClient):
+    """
+    A simple validation test that makes sure that we don't accept
+    user-provided timestamps in queries to strongly consistent tables.
+    """
+
+    config = {
+        'experimental_features': ['strongly-consistent-tables']
+    }
+    cmdline = [
+        '--logger-log-level', 'sc_groups_manager=debug',
+        '--logger-log-level', 'sc_coordinator=debug'
+    ]
+    server = await manager.server_add(config=config, cmdline=cmdline)
+    cql, _ = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            error_msg = "Strongly consistent queries don't support user-provided timestamps"
+            with pytest.raises(InvalidRequest, match=error_msg):
+                await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13) USING TIMESTAMP 23")
+            with pytest.raises(InvalidRequest, match=error_msg):
+                await cql.run_async(f"UPDATE {table} USING TIMESTAMP 23 SET v = 13 WHERE pk = 0")
+            with pytest.raises(InvalidRequest, match=error_msg):
+                await cql.run_async(f"DELETE FROM {table} USING TIMESTAMP 23 WHERE pk = 0")
+            # FIXME(SCYLLADB-977):
+            # Add test cases for batches with timestamps. Remember to
+            # handle both whole-batch timestamps, e.g.
+            #   BEGIN BATCH USING TIMESTAMP ts
+            #     ...
+            #   APPLY BATCH
+            # as well as timestamps for individual items, e.g.
+            #   BEGIN BATCH
+            #     INSERT INTO ... USING TIMESTAMP st;
+            #     ...
+            #   APPLY BATCH
