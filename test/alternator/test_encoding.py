@@ -1,4 +1,4 @@
-# Copyright 2025-present ScyllaDB
+# Copyright 2026-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
