@@ -283,7 +283,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
                 auto schema = co_await create_test_table(env, "ks", "vs");
                 auto as = abort_source_timeout();
                 auto& vs = env.local_qp().vector_store_client();
-                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"bad.authority.here", std::nullopt}});
+                configure(vs)
+                        .with_dns_refresh_interval(seconds(1))
+                        .with_dns({{"bad.authority.here", std::nullopt}})
+                        .with_wait_for_client_timeout(milliseconds(100));
 
                 vs.start_background_tasks();
 
@@ -1008,8 +1011,9 @@ SEASTAR_TEST_CASE(vector_store_client_https) {
 
                 auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
-                BOOST_CHECK(keys);
-                co_return;
+                if (!keys) {
+                    BOOST_FAIL("Expected successful ANN result, but got error: " << std::visit(vector_search::error_visitor{}, keys.error()));
+                }
             },
             cfg)
             .finally(seastar::coroutine::lambda([&] -> future<> {
