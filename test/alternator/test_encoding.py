@@ -42,6 +42,39 @@ import pytest
 
 from .util import new_test_table, random_string
 
+# A module-scoped table with both a GSI and an LSI, where "x" is both the
+# GSI hash key and the LSI range key (a non-base-table-key attribute).
+# Used by test_index_naming and test_index_key_not_schema_column below.
+@pytest.fixture(scope='module')
+def test_table_with_indexes(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH'},
+            {'AttributeName': 'c', 'KeyType': 'RANGE'},
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+            {'AttributeName': 'c', 'AttributeType': 'S'},
+            {'AttributeName': 'x', 'AttributeType': 'S'},
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'lsi1',
+                'KeySchema': [
+                    {'AttributeName': 'p', 'KeyType': 'HASH'},
+                    {'AttributeName': 'x', 'KeyType': 'RANGE'},
+                ],
+                'Projection': {'ProjectionType': 'ALL'}
+            }
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi1',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'}
+            }
+        ],
+    ) as table:
+        yield table
+
 # All tests in this file are scylla-only (they access CQL internals)
 @pytest.fixture(scope="function", autouse=True)
 def all_tests_are_scylla_only(scylla_only):
@@ -213,3 +246,54 @@ def test_key_column_types(dynamodb, cql, test_table_sn, test_table_b, test_table
 
     # Range key type N -> CQL decimal
     assert get_col_type(test_table_sn, 'c') == 'decimal'
+
+# Test that GSI and LSI view names in the underlying CQL schema follow the
+# expected naming convention:
+#   GSI named "gsi1" -> CQL view "{table_name}:gsi1"
+#   LSI named "lsi1" -> CQL view "{table_name}!:lsi1"
+# These naming conventions must remain stable, as changing them would break
+# access to existing data. See also test_cql_schema.py::test_alternator_aux_tables
+# which tests related properties in a different way.
+def test_index_naming(cql, test_table_with_indexes):
+    table_name = test_table_with_indexes.name
+    ks = 'alternator_' + table_name
+    gsi_view = table_name + ':gsi1'
+    lsi_view = table_name + '!:lsi1'
+    # Query the GSI view directly to confirm it exists with the expected name.
+    rows = list(cql.execute(f'SELECT p FROM "{ks}"."{gsi_view}" LIMIT 0'))
+    assert rows == []
+    # Query the LSI view directly to confirm it exists with the expected name.
+    rows = list(cql.execute(f'SELECT p FROM "{ks}"."{lsi_view}" LIMIT 0'))
+    assert rows == []
+
+# Test that GSI/LSI key attributes that are not base-table key attributes
+# are NOT stored as separate CQL schema columns in the base table - they are
+# stored in ":attrs" instead. In this test, "x" is the GSI hash key and LSI
+# range key, but not a base-table key column.
+# Note: this behavior changed recently. Before https://github.com/scylladb/scylladb/pull/24991,
+# LSI key columns (and before an even earlier change, also GSI key columns) were
+# added as real schema columns. Now all non-base-table-key attributes, including
+# GSI and LSI key attributes, are stored in ":attrs".
+def test_index_key_not_schema_column(dynamodb, cql, test_table_with_indexes):
+    table = test_table_with_indexes
+    ks = 'alternator_' + table.name
+    # "x" must NOT appear as a column in the base table's CQL schema.
+    rows = list(cql.execute(
+        "SELECT column_name FROM system_schema.columns "
+        f"WHERE keyspace_name = '{ks}' AND table_name = '{table.name}' "
+        "AND column_name = 'x'"
+    ))
+    assert rows == [], f"Attribute 'x' (GSI/LSI key) should not be a schema column, but found: {rows}"
+    # Write an item with "x" set, then confirm "x" is stored in ":attrs".
+    p = random_string()
+    c = random_string()
+    table.put_item(Item={'p': p, 'c': c, 'x': 'hello'})
+    rows = list(cql.execute(
+        f'SELECT ":attrs" FROM "{ks}"."{table.name}" WHERE p = %s AND c = %s',
+        [p, c]
+    ))
+    assert len(rows) == 1
+    attrs = rows[0][0]
+    assert 'x' in attrs, "Attribute 'x' (GSI/LSI key) should be stored in ':attrs'"
+    # The value should be encoded as an S type (type byte 0x00 + UTF-8)
+    assert attrs['x'] == b'\x00' + b'hello'
