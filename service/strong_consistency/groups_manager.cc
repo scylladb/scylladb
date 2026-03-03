@@ -227,18 +227,9 @@ void groups_manager::schedule_raft_groups_deletion(bool all) {
 }
 
 future<> groups_manager::wait_for_groups_to_start(lowres_clock::time_point timeout) {
-    while (true) {
-        const auto it = std::ranges::find_if(_raft_groups, [](const auto& p) {
-            auto& state = p.second;
-            return !state.gate->is_closed() && !state.server_control_op.available();
-        });
-        if (it == _raft_groups.end()) {
-            break;
-        }
-
-        const auto& [id, state] = *it;
-        logger.info("waiting for group {} to start", id);
-        co_await state.server_control_op.get_future(timeout);
+    while (!_starting_groups.empty()) {
+        auto& state = _starting_groups.front();
+        co_await state.server_control_op.get_future(timeout); // the state is unlinked when this completes
     }
 }
 
@@ -388,11 +379,13 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
         logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
         state.gate = make_lw_shared<gate>();
+        _starting_groups.push_back(state);
         state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm](this auto) -> future<> {
             co_await state.server_control_op.get_future();
             co_await start_raft_group(tablet, id, std::move(new_tm));
             state.server = &_raft_gr.get_server(id);
             state.leader_info_updater = leader_info_updater(state, tablet, id);
+            _starting_groups.erase(_starting_groups.iterator_to(state));
             logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
         });
     });

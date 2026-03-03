@@ -57,7 +57,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         api::timestamp_type last_timestamp;
     };
 
-    struct raft_group_state {
+    struct raft_group_state : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
@@ -84,6 +84,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     gms::feature_service& _features;
     gms::gossiper& _gossiper;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
+    boost::intrusive::list<raft_group_state, boost::intrusive::constant_time_size<false>> _starting_groups;
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
 
