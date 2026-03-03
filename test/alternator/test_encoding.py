@@ -1,0 +1,244 @@
+# Copyright 2025-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+# Tests for the on-disk encoding of Alternator data. Specifically, these
+# tests verify that the internal format used to store DynamoDB attribute
+# values in the underlying Scylla table hasn't accidentally changed. If
+# Alternator's encoding were to change, sstables written by an older version
+# would become unreadable by a newer version - an unacceptable compatibility
+# breakage. So if any of these tests fail, the reason should be carefully
+# analyzed, and the test should only be updated if the encoding change was
+# intentional and backward compatibility was handled.
+#
+# Background on the encoding (see also issue #19770):
+# Alternator stores each DynamoDB table in keyspace "alternator_{table_name}",
+# table "{table_name}". The key attributes (hash key and optional range key)
+# are stored as regular CQL columns with their native CQL types (text for S,
+# blob for B, decimal for N). All other (non-key) attributes are stored
+# together in a single CQL column named ":attrs" of type map<text, blob>.
+# The map key is the attribute name; the map value encodes the type and value
+# of the attribute:
+# - "Optimized" types S, B, BOOL, N are encoded as one type byte followed by
+#   Scylla's native serialization of the value. The type bytes are defined by
+#   enum class alternator_type in alternator/serialization.hh:
+#     S    = 0
+#     B    = 1
+#     BOOL = 2
+#     N    = 3
+# - All other DynamoDB types (NULL, L, M, SS, NS, BS) are stored as type byte
+#   4 (NOT_SUPPORTED_YET) followed by the JSON encoding of the full typed
+#   DynamoDB value (e.g., {"NULL":true} or {"L":[...]}).
+#
+# The order of entries in the alternator_type enum is critical: the numeric
+# value of each type is written to disk, so it must not change.
+#
+# This file is related to issue #19770.
+
+import json
+from decimal import Decimal
+
+import pytest
+
+from .util import new_test_table
+
+# All tests in this file are scylla-only (they access CQL internals)
+@pytest.fixture(scope="function", autouse=True)
+def all_tests_are_scylla_only(scylla_only):
+    pass
+
+# Serialize a DynamoDB number string as Scylla's decimal_type binary format:
+# 4-byte big-endian signed scale followed by a big-endian two's-complement
+# varint (minimum bytes) for the unscaled value.
+# This matches how big_decimal::big_decimal(string_view) in Scylla parses
+# the number string and how decimal_type serializes it.
+def _serialize_number(s):
+    d = Decimal(s)
+    sign, digits, exp = d.as_tuple()
+    # Scylla's big_decimal sets scale = -exp and unscaled = int(digits)
+    cql_scale = -exp
+    unscaled = int(''.join(str(x) for x in digits)) if digits else 0
+    if sign:
+        unscaled = -unscaled
+    scale_bytes = cql_scale.to_bytes(4, 'big', signed=True)
+    # Encode unscaled as a Cassandra varint (big-endian two's complement, minimum bytes)
+    if unscaled == 0:
+        varint_bytes = b'\x00'
+    elif unscaled > 0:
+        # Need enough bytes so the most-significant bit is 0 (positive sign)
+        num_bytes = (unscaled.bit_length() + 8) // 8
+        varint_bytes = unscaled.to_bytes(num_bytes, 'big')
+    else:
+        num_bytes = ((-unscaled).bit_length() + 7) // 8
+        try:
+            varint_bytes = unscaled.to_bytes(num_bytes, 'big', signed=True)
+        except OverflowError:
+            varint_bytes = unscaled.to_bytes(num_bytes + 1, 'big', signed=True)
+    return scale_bytes + varint_bytes
+
+# Test that the encoding of all DynamoDB attribute types in the ":attrs"
+# map column of the underlying CQL table is as documented in the header
+# comment of this file, and has not accidentally changed. Specifically:
+# - For S, B, BOOL, N (optimized types): check the exact binary encoding.
+# - For NULL, L, M, SS, NS, BS: check the type byte (0x04) and verify the
+#   remaining bytes decode to the expected JSON structure.
+def test_attrs_encoding(dynamodb, cql):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                       {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                   {'AttributeName': 'c', 'AttributeType': 'S'}]) as table:
+        p = 'test_encoding_key'
+        c = 'test_encoding_range'
+        table.put_item(Item={
+            'p': p,
+            'c': c,
+            'a_s': 'hello',                    # S
+            'a_n': Decimal('3.14'),             # N
+            'a_b': b'\x01\x02\x03',             # B
+            'a_bool_t': True,                   # BOOL true
+            'a_bool_f': False,                  # BOOL false
+            'a_null': None,                     # NULL
+            'a_l': ['x'],                       # L (list with one string)
+            'a_m': {'k': 'v'},                  # M (map with one string value)
+            'a_ss': {'hello'},                  # SS (single-element string set)
+            'a_ns': {Decimal('1')},             # NS (single-element number set)
+            'a_bs': {b'\x01'},                  # BS (single-element binary set)
+        })
+
+        ks = 'alternator_' + table.name
+        rows = list(cql.execute(
+            f'SELECT ":attrs" FROM "{ks}"."{table.name}" WHERE p = %s AND c = %s',
+            [p, c]
+        ))
+        assert len(rows) == 1
+        attrs = rows[0][0]
+
+        # S (alternator_type::S = 0): type byte 0x00 followed by raw UTF-8 bytes
+        assert attrs['a_s'] == b'\x00' + b'hello'
+
+        # N (alternator_type::N = 3): type byte 0x03 followed by decimal_type serialization
+        # (4-byte big-endian scale + varint unscaled value)
+        assert attrs['a_n'] == b'\x03' + _serialize_number('3.14')
+
+        # B (alternator_type::B = 1): type byte 0x01 followed by raw bytes
+        assert attrs['a_b'] == b'\x01' + b'\x01\x02\x03'
+
+        # BOOL true (alternator_type::BOOL = 2): type byte 0x02 followed by 0x01
+        assert attrs['a_bool_t'] == b'\x02\x01'
+
+        # BOOL false: type byte 0x02 followed by 0x00
+        assert attrs['a_bool_f'] == b'\x02\x00'
+
+        # For the following types (NOT_SUPPORTED_YET = 4), the encoding is:
+        # type byte 0x04 followed by the compact JSON of the full typed value.
+        # We check the type byte and that the JSON decodes to the expected structure.
+
+        # NULL
+        assert attrs['a_null'][0:1] == b'\x04'
+        assert json.loads(attrs['a_null'][1:]) == {'NULL': True}
+
+        # L (list)
+        assert attrs['a_l'][0:1] == b'\x04'
+        assert json.loads(attrs['a_l'][1:]) == {'L': [{'S': 'x'}]}
+
+        # M (map)
+        assert attrs['a_m'][0:1] == b'\x04'
+        assert json.loads(attrs['a_m'][1:]) == {'M': {'k': {'S': 'v'}}}
+
+        # SS (string set, single element so no ordering ambiguity)
+        assert attrs['a_ss'][0:1] == b'\x04'
+        assert json.loads(attrs['a_ss'][1:]) == {'SS': ['hello']}
+
+        # NS (number set, single element so no ordering ambiguity)
+        assert attrs['a_ns'][0:1] == b'\x04'
+        assert json.loads(attrs['a_ns'][1:]) == {'NS': ['1']}
+
+        # BS (binary set, binary values are base64-encoded in the JSON)
+        assert attrs['a_bs'][0:1] == b'\x04'
+        assert json.loads(attrs['a_bs'][1:]) == {'BS': ['AQ==']}
+
+# Test that the alternator_type enum values haven't changed. These integer
+# values are written to disk as the first byte of every non-key attribute
+# value in ":attrs", so they must remain stable across versions.
+# S=0, B=1, BOOL=2, N=3, NOT_SUPPORTED_YET=4
+def test_attrs_type_bytes(dynamodb, cql):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = 'type_byte_test'
+        table.put_item(Item={
+            'p': p,
+            'a_s': 'x',          # S
+            'a_b': b'\x00',      # B
+            'a_bool': True,      # BOOL
+            'a_n': Decimal('0'), # N
+            'a_null': None,      # NULL (NOT_SUPPORTED_YET)
+        })
+
+        ks = 'alternator_' + table.name
+        rows = list(cql.execute(
+            f'SELECT ":attrs" FROM "{ks}"."{table.name}" WHERE p = %s',
+            [p]
+        ))
+        assert len(rows) == 1
+        attrs = rows[0][0]
+
+        # Verify the type byte for each type
+        assert attrs['a_s'][0] == 0,    'S must be type byte 0'
+        assert attrs['a_b'][0] == 1,    'B must be type byte 1'
+        assert attrs['a_bool'][0] == 2, 'BOOL must be type byte 2'
+        assert attrs['a_n'][0] == 3,    'N must be type byte 3'
+        assert attrs['a_null'][0] == 4, 'NOT_SUPPORTED_YET (NULL etc.) must be type byte 4'
+
+# Test that Alternator tables use the expected keyspace and table names in
+# the underlying CQL schema. This naming convention must remain stable, as
+# changing it would break access to existing data.
+def test_table_naming(dynamodb, cql):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        table_name = table.name
+        ks = 'alternator_' + table_name
+        # Verify we can query the underlying CQL table using the expected keyspace
+        # and table name. The query will succeed only if naming is as expected.
+        rows = list(cql.execute(f'SELECT p FROM "{ks}"."{table_name}" LIMIT 0'))
+        assert rows == []
+
+# Test that the hash key of an Alternator table with key type S is stored
+# as a CQL 'text' column, key type B as 'blob', and key type N as 'decimal'.
+# These encodings are part of the on-disk format and must not change.
+def test_key_column_types(dynamodb, cql):
+    # Table with string hash key (S)
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                       {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                   {'AttributeName': 'c', 'AttributeType': 'N'}]) as table:
+        ks = 'alternator_' + table.name
+        # Check that the 'p' column has type 'text' and 'c' has type 'decimal'
+        # by querying system_schema.columns
+        rows = list(cql.execute(
+            "SELECT column_name, type FROM system_schema.columns "
+            f"WHERE keyspace_name = '{ks}' AND table_name = '{table.name}' "
+            "AND column_name IN ('p', 'c')"
+        ))
+        col_types = {row.column_name: row.type for row in rows}
+        p_type = col_types.get('p')
+        c_type = col_types.get('c')
+        assert p_type == 'text',    f"Hash key type S should be stored as CQL 'text', got {p_type!r}"
+        assert c_type == 'decimal', f"Range key type N should be stored as CQL 'decimal', got {c_type!r}"
+
+    # Table with binary hash key (B)
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'B'}]) as table:
+        ks = 'alternator_' + table.name
+        rows = list(cql.execute(
+            "SELECT column_name, type FROM system_schema.columns "
+            f"WHERE keyspace_name = '{ks}' AND table_name = '{table.name}' "
+            "AND column_name = 'p'"
+        ))
+        col_types = {row.column_name: row.type for row in rows}
+        p_type = col_types.get('p')
+        assert p_type == 'blob', f"Hash key type B should be stored as CQL 'blob', got {p_type!r}"
