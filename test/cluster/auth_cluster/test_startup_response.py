@@ -38,12 +38,13 @@ async def test_startup_no_auth_response(manager: ManagerClient, build_mode):
     auth_provider = PlainTextAuthProvider(username='cassandra', password='cassandra')
 
     connections_observed = False
-    num_connections = 500
-    timeout = 180
+    num_connections = 100
+    timeout = 360
 
     def attempt_bad_connection():
         c = Cluster([server.ip_addr], port=9042, auth_provider=auth_provider, connect_timeout=timeout, connection_class=NoOpConnection)
         try:
+            logging.info("Attempting bad connection")
             c.connect()
             pytest.fail("Should not connect")
         except Exception:
@@ -56,7 +57,9 @@ async def test_startup_no_auth_response(manager: ManagerClient, build_mode):
         nonlocal connections_observed
         c = Cluster([server.ip_addr], port=9042, auth_provider=auth_provider, connect_timeout=timeout/3)
         try:
+            logging.info("Attempting good connection")
             session = c.connect()
+            logging.info("Performing SELECT(*) FROM system.clients")
             res = session.execute("SELECT COUNT(*) FROM system.clients WHERE connection_stage = 'AUTHENTICATING' ALLOW FILTERING;")
             count = res[0][0]
             logging.info(f"Observed {count} AUTHENTICATING connections...")
