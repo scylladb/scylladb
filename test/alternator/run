@@ -65,7 +65,9 @@ def run_alternator_cmd(pid, dir):
         '--alternator-write-isolation', 'only_rmw_uses_lwt',
         '--alternator-streams-time-window-s', '0',
         '--alternator-timeout-in-ms', '30000',
-        '--alternator-ttl-period-in-seconds', '0.5',
+        # no longer needed here because it's defined in test/cqlpy/run.py
+        # now that this parameter is used also by CQL's per-row TTL.
+        #'--alternator-ttl-period-in-seconds', '0.5',
         '--alternator-allow-system-table-write=1',
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.
