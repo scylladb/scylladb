@@ -124,7 +124,7 @@ def test_attrs_encoding(dynamodb, cql, test_table_ss):
     assert attrs['a_n'] == b'\x03' + _serialize_number('3.14')
     assert attrs['a_n_zero'] == b'\x03' + _serialize_number('0')
     assert attrs['a_n_neg'] == b'\x03' + _serialize_number('-5')
-    assert attrs['a_n_negscale'] == b'\x03' + _serialize_number(str(Decimal('1e10')))
+    assert attrs['a_n_negscale'] == b'\x03' + _serialize_number('1e10')
     assert attrs['a_n_large'] == b'\x03' + _serialize_number('12345678901234567890')
 
     # B (alternator_type::B = 1): type byte 0x01 followed by raw bytes
@@ -179,9 +179,9 @@ def test_table_naming(cql, test_table_s):
 
 # Test that both hash keys and range keys of all three DynamoDB key types
 # (S, B, N) are stored as the correct native CQL types. Specifically:
-#   S (string) → CQL text
-#   B (binary) → CQL blob
-#   N (number) → CQL decimal
+#   S (string) -> CQL text
+#   B (binary) -> CQL blob
+#   N (number) -> CQL decimal
 # These type mappings are part of the on-disk format and must not change.
 def test_key_column_types(dynamodb, cql, test_table_sn, test_table_b, test_table_ss, test_table_sb):
     def get_col_type(table, col_name):
@@ -193,29 +193,23 @@ def test_key_column_types(dynamodb, cql, test_table_sn, test_table_b, test_table
         ))
         return rows[0].type if rows else None
 
-    # Hash key type S → CQL text
-    p_type = get_col_type(test_table_sn, 'p')
-    assert p_type == 'text', f"Hash key type S should be stored as CQL 'text', got {p_type!r}"
+    # Hash key type S -> CQL text
+    assert get_col_type(test_table_sn, 'p') == 'text'
 
-    # Hash key type B → CQL blob
-    p_type = get_col_type(test_table_b, 'p')
-    assert p_type == 'blob', f"Hash key type B should be stored as CQL 'blob', got {p_type!r}"
+    # Hash key type B -> CQL blob
+    assert get_col_type(test_table_b, 'p') == 'blob'
 
-    # Hash key type N → CQL decimal (no shared fixture for N-hash tables)
+    # Hash key type N -> CQL decimal (no shared fixture for N-hash tables)
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}]) as table:
-        p_type = get_col_type(table, 'p')
-        assert p_type == 'decimal', f"Hash key type N should be stored as CQL 'decimal', got {p_type!r}"
+        assert get_col_type(table, 'p') == 'decimal'
 
-    # Range key type S → CQL text
-    c_type = get_col_type(test_table_ss, 'c')
-    assert c_type == 'text', f"Range key type S should be stored as CQL 'text', got {c_type!r}"
+    # Range key type S -> CQL text
+    assert get_col_type(test_table_ss, 'c') == 'text'
 
-    # Range key type B → CQL blob
-    c_type = get_col_type(test_table_sb, 'c')
-    assert c_type == 'blob', f"Range key type B should be stored as CQL 'blob', got {c_type!r}"
+    # Range key type B -> CQL blob
+    assert get_col_type(test_table_sb, 'c') == 'blob'
 
-    # Range key type N → CQL decimal
-    c_type = get_col_type(test_table_sn, 'c')
-    assert c_type == 'decimal', f"Range key type N should be stored as CQL 'decimal', got {c_type!r}"
+    # Range key type N -> CQL decimal
+    assert get_col_type(test_table_sn, 'c') == 'decimal'
