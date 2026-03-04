@@ -469,3 +469,7 @@ def modify_pytest_item(item: pytest.Item) -> None:
             __skip_test(*mark.args, **mark.kwargs)
         except TypeError as e:
             raise TypeError(f"Failed to process skip_mode mark, {mark} for test {item}, error {e}")
+
+    if (any(mark.name == "xfail" for mark in item.iter_markers("xfail"))
+            and not any(mark.name == "nightly" for mark in item.iter_markers("nightly"))):
+        item.add_marker(pytest.mark.nightly)
