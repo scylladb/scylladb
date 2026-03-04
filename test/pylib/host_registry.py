@@ -10,11 +10,29 @@ import random
 from pathlib import Path
 from test.pylib.pool import Pool
 from typing import NewType, Awaitable, Optional
+from threading import Lock
 
 Host = NewType('Host', str)
 
 
 class HostRegistry:
+    used_subnets = set()
+    lock = Lock()
+
+    @staticmethod
+    def check_lock_filename(lockfilename:Path):
+        with HostRegistry.lock:
+            if not lockfilename in HostRegistry.used_subnets:
+                HostRegistry.used_subnets.add(lockfilename)
+                return True
+        return False
+
+    @staticmethod
+    def release_lock_filename(lockfilename:Path):
+        with HostRegistry.lock:
+            assert(lockfilename in HostRegistry.used_subnets)
+            HostRegistry.used_subnets.remove(lockfilename)
+
     """A Scylla servers needs a unique IP address and working directory
     which we need to manage and share across many running tests. Store
     all shared external resources within this class to make sure
@@ -53,6 +71,17 @@ class HostRegistry:
             self.subnet = "127.{}.{}".format(random.randrange(1, 254),
                                              random.randrange(0, 255))
             self.lock_filename: Optional[Path] = Path(os.getenv('TMPDIR', '/tmp')) / ('scylla-' + self.subnet)
+            # posix file locking is per PID, not per file desc. Thus 
+            # if we have more than one HostRegistry in a process, we can
+            # not only acquire the same subnet twice, but then first 
+            # instance to close the file would in fact release the lock
+            # for the whole process, and another process could acquire 
+            # it too
+            # Use a (thread safe) pid-global cache to ensure we don't
+            # clash. Note that while we do a lot of async, there are still
+            # threads around...
+            if not HostRegistry.check_lock_filename(self.lock_filename):
+                continue
             self.lock_file = self.lock_filename.open('w')
             try:
                 fcntl.lockf(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -64,6 +93,7 @@ class HostRegistry:
                 self.lock_filename.unlink()
 
             self.lock_file.close()
+            HostRegistry.release_lock_filename(self.lock_filename)
 
         self.subnet += ".{}"
         self.next_host_id = 0
@@ -79,11 +109,19 @@ class HostRegistry:
         self.pool = Pool[Host](254, create_host, destroy_host)
 
         async def cleanup() -> None:
-            if self.lock_filename:
-                self.lock_filename.unlink()
-                self.lock_filename = None
+            self._do_cleanup()
 
         self.cleanup = cleanup
+
+    # just in case: do this in destructor.
+    def __del__(self):
+        self._do_cleanup()
+
+    def _do_cleanup(self):
+        if self.lock_filename:
+            self.lock_filename.unlink()
+            HostRegistry.release_lock_filename(self.lock_filename)
+            self.lock_filename = None
 
     async def lease_host(self) -> Host:
         return await self.pool.get()
