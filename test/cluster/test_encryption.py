@@ -433,7 +433,8 @@ async def test_non_existant_table_master_key(manager: ManagerClient, tmpdir):
 
 async def test_system_auth_encryption(manager: ManagerClient, tmpdir):
     cfg = {"authenticator": "org.apache.cassandra.auth.PasswordAuthenticator", 
-               "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer"}
+               "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer",
+                "commitlog_sync": "batch" }
 
     servers: list[ServerInfo] = await manager.servers_add(servers_num = 1, config=cfg, 
                                                           driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')})
@@ -450,11 +451,14 @@ async def test_system_auth_encryption(manager: ManagerClient, tmpdir):
             file_paths = [f for f in file_paths if os.path.isfile(f) and not os.path.islink(f)]
 
             for file_path in file_paths:
-                with open(file_path, 'rb') as f:
-                    data = f.read()
-                    if pbytes in data:
-                        pattern_found_counter += 1
-                        logger.debug("Pattern '%s' found in %s", pattern, file_path)
+                try:
+                    with open(file_path, 'rb') as f:
+                        data = f.read()
+                        if pbytes in data:
+                            pattern_found_counter += 1
+                            logger.debug("Pattern '%s' found in %s", pattern, file_path)
+                except FileNotFoundError:
+                    pass # assume just compacted away
 
         if expect:
             assert pattern_found_counter > 0
@@ -462,15 +466,15 @@ async def test_system_auth_encryption(manager: ManagerClient, tmpdir):
             assert pattern_found_counter == 0
 
     async def verify_system_info(expect: bool):
-        user = f"user_{str(uuid.uuid4())}"
+        user = f"user_{str(uuid.uuid4())}".replace('-','_')
         pwd = f"pwd_{str(uuid.uuid4())}"
         cql.execute(f"CREATE USER {user} WITH PASSWORD '{pwd}' NOSUPERUSER")
         assert_one(cql, f"LIST ROLES of {user}", [user, False, True, {}])
 
         logger.debug("Verify PART 1: check commitlogs -------------")
 
-        grep_database_files(pwd, "commitlog", "**/*.log", expect)
-        grep_database_files(user, "commitlog", "**/*.log", True)
+        await grep_database_files(pwd, "commitlog", "**/*.log", False)
+        await grep_database_files(user, "commitlog", "**/*.log", expect)
 
         salted_hash = None
         system_auth = None
@@ -487,39 +491,38 @@ async def test_system_auth_encryption(manager: ManagerClient, tmpdir):
 
         assert salted_hash is not None
         assert system_auth is not None
-        grep_database_files(salted_hash, "commitlog", "**/*.log", expect)
+        await grep_database_files(salted_hash, "commitlog", "**/*.log", expect)
 
         rand_comment = f"comment_{str(uuid.uuid4())}"
 
         async with await create_ks(manager) as ks:
-            async with await new_test_table(cql, ks, "key text PRIMARY KEY, c1 text, c2 text") as table:
+            async with new_test_table(manager, ks, "key text PRIMARY KEY, c1 text, c2 text") as table:
                 cql.execute(f"ALTER TABLE {table} WITH comment = '{rand_comment}'")
-                grep_database_files(rand_comment, "commitlog/schema", "**/*.log", expect)
-                nodetool.flush_all(cql)
+                await grep_database_files(rand_comment, "commitlog/schema", "**/*.log", expect)
+                # Note: original test did greping in sstables. This does no longer work
+                # since all system tables are compressed, and thus binary greping will 
+                # not work. We could do scylla sstable dump-data and grep in the json,
+                # but this is somewhat pointless as this would, if it handles it, just
+                # decrypt the info from the sstable, thus we can't really verify anything.
+                # We could maybe check that the expected system tables are in fact encrypted,
+                # though this is more a promise than guarantee... Also, the only tables
+                # encrypted are paxos and batchlog -> pointless
 
-                logger.debug("Verify PART 2: check sstable files -------------\n`system_info_encryption` won't encrypt sstable files on disk")
-                logger.debug("GREP_DB_FILES: Check PM key user in sstable file ....")
-                grep_database_files(user, f"data/{system_auth}/", "**/*-Data.db", expect=True)
-                logger.debug("GREP_DB_FILES: Check original password in commitlogs .... Original password should never be saved")
-                grep_database_files(pwd, f"data/{system_auth}/", "**/*-Data.db", expect=False)
-                logger.debug("GREP_DB_FILES: Check salted_hash of password in sstable file ....")
-                grep_database_files(salted_hash, f"data/{system_auth}/", "**/*-Data.db", expect=False)
-                logger.debug("GREP_DB_FILES: Check table comment in sstable file ....")
-                grep_database_files(rand_comment, "data/system_schema/", "**/*-Data.db", expect=True)
-
-    verify_system_info(True) # not encrypted
+    await verify_system_info(True) # not encrypted
 
     cfg = {"system_info_encryption": {
         "enabled": True, 
-        "key_provider": "LocalFileSystemKeyProviderFactory"}
+        "key_provider": "LocalFileSystemKeyProviderFactory"},
+        "system_key_directory": os.path.join(tmpdir, "resources/system_keys")
         }
 
     for server in servers:
-        manager.server_update_config(server.server_id, config_options=cfg)
+        await manager.server_update_config(server.server_id, config_options=cfg)
+        await manager.server_restart(server.server_id)
 
     await manager.rolling_restart(servers)
 
-    verify_system_info(False) # should not see stuff now
+    await verify_system_info(False) # should not see stuff now
 
 
 async def test_system_encryption_reboot(manager: ManagerClient, tmpdir):
