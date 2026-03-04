@@ -159,7 +159,7 @@ async def test_tablet_repair_task_children(manager: ManagerClient):
 
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
     for server in servers:
-        tm.set_task_ttl(server.ip_addr, 3600)
+        await tm.set_task_ttl(server.ip_addr, 3600)
     assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
 
     log = await manager.server_open_log(servers[0].server_id)
