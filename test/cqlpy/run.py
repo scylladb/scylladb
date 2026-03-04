@@ -321,9 +321,9 @@ def run_scylla_cmd(pid, dir):
         # and other modules dependent on it: e.g. service levels
         '--authenticator', 'PasswordAuthenticator',
         '--authorizer', 'CassandraAuthorizer',
-        '--auth-superuser-name', 'cassandra',
+        '--auth-superuser-name=cassandra',
         # password is "cassandra"
-        '--auth-superuser-salted-password', '$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/',
+        '--auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/',
         '--strict-allow-filtering=true',
         '--strict-is-not-null-in-views=true',
         '--permissions-update-interval-in-ms', '100',
@@ -385,6 +385,8 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
     if major < [5,4] or (enterprise and major <= [2023,1]):
         cmd.remove('--strict-is-not-null-in-views=true')
         cmd.remove('--minimum-replication-factor-warn-threshold=-1')
+        cmd.remove('--auth-superuser-name=cassandra')
+        cmd.remove('--auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/')
     if major <= [5,1] or (enterprise and major <= [2022,2]):
         cmd.remove('--query-tombstone-page-limit=1000')
     if major <= [5,0] or (enterprise and major <= [2022,1]):
