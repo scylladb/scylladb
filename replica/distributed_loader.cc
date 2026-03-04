@@ -120,7 +120,8 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
         sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator,
         std::function<bool (const sstables::shared_sstable&)> filter) {
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-    auto task = co_await compaction_module.make_and_start_task<compaction::table_reshaping_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, mode, std::move(creator), std::move(filter));
+    bool quarantine_orphaned_sstables = true;
+    auto task = co_await compaction_module.make_and_start_task<compaction::table_reshaping_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, mode, std::move(creator), std::move(filter), quarantine_orphaned_sstables);
     co_await task->done();
 }
 

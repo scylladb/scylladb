@@ -1332,6 +1332,9 @@ public:
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_compaction_group_view(std::function<future<>(compaction::compaction_group_view&)> action);
     compaction::compaction_group_view& compaction_group_view_for_sstable(const sstables::shared_sstable& sst) const;
+    // Select a compaction group view from a given sstable based on its token range.
+    // If the SSTable doesn't belong to any existing compaction group, quarantine the SSTable and return null.
+    future<compaction::compaction_group_view*> maybe_compaction_group_view_for_sstable(const sstables::shared_sstable& sst, bool quarantine_orphaned_sstables = false) const;
 
     // Uncoditionally erase sst from `sstables_requiring_cleanup`
     // Returns true iff sst was found and erased.

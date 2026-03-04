@@ -1407,10 +1407,14 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
 
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable new_sst, sstables::offstrategy offstrategy, bool trigger_compaction) {
-    auto& cg = compaction_group_for_sstable(new_sst);
+  try {
+    // Allow skipping orphaned SSTables that are already quarantined
+    auto& cg = compaction_group_for_sstable(new_sst, !new_sst->is_quarantined());
     // Hold gate to make share compaction group is alive.
     auto holder = cg.async_gate().hold();
     co_await do_add_sstable_and_update_cache(cg, new_sst, offstrategy, trigger_compaction);
+  } catch (const no_such_storage_group& e) {
+  }
 }
 
 future<>
@@ -4888,6 +4892,27 @@ future<> table::parallel_foreach_compaction_group_view(std::function<future<>(co
 compaction::compaction_group_view& table::compaction_group_view_for_sstable(const sstables::shared_sstable& sst) const {
     auto& cg = compaction_group_for_sstable(sst);
     return cg.view_for_sstable(sst);
+}
+
+future<compaction::compaction_group_view*> table::maybe_compaction_group_view_for_sstable(const sstables::shared_sstable& sst, bool quarantine_orphaned_sstables) const {
+    try {
+        auto& cg = compaction_group_for_sstable(sst, false);
+        co_return &cg.view_for_sstable(sst);
+    } catch (const no_such_storage_group& e) {
+        if (quarantine_orphaned_sstables) {
+            auto sstable_identifier = sst->sstable_identifier();
+            std::time_t created_at_millis = sstable_identifier ? utils::UUID_gen::unix_timestamp(sstable_identifier->uuid()).count() : 0;
+            auto originating_host_id = sst->get_stats_metadata().originating_host_id.value_or(locator::host_id());
+            tlogger.error("{} sstable_id={} created_at={:%FT%T},{:03d} originating_host_id={}: Move SSTable to quarantine.", std::current_exception(),
+                    sstable_identifier,
+                    fmt::gmtime(created_at_millis / 1000), static_cast<int>(created_at_millis % 1000),
+                    originating_host_id);
+        } else {
+            on_internal_error(tlogger, e.what());
+        }
+    }
+    co_await sst->change_state(sstables::sstable_state::quarantine);
+    co_return nullptr;
 }
 
 data_dictionary::table
