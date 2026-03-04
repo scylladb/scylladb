@@ -162,7 +162,12 @@ async def do_test_internode_compression_between_datacenters(manager: ManagerClie
 
     await asyncio.gather(*[manager.server_stop(s.server_id) for s,_ in servers])
     await asyncio.gather(*[p.stop() for p in proxies])
-
+    # these will all except, because we just stopped them above
+    for coro in proxy_futs:
+        try:
+            await coro
+        except:
+            pass
 
 async def test_internode_compression_compress_packets_between_nodes(request, manager: ManagerClient) -> None:
     def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy):
