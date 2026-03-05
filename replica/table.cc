@@ -1268,9 +1268,23 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
     auto [first_id, first_range_side] = storage_group_of(sst->get_first_decorated_key().token());
     auto [last_id, last_range_side] = storage_group_of(sst->get_last_decorated_key().token());
 
+    auto sstable_desc = [] (const sstables::shared_sstable& sst) {
+        auto& identifier_opt = sst->sstable_identifier();
+        auto& originating_host_id_opt = sst->get_stats_metadata().originating_host_id;
+        return format("{} (originated from {} with id {} on host {})",
+                      sst->get_filename(), sst->get_origin(),
+                      identifier_opt ? identifier_opt->to_sstring() : "unknown",
+                      originating_host_id_opt ? originating_host_id_opt->to_sstring() : "unknown");
+    };
+    auto tablet_desc = [this] (locator::tablet_id id) {
+        return format("{} (replica set: {})", id, tablet_map().get_tablet_info(id).replicas);
+    };
+
     if (first_id != last_id) {
         on_internal_error(tlogger, format("Unable to load SSTable {} that belongs to tablets {} and {}",
-                                          sst->get_filename(), first_id, last_id));
+                                          sstable_desc(sst),
+                                          tablet_desc(locator::tablet_id(first_id)),
+                                          tablet_desc(locator::tablet_id(last_id))));
     }
 
     try {
@@ -1282,7 +1296,10 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
 
         return *sg.select_compaction_group(first_range_side);
     } catch (std::out_of_range& e) {
-        on_internal_error(tlogger, format("Unable to load SSTable {} : {}", sst->get_filename(), e.what()));
+        on_internal_error(tlogger, format("Unable to load SSTable {} of tablet {}, due to {}",
+                                          sstable_desc(sst),
+                                          tablet_desc(locator::tablet_id(first_id)),
+                                          e.what()));
     }
 }
 
