@@ -131,6 +131,18 @@ const sstring TABLE_CREATION_TIME_TAG_KEY("system:table_creation_time");
 // configured by UpdateTimeToLive to be the expiration-time attribute for
 // this table.
 extern const sstring TTL_TAG_KEY("system:ttl_attribute");
+// If this tag is present, it stores the name of an attribute whose numeric
+// value (in microseconds since the Unix epoch) is used as the write timestamp
+// for write operations (PutItem, UpdateItem, DeleteItem, and BatchWriteItem's
+// PutRequest and DeleteRequest). When the named attribute is present in a
+// write request, its value is used as the timestamp of the write, and the
+// attribute itself is NOT stored in the item. This feature allows users to
+// control write ordering for last-write-wins semantics. Writes which use LWT
+// (see rmw_operation::execute()), and writes to tables where this feature is
+// unsafe (see validate_custom_timestamp_allowed()), are rejected. The tag is
+// ignored if it names an attribute which must be stored (see
+// get_timestamp_attribute()).
+static const sstring TIMESTAMP_TAG_KEY("system:timestamp_attribute");
 // This tag is set for GSIs since scylla-2026.4.
 // GSI implementation in Alternator assumes that (currently up to 4)
 // user-specified RANGE keys come first in the underlying materialized view's
@@ -1263,13 +1275,32 @@ void rmw_operation::set_default_write_isolation(std::string_view value) {
 // Alternator uses tags whose keys start with the "system:" prefix for
 // internal purposes. Those should not be readable by ListTagsOfResource,
 // nor writable with TagResource or UntagResource (see #24098).
-// Only a few specific system tags, currently only "system:write_isolation"
-// and "system:initial_tablets", are deliberately intended to be set and read
-// by the user, so are not considered "internal".
+// Only a few specific system tags, currently only "system:write_isolation",
+// "system:initial_tablets", and "system:timestamp_attribute", are deliberately
+// intended to be set and read by the user, so are not considered "internal".
 static bool tag_key_is_internal(std::string_view tag_key) {
     return tag_key.starts_with("system:")
         && tag_key != rmw_operation::WRITE_ISOLATION_TAG_KEY
-        && tag_key != INITIAL_TABLETS_TAG_KEY;
+        && tag_key != INITIAL_TABLETS_TAG_KEY
+        && tag_key != TIMESTAMP_TAG_KEY;
+}
+
+// A node which doesn't support the system:timestamp_attribute tag would store
+// the attribute instead of using it as the write timestamp, so the tag can't
+// be set (by TagResource or CreateTable) until all nodes support it - i.e.,
+// the ALTERNATOR_TIMESTAMP_ATTRIBUTE cluster feature is enabled. "tags" is
+// the request's Tags array, already known to be an array.
+static void reject_timestamp_tag_if_unsupported(const rjson::value& tags, const gms::feature_service& features) {
+    if (features.alternator_timestamp_attribute) {
+        return;
+    }
+    for (auto it = tags.Begin(); it != tags.End(); ++it) {
+        const rjson::value* key = it->IsObject() ? rjson::find(*it, "Key") : nullptr;
+        if (key && key->IsString() && rjson::to_string_view(*key) == TIMESTAMP_TAG_KEY) {
+            throw api_error::validation("The system:timestamp_attribute tag is not yet supported. "
+                    "Upgrade all nodes to a version that supports it.");
+        }
+    }
 }
 
 enum class update_tags_action { add_tags, delete_tags };
@@ -1299,13 +1330,23 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
             if (tag_key_is_internal(tag_key)) {
                 throw api_error::validation(fmt::format("Tag key '{}' is reserved for internal use", tag_key));
             }
-            // Note tag values are limited similarly to tag keys, but have a
-            // longer length limit, and *can* be empty.
-            if (tag_value.size() > 256) {
-                throw api_error::validation("A tag Value is limited to 256 characters");
-            }
-            if (!validate_legal_tag_chars(tag_value)) {
-                throw api_error::validation("A tag Value can only contain letters, spaces, and [+-=._:/]");
+            if (tag_key == TIMESTAMP_TAG_KEY) {
+                // This tag's value is an attribute name, so it is limited
+                // like an attribute name - not like a tag value, which would
+                // make some attribute names impossible to use. An empty value
+                // is allowed, and means that no attribute is used.
+                if (!tag_value.empty()) {
+                    validate_attr_name_length("system:timestamp_attribute tag", tag_value.size(), false);
+                }
+            } else {
+                // Note tag values are limited similarly to tag keys, but have a
+                // longer length limit, and *can* be empty.
+                if (tag_value.size() > 256) {
+                    throw api_error::validation("A tag Value is limited to 256 characters");
+                }
+                if (!validate_legal_tag_chars(tag_value)) {
+                    throw api_error::validation("A tag Value can only contain letters, spaces, and [+-=._:/]");
+                }
             }
             tags_map[sstring(tag_key)] = sstring(tag_value);
         }
@@ -1345,6 +1386,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         co_return api_error::validation("The number of tags must be at least 1") ;
     }
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::ALTER, _stats);
+    reject_timestamp_tag_if_unsupported(*tags, _proxy.features());
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     });
@@ -2434,6 +2476,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     const rjson::value* tags = rjson::find(request, "Tags");
     std::map<sstring, sstring> tags_map;
     if (tags && tags->IsArray()) {
+        reject_timestamp_tag_if_unsupported(*tags, _proxy.features());
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     }
     if (bm.provisioned) {
@@ -3396,6 +3439,41 @@ struct write_item_index_info {
     write_item_index_info(service::storage_proxy& proxy, const schema& s);
 };
 
+// Try to extract a write timestamp from a DynamoDB-typed value.
+// The value should be a number ({"N": "..."}), representing microseconds
+// since the Unix epoch. Fractional microseconds are truncated. Returns
+// nullopt if the value is not a number, or doesn't represent a valid
+// (positive) timestamp.
+static std::optional<api::timestamp_type> try_get_timestamp(const rjson::value& attr_value) {
+    std::optional<big_decimal> n = try_unwrap_number(attr_value);
+    if (!n) {
+        return std::nullopt;
+    }
+    boost::multiprecision::cpp_int v = n->unscaled_value();
+    if (n->scale() != 0) {
+        // try_unwrap_number() validated the number, so its exponent is small,
+        // and as_rational() is cheap. Integer division truncates the
+        // fractional part.
+        auto r = n->as_rational();
+        v = numerator(r) / denominator(r);
+    }
+    if (v <= 0 || v > std::numeric_limits<api::timestamp_type>::max()) {
+        return std::nullopt;
+    }
+    return static_cast<api::timestamp_type>(v);
+}
+
+// Extract a write timestamp from a DynamoDB-typed value, or throw
+// api_error::validation if the value is not a valid positive number.
+static api::timestamp_type get_timestamp(const rjson::value& attr_value, std::string_view attribute_name) {
+    if (auto t = try_get_timestamp(attr_value)) {
+        return *t;
+    }
+    throw api_error::validation(fmt::format(
+        "The '{}' attribute used as a write timestamp must be a positive number (microseconds since epoch)",
+        attribute_name));
+}
+
 // The put_or_delete_item class builds the mutations needed by the PutItem and
 // DeleteItem operations - either as stand-alone commands or part of a list
 // of commands in BatchWriteItem.
@@ -3422,13 +3500,21 @@ private:
     // that length can have different meaning depends on the operation but the
     // the calculation of length in bytes to WCU is the same.
     uint64_t _length_in_bytes = 0;
+    // If the table has a system:timestamp_attribute tag, and the named
+    // attribute was found in the item with a valid numeric value, this holds
+    // the extracted timestamp. The attribute is not added to _cells.
+    std::optional<api::timestamp_type> _custom_timestamp;
 public:
     struct delete_item {};
     struct put_item {};
-    put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item);
-    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, const write_item_index_info& index_info);
+    put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item,
+            const std::optional<bytes>& timestamp_attribute = std::nullopt);
+    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, const write_item_index_info& index_info,
+            const std::optional<bytes>& timestamp_attribute = std::nullopt);
     // put_or_delete_item doesn't keep a reference to schema (so it can be
-    // moved between shards for LWT) so it needs to be given again to build():
+    // moved between shards for LWT) so it needs to be given again to build().
+    // The mutation's timestamp is the custom timestamp, if the item has one
+    // (see custom_timestamp()), or else ts.
     mutation build(schema_ptr schema, api::timestamp_type ts) const;
     const partition_key& pk() const { return _pk; }
     const clustering_key& ck() const { return _ck; }
@@ -3441,11 +3527,24 @@ public:
     bool is_put_item() noexcept {
         return _cells.has_value();
     }
+    // Returns the custom write timestamp extracted from the timestamp attribute,
+    // if any. If not set, the caller should use api::new_timestamp() instead.
+    std::optional<api::timestamp_type> custom_timestamp() const noexcept {
+        return _custom_timestamp;
+    }
 };
 
-put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
+put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item, const std::optional<bytes>& timestamp_attribute)
         : _pk(pk_from_json(key, schema)), _ck(ck_from_json(key, schema)) {
-    check_key(key, schema);
+    // The timestamp attribute may be provided as a "pseudo-key": it is not a
+    // real key column, but can be included in the "Key" object to carry the
+    // custom write timestamp. If found, extract the timestamp, and let
+    // check_key() accept this one extra member of the key.
+    const rjson::value* ts_val = timestamp_attribute ? rjson::find(key, to_string_view(*timestamp_attribute)) : nullptr;
+    if (ts_val) {
+        _custom_timestamp = get_timestamp(*ts_val, to_string_view(*timestamp_attribute));
+    }
+    check_key(key, schema, ts_val != nullptr);
 }
 
 // find_attribute() checks whether the named attribute is stored in the
@@ -3650,7 +3749,8 @@ static void validate_value_if_search_schema_attribute(
     }
 }
 
-put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, const write_item_index_info& index_info)
+put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, const write_item_index_info& index_info,
+        const std::optional<bytes>& timestamp_attribute)
         : _pk(pk_from_json(item, schema)), _ck(ck_from_json(item, schema)) {
     _cells = std::vector<cell>();
     _cells->reserve(item.MemberCount());
@@ -3662,6 +3762,14 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         validate_value(it->value, "PutItem");
         const column_definition* cdef = find_attribute(*schema, column_name);
         validate_attr_name_length("", column_name.size(), cdef && cdef->is_primary_key());
+        // If this is the timestamp attribute, it must be a valid numeric value
+        // (microseconds since epoch). Use it as the write timestamp and do not
+        // store it in the item data. Reject the write if the value is non-numeric.
+        if (timestamp_attribute && column_name == *timestamp_attribute) {
+            _custom_timestamp = get_timestamp(it->value, to_string_view(*timestamp_attribute));
+            // The attribute is consumed as timestamp, not stored in _cells.
+            continue;
+        }
         _length_in_bytes += column_name.size();
         if (!cdef) {
             // This attribute may be a key column of one of the GSI or LSI,
@@ -3709,6 +3817,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
 }
 
 mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) const {
+    ts = _custom_timestamp.value_or(ts);
     mutation m(schema, _pk);
     // If there's no clustering key, a tombstone should be created directly
     // on a partition, not on a clustering row - otherwise it will look like
@@ -3855,11 +3964,97 @@ rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value&
     }
 }
 
+// Returns the name of the attribute which the table's system:timestamp_attribute
+// tag says holds a custom write timestamp, if any. The tag is ignored if it
+// names a key attribute of the table, an attribute used by one of its
+// indexes (a GSI or LSI key, or a vector index's target or SearchSchema
+// attribute), or the table's TTL attribute: such an attribute must be stored
+// in the item, so it can't be consumed as a write timestamp.
+static std::optional<bytes> get_timestamp_attribute(service::storage_proxy& proxy, const schema_ptr& schema) {
+    const auto tags_ptr = db::get_tags_of_table(schema);
+    if (!tags_ptr) {
+        return std::nullopt;
+    }
+    auto it = tags_ptr->find(TIMESTAMP_TAG_KEY);
+    if (it == tags_ptr->end() || it->second.empty()) {
+        return std::nullopt;
+    }
+    auto ttl_it = tags_ptr->find(TTL_TAG_KEY);
+    if (ttl_it != tags_ptr->end() && ttl_it->second == it->second) {
+        return std::nullopt;
+    }
+    bytes attr = to_bytes(it->second);
+    const column_definition* cdef = schema->get_column_definition(attr);
+    if (cdef && cdef->is_primary_key()) {
+        return std::nullopt;
+    }
+    write_item_index_info index_info(proxy, *schema);
+    if (index_info.key_attributes.contains(attr) || index_info.vec_attrs.contains(attr) ||
+            index_info.search_schema_attrs.contains(attr)) {
+        return std::nullopt;
+    }
+    return attr;
+}
+
+// Throw api_error::validation if writes with a custom write timestamp
+// (from the system:timestamp_attribute tag) can't be allowed on this table.
+// Used by both rmw_operation::execute() and BatchWriteItem.
+static void validate_custom_timestamp_allowed(service::storage_proxy& proxy, const schema& s) {
+    // CDC (which implements Streams) only accepts write timestamps close
+    // to the current time, so the main use case of custom timestamps -
+    // writing data with old timestamps - can't work on such tables.
+    if (s.cdc_options().enabled()) {
+        throw api_error::validation(fmt::format(
+            "Using the system:timestamp_attribute is not compatible with "
+            "Streams, which are enabled on table {}.", s.cf_name()));
+    }
+    // A vector index also uses CDC: the vector store reads the table's
+    // changes from the CDC log (see cdc::cdc_enabled()). Besides the above
+    // problem, CDC also records a write that loses to a newer one, so the
+    // vector store could index the losing value.
+    if (cdc::cdc_enabled(s)) {
+        throw api_error::validation(fmt::format(
+            "Using the system:timestamp_attribute is not compatible with "
+            "a vector index, which table {} has.", s.cf_name()));
+    }
+    // Custom write timestamps can make a materialized view - which
+    // implements a GSI or LSI - inconsistent with its base table, if the
+    // view's key has two or more attributes which aren't key attributes of
+    // the base table (CQL doesn't allow such views; Alternator does, e.g.,
+    // for a GSI with both hash and range key). For such a view, the view
+    // update uses the maximum of these attributes' timestamps both for a new
+    // view row and for deleting the old one. When writes don't arrive in
+    // timestamp order, a view row may then be re-created with the same
+    // timestamp as its earlier deletion, and since the deletion wins, the
+    // item disappears from the index.
+    for (const view_ptr& v : proxy.data_dictionary().find_table(s.ks_name(), s.cf_name()).views()) {
+        int nonkey = 0;
+        for (const auto& cdef : v->primary_key_columns()) {
+            const column_definition* base_cdef = s.get_column_definition(cdef.name());
+            if (!base_cdef || !base_cdef->is_primary_key()) {
+                ++nonkey;
+            }
+        }
+        if (nonkey >= 2) {
+            std::string_view index_name = v->cf_name();
+            auto delim = index_name.find(':');
+            if (delim != std::string_view::npos) {
+                index_name = index_name.substr(delim + 1);
+            }
+            throw api_error::validation(fmt::format(
+                "Using the system:timestamp_attribute is not compatible with "
+                "index {} of table {}, whose key has two or more non-key attributes.",
+                index_name, s.cf_name()));
+        }
+    }
+}
+
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
     : _request(std::move(request))
     , _schema(get_table_for_write(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _consumed_capacity(_request)
+    , _timestamp_attribute(get_timestamp_attribute(proxy, _schema))
     , _returnvalues(parse_returnvalues(_request))
     , _returnvalues_on_condition_check_failure(parse_returnvalues_on_condition_check_failure(_request))
 {
@@ -4001,6 +4196,27 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         .alternator = true,
         .alternator_streams_increased_compatibility = schema()->cdc_options().enabled() && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
     };
+    // If this operation wants to set a custom write timestamp (i.e., the
+    // attribute specified in the system:timestamp_attribute tag has a value),
+    // LWT cannot be used because LWT requires the timestamp to be set by the
+    // Paxos protocol. Reject the operation if it would need to use LWT -
+    // which is exactly when shard_for_execute() gave it a cas_shard.
+    if (has_custom_timestamp()) {
+        validate_custom_timestamp_allowed(proxy, *schema());
+        if (cas_shard) {
+            if (_write_isolation == write_isolation::LWT_ALWAYS) {
+                throw api_error::validation(fmt::format(
+                    "Using the system:timestamp_attribute '{}' is not compatible with "
+                    "the 'always_use_lwt' write isolation policy.",
+                    to_string_view(*_timestamp_attribute)));
+            }
+            throw api_error::validation(fmt::format(
+                "Using the system:timestamp_attribute '{}' is not compatible with "
+                "a conditional or read-modify-write request, which needs LWT in "
+                "the 'only_rmw_uses_lwt' write isolation policy.",
+                to_string_view(*_timestamp_attribute)));
+        }
+    }
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
             throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
@@ -4089,7 +4305,7 @@ public:
     put_item_operation(parsed::expression_cache& parsed_expression_cache, service::storage_proxy& proxy, rjson::value&& request)
         : rmw_operation(proxy, std::move(request))
         , _mutation_builder(rjson::get(_request, "Item"), schema(), put_or_delete_item::put_item{},
-            write_item_index_info(proxy, *schema())) {
+            write_item_index_info(proxy, *schema()), _timestamp_attribute) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
         if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
@@ -4120,6 +4336,9 @@ public:
         return _request.HasMember("Expected") ||
                check_needs_read_before_write(_condition_expression) ||
                _returnvalues == returnvalues::ALL_OLD;
+    }
+    bool has_custom_timestamp() const noexcept override {
+        return _mutation_builder.custom_timestamp().has_value();
     }
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options& cdc_opts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
@@ -4202,7 +4421,7 @@ public:
     parsed::condition_expression _condition_expression;
     delete_item_operation(parsed::expression_cache& parsed_expression_cache, service::storage_proxy& proxy, rjson::value&& request)
         : rmw_operation(proxy, std::move(request))
-        , _mutation_builder(rjson::get(_request, "Key"), schema(), put_or_delete_item::delete_item{}) {
+        , _mutation_builder(rjson::get(_request, "Key"), schema(), put_or_delete_item::delete_item{}, _timestamp_attribute) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
         if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
@@ -4232,6 +4451,9 @@ public:
         return _request.HasMember("Expected") ||
                 check_needs_read_before_write(_condition_expression) ||
                 _returnvalues == returnvalues::ALL_OLD;
+    }
+    bool has_custom_timestamp() const noexcept override {
+        return _mutation_builder.custom_timestamp().has_value();
     }
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options& cdc_opts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
@@ -4277,7 +4499,12 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     per_table_stats->api_operations.delete_item++;
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
-    const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    // alternator_force_read_before_write adds a read only for WCU accounting.
+    // A write with a custom timestamp can't use LWT, so skip that read for it,
+    // instead of rejecting the write as a read-modify-write operation.
+    const bool needs_read_before_write = op->needs_read_before_write() ||
+        (_proxy.data_dictionary().get_config().alternator_force_read_before_write() &&
+         !op->has_custom_timestamp());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
@@ -4467,6 +4694,9 @@ future<> executor::do_batch_write(
             schema_decorated_key_equal>;
         auto key_builders = std::make_unique<map_type>(1, schema_decorated_key_hash{}, schema_decorated_key_equal{});
         for (auto&& b : std::move(mutation_builders)) {
+            if (b.second.custom_timestamp().has_value()) {
+                throw api_error::validation("Using the system:timestamp_attribute is not compatible with BatchWriteItem when any table in the batch uses the 'always' write isolation policy.");
+            }
             auto [it, added] = key_builders->try_emplace(schema_decorated_key {
                 .schema = b.first,
                 .dk = dht::decorate_key(*b.first, b.second.pk())
@@ -4569,6 +4799,9 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         // recomputed - and its vector indexes' JSON-encoded options
         // re-parsed - for every item.
         std::optional<write_item_index_info> index_info;
+        // Look up the timestamp attribute tag once per table (shared by all
+        // PutRequests and DeleteRequests for this table).
+        std::optional<bytes> ts_attr = get_timestamp_attribute(_proxy, schema);
         for (auto& request : it->value.GetArray()) {
             auto& r = get_single_member(request, "RequestItems element");
             const auto r_name = rjson::to_string_view(r.name);
@@ -4579,7 +4812,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                     index_info.emplace(_proxy, *schema);
                 }
                 auto&& put_item = put_or_delete_item(
-                        item, schema, put_or_delete_item::put_item{}, *index_info);
+                        item, schema, put_or_delete_item::put_item{}, *index_info, ts_attr);
                 mutation_builders.emplace_back(schema, std::move(put_item));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(), mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
@@ -4590,7 +4823,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 const rjson::value& key = get_member(r.value, "Key", "DeleteRequest");
                 validate_is_object(key, "Key in DeleteRequest");
                 mutation_builders.emplace_back(schema, put_or_delete_item(
-                        key, schema, put_or_delete_item::delete_item{}));
+                        key, schema, put_or_delete_item::delete_item{}, ts_attr));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(),
                         mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
@@ -4605,6 +4838,16 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     }
     for (const auto& b : mutation_builders) {
         co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, b.first, auth::permission::MODIFY, _stats);
+    }
+    // Check once per table (not per item) if custom timestamps are allowed.
+    // This must come after the permission check above, because its error
+    // message reveals information about the table (whether it has Streams
+    // enabled, or the name of one of its indexes).
+    std::unordered_set<table_id> validated_ts_tables;
+    for (const auto& b : mutation_builders) {
+        if (b.second.custom_timestamp() && validated_ts_tables.insert(b.first->id()).second) {
+            validate_custom_timestamp_allowed(_proxy, *b.first);
+        }
     }
     // If alternator_force_read_before_write is true we will first get the previous item size
     // and only then do send the mutation.
@@ -4826,8 +5069,18 @@ public:
     virtual ~update_item_operation() = default;
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options& cdc_opts) const override;
     bool needs_read_before_write() const;
+    // Returns true if the timestamp attribute is being set in this update
+    // (via AttributeUpdates PUT or UpdateExpression SET). Used to detect
+    // whether a custom write timestamp will be used.
+    bool has_custom_timestamp() const override;
 
 private:
+    // If AttributeUpdates PUTs the timestamp attribute, its value (validated
+    // by the constructor), which is used as the write timestamp.
+    std::optional<api::timestamp_type> _attribute_updates_timestamp;
+    // If UpdateExpression SETs the timestamp attribute, that SET action,
+    // whose value apply() uses as the write timestamp. Otherwise, nullptr.
+    const parsed::update_expression::action* timestamp_set_action() const;
     void delete_attribute(bytes&& column_name, const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts, deletable_row& row,
             attribute_collector& modified_attrs) const;
     void update_attribute(bytes&& column_name, const rjson::value& json_value, const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts,
@@ -4922,6 +5175,32 @@ update_item_operation::update_item_operation(parsed::expression_cache& parsed_ex
     if (expression_attribute_values) {
         _consumed_capacity._total_bytes += estimate_value_size(*expression_attribute_values);
     }
+    if (_timestamp_attribute) {
+        std::string_view ts_attr = to_string_view(*_timestamp_attribute);
+        // An AttributeUpdates PUT of the timestamp attribute gives the write
+        // timestamp, which we validate here, so that an invalid one is
+        // reported before anything else happens, as in PutItem and DeleteItem.
+        // If the entry is malformed, we leave it to apply_attribute_updates()
+        // to report.
+        const rjson::value* update = _attribute_updates ? rjson::find(*_attribute_updates, ts_attr) : nullptr;
+        const rjson::value* action = (update && update->IsObject()) ? rjson::find(*update, "Action") : nullptr;
+        if (action && action->IsString()) {
+            const rjson::value* value = rjson::find(*update, "Value");
+            if (rjson::to_string_view(*action) == "PUT" && value) {
+                _attribute_updates_timestamp = get_timestamp(*value, ts_attr);
+            } else if (rjson::to_string_view(*action) == "ADD") {
+                // The timestamp attribute is never stored, so it can't be ADDed to.
+                throw api_error::validation(fmt::format(
+                    "UpdateItem cannot ADD to the system:timestamp_attribute '{}'", ts_attr));
+            }
+        }
+        auto it = _update_expression.find(std::string(ts_attr));
+        if (it != _update_expression.end() && it->second.has_value() &&
+                std::holds_alternative<parsed::update_expression::action::add>(it->second.get_value()._action)) {
+            throw api_error::validation(fmt::format(
+                "UpdateItem cannot ADD to the system:timestamp_attribute '{}'", ts_attr));
+        }
+    }
 }
 
 // These are the cases where update_item_operation::apply() needs to use
@@ -4956,6 +5235,27 @@ update_item_operation::needs_read_before_write() const {
            check_needs_read_before_write_attribute_updates(_attribute_updates) ||
            _request.HasMember("Expected") ||
            (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::UPDATED_NEW);
+}
+
+const parsed::update_expression::action*
+update_item_operation::timestamp_set_action() const {
+    if (!_timestamp_attribute || _update_expression.empty()) {
+        return nullptr;
+    }
+    auto it = _update_expression.find(std::string(to_string_view(*_timestamp_attribute)));
+    if (it == _update_expression.end() || !it->second.has_value()) {
+        return nullptr;
+    }
+    const auto& action = it->second.get_value();
+    return std::holds_alternative<parsed::update_expression::action::set>(action._action) ? &action : nullptr;
+}
+
+// A SET of the timestamp attribute is a custom timestamp even before apply()
+// calculates its value: if the value isn't a valid timestamp, apply() rejects
+// the write.
+bool
+update_item_operation::has_custom_timestamp() const {
+    return _attribute_updates_timestamp || timestamp_set_action();
 }
 
 // action_result() returns the result of applying an UpdateItem action -
@@ -5246,6 +5546,11 @@ inline void update_item_operation::apply_attribute_updates(const std::unique_ptr
             throw api_error::validation(format("UpdateItem cannot update key column {}", rjson::to_string_view(it->name)));
         }
         std::string action = rjson::to_string((it->value)["Action"]);
+        // A PUT of the timestamp attribute gives the write timestamp (see
+        // apply()), and isn't stored.
+        if (_attribute_updates_timestamp && column_name == *_timestamp_attribute) {
+            continue;
+        }
         if (action == "DELETE") {
             // The DELETE operation can do two unrelated tasks. Without a
             // "Value" option, it is used to delete an attribute. With a
@@ -5340,6 +5645,7 @@ inline void update_item_operation::apply_attribute_updates(const std::unique_ptr
 
 inline void update_item_operation::apply_update_expression(const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts, deletable_row& row,
         attribute_collector& modified_attrs, bool& any_updates, bool& any_deletes) const {
+    const parsed::update_expression::action* timestamp_set = timestamp_set_action();
     for (auto& actions : _update_expression) {
         // The actions of _update_expression are grouped by top-level
         // attributes. Here, all actions in actions.second share the same
@@ -5348,6 +5654,11 @@ inline void update_item_operation::apply_update_expression(const std::unique_ptr
         const column_definition* cdef = _schema->get_column_definition(to_bytes(column_name));
         if (cdef && cdef->is_primary_key()) {
             throw api_error::validation(fmt::format("UpdateItem cannot update key column {}", column_name));
+        }
+        // A SET of the timestamp attribute gives the write timestamp (see
+        // apply()), and isn't stored.
+        if (timestamp_set && actions.second.has_value() && &actions.second.get_value() == timestamp_set) {
+            continue;
         }
         if (actions.second.has_value()) {
             // An action on a top-level attribute column_name. The single
@@ -5387,6 +5698,16 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
     if (_consumed_capacity._total_bytes == 0) {
         _consumed_capacity._total_bytes = 1;
     }
+    // If the update sets the timestamp attribute, its value is the write
+    // timestamp. A SET's value is calculated, and validated, here before the
+    // condition is checked, so that an invalid timestamp is reported even if
+    // the condition fails, as in PutItem and DeleteItem.
+    api::timestamp_type effective_ts = ts;
+    if (_attribute_updates_timestamp) {
+        effective_ts = *_attribute_updates_timestamp;
+    } else if (const auto* set = timestamp_set_action()) {
+        effective_ts = get_timestamp(*action_result(*set, previous_item.get()), to_string_view(*_timestamp_attribute));
+    }
     if (!verify_expected(_request, previous_item.get()) || !verify_condition_expression(_condition_expression, previous_item.get())) {
         if (previous_item && _returnvalues_on_condition_check_failure == returnvalues_on_condition_check_failure::ALL_OLD) {
             _return_attributes = std::move(*previous_item);
@@ -5425,10 +5746,10 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
     auto& row = m.partition().clustered_row(*_schema, _ck);
     auto modified_attrs = attribute_collector();
     if (!_update_expression.empty()) {
-        apply_update_expression(previous_item, ts, row, modified_attrs, any_updates, any_deletes);
+        apply_update_expression(previous_item, effective_ts, row, modified_attrs, any_updates, any_deletes);
     }
     if (_attribute_updates) {
-        apply_attribute_updates(previous_item, ts, row, modified_attrs, any_updates, any_deletes);
+        apply_attribute_updates(previous_item, effective_ts, row, modified_attrs, any_updates, any_deletes);
     }
     if (!modified_attrs.empty()) {
         auto serialized_map = modified_attrs.to_mut();
@@ -5439,7 +5760,7 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
     // marker. An update with only DELETE operations must not add a row marker
     // (this was issue #5862) but any other update, even an empty one, should.
     if (any_updates || !any_deletes) {
-        row.apply(row_marker(ts));
+        row.apply(row_marker(effective_ts));
     } else if (_returnvalues == returnvalues::ALL_NEW && !previous_item) {
         // There was no pre-existing item, and we're not creating one, so
         // don't report the new item in the returned Attributes.
@@ -5478,7 +5799,12 @@ future<executor::request_return_type> executor::update_item(client_state& client
     }
 
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
-    const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    // alternator_force_read_before_write adds a read only for WCU accounting.
+    // A write with a custom timestamp can't use LWT, so skip that read for it,
+    // instead of rejecting the write as a read-modify-write operation.
+    const bool needs_read_before_write = op->needs_read_before_write() ||
+        (_proxy.data_dictionary().get_config().alternator_force_read_before_write() &&
+         !op->has_custom_timestamp());
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
