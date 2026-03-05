@@ -193,7 +193,7 @@ class ManagerClient:
             # check if we should ignore cores on this server
             ignore_cores = []
             if self.ignore_cores_log_patterns:
-                if matches := log_file.grep("|".join(f"({p})" for p in set(self.ignore_cores_log_patterns))):
+                if matches := await log_file.grep("|".join(f"({p})" for p in set(self.ignore_cores_log_patterns))):
                     logger.debug(f"Will ignore cores on {server}. Found the following log messages: {matches}")
                     ignore_cores.append(server)
             critical_error_pattern = r"Assertion.*failed|AddressSanitizer"

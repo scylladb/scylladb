@@ -55,7 +55,7 @@ async def test_add_node_in_new_rack_violating_rf_rack(manager: ManagerClient, en
         # Node should be accepted but with a warning
         await manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r4"})
 
-        matches = [log.grep('makes some existing keyspaces RF-rack-invalid') for log in logs]
+        matches = [await log.grep('makes some existing keyspaces RF-rack-invalid') for log in logs]
         assert any(matches)
 
 
@@ -117,7 +117,7 @@ async def test_remove_node_violating_rf_rack(manager: ManagerClient, enforce: bo
         # Node removal should succeed but with a warning
         await remove_node(servers[4].server_id)
 
-        matches = [log.grep('makes some existing keyspaces RF-rack-invalid') for log in logs]
+        matches = [await log.grep('makes some existing keyspaces RF-rack-invalid') for log in logs]
         assert any(matches)
 
 
