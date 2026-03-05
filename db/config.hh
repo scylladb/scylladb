@@ -539,19 +539,22 @@ public:
 
     named_value<std::vector<std::unordered_map<sstring, sstring>>> auth_certificate_role_queries;
 
+    // guardrails options
+    named_value<bool> enable_create_table_with_compact_storage;
     named_value<int> minimum_replication_factor_fail_threshold;
     named_value<int> minimum_replication_factor_warn_threshold;
-    named_value<int> maximum_replication_factor_warn_threshold;
     named_value<int> maximum_replication_factor_fail_threshold;
+    named_value<int> maximum_replication_factor_warn_threshold;
+    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_fail_list;
+    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_warn_list;
+    named_value<std::vector<enum_option<consistency_level_restriction_t>>> write_consistency_levels_disallowed;
+    named_value<std::vector<enum_option<consistency_level_restriction_t>>> write_consistency_levels_warned;
 
     named_value<double> tablets_initial_scale_factor;
     named_value<unsigned> tablets_per_shard_goal;
     named_value<uint64_t> target_tablet_size_in_bytes;
     named_value<unsigned> tablet_streaming_read_concurrency_per_shard;
     named_value<unsigned> tablet_streaming_write_concurrency_per_shard;
-
-    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_warn_list;
-    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_fail_list;
 
     named_value<uint32_t> service_levels_interval;
 
@@ -603,8 +606,6 @@ public:
     named_value<float> disk_space_monitor_polling_interval_threshold;
     named_value<float> critical_disk_utilization_level;
 
-    named_value<bool> enable_create_table_with_compact_storage;
-
     named_value<bool> rf_rack_valid_keyspaces;
     named_value<bool> enforce_rack_list;
 
@@ -620,9 +621,6 @@ public:
     named_value<float> compaction_max_shares;
     named_value<bool> compaction_enforce_min_threshold;
     named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
-
-    named_value<std::vector<enum_option<consistency_level_restriction_t>>> write_consistency_levels_warned;
-    named_value<std::vector<enum_option<consistency_level_restriction_t>>> write_consistency_levels_disallowed;
 
     static const sstring default_tls_priority;
 private:
