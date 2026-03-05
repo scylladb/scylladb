@@ -80,27 +80,15 @@ namespace {
         static const std::unordered_set<sstring> tables = {
             schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
             system_keyspace::BROADCAST_KV_STORE,
-            system_keyspace::CDC_GENERATIONS_V3,
             system_keyspace::RAFT,
             system_keyspace::RAFT_SNAPSHOTS,
             system_keyspace::RAFT_SNAPSHOT_CONFIG,
             system_keyspace::GROUP0_HISTORY,
             system_keyspace::DISCOVERY,
-            system_keyspace::TABLETS,
-            system_keyspace::TOPOLOGY,
-            system_keyspace::TOPOLOGY_REQUESTS,
             system_keyspace::LOCAL,
             system_keyspace::PEERS,
-            system_keyspace::SCYLLA_LOCAL,
             system_keyspace::COMMITLOG_CLEANUPS,
-            system_keyspace::SERVICE_LEVELS_V2,
-            system_keyspace::VIEW_BUILD_STATUS_V2,
-            system_keyspace::ROLES,
-            system_keyspace::ROLE_MEMBERS,
-            system_keyspace::ROLE_ATTRIBUTES,
-            system_keyspace::ROLE_PERMISSIONS,
             system_keyspace::v3::CDC_LOCAL,
-            system_keyspace::DICTS
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -127,7 +115,7 @@ namespace {
                 system_keyspace::DICTS,
             };
             if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
-                props.is_group0_table = true;
+                props.set_is_group0_table();
             }
         });
 }

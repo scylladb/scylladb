@@ -106,7 +106,7 @@ namespace {
         schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
             if (ks_name == schema_tables::NAME) {
                 // all schema tables are group0 tables
-                props.is_group0_table = true;
+                props.set_is_group0_table();
             }
         });
 }
