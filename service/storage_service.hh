@@ -617,6 +617,8 @@ public:
     virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) override {}
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
+
+    future<> on_cleanup_for_drop_table(const table_id& id);
 private:
     std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint);
     // return an engaged value iff app_state_map has changes to the peer info

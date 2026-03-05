@@ -778,6 +778,7 @@ compaction_manager::get_incremental_repair_read_lock(compaction::compaction_grou
         cmlog.debug("Get get_incremental_repair_read_lock for {} started", reason);
     }
     compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = cs.gate.hold();
     auto ret = co_await cs.incremental_repair_lock.hold_read_lock();
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_read_lock for {} done", reason);
@@ -791,6 +792,7 @@ compaction_manager::get_incremental_repair_write_lock(compaction::compaction_gro
         cmlog.debug("Get get_incremental_repair_write_lock for {} started", reason);
     }
     compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = cs.gate.hold();
     auto ret = co_await cs.incremental_repair_lock.hold_write_lock();
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_write_lock for {} done", reason);
@@ -2387,6 +2389,8 @@ future<> compaction_manager::remove(compaction_group_view& t, sstring reason) no
     if (!c_state.gate.is_closed()) {
         auto close_gate = c_state.gate.close();
         co_await stop_ongoing_compactions(reason, &t);
+        // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
+        co_await c_state.incremental_repair_lock.write_lock();
         co_await std::move(close_gate);
     }
 

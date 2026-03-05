@@ -8626,4 +8626,13 @@ future<> storage_service::query_cdc_streams(table_id table, noncopyable_function
     return _cdc_gens.local().query_cdc_streams(table, std::move(f));
 }
 
+future<> storage_service::on_cleanup_for_drop_table(const table_id& id) {
+    co_await container().invoke_on_all([id] (storage_service& ss) {
+        if (ss._repair.local_is_initialized()) {
+            ss._repair.local().on_cleanup_for_drop_table(id);
+        }
+    });
+    co_return;
+}
+
 } // namespace service

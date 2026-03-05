@@ -750,6 +750,7 @@ public:
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::vector<sstables::shared_sstable>{sst});
     }
     dht::token_range get_token_range_after_split(const dht::token&) const noexcept override { return dht::token_range(); }
+    future<> wait_for_background_tablet_resize_work() override { return make_ready_future<>(); }
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
         return get_compaction_group().make_sstable_set();
@@ -768,6 +769,13 @@ class tablet_storage_group_manager final : public storage_group_manager {
     locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
     future<> _merge_completion_fiber;
     condition_variable _merge_completion_event;
+    // Ensures that processes such as incremental repair will wait for pending work from
+    // merge fiber before proceeding. This guarantees stability on the compaction groups.
+    // NOTE: it's important that we don't await on the barrier with any compaction group
+    // gate held, since merge fiber will stop groups that in turn await on gate,
+    // potentially causing an ABBA deadlock.
+    utils::phased_barrier _merge_fiber_barrier;
+    std::optional<utils::phased_barrier::operation> _pending_merge_fiber_work;
     // Holds compaction reenabler which disables compaction temporarily during tablet merge
     std::vector<compaction::compaction_reenabler> _compaction_reenablers_for_merging;
 private:
@@ -856,6 +864,7 @@ public:
         , _my_host_id(erm.get_token_metadata().get_my_id())
         , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map(schema()->id()))
         , _merge_completion_fiber(merge_completion_fiber())
+        , _merge_fiber_barrier(format("[table {}.{}] merge_fiber_barrier", _t.schema()->ks_name(), _t.schema()->cf_name()))
     {
         storage_group_map ret;
 
@@ -907,6 +916,10 @@ public:
     future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override;
     dht::token_range get_token_range_after_split(const dht::token& token) const noexcept override {
         return tablet_map().get_token_range_after_split(token);
+    }
+    future<> wait_for_background_tablet_resize_work() override {
+        co_await _merge_fiber_barrier.advance_and_await();
+        co_return;
     }
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
@@ -2120,33 +2133,31 @@ compaction_group::update_repaired_at_for_merge() {
     });
 }
 
-future<std::vector<compaction::compaction_group_view*>> table::get_compaction_group_views_for_repair(dht::token_range range) {
-    std::vector<compaction::compaction_group_view*> ret;
-    auto sgs = storage_groups_for_token_range(range);
-    for (auto& sg : sgs) {
-        co_await coroutine::maybe_yield();
-        sg->for_each_compaction_group([&ret] (const compaction_group_ptr& cg) {
-            ret.push_back(&cg->view_for_unrepaired_data());
-        });
-    }
-    co_return ret;
-}
-
 future<compaction_reenablers_and_lock_holders> table::get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
         const service::frozen_topology_guard& guard, dht::token_range range) {
     auto ret = compaction_reenablers_and_lock_holders();
-    auto views = co_await get_compaction_group_views_for_repair(range);
-    for (auto view : views) {
-        auto cre = co_await db.get_compaction_manager().await_and_disable_compaction(*view);
+    // Waits for background tablet resize work like merge that might destroy compaction groups,
+    // providing stability. Essentially, serializes tablet merge completion handling with
+    // the start of incremental repair, from the replica side.
+    co_await _sg_manager->wait_for_background_tablet_resize_work();
+
+    for (auto sg : storage_groups_for_token_range(range)) {
+      // FIXME: indentation
+      auto cgs = sg->compaction_groups_immediate();
+      for (auto& cg : cgs) {
+        auto gate_holder = cg->async_gate().hold();
+        auto& view = cg->view_for_unrepaired_data();
+        auto cre = co_await db.get_compaction_manager().await_and_disable_compaction(view);
         tlogger.info("Disabled compaction for range={} session_id={} for incremental repair", range, guard);
         ret.cres.push_back(std::make_unique<compaction::compaction_reenabler>(std::move(cre)));
 
         // This lock prevents the unrepaired compaction started by major compaction to run in parallel with repair.
         // The unrepaired compaction started by minor compaction does not need to take the lock since it ignores
         // sstables being repaired, so it can run in parallel with repair.
-        auto lock_holder = co_await db.get_compaction_manager().get_incremental_repair_write_lock(*view, "row_level_repair");
+        auto lock_holder = co_await db.get_compaction_manager().get_incremental_repair_write_lock(view, "row_level_repair");
         tlogger.info("Got unrepaired compaction and repair lock for range={} session_id={} for incremental repair", range, guard);
         ret.lock_holders.push_back(std::move(lock_holder));
+      }
     }
     co_return ret;
 }
@@ -3018,7 +3029,7 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
 
     while (!_t.async_gate().is_closed()) {
         try {
-            co_await utils::get_local_injector().inject("merge_completion_fiber", utils::wait_for_message(60s));
+            co_await utils::get_local_injector().inject("merge_completion_fiber", utils::wait_for_message(5min));
             auto ks_name = schema()->ks_name();
             auto cf_name = schema()->cf_name();
             // Enable compaction after merge is done.
@@ -3052,6 +3063,7 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
         utils::get_local_injector().inject("replica_merge_completion_wait", [] () {
             tlogger.info("Merge completion fiber finished, about to sleep");
         });
+        _pending_merge_fiber_work.reset();
         co_await _merge_completion_event.wait();
         tlogger.debug("Merge completion fiber woke up for {}.{}", schema()->ks_name(), schema()->cf_name());
     }
@@ -3110,6 +3122,7 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
         new_storage_groups[new_tid] = std::move(new_sg);
     }
     _storage_groups = std::move(new_storage_groups);
+    _pending_merge_fiber_work = _merge_fiber_barrier.start();
     _merge_completion_event.signal();
 }
 
@@ -3126,6 +3139,9 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
     } else if (new_tablet_count < old_tablet_count) {
         tlogger.info0("Detected tablet merge for table {}.{}, decreasing from {} to {} tablets",
                       schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
+        if (utils::get_local_injector().is_enabled("tablet_force_tablet_count_decrease_once")) {
+            utils::get_local_injector().disable("tablet_force_tablet_count_decrease");
+        }
         handle_tablet_merge_completion(*old_tablet_map, *new_tablet_map);
     }
 

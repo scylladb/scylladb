@@ -1211,6 +1211,7 @@ private:
         }
 
         co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(60s));
+        rlogger.debug("Disabling compaction for range={} for incremental repair", _range);
         auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
         for (auto& lock_holder : reenablers_and_holders.lock_holders) {
             _rs._repair_compaction_locks[gid].push_back(std::move(lock_holder));
@@ -1240,6 +1241,8 @@ private:
         // compaction.
         reenablers_and_holders.cres.clear();
         rlogger.info("Re-enabled compaction for range={} for incremental repair", _range);
+
+        co_await utils::get_local_injector().inject("wait_after_prepare_sstables_for_incremental_repair", utils::wait_for_message(5min));
     }
 
     // Read rows from sstable until the size of rows exceeds _max_row_buf_size  - current_size
@@ -3952,4 +3955,20 @@ future<std::optional<repair_task_progress>> repair_service::get_tablet_repair_ta
     rlogger.debug("repair_task_progress: task_uuid={} table_uuid={} requested_tablets={} finished_tablets={} progress={} finished_nomerge={}",
             task_uuid, tid, requested, finished, progress.progress(), finished_nomerge);
     co_return progress;
+}
+
+void repair_service::on_cleanup_for_drop_table(const table_id& id) {
+    // Prevent repair lock from being leaked in repair_service when table is dropped midway.
+    // The RPC verb that removes the lock on success path will not be called by coordinator after table was dropped.
+    // We also cannot move the lock from repair_service to repair_meta, since the lock must outlive the latter.
+    // Since tablet metadata has been erased at this point, we can simply erase all instances for the dropped table.
+    rlogger.debug("Cleaning up state for dropped table {}", id);
+    for (auto it = _repair_compaction_locks.begin(); it != _repair_compaction_locks.end();) {
+        auto& [global_tid, _] = *it;
+        if (global_tid.table == id) {
+            it = _repair_compaction_locks.erase(it);
+        } else {
+            it++;
+        }
+    }
 }
