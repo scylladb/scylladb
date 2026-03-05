@@ -994,12 +994,27 @@ future<> schema_applier::finalize_tables_and_views() {
     // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
     for (auto& dropped_view : diff.tables_and_views.local().views.dropped) {
         auto s = dropped_view.get();
+        co_await _ss.local().on_cleanup_for_drop_table(s->id());
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
     for (auto& dropped_table : diff.tables_and_views.local().tables.dropped) {
         auto s = dropped_table.get();
+        co_await _ss.local().on_cleanup_for_drop_table(s->id());
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
+<<<<<<< HEAD
+||||||| parent of 9190d42863 (Merge 'repair: Fix rwlock in compaction_state and lock holder lifecycle' from Raphael Raph Carvalho)
+    for (auto& dropped_cdc : diff.tables_and_views.local().cdc.dropped) {
+        auto s = dropped_cdc.get();
+        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+    }
+=======
+    for (auto& dropped_cdc : diff.tables_and_views.local().cdc.dropped) {
+        auto s = dropped_cdc.get();
+        co_await _ss.local().on_cleanup_for_drop_table(s->id());
+        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+    }
+>>>>>>> 9190d42863 (Merge 'repair: Fix rwlock in compaction_state and lock holder lifecycle' from Raphael Raph Carvalho)
 
     // We must do it after tables are dropped so that table snapshot doesn't experience missing tablet map,
     // and so that compaction groups are not destroyed altogether.
