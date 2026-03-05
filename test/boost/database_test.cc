@@ -1712,7 +1712,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
 
     schema_builder::register_schema_initializer([] (schema_builder& builder) {
         if (builder.ks_name() == "test" && builder.cf_name() == "table_gc_mode_group0") {
-            builder.set_is_group0_table(true);
+            builder.set_is_group0_table();
         }
     });
     auto table_gc_mode_group0 = schema_builder("test", "table_gc_mode_group0")
