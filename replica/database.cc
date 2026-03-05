@@ -2246,16 +2246,16 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     // assume failure until proven otherwise
     auto update_writes_failed = defer([&] { ++_stats->total_writes_failed; });
 
-    utils::get_local_injector().inject("database_apply", [&s] () {
-        if (!is_system_keyspace(s->ks_name())) {
-            throw std::runtime_error("injected error");
+    co_await utils::get_local_injector().inject("database_apply", [&s] (auto& handler) -> future<> {
+        if (s->ks_name() != handler.get("ks_name") || s->cf_name() != handler.get("cf_name")) {
+            co_return;
         }
-    });
-    co_await utils::get_local_injector().inject("database_apply_wait", [&] (auto& handler) -> future<> {
-        if (s->cf_name() == handler.get("cf_name")) {
-            dblog.info("database_apply_wait: wait");
+        if (handler.get("what") == "throw") {
+            throw std::runtime_error(format("injected error for {}.{}", s->ks_name(), s->cf_name()));
+        } else if (handler.get("what") == "wait") {
+            dblog.info("database_apply: wait");
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-            dblog.info("database_apply_wait: done");
+            dblog.info("database_apply: done");
         }
     });
 
