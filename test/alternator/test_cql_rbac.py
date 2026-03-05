@@ -818,6 +818,26 @@ def test_rbac_batchwriteitem(dynamodb, cql, test_table, test_table_s):
                     assert 'Item' in test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
                     assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
 
+# A BatchWriteItem with a custom write timestamp (see test_timestamp_attribute.py)
+# on a table which doesn't allow custom timestamps - here because it has
+# Streams enabled - is rejected with a ValidationException which reveals this
+# fact about the table. A role without MODIFY permission on the table must
+# get an AccessDeniedException instead, and not learn anything about the table.
+def test_rbac_batchwriteitem_timestamp_attribute(dynamodb, cql):
+    with new_test_table(dynamodb,
+        Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'ts'}],
+        StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'},
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        batch = {table.name: [{'PutRequest': {'Item': {'p': random_string(), 'ts': 1000}}}]}
+        with new_role(cql) as (role, key):
+            with new_dynamodb(dynamodb, role, key) as d:
+                unauthorized(lambda: d.meta.client.batch_write_item(RequestItems = batch))
+                # With the MODIFY permission, we get the ValidationException:
+                with temporary_grant(cql, 'MODIFY', cql_table_name(table), role):
+                    with pytest.raises(ClientError, match='ValidationException.*Streams'):
+                        authorized(lambda: d.meta.client.batch_write_item(RequestItems = batch))
+
 # A test for permission checks in BatchGetItem. BatchGetItem needs the
 # "SELECT" permission, but one BatchGetItem may read from several tables
 # so needs SELECT permissions on all of them, not just one. If any of the
