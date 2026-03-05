@@ -298,14 +298,14 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
         new_replica = (host_ids[1], 0)
 
         logger.info(f"Moving tablet {old_replica} -> {new_replica}")
-        manager.api.move_tablet(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0)
 
         await assert_rows(1)
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({2}, {2});")
         await assert_rows(2)
 
         logger.info(f"Moving tablet {new_replica} -> {old_replica}")
-        manager.api.move_tablet(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], old_replica[0], old_replica[1], 0)
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], old_replica[0], old_replica[1], 0)
 
         await assert_rows(2)
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({3}, {3});")
@@ -400,8 +400,7 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: M
         logger.info(f"SSTable count in staging dir of server 1: {s1_sstables_in_staging}")
 
         logger.info("Allowing view update generator to progress again")
-        for server in servers:
-            manager.api.disable_injection(server.ip_addr, 'view_update_generator_consume_staging_sstable')
+        await asyncio.gather(*[manager.api.disable_injection(server.ip_addr, 'stream_mutation_fragments') for server in servers])
 
         assert s0_sstables_in_staging > 0
         assert s0_sstables_in_staging == s1_sstables_in_staging
