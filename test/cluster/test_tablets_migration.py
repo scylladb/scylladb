@@ -11,6 +11,7 @@ from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
 from test.pylib.util import start_writes
 from test.cluster.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for
+from test.pylib.internal_types import HostID
 import time
 import pytest
 import logging
@@ -543,3 +544,92 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
         await asyncio.gather(*[manager.api.message_injection(s.ip_addr, "wait_after_tablet_cleanup") for s in servers])
 
         await manager.api.quiesce_topology(servers[0].ip_addr)
+
+
+async def test_quarantine_orphaned_sstable(manager: ManagerClient):
+    '''
+    Reproduces the symptom seen in https://scylladb.atlassian.net/browse/SCYLLADB-788
+    where the node fails to start when hitting an sstable
+    that is not included in any tablet owned by the node.
+    '''
+    logger.info("Bootstrapping cluster")
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled', 'failure_detector_timeout_in_ms': 2000}
+    host_ids = []
+    servers = []
+    snap_name = "test_snapshot"
+
+    async def make_server(rack: str):
+        s = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack})
+        servers.append(s)
+        host_ids.append(await manager.get_host_id(s.server_id))
+
+    await make_server("r1")
+
+    await manager.disable_tablet_balancing()
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        keys = range(256)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+        await make_server("r1")
+
+        logger.info(f"Cluster is [{host_ids}]")
+
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        logger.info(f"Tablet is on [{replicas}]")
+        assert len(replicas) == 1 and len(replicas[0].replicas) == 1
+
+        old_server = None
+        old_replica = replicas[0].replicas[0]
+        new_replica : tuple[HostID, int] = None
+        for i, h in enumerate(host_ids):
+            if h == old_replica[0]:
+                old_server = servers[i]
+            else:
+                new_replica = (h, 0)
+        logger.info(f"Moving tablet {old_replica} -> {new_replica}")
+
+        print('Flush keyspace')
+        await manager.api.flush_keyspace(old_server.ip_addr, ks)
+        print('Take keyspace snapshot')
+        await manager.api.take_snapshot(old_server.ip_addr, ks, snap_name)
+
+        finish_writes = await start_writes(cql, ks, "test")
+
+        migration_task = asyncio.create_task(
+            manager.api.move_tablet(servers[0].ip_addr, ks, "test", old_replica[0], old_replica[1], new_replica[0], new_replica[1], 0))
+
+        logger.info("Done, waiting for migration to finish")
+        await migration_task
+
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        logger.info(f"Tablet is now on [{replicas}]")
+        assert len(replicas) == 1
+        assert replicas[0].replicas[0] == new_replica
+
+        await finish_writes()
+
+        await manager.server_stop(old_server.server_id)
+
+        logger.info("Restoring now-orphaned SSTables")
+        workdir = await manager.server_get_workdir(old_server.server_id)
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        snap_dir = f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}'
+        tocs = []
+        for f in os.scandir(snap_dir):
+            if f.name.endswith("-TOC.txt"):
+                tocs.append(f.name)
+            os.rename(f.path, f'{workdir}/data/{ks}/{cf_dir}/{f.name}')
+            logger.info(f'Moved {f.path} back to {cf_dir}')
+
+        await manager.server_start(old_server.server_id)
+
+        quarantine_dir = f'{workdir}/data/{ks}/{cf_dir}/quarantine'
+        for t in tocs:
+            assert os.path.exists(f'{quarantine_dir}/{t}'), f"TOC file {t} is not quarantined"
+
+        # For dropping the keyspace after the node failure
+        await reconnect_driver(manager)
