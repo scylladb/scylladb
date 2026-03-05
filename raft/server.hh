@@ -254,6 +254,8 @@ public:
     // It it passes nullptr, the function is unabortable.
     //
     // Exceptions:
+    // raft::stopped_error
+    //     Thrown if abort() was called on the server instance.
     // raft::request_aborted
     //     Thrown if abort is requested before the operation finishes.
     virtual future<> wait_for_state_change(seastar::abort_source* as) = 0;
@@ -268,6 +270,8 @@ public:
     // It it passes nullptr, the function is unabortable.
     //
     // Exceptions:
+    // raft::stopped_error
+    //     Thrown if abort() was called on the server instance.
     // raft::request_aborted
     //     Thrown if abort is requested before the operation finishes.
     virtual future<> wait_for_leader(seastar::abort_source* as) = 0;
