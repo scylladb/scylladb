@@ -469,3 +469,7 @@ def modify_pytest_item(item: pytest.Item) -> None:
             __skip_test(*mark.args, **mark.kwargs)
         except TypeError as e:
             raise TypeError(f"Failed to process skip_mode mark, {mark} for test {item}, error {e}")
+
+    if (any(mark.name in ("perf", "manual", "unstable") for mark in item.iter_markers())
+            and not any(mark.name == "non_gating" for mark in item.iter_markers("non_gating"))):
+        item.add_marker(pytest.mark.non_gating)
