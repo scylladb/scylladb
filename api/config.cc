@@ -82,15 +82,16 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         });
     });
 
-    cs::find_config_id.set(r, [&cfg] (const_req r) {
-        auto id = r.get_path_param("id");
-        for (auto&& cfg_ref : cfg.values()) {
-            auto&& cfg = cfg_ref.get();
-            if (id == cfg.name()) {
-                return cfg.value_as_json();
-            }
+    cs::find_config_id.set(r, [&cfg] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto id = req->get_path_param("id");
+        auto value = co_await cfg.value_as_json_string_for_name(id);
+        if (!value) {
+            throw bad_param_exception(sstring("No such config entry: ") + id);
         }
-        throw bad_param_exception(sstring("No such config entry: ") + id);
+        //value is already a json string 
+        json::json_return_type ret{json::json_void()};
+        ret._res = std::move(*value);
+        co_return ret;
     });
 
     sp::get_rpc_timeout.set(r, [&cfg](const_req req)  {

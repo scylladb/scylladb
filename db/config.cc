@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <optional>
 #include <unordered_map>
 #include <sstream>
 
@@ -19,6 +20,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/format.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/json/json_elements.hh>
 #include <seastar/util/log.hh>
@@ -1689,6 +1691,23 @@ void db::config::maybe_in_workdir(named_value<string_list>& tos, const char* sub
         n.push_back(work_directory() + "/" + sub);
         tos(n);
     }
+}
+
+future<std::optional<sstring>> db::config::value_as_json_string_for_name(sstring name) const {
+    // Config reloads triggered by SIGHUP are applied on shard 0 and then
+    // broadcast to all other shards.  We read the value on shard 0 under
+    // a read lock to guarantee a consistent snapshot — the SIGHUP handler
+    // holds the write lock across the entire reload-and-broadcast sequence.
+    co_return co_await smp::submit_to(0, [this, name = std::move(name)] () -> future<std::optional<sstring>> {
+        auto lock = co_await _config_update_lock.hold_read_lock();
+        for (auto&& cfg_ref : values()) {
+            auto&& c = cfg_ref.get();
+            if (name == c.name()) {
+                co_return c.value_as_json()._res;
+            }
+        }
+        co_return std::nullopt;
+    });
 }
 
 const sstring db::config::default_tls_priority("SECURE128:-VERS-TLS1.0");
