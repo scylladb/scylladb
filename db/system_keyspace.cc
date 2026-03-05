@@ -85,27 +85,40 @@ namespace {
         static const std::unordered_set<sstring> tables = {
             schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
             system_keyspace::BROADCAST_KV_STORE,
-            system_keyspace::CDC_GENERATIONS_V3,
             system_keyspace::RAFT,
             system_keyspace::RAFT_SNAPSHOTS,
             system_keyspace::RAFT_SNAPSHOT_CONFIG,
             system_keyspace::GROUP0_HISTORY,
             system_keyspace::DISCOVERY,
-            system_keyspace::TABLETS,
-            system_keyspace::TOPOLOGY,
-            system_keyspace::TOPOLOGY_REQUESTS,
             system_keyspace::LOCAL,
             system_keyspace::PEERS,
-            system_keyspace::SCYLLA_LOCAL,
             system_keyspace::COMMITLOG_CLEANUPS,
+<<<<<<< HEAD
             system_keyspace::SERVICE_LEVELS_V2,
             system_keyspace::VIEW_BUILD_STATUS_V2,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
             system_keyspace::ROLE_PERMISSIONS,
+||||||| parent of 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
+            system_keyspace::SERVICE_LEVELS_V2,
+            system_keyspace::VIEW_BUILD_STATUS_V2,
+            system_keyspace::CDC_STREAMS_STATE,
+            system_keyspace::CDC_STREAMS_HISTORY,
+            system_keyspace::ROLES,
+            system_keyspace::ROLE_MEMBERS,
+            system_keyspace::ROLE_ATTRIBUTES,
+            system_keyspace::ROLE_PERMISSIONS,
+=======
+>>>>>>> 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
             system_keyspace::v3::CDC_LOCAL,
+<<<<<<< HEAD
             system_keyspace::DICTS
+||||||| parent of 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
+            system_keyspace::DICTS,
+            system_keyspace::VIEW_BUILDING_TASKS,
+=======
+>>>>>>> 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -131,8 +144,16 @@ namespace {
                 system_keyspace::ROLE_PERMISSIONS,
                 system_keyspace::DICTS,
             };
+<<<<<<< HEAD
             if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
                 props.is_group0_table = true;
+||||||| parent of 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
+            if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
+                builder.set_is_group0_table(true);
+=======
+            if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
+                builder.set_is_group0_table();
+>>>>>>> 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
             }
         });
 }

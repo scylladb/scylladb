@@ -232,6 +232,39 @@ public:
 
     schema_builder& set_tablet_options(std::map<sstring, sstring>&& hints);
 
+<<<<<<< HEAD
+||||||| parent of 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
+    // Setters for static properties.
+    void set_use_null_sharder(bool enabled = true) {
+        _static_props.use_null_sharder = enabled;
+    }
+    void set_wait_for_sync_to_commitlog(bool enabled = true) {
+        _static_props.wait_for_sync_to_commitlog = enabled;
+    }
+    void enable_schema_commitlog() {
+        _static_props.enable_schema_commitlog();
+    }
+    void set_is_group0_table(bool enabled = true) {
+        _static_props.is_group0_table = enabled;
+    }
+
+=======
+    // Setters for static properties.
+    void set_use_null_sharder(bool enabled = true) {
+        _static_props.use_null_sharder = enabled;
+    }
+    void set_wait_for_sync_to_commitlog(bool enabled = true) {
+        _static_props.wait_for_sync_to_commitlog = enabled;
+    }
+    void enable_schema_commitlog() {
+        _static_props.enable_schema_commitlog();
+    }
+    void set_is_group0_table() {
+        _static_props.is_group0_table = true;
+        enable_schema_commitlog();
+    }
+
+>>>>>>> 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
     class default_names {
     public:
         default_names(const schema_builder&);

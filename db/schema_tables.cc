@@ -104,7 +104,13 @@ namespace {
         schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
             if (ks_name == schema_tables::NAME) {
                 // all schema tables are group0 tables
+<<<<<<< HEAD
                 props.is_group0_table = true;
+||||||| parent of 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
+                builder.set_is_group0_table(true);
+=======
+                builder.set_is_group0_table();
+>>>>>>> 0c786045ff (Merge 'service: assert that tables updated via group0 use schema commitlog' from Aleksandra Martyniuk)
             }
         });
 }
