@@ -10,8 +10,8 @@
 #include "types/types.hh"
 #include "types/vector.hh"
 #include "exceptions/exceptions.hh"
+#include <bit>
 #include <span>
-#include <cstring>
 #include <seastar/core/byteorder.hh>
 
 namespace cql3 {
@@ -31,16 +31,10 @@ std::vector<float> extract_float_vector(const bytes_opt& param, vector_dimension
                        expected_size, dimension, param->size()));
     }
 
-    std::vector<float> result;
-    result.resize(dimension);
-
-    // Bulk copy bytes from param to result
-    std::memcpy(result.data(), param->data(), expected_size);
-
-    // Convert endianness in-place (network byte order is big-endian)
-    uint32_t* data = reinterpret_cast<uint32_t*>(result.data());
+    std::vector<float> result(dimension);
+    const char* p = reinterpret_cast<const char*>(param->data());
     for (size_t i = 0; i < dimension; ++i) {
-        data[i] = be_to_cpu(data[i]);
+        result[i] = std::bit_cast<float>(consume_be<uint32_t>(p));
     }
 
     return result;
