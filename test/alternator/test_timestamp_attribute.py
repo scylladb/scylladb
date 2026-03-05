@@ -280,11 +280,20 @@ def test_timestamp_attribute_delete_item(test_table_ts):
 # normally (no custom timestamp is applied).
 def test_timestamp_attribute_delete_item_no_ts(test_table_ts):
     p = random_string()
-    test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': LARGE_TS})
+    # Use SMALL_TS so the delete (which uses the current server time) wins.
+    # If we used LARGE_TS (far future), the delete without an explicit timestamp
+    # would use current time which is smaller than LARGE_TS and the delete would lose.
+    test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': SMALL_TS})
     # Delete without a timestamp attribute - should succeed normally
     test_table_ts.delete_item(Key={'p': p})
+    assert 'Item' not in test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)
+    # Verify that an item written with a far-future timestamp is NOT deleted by
+    # a delete without an explicit timestamp (server time < LARGE_TS).
+    p = random_string()
+    test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': LARGE_TS})
+    test_table_ts.delete_item(Key={'p': p})
     item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True).get('Item')
-    assert item is None
+    assert item is not None and item['val'] == 'hello'
 
 # Test that DeleteItem with a non-numeric timestamp attribute is rejected.
 def test_timestamp_attribute_delete_item_non_numeric(test_table_ts):
@@ -307,5 +316,41 @@ def test_timestamp_attribute_batch_delete(test_table_ts):
     test_table_ts.meta.client.batch_write_item(RequestItems={
         test_table_ts.name: [{'DeleteRequest': {'Key': {'p': p, 'ts': LARGE_TS + 1}}}]
     })
-    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True).get('Item')
-    assert item is None
+    assert 'Item' not in test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)
+
+# Test that DeleteItem with a ConditionExpression and a custom timestamp is
+# rejected, because conditional writes require LWT which is incompatible with
+# custom timestamps.
+def test_timestamp_attribute_delete_item_condition_rejected(test_table_ts):
+    p = random_string()
+    test_table_ts.put_item(Item={'p': p, 'val': 'hello'})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts.delete_item(
+            Key={'p': p, 'ts': SMALL_TS},
+            ConditionExpression='attribute_exists(p)'
+        )
+
+# Test that DeleteItem with a custom timestamp is rejected when the table uses
+# always_use_lwt isolation, because every write uses LWT in that mode.
+def test_timestamp_attribute_delete_item_lwt_always_rejected(test_table_ts_lwt):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts_lwt.delete_item(Key={'p': p, 'ts': SMALL_TS})
+
+# Test that BatchWriteItem PutRequest with a custom timestamp is rejected when
+# the table uses always_use_lwt isolation.
+def test_timestamp_attribute_batch_put_lwt_always_rejected(test_table_ts_lwt):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts_lwt.meta.client.batch_write_item(RequestItems={
+            test_table_ts_lwt.name: [{'PutRequest': {'Item': {'p': p, 'val': 'v', 'ts': SMALL_TS}}}]
+        })
+
+# Test that BatchWriteItem DeleteRequest with a custom timestamp is rejected
+# when the table uses always_use_lwt isolation.
+def test_timestamp_attribute_batch_delete_lwt_always_rejected(test_table_ts_lwt):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts_lwt.meta.client.batch_write_item(RequestItems={
+            test_table_ts_lwt.name: [{'DeleteRequest': {'Key': {'p': p, 'ts': SMALL_TS}}}]
+        })

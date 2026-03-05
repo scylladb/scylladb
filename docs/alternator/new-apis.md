@@ -223,7 +223,7 @@ writes reach different replicas.
 
 ScyllaDB Alternator extends this with the `system:timestamp_attribute` tag,
 which allows specifying a custom write timestamp for each PutItem,
-UpdateItem, or DeleteItem request. To use this feature:
+UpdateItem, DeleteItem, or BatchWriteItem request. To use this feature:
 
 1. Tag the table (at CreateTable time or using TagResource) with
    `system:timestamp_attribute` set to the name of an attribute that will
