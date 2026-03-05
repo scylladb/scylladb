@@ -63,6 +63,7 @@ async def test_service_levels_snapshot(manager: ManagerClient):
 
     assert set([sl.service_level for sl in result]) == set([sl.service_level for sl in new_result])
 
+<<<<<<< HEAD
 @pytest.mark.asyncio
 async def test_service_levels_upgrade(request, manager: ManagerClient, build_mode: str):
     # First, force the first node to start in legacy mode
@@ -213,6 +214,17 @@ def default_timeout(mode):
     else:
         # this branch shouldn't be reached
         assert False
+||||||| parent of b32ef8ecd5 (test/auth_cluster: align service-level timeout expectations with scaled config)
+def default_timeout(mode):
+    if mode == "dev":
+        return "30s"
+    elif mode == "debug":
+        return "1m30s"
+    else:
+        # this branch shouldn't be reached
+        assert False
+=======
+>>>>>>> b32ef8ecd5 (test/auth_cluster: align service-level timeout expectations with scaled config)
 
 def create_roles_stmts():
     return [
@@ -279,20 +291,21 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
     cluster_connections, sessions = await get_roles_connections(manager, servers)
 
     logging.info("Asserting all connections have default parameters")
+    str_to = lambda build_mode : "1m" if build_mode=="dev" else ("1m30s" if build_mode=="debug" else f"Faild bad mode {build_mode}")
     await assert_connections_params(manager, hosts, {
         "r1": {
             "workload_type": "unspecified",
-            "timeout": default_timeout(build_mode),
+            "timeout": str_to(build_mode),
             "scheduling_group": "sl:default",
         },
         "r2": {
             "workload_type": "unspecified",
-            "timeout": default_timeout(build_mode),
+            "timeout": str_to(build_mode),
             "scheduling_group": "sl:default",
         },
         "r3": {
             "workload_type": "unspecified",
-            "timeout": default_timeout(build_mode),
+            "timeout": str_to(build_mode),
             "scheduling_group": "sl:default",
         },
     })
