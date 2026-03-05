@@ -2310,8 +2310,11 @@ public:
 // After calling pk_from_json() and ck_from_json() to extract the pk and ck
 // components of a key, and if that succeeded, call check_key() to further
 // check that the key doesn't have any spurious components.
-static void check_key(const rjson::value& key, const schema_ptr& schema) {
-    if (key.MemberCount() != (schema->clustering_key_size() == 0 ? 1 : 2)) {
+// allow_extra_attribute: set to true when the key may contain one extra
+// non-key attribute (e.g., the timestamp pseudo-attribute for DeleteItem).
+static void check_key(const rjson::value& key, const schema_ptr& schema, bool allow_extra_attribute = false) {
+    const unsigned expected = (schema->clustering_key_size() == 0 ? 1 : 2) + (allow_extra_attribute ? 1 : 0);
+    if (key.MemberCount() != expected) {
         throw api_error::validation("Given key attribute not in schema");
     }
 }
@@ -2431,7 +2434,8 @@ private:
 public:
     struct delete_item {};
     struct put_item {};
-    put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item);
+    put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item,
+            const std::optional<bytes>& timestamp_attribute = std::nullopt);
     put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, std::unordered_map<bytes, std::string> key_attributes,
             const std::optional<bytes>& timestamp_attribute = std::nullopt);
     // put_or_delete_item doesn't keep a reference to schema (so it can be
@@ -2455,9 +2459,25 @@ public:
     }
 };
 
-put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
+put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item, const std::optional<bytes>& timestamp_attribute)
         : _pk(pk_from_json(key, schema)), _ck(ck_from_json(key, schema)) {
-    check_key(key, schema);
+    if (timestamp_attribute) {
+        // The timestamp attribute may be provided as a "pseudo-key": it is
+        // not a real key column, but can be included in the "Key" object to
+        // carry the custom write timestamp. If found, extract the timestamp
+        // and don't store it in the item.
+        const rjson::value* ts_val = rjson::find(key, to_string_view(*timestamp_attribute));
+        if (ts_val) {
+            if (auto t = try_get_timestamp(*ts_val)) {
+                _custom_timestamp = t;
+            } else {
+                throw api_error::validation(fmt::format(
+                    "The '{}' attribute used as a write timestamp must be a positive number (microseconds since epoch)",
+                    to_string_view(*timestamp_attribute)));
+            }
+        }
+    }
+    check_key(key, schema, _custom_timestamp.has_value());
 }
 
 // find_attribute() checks whether the named attribute is stored in the
@@ -3128,7 +3148,7 @@ public:
     parsed::condition_expression _condition_expression;
     delete_item_operation(parsed::expression_cache& parsed_expression_cache, service::storage_proxy& proxy, rjson::value&& request)
         : rmw_operation(proxy, std::move(request))
-        , _mutation_builder(rjson::get(_request, "Key"), schema(), put_or_delete_item::delete_item{}) {
+        , _mutation_builder(rjson::get(_request, "Key"), schema(), put_or_delete_item::delete_item{}, _timestamp_attribute) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
         if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
@@ -3159,6 +3179,9 @@ public:
                 check_needs_read_before_write(_condition_expression) ||
                 _returnvalues == returnvalues::ALL_OLD;
     }
+    bool has_custom_timestamp() const noexcept override {
+        return _mutation_builder.custom_timestamp().has_value();
+    }
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options& cdc_opts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
@@ -3179,7 +3202,10 @@ public:
         if (_consumed_capacity._total_bytes == 0) {
             _consumed_capacity._total_bytes = 1;
         }
-        return _mutation_builder.build(_schema, ts);
+        // Use the custom timestamp from the timestamp attribute if available,
+        // otherwise use the provided timestamp.
+        api::timestamp_type effective_ts = _mutation_builder.custom_timestamp().value_or(ts);
+        return _mutation_builder.build(_schema, effective_ts);
     }
     virtual ~delete_item_operation() = default;
 };
@@ -3472,21 +3498,22 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
 
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
                 1, primary_key_hash{schema}, primary_key_equal{schema});
+        // Look up the timestamp attribute tag once per table (shared by all
+        // PutRequests and DeleteRequests for this table).
+        std::optional<bytes> ts_attr;
+        const auto tags_ptr = db::get_tags_of_table(schema);
+        if (tags_ptr) {
+            auto tag_it = tags_ptr->find(TIMESTAMP_TAG_KEY);
+            if (tag_it != tags_ptr->end() && !tag_it->second.empty()) {
+                ts_attr = to_bytes(tag_it->second);
+            }
+        }
         for (auto& request : it->value.GetArray()) {
             auto& r = get_single_member(request, "RequestItems element");
             const auto r_name = rjson::to_string_view(r.name);
             if (r_name == "PutRequest") {
                 const rjson::value& item = get_member(r.value, "Item", "PutRequest");
                 validate_is_object(item, "Item in PutRequest");
-                // Check for timestamp attribute tag on the schema
-                std::optional<bytes> ts_attr;
-                const auto tags_ptr = db::get_tags_of_table(schema);
-                if (tags_ptr) {
-                    auto tag_it = tags_ptr->find(TIMESTAMP_TAG_KEY);
-                    if (tag_it != tags_ptr->end() && !tag_it->second.empty()) {
-                        ts_attr = to_bytes(tag_it->second);
-                    }
-                }
                 auto&& put_item = put_or_delete_item(
                         item, schema, put_or_delete_item::put_item{},
                         si_key_attributes(_proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name())),
@@ -3501,7 +3528,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 const rjson::value& key = get_member(r.value, "Key", "DeleteRequest");
                 validate_is_object(key, "Key in DeleteRequest");
                 mutation_builders.emplace_back(schema, put_or_delete_item(
-                        key, schema, put_or_delete_item::delete_item{}));
+                        key, schema, put_or_delete_item::delete_item{}, ts_attr));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(),
                         mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {

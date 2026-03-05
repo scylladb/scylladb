@@ -258,3 +258,54 @@ def test_timestamp_attribute_batch_write(test_table_ts):
     item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
     assert item['val'] == 'large_ts'
     assert 'ts' not in item
+
+# Test that DeleteItem respects the timestamp attribute: a delete with a
+# smaller timestamp than the item's write timestamp should not take effect.
+def test_timestamp_attribute_delete_item(test_table_ts):
+    p = random_string()
+    # Write an item with a large timestamp
+    test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': LARGE_TS})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    assert item['val'] == 'hello'
+    # Delete with a small timestamp - the delete should lose (item still exists)
+    test_table_ts.delete_item(Key={'p': p, 'ts': SMALL_TS})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True).get('Item')
+    assert item is not None and item['val'] == 'hello'
+    # Delete with a large timestamp - the delete should win (item is removed)
+    test_table_ts.delete_item(Key={'p': p, 'ts': LARGE_TS + 1})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True).get('Item')
+    assert item is None
+
+# Test that DeleteItem without the timestamp attribute in the key behaves
+# normally (no custom timestamp is applied).
+def test_timestamp_attribute_delete_item_no_ts(test_table_ts):
+    p = random_string()
+    test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': LARGE_TS})
+    # Delete without a timestamp attribute - should succeed normally
+    test_table_ts.delete_item(Key={'p': p})
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True).get('Item')
+    assert item is None
+
+# Test that DeleteItem with a non-numeric timestamp attribute is rejected.
+def test_timestamp_attribute_delete_item_non_numeric(test_table_ts):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_ts.delete_item(Key={'p': p, 'ts': 'not_a_number'})
+
+# Test that BatchWriteItem DeleteRequest also respects the timestamp attribute.
+def test_timestamp_attribute_batch_delete(test_table_ts):
+    p = random_string()
+    # Write an item with a large timestamp
+    test_table_ts.put_item(Item={'p': p, 'val': 'hello', 'ts': LARGE_TS})
+    # Delete via BatchWriteItem with a small timestamp - delete should lose
+    test_table_ts.meta.client.batch_write_item(RequestItems={
+        test_table_ts.name: [{'DeleteRequest': {'Key': {'p': p, 'ts': SMALL_TS}}}]
+    })
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True).get('Item')
+    assert item is not None and item['val'] == 'hello'
+    # Delete via BatchWriteItem with a large timestamp - delete should win
+    test_table_ts.meta.client.batch_write_item(RequestItems={
+        test_table_ts.name: [{'DeleteRequest': {'Key': {'p': p, 'ts': LARGE_TS + 1}}}]
+    })
+    item = test_table_ts.get_item(Key={'p': p}, ConsistentRead=True).get('Item')
+    assert item is None

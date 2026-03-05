@@ -222,8 +222,8 @@ these timestamps for last-write-wins conflict resolution when concurrent
 writes reach different replicas.
 
 ScyllaDB Alternator extends this with the `system:timestamp_attribute` tag,
-which allows specifying a custom write timestamp for each PutItem or
-UpdateItem request. To use this feature:
+which allows specifying a custom write timestamp for each PutItem,
+UpdateItem, or DeleteItem request. To use this feature:
 
 1. Tag the table (at CreateTable time or using TagResource) with
    `system:timestamp_attribute` set to the name of an attribute that will
@@ -233,6 +233,9 @@ UpdateItem request. To use this feature:
    in the request with a numeric value. The value represents the write
    timestamp in **microseconds since the Unix epoch** (this is the same
    unit used internally by ScyllaDB for timestamps).
+   For a DeleteItem or a BatchWriteItem DeleteRequest, include the named
+   attribute in the `Key` parameter (it will be stripped from the key
+   before use).
 
 3. The named attribute is **not stored** in the item data - it only
    controls the write timestamp. If you also want to record the timestamp
