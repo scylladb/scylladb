@@ -659,14 +659,14 @@ void storage_group_manager::remove_storage_group(size_t id) {
     if (auto it = _storage_groups.find(id); it != _storage_groups.end()) {
         _storage_groups.erase(it);
     } else {
-        throw std::out_of_range(format("remove_storage_group: storage group with id={} not found", id));
+        throw no_such_storage_group(format("remove_storage_group: storage group with id={} not found", id));
     }
 }
 
 storage_group& storage_group_manager::storage_group_for_id(const schema_ptr& s, size_t i) const {
     auto it = _storage_groups.find(i);
     if (it == _storage_groups.end()) [[unlikely]] {
-        throw std::out_of_range(format("Storage wasn't found for tablet {} of table {}.{}", i, s->ks_name(), s->cf_name()));
+        throw no_such_storage_group(format("Storage wasn't found for tablet {} of table {}.{}", i, s->ks_name(), s->cf_name()));
     }
     return *it->second.get();
 }
@@ -1263,7 +1263,7 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
         }
 
         return *sg.select_compaction_group(first_range_side);
-    } catch (std::out_of_range& e) {
+    } catch (const no_such_storage_group& e) {
         on_internal_error(tlogger, format("Unable to load SSTable {} : {}", sst->get_filename(), e.what()));
     }
 }

@@ -1477,6 +1477,10 @@ public:
 using no_such_keyspace = data_dictionary::no_such_keyspace;
 using no_such_column_family = data_dictionary::no_such_column_family;
 
+struct no_such_storage_group : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 struct database_config {
     seastar::scheduling_group memtable_scheduling_group;
     seastar::scheduling_group memtable_to_cache_scheduling_group; // FIXME: merge with memtable_scheduling_group
