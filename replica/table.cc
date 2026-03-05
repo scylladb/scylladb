@@ -724,7 +724,7 @@ public:
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override {
         return get_compaction_group();
     }
-    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override {
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst, bool abort_on_error = true) const override {
         return get_compaction_group();
     }
     size_t log2_storage_groups() const override {
@@ -891,7 +891,7 @@ public:
     compaction_group& compaction_group_for_token(dht::token token) const override;
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override;
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override;
-    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst, bool abort_on_error = true) const override;
 
     size_t log2_storage_groups() const override {
         return log2ceil(tablet_map().tablet_count());
@@ -1246,16 +1246,15 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
     return _sg_manager->compaction_group_for_key(key, s);
 }
 
-compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
-    auto [first_id, first_range_side] = storage_group_of(sst->get_first_decorated_key().token());
-    auto [last_id, last_range_side] = storage_group_of(sst->get_last_decorated_key().token());
-
-    if (first_id != last_id) {
-        on_internal_error(tlogger, format("Unable to load SSTable {} that belongs to tablets {} and {}",
-                                          sst->get_filename(), first_id, last_id));
-    }
-
+compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst, bool abort_on_error) const {
     try {
+        auto [first_id, first_range_side] = storage_group_of(sst->get_first_decorated_key().token());
+        auto [last_id, last_range_side] = storage_group_of(sst->get_last_decorated_key().token());
+
+        if (first_id != last_id) {
+            throw no_such_storage_group(format("SSTable belongs to more than one tablet: {} and {}", first_id, last_id));
+        }
+
         auto& sg = storage_group_for_id(first_id);
 
         if (first_range_side != last_range_side) {
@@ -1264,12 +1263,17 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
 
         return *sg.select_compaction_group(first_range_side);
     } catch (const no_such_storage_group& e) {
-        on_internal_error(tlogger, format("Unable to load SSTable {} : {}", sst->get_filename(), e.what()));
+        auto msg = fmt::format("Unable to load SSTable {} : {}", sst, e.what());
+        if (abort_on_error) {
+            on_fatal_internal_error(tlogger, msg);
+        } else {
+            throw no_such_storage_group(std::move(msg));
+        }
     }
 }
 
-compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
-    return _sg_manager->compaction_group_for_sstable(sst);
+compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst, bool abort_on_error) const {
+    return _sg_manager->compaction_group_for_sstable(sst, abort_on_error);
 }
 
 future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
