@@ -169,7 +169,10 @@ std::string lsi_name(std::string_view table_name, std::string_view index_name,
 /// After calling pk_from_json() and ck_from_json() to extract the pk and ck
 /// components of a key, and if that succeeded, call check_key() to further
 /// check that the key doesn't have any spurious components.
-void check_key(const rjson::value& key, const schema_ptr& schema);
+/// Set "allow_extra_attribute" if the key is known to contain one more non-key
+/// attribute (namely, a timestamp pseudo-attribute in the Key given to
+/// DeleteItem or BatchWriteItem's DeleteRequest).
+void check_key(const rjson::value& key, const schema_ptr& schema, bool allow_extra_attribute = false);
 
 /// Fail with api_error::validation if the expression if has unused attribute
 /// names or values. This is how DynamoDB behaves, so we do too.
