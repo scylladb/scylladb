@@ -87,31 +87,15 @@ namespace {
         static const std::unordered_set<sstring> tables = {
             schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
             system_keyspace::BROADCAST_KV_STORE,
-            system_keyspace::CDC_GENERATIONS_V3,
             system_keyspace::RAFT,
             system_keyspace::RAFT_SNAPSHOTS,
             system_keyspace::RAFT_SNAPSHOT_CONFIG,
             system_keyspace::GROUP0_HISTORY,
             system_keyspace::DISCOVERY,
-            system_keyspace::TABLETS,
-            system_keyspace::TOPOLOGY,
-            system_keyspace::TOPOLOGY_REQUESTS,
             system_keyspace::LOCAL,
             system_keyspace::PEERS,
-            system_keyspace::SCYLLA_LOCAL,
             system_keyspace::COMMITLOG_CLEANUPS,
-            system_keyspace::SERVICE_LEVELS_V2,
-            system_keyspace::VIEW_BUILD_STATUS_V2,
-            system_keyspace::CDC_STREAMS_STATE,
-            system_keyspace::CDC_STREAMS_HISTORY,
-            system_keyspace::ROLES,
-            system_keyspace::ROLE_MEMBERS,
-            system_keyspace::ROLE_ATTRIBUTES,
-            system_keyspace::ROLE_PERMISSIONS,
             system_keyspace::CDC_LOCAL,
-            system_keyspace::DICTS,
-            system_keyspace::VIEW_BUILDING_TASKS,
-            system_keyspace::CLIENT_ROUTES,
         };
         if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
             builder.enable_schema_commitlog();
@@ -143,7 +127,7 @@ namespace {
                 system_keyspace::REPAIR_TASKS,
             };
             if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
-                builder.set_is_group0_table(true);
+                builder.set_is_group0_table();
             }
         });
 }

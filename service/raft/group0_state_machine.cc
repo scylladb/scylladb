@@ -350,6 +350,10 @@ static void ensure_group0_schema(const group0_command& cmd, const replica::datab
             if (!schema->static_props().is_group0_table) {
                 on_internal_error(slogger, fmt::format("ensure_group0_schema: schema is not group0: {}", schema->cf_name()));
             }
+
+            if (!schema->static_props().use_schema_commitlog) {
+                on_internal_error(slogger, fmt::format("ensure_group0_schema: group0 table {} does not use schema commitlog", schema->cf_name()));
+            }
         }
     };
 

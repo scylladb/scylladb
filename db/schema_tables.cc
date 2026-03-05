@@ -105,7 +105,7 @@ namespace {
         schema_builder::register_schema_initializer([](schema_builder& builder) {
             if (builder.ks_name() == schema_tables::NAME) {
                 // all schema tables are group0 tables
-                builder.set_is_group0_table(true);
+                builder.set_is_group0_table();
             }
         });
 }
