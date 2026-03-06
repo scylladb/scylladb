@@ -148,8 +148,8 @@ the ``CUSTOM`` keyword and specifying the index type as ``vector_index``. It is 
 add additional columns to the index for filtering the search results. The partition column
 specified in the global vector index definition must be the vector column, and any subsequent
 columns are treated as filtering columns. The local vector index requires that the partition key
-of the base table is also the partition key of the index and the vector column is the first one
-from the following columns.
+of the index is a subset of the table's partition key columns and the vector column is the first
+one from the following columns.
 
 Example of a simple index:
 
@@ -187,8 +187,9 @@ Example of a local vector index:
 The vector column (``embedding``) is indexed for similarity search (a local
 index) and additional columns are added for filtering the search results. The
 filtering is possible on ``category``, ``info`` and all primary key columns of
-the base table. The columns ``id`` and ``created_at`` must be the partition key
-of the base table.
+the base table. The partition key of the base table must contains both columns
+``id`` and ``created_at``. It is allowed to create a local vector index using
+only a part of the partition key columns of the base table.
 
 Vector indexes support additional filtering columns of native data types
 (excluding counter and duration). The indexed column itself must be a vector
