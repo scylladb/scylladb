@@ -303,7 +303,7 @@ endpoints_to_update get_view_natural_endpoint(
     locator::host_id node,
     const locator::effective_replication_map_ptr& base_erm,
     const locator::effective_replication_map_ptr& view_erm,
-    const locator::abstract_replication_strategy& replication_strategy,
+    const bool network_topology,
     const dht::token& base_token,
     const dht::token& view_token,
     bool use_tablets,

@@ -1730,7 +1730,7 @@ static endpoints_to_update get_view_natural_endpoint_vnodes(
         std::vector<std::reference_wrapper<const locator::node>> base_nodes,
         std::vector<std::reference_wrapper<const locator::node>> view_nodes,
         locator::endpoint_dc_rack my_location,
-        const locator::network_topology_strategy* network_topology,
+        const bool network_topology,
         replica::cf_stats& cf_stats) {
     using node_vector = std::vector<std::reference_wrapper<const locator::node>>;
     node_vector base_endpoints, view_endpoints;
@@ -1883,7 +1883,7 @@ endpoints_to_update get_view_natural_endpoint(
         locator::host_id me,
         const locator::effective_replication_map_ptr& base_erm,
         const locator::effective_replication_map_ptr& view_erm,
-        const locator::abstract_replication_strategy& replication_strategy,
+        const bool network_topology,
         const dht::token& base_token,
         const dht::token& view_token,
         bool use_tablets,
@@ -1891,7 +1891,6 @@ endpoints_to_update get_view_natural_endpoint(
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
     auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
     auto& my_location = topology.get_location(me);
-    auto* network_topology = dynamic_cast<const locator::network_topology_strategy*>(&replication_strategy);
 
     auto resolve = [&] (const locator::topology& topology, const locator::host_id& ep, bool is_view) -> const locator::node& {
         if (auto* np = topology.find_node(ep)) {
@@ -1925,7 +1924,7 @@ endpoints_to_update get_view_natural_endpoint(
                 // view pairing as the leaving base replica.
                 // note that the recursive call will not recurse again because leaving_base is in base_nodes.
                 auto leaving_base = it->get().host_id();
-                return get_view_natural_endpoint(leaving_base, base_erm, view_erm, replication_strategy, base_token,
+                return get_view_natural_endpoint(leaving_base, base_erm, view_erm, network_topology, base_token,
                         view_token, use_tablets, cf_stats);
             }
         }
@@ -2021,7 +2020,9 @@ future<> view_update_generator::mutate_MV(
         wait_for_all_updates wait_for_all)
 {
     auto& ks = _db.find_keyspace(base->ks_name());
-    auto& replication = ks.get_replication_strategy();
+    const bool uses_tablets = ks.uses_tablets();
+    const bool uses_nts = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy()) != nullptr;
+    // The object pointed by `ks` may disappear after preeemption. It should not be touched again after this comment.
     std::unordered_map<table_id, locator::effective_replication_map_ptr> erms;
     auto get_erm = [&] (table_id id) {
         auto it = erms.find(id);
@@ -2040,8 +2041,8 @@ future<> view_update_generator::mutate_MV(
     co_await max_concurrent_for_each(view_updates, max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto view_ermp = erms.at(mut.s->id());
-        auto [target_endpoint, no_pairing_endpoint] = get_view_natural_endpoint(me, base_ermp, view_ermp, replication, base_token, view_token,
-                ks.uses_tablets(), cf_stats);
+        auto [target_endpoint, no_pairing_endpoint] = get_view_natural_endpoint(me, base_ermp, view_ermp, uses_nts, base_token, view_token,
+                uses_tablets, cf_stats);
         auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
         auto memory_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_update_memory_units.split(memory_usage_of(mut)));
         if (no_pairing_endpoint) {
