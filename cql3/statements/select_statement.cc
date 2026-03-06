@@ -965,35 +965,37 @@ future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
-                                  gc_clock::time_point now) const
+                                  gc_clock::time_point now,
+                                  const cql3::selection::temporaries_provider* temporaries_provider) const
 {
-    const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !needs_post_filtering();
+    const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !needs_post_filtering() && !temporaries_provider;
     if (fast_path) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(make_shared<cql_transport::messages::result_message::rows>(result(
             result_generator(_query_schema, std::move(results), std::move(cmd), _selection, _stats),
             _selection->get_result_metadata())
         ));
     }
-    return process_results_complex(std::move(results), std::move(cmd), options, now);
+    return process_results_complex(std::move(results), std::move(cmd), options, now, temporaries_provider);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::process_results_complex(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
-                                  gc_clock::time_point now) const {
-    cql3::selection::result_set_builder builder(*_selection, now, &options);
+                                  gc_clock::time_point now,
+                                  const cql3::selection::temporaries_provider* temporaries_provider) const {
+    cql3::selection::result_set_builder builder(*_selection, now, &options, {});
     co_return co_await builder.with_thread_if_needed([&] {
         if (needs_post_filtering()) {
             results->ensure_counts();
             _stats.filtered_rows_read_total += *results->row_count();
             query::result_view::consume(*results, cmd->slice,
                     cql3::selection::result_set_builder::visitor(builder, *_query_schema,
-                            *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _query_schema, cmd->slice.partition_row_limit())));
+                            *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _query_schema, cmd->slice.partition_row_limit()), temporaries_provider));
         } else {
             query::result_view::consume(*results, cmd->slice,
                     cql3::selection::result_set_builder::visitor(builder, *_query_schema,
-                            *_selection));
+                            *_selection, cql3::selection::result_set_builder::nop_filter(), temporaries_provider));
         }
         auto rs = builder.build();
 
