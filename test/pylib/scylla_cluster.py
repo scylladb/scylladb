@@ -31,6 +31,7 @@ from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, scale_timeout_by_mode
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from functools import partial
 import aiohttp
@@ -924,7 +925,7 @@ class ScyllaServer:
             self.control_connection.shutdown()
             self.control_connection = None
         if self.control_cluster is not None:
-            self.control_cluster.shutdown()
+            safe_driver_shutdown(self.control_cluster)
             self.control_cluster = None
         self._cleanup_notify_socket()
 

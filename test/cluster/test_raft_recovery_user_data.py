@@ -13,6 +13,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, unique_name, wait_for_cql_and_get_hosts
@@ -136,7 +137,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # replica, 1 pending replica, CL=LOCAL_QUORUM requires 2 normal replicas). So, we can start sending writes to dc2
     # only after increasing RF to 3, which we do - see finish_writes_dc2.
     await finish_writes()
-    ccluster_all_nodes.shutdown()
+    safe_driver_shutdown(ccluster_all_nodes)
     ccluster_dc1 = cluster_con(
             [srv.ip_addr for srv in live_servers],
             load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in live_servers]))
@@ -220,5 +221,5 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     await finish_writes_dc1()
     await finish_writes_dc2()
-    ccluster_dc1.shutdown()
-    ccluster_dc2.shutdown()
+    safe_driver_shutdown(ccluster_dc1)
+    safe_driver_shutdown(ccluster_dc2)

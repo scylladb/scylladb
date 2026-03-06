@@ -10,6 +10,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.manager_client import ManagerClient
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.conftest import cluster_con
 from test.pylib.util import gather_safely, wait_for_cql_and_get_hosts
@@ -189,5 +190,5 @@ async def test_maintenance_mode(manager: ManagerClient):
     logger.info("Checking tables in normal mode")
     await gather_safely(*(check_table_in_normal_mode(table, key) for table, key in key_on_server_a_per_table.items()))
 
-    cluster.shutdown()
-    maintenance_cluster.shutdown()
+    safe_driver_shutdown(cluster)
+    safe_driver_shutdown(maintenance_cluster)

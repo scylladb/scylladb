@@ -20,6 +20,8 @@ from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
 
+from test.pylib.driver_utils import safe_driver_shutdown
+
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(length))
 
@@ -232,8 +234,10 @@ def cql_session(host, port, is_ssl, username, password, request_timeout=120, pro
         connect_timeout = 60,
         control_connection_timeout = 60,
     )
-    yield cluster.connect()
-    cluster.shutdown()
+    try:
+        yield cluster.connect()
+    finally:
+        safe_driver_shutdown(cluster)
 
 @contextmanager
 def new_user(cql, username='', with_superuser_privileges=False):

@@ -224,6 +224,10 @@ import ssl
 # only one that matches this wildcard, but this can be overridden
 # by setting a SCYLLA environment variable:
 source_path = os.path.realpath(os.path.join(__file__, '../../..'))
+if source_path not in sys.path:
+    sys.path.append(source_path)
+from test.pylib.driver_utils import safe_driver_shutdown
+
 scylla = None
 def find_scylla():
     global scylla
@@ -430,7 +434,7 @@ def check_cql(ip, ssl_context=None):
     try:
         cluster = get_cql_cluster(ip, ssl_context)
         cluster.connect()
-        cluster.shutdown()
+        safe_driver_shutdown(cluster)
     except cassandra.cluster.NoHostAvailable:
         raise NotYetUp
     # Any other exception may indicate a problem, and is passed to the caller.

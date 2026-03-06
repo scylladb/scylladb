@@ -18,6 +18,8 @@ from cassandra.cluster import EXEC_PROFILE_DEFAULT, NoHostAvailable, default_lbp
 from cassandra.cluster import Cluster as PyCluster
 from cassandra.policies import ExponentialReconnectionPolicy, WhiteListRoundRobinPolicy
 
+from test.pylib.driver_utils import safe_driver_shutdown
+
 from test.cluster.dtest.dtest_class import (
     get_auth_provider,
     get_ip_from_node,
@@ -167,7 +169,7 @@ class DTestSetup:
 
             def __cleanup(self):
                 if self.session:
-                    self.session.cluster.shutdown()
+                    safe_driver_shutdown(self.session.cluster)
                     self.session = None
 
         return ClusterSession(session)

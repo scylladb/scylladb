@@ -16,6 +16,8 @@ import re
 import ssl
 import time
 
+from test.pylib.driver_utils import safe_driver_shutdown
+
 
 # This function normalizes the SSL cipher suite name (a string),
 # which we need to do because tests use python library and scylla server uses C library,
@@ -118,7 +120,7 @@ def try_connect(orig_cluster, ssl_version):
         session = cluster.connect()
         yield session
     finally:
-        cluster.shutdown()
+        safe_driver_shutdown(cluster)
 
 # Test that if we try to connect to an SSL port with *unencrypted* CQL,
 # it doesn't work.
@@ -135,6 +137,8 @@ def test_non_tls_on_tls(cql):
         port=cql.cluster.port,
         protocol_version=cql.cluster.protocol_version,
         auth_provider=cql.cluster.auth_provider)
-    with pytest.raises(cassandra.cluster.NoHostAvailable, match="ProtocolError"):
-        cluster.connect()
-    cluster.shutdown() # can't be reached
+    try:
+        with pytest.raises(cassandra.cluster.NoHostAvailable, match="ProtocolError"):
+            cluster.connect()
+    finally:
+        safe_driver_shutdown(cluster)

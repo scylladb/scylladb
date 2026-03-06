@@ -22,6 +22,7 @@ from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMe
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer, ScyllaVersionDescription
+from test.pylib.driver_utils import safe_driver_shutdown
 from cassandra.cluster import Session as CassandraSession, \
     ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.policies import LoadBalancingPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy
@@ -114,7 +115,7 @@ class ManagerClient:
         """Disconnect from cluster"""
         if self.ccluster is not None:
             logger.debug("shutting down driver")
-            self.ccluster.shutdown()
+            safe_driver_shutdown(self.ccluster)
             self.ccluster = None
         self.cql = None
 

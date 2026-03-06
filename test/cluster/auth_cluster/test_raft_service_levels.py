@@ -10,6 +10,7 @@ import logging
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
 from test.pylib.manager_client import ManagerClient
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.cluster.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
         wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created, get_topology_coordinator, \
@@ -198,7 +199,7 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
     })
 
     for cluster_conn in cluster_connections:
-        cluster_conn.shutdown()
+        safe_driver_shutdown(cluster_conn)
 
 @pytest.mark.asyncio
 async def test_service_level_cache_after_restart(manager: ManagerClient):
