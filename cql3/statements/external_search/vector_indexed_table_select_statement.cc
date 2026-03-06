@@ -11,6 +11,7 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/vector_similarity_fcts.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/util.hh"
@@ -24,6 +25,7 @@
 #include "types/vector.hh"
 #include "utils/result_loop.hh"
 
+#include <cmath>
 #include <seastar/core/future.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/exception.hh>
@@ -39,6 +41,86 @@ namespace statements {
 static logging::logger logger("vector_indexed_table_select_statement");
 
 namespace {
+
+/// Re-computes similarity scores live from the fetched embedding column.
+/// Used in rescoring mode: no reliance on VS-provided distances.
+class rescoring_similarity_provider : public cql3::selection::result_set_builder::temporaries_provider {
+    const seastar::shared_ptr<cql3::functions::vector_similarity_fct> _similarity_fct;
+    const bytes_opt _query_vec_bytes;
+    /// Storage class of the indexed column.
+    const column_kind _col_kind;
+    /// Unified index into the relevant data source:
+    ///  - partition_key / clustering_key: component offset in the exploded key span.
+    ///  - static_column / regular_column: cell-stream offset (only same-kind columns counted).
+    const size_t _index;
+    /// True if the indexed column is a multi-cell (collection) type.
+    const bool _is_multi_cell;
+    const size_t _temporary_index;
+public:
+    rescoring_similarity_provider(
+            seastar::shared_ptr<cql3::functions::vector_similarity_fct> similarity_fct,
+            bytes_opt query_vec_bytes,
+            column_kind col_kind,
+            size_t index,
+            bool is_multi_cell,
+            size_t temporary_index)
+        : _similarity_fct(std::move(similarity_fct))
+        , _query_vec_bytes(std::move(query_vec_bytes))
+        , _col_kind(col_kind)
+        , _index(index)
+        , _is_multi_cell(is_multi_cell)
+        , _temporary_index(temporary_index) {}
+
+    bool try_fill(
+            std::vector<cql3::raw_value>& temporaries,
+            std::span<const bytes> partition_key,
+            std::span<const bytes> clustering_key,
+            const query::result_row_view& static_row,
+            const query::result_row_view* row) const override {
+        bytes_opt row_vec_bytes;
+        switch (_col_kind) {
+        case column_kind::partition_key:
+            row_vec_bytes = partition_key[_index];
+            break;
+        case column_kind::clustering_key:
+            row_vec_bytes = clustering_key[_index];
+            break;
+        case column_kind::static_column:
+        case column_kind::regular_column: {
+            if (_col_kind == column_kind::regular_column && !row) {
+                return false;
+            }
+            auto iter = (_col_kind == column_kind::static_column) ? static_row.iterator()
+                                                                   : row->iterator();
+            for (size_t i = 0; i < _index; ++i) {
+                iter.next_atomic_cell();
+            }
+            if (_is_multi_cell) {
+                auto cell = iter.next_collection_cell();
+                if (cell) {
+                    row_vec_bytes = linearized(*cell);
+                }
+            } else {
+                auto cell = iter.next_atomic_cell();
+                if (cell) {
+                    row_vec_bytes = linearized(cell->value());
+                }
+            }
+            break;
+        }
+        }
+        auto result_bytes = _similarity_fct->execute(std::array<bytes_opt, 2>{_query_vec_bytes, row_vec_bytes});
+        if (!result_bytes) {
+            return false;
+        }
+        float similarity_value = value_cast<float>(float_type->deserialize(*result_bytes));
+        if (!std::isfinite(similarity_value)) {
+            return false;
+        }
+        temporaries[_temporary_index] = cql3::raw_value::make_value(std::move(*result_bytes));
+        return true;
+    }
+};
 
 template <typename Func>
 auto measure_index_latency(const schema& schema, const secondary_index::index& index, Func&& func) -> std::invoke_result_t<Func> {
