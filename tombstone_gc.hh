@@ -161,7 +161,7 @@ public:
     static tombstone_gc_state gc_all() { return tombstone_gc_state(mode::gc_all, nullptr, false); }
 
     // To be used by tests only -- only non-repair mode gc works.
-    static tombstone_gc_state for_tests(size_t table_replication_factor = 0) { return tombstone_gc_state(mode::gc_expired, nullptr, true); }
+    static tombstone_gc_state for_tests() { return tombstone_gc_state(mode::gc_expired, nullptr, true); }
 
     bool is_gc_enabled() const noexcept {
         return _mode != mode::no_gc;
