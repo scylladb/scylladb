@@ -725,9 +725,10 @@ query_processor::prepare(sstring query_string, service::query_state& query_state
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::prepare(sstring query_string, const service::client_state& client_state, cql3::dialect d) {
-    try {
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
-        auto prep_ptr = co_await _prepared_cache.get(key, [this, &query_string, &client_state, d] {
+        prepared_statements_cache::value_type prep_ptr;
+        try {
+            prep_ptr = co_await _prepared_cache.get(key, [this, &query_string, &client_state, d] {
                 auto prepared = get_statement(query_string, client_state, d);
                 prepared->calculate_metadata_id();
                 auto bound_terms = prepared->statement->get_bound_terms();
@@ -740,6 +741,9 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
                 SCYLLA_ASSERT(bound_terms == prepared->bound_names.size());
                 return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
             });
+        } catch(typename prepared_statements_cache::statement_is_too_big&) {
+            throw prepared_statement_is_too_big(query_string);
+        }
 
         const auto& warnings = prep_ptr->warnings;
         const auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key), std::move(prep_ptr),
@@ -748,9 +752,6 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
             msg->add_warning(w);
         }
         co_return ::shared_ptr<cql_transport::messages::result_message::prepared>(std::move(msg));
-    } catch(typename prepared_statements_cache::statement_is_too_big&) {
-        throw prepared_statement_is_too_big(query_string);
-    }
 }
 
 static std::string hash_target(std::string_view query_string, std::string_view keyspace) {
