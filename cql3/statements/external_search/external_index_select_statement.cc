@@ -95,8 +95,10 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
 
     command->set_row_limit(get_limit(options, _limit));
 
-    co_return co_await wrap_result_to_error_message([this, command = std::move(command), &options](auto query_result) {
-        return process_results(std::move(query_result), command, options, _query_start_time_point);
+    auto provider = get_temporaries_provider(options);
+
+    co_return co_await wrap_result_to_error_message([this, command = std::move(command), &options, provider_ptr = provider.get()](auto query_result) {
+        return process_results(std::move(query_result), command, options, _query_start_time_point, provider_ptr);
     })(std::move(result));
 }
 

@@ -55,6 +55,14 @@ protected:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_search(
             query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const = 0;
 
+    /// Override to provide a temporaries_provider for custom result processing.
+    /// Called by query_base_table() to inject custom data (e.g., rescoring similarity scores) during result processing.
+    /// \return A temporaries_provider, or nullptr if no custom processing is needed.
+    virtual std::unique_ptr<cql3::selection::temporaries_provider>
+    get_temporaries_provider(const query_options& options) const {
+        return nullptr;
+    }
+
     void update_stats_rows_read(int64_t rows_read) const override {
         _stats.rows_read += rows_read;
         _stats.secondary_index_rows_read += rows_read;

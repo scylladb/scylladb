@@ -217,36 +217,21 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
     };
 }
 
-uint32_t add_similarity_function_to_selectors(
+// Appends a temporary expression for the similarity score to prepared_selectors.
+// Returns the index of the appended selector within prepared_selectors.
+uint32_t append_similarity_temporary_selector(
         std::vector<selection::prepared_selector>& prepared_selectors,
-        const ann_ordering_info& ann_ordering_info,
-        data_dictionary::database db,
-        schema_ptr schema) {
-    auto similarity_function_name = secondary_index::vector_index::get_cql_similarity_function_name(ann_ordering_info._index.metadata().options());
-    // Create the function name
-    auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
-
-    // Create the function arguments
-    std::vector<expr::expression> args;
-    args.push_back(expr::column_value(ann_ordering_info._prepared_ann_ordering.first));
-    args.push_back(ann_ordering_info._prepared_ann_ordering.second);
-
-    // Get the function object
-    std::vector<shared_ptr<assignment_testable>> provided_args;
-    provided_args.push_back(expr::as_assignment_testable(args[0], expr::type_of(args[0])));
-    provided_args.push_back(expr::as_assignment_testable(args[1], expr::type_of(args[1])));
-
-    auto func = cql3::functions::instance().get(db, schema->ks_name(), func_name, provided_args, schema->ks_name(), schema->cf_name(), nullptr);
-
-    // Create the function call expression
-    expr::function_call similarity_func_call{
-        .func = func,
-        .args = std::move(args),
+        size_t temp_index) {
+    // Create a temporary expression instead of a function call.
+    // The value will be injected during result processing by rescoring_similarity_provider.
+    expr::temporary similarity_temp{
+        .index = temp_index,
+        .type = float_type,
     };
 
-    // Add the similarity function as a prepared selector (last)
+    // Add the temporary as a prepared selector (last)
     prepared_selectors.push_back(selection::prepared_selector{
-        .expr = std::move(similarity_func_call),
+        .expr = expr::expression(similarity_temp),
         .alias = nullptr,
     });
     return prepared_selectors.size() - 1;
@@ -304,6 +289,9 @@ vector_indexed_table_select_statement::vector_indexed_table_select_statement(sch
     if (selection->is_aggregate()) {
         throw exceptions::invalid_request_exception("Vector ANN queries cannot be run with aggregation");
     }
+
+    // Compute rescoring decision once at prepare time.
+    _rescoring = rescoring_config::make(_index, _prepared_ann_ordering.first, *_selection);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::execute_search(
@@ -325,11 +313,19 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
                 exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
     }
 
-    if (pkeys->size() > limit && !secondary_index::vector_index::is_rescoring_enabled(_index.metadata().options())) {
+    if (pkeys->size() > limit && !_rescoring.is_enabled()) {
         pkeys->erase(pkeys->begin() + limit, pkeys->end());
     }
 
     co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
+}
+
+std::unique_ptr<cql3::selection::temporaries_provider>
+vector_indexed_table_select_statement::get_temporaries_provider(const query_options& options) const {
+    return _rescoring.make_similarity_provider(
+        options,
+        _prepared_ann_ordering.second,
+        similarity_temporary_index);
 }
 
 } // namespace statements

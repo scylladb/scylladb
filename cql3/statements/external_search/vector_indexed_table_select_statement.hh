@@ -31,13 +31,11 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
         lw_shared_ptr<const raw::select_statement::parameters> parameters,
         prepare_context& ctx);
 
-/// Adds a similarity function call to prepared_selectors based on the ANN index.
+/// Appends a temporary expression for the similarity score to prepared_selectors.
 /// Returns the index of the appended selector within prepared_selectors.
-uint32_t add_similarity_function_to_selectors(
+uint32_t append_similarity_temporary_selector(
         std::vector<selection::prepared_selector>& prepared_selectors,
-        const ann_ordering_info& ann_ordering_info,
-        data_dictionary::database db,
-        schema_ptr schema);
+        size_t temp_index);
 
 /// Builds an ordering comparator that sorts by descending similarity score.
 select_statement::ordering_comparator_type get_similarity_ordering_comparator(
@@ -74,9 +72,13 @@ public:
 private:
     prepared_ann_ordering_type _prepared_ann_ordering;
     external_search::prepared_filter _prepared_filter;
+    rescoring_config _rescoring;
 
 public:
     static constexpr size_t max_ann_query_limit = 1000;
+    // Index of the similarity score temporary within the temporaries vector.
+    // Fixed at 0: always allocated before any aggregation temporaries.
+    static constexpr size_t similarity_temporary_index = 0;
 
     static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db, schema_ptr schema, uint32_t bound_terms,
             lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
@@ -97,6 +99,9 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_search(
             query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const override;
+
+    std::unique_ptr<cql3::selection::temporaries_provider>
+    get_temporaries_provider(const query_options& options) const override;
 };
 
 } // namespace cql3::statements

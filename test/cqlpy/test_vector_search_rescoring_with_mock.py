@@ -249,7 +249,6 @@ def test_select_similarity_function_other_than_ann_ordering(cql, test_keyspace, 
 # an error during cosine rescoring; now similarity_cosine returns NaN for them.
 #
 # Reproduces SCYLLADB-2231
-@pytest.mark.xfail(reason="SCYLLADB-2231 rescoring does not yet filter rows with invalid similarity scores (NaN)")
 def test_filters_invalid_similarity_scores_in_rescored_results(cql, test_keyspace, vector_store_mock, skip_without_tablets):
     for func_name, data in TEST_DATA.items():
         with rescoring_test_table(cql, test_keyspace, data,
@@ -293,7 +292,6 @@ def test_filters_invalid_similarity_scores_in_rescored_results(cql, test_keyspac
 # an empty result set.
 #
 # Reproduces SCYLLADB-2231
-@pytest.mark.xfail(reason="SCYLLADB-2231: rescoring does not yet filter NaN similarity scores")
 def test_rescoring_with_zerovector_query(cql, test_keyspace, vector_store_mock, skip_without_tablets):
     data = TEST_DATA["cosine"]
     with rescoring_test_table(cql, test_keyspace, data) as table:
