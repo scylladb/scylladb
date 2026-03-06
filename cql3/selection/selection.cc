@@ -224,6 +224,7 @@ private:
     std::vector<expr::expression> _inner_loop;
     std::vector<expr::expression> _outer_loop;
     std::vector<raw_value> _initial_values_for_temporaries;
+    size_t _external_values_count = 0;
 public:
     selection_with_processing(schema_ptr schema, std::vector<const column_definition*> columns,
             std::vector<lw_shared_ptr<column_specification>> metadata,
@@ -234,11 +235,20 @@ public:
             contains_collection_mutation_attribute(expr::tuple_constructor{selectors}))
         , _selectors(std::move(selectors))
     {
+        // Determine how many external_value slots are needed.
+        for (const auto& expr : _selectors) {
+            expr::for_each_expression<expr::external_value>(expr, [&] (const expr::external_value& v) {
+                _external_values_count = std::max(_external_values_count, v.index + 1);
+            });
+        }
+
         auto agg_split = expr::split_aggregation(_selectors);
         _outer_loop = std::move(agg_split.outer_loop);
         _inner_loop = std::move(agg_split.inner_loop);
         _initial_values_for_temporaries = std::move(agg_split.initial_values_for_temporaries);
     }
+
+    virtual size_t external_values_count() const override { return _external_values_count; }
 
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
         auto it = std::find_if(_selectors.begin(), _selectors.end(), [&c](const expr::expression& e) {
@@ -429,6 +439,7 @@ protected:
                     .static_and_regular_ttls = rs._ttls,
                     .temporaries = {},
                     .collection_element_metadata = rs._collection_element_metadata,
+                    .external_values = rs.current_external_values,
             };
             for (auto&& e : _sel._selectors) {
                 auto out = expr::evaluate(e, inputs);
@@ -468,6 +479,7 @@ protected:
                     .static_and_regular_ttls = rs._ttls,
                     .temporaries = _temporaries,
                     .collection_element_metadata = rs._collection_element_metadata,
+                    .external_values = rs.current_external_values,
             };
             for (size_t i = 0; i != _sel._inner_loop.size(); ++i) {
                 _temporaries[i] = expr::evaluate(_sel._inner_loop[i], inputs);
@@ -594,6 +606,10 @@ result_set_builder::result_set_builder(const selection& s, gc_clock::time_point 
     }
     if (s._collect_collection_timestamps) {
         _collection_element_metadata.resize(s._columns.size());
+    }
+    const size_t ext_count = s.external_values_count();
+    if (ext_count > 0) {
+        current_external_values.resize(ext_count, cql3::raw_value::make_null());
     }
 }
 

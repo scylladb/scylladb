@@ -18,9 +18,11 @@
 #include "selector.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/functions/function.hh"
+#include "cql3/values.hh"
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
+#include <span>
 
 namespace cql3 {
 
@@ -36,6 +38,26 @@ namespace selection {
 
 class raw_selector;
 class result_set_builder;
+
+// External values are scratch slots filled at execution time by a provider.
+// Unlike temporaries (used for aggregation inter-row state),
+// external values carry read-only input for the current row, such as BM25
+// relevance scores or ANN similarity scores. They are injected before CQL
+// filtering and become available to selectors via external_value{} expressions.
+class external_values_provider {
+public:
+    virtual ~external_values_provider() = default;
+
+    // Fill external value slots for the current row.
+    // Returns true to keep the row, false to drop it.
+    virtual bool try_fill(
+        std::vector<cql3::raw_value>& external_values, // reset to NULL before each call
+        std::span<const bytes> partition_key,
+        std::span<const bytes> clustering_key,
+        const query::result_row_view& static_row,
+        const query::result_row_view* row // nullptr for static-only rows
+    ) const = 0;
+};
 
 class selectors {
 public:
@@ -163,6 +185,10 @@ public:
         return _columns.size();
     }
 
+    /// Returns the number of external_value slots required by this selection.
+    /// These are filled by an external_values_provider at execution time.
+    virtual size_t external_values_count() const { return 0; }
+
     virtual bool is_aggregate() const = 0;
 
     virtual bool is_count() const {return false;}
@@ -199,6 +225,7 @@ public:
     std::vector<managed_bytes_opt> current;
     std::vector<bytes> current_partition_key;
     std::vector<bytes> current_clustering_key;
+    std::vector<cql3::raw_value> current_external_values; ///< Per-row external values; filled by external_values_provider before expression evaluation.
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
     std::vector<cql3::expr::collection_cell_metadata> _collection_element_metadata;
@@ -286,9 +313,11 @@ public:
         std::vector<bytes>& _partition_key;
         std::vector<bytes>& _clustering_key;
         Filter _filter;
+        const external_values_provider* _external_values_provider;
     public:
         visitor(cql3::selection::result_set_builder& builder, const schema& s,
-                const selection& selection, Filter filter = Filter())
+                const selection& selection, Filter filter = Filter(),
+                const external_values_provider* external_values_provider = nullptr)
             : _builder(builder)
             , _schema(s)
             , _selection(selection)
@@ -296,6 +325,7 @@ public:
             , _partition_key(_builder.current_partition_key)
             , _clustering_key(_builder.current_clustering_key)
             , _filter(filter)
+            , _external_values_provider(external_values_provider)
         {}
         visitor(visitor&&) = default;
 
@@ -338,9 +368,21 @@ public:
         void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
             auto static_row_iterator = static_row.iterator();
             auto row_iterator = row.iterator();
+
+            // Inject externally supplied values and optionally drop the row.
+            if (_external_values_provider) {
+                std::fill(_builder.current_external_values.begin(), _builder.current_external_values.end(),
+                          cql3::raw_value::make_null());
+                if (!_external_values_provider->try_fill(_builder.current_external_values,
+                        _partition_key, _clustering_key, static_row, &row)) {
+                    return;
+                }
+            }
+
             if (!_filter(_selection, _partition_key, _clustering_key, static_row, &row)) {
                 return;
             }
+
             _builder.start_new_row();
             for (auto&& def : _selection.get_columns()) {
                 switch (def->kind) {
@@ -369,9 +411,20 @@ public:
 
         uint64_t accept_partition_end(const query::result_row_view& static_row) {
             if (_row_count == 0) {
+                // Inject provider values for static-only rows.
+                if (_external_values_provider) {
+                    std::fill(_builder.current_external_values.begin(), _builder.current_external_values.end(),
+                              cql3::raw_value::make_null());
+                    if (!_external_values_provider->try_fill(_builder.current_external_values,
+                            _partition_key, _clustering_key, static_row, nullptr)) {
+                        return 0;
+                    }
+                }
+
                 if (!_filter(_selection, _partition_key, _clustering_key, static_row, nullptr)) {
                     return _filter.get_rows_dropped();
                 }
+
                 _builder.start_new_row();
                 auto static_row_iterator = static_row.iterator();
                 for (auto&& def : _selection.get_columns()) {
