@@ -48,6 +48,7 @@
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/pretty_printers.hh"
 #include "readers/multi_range.hh"
 #include "readers/compacting.hh"
@@ -610,23 +611,23 @@ private:
     }
 
     // Called in a seastar thread
-    dht::partition_range_vector
+    utils::chunked_vector<dht::partition_range>
     get_ranges_for_invalidation(const std::vector<sstables::shared_sstable>& sstables) {
         // If owned ranges is disengaged, it means no cleanup work was done and
         // so nothing needs to be invalidated.
         if (!_owned_ranges) {
-            return dht::partition_range_vector{};
+            return {};
         }
-        auto owned_ranges = dht::to_partition_ranges(*_owned_ranges, utils::can_yield::yes);
+        auto owned_ranges = dht::to_partition_ranges_chunked(*_owned_ranges).get();
 
         auto non_owned_ranges = sstables
                 | std::views::transform([] (const sstables::shared_sstable& sst) {
             seastar::thread::maybe_yield();
             return dht::partition_range::make({sst->get_first_decorated_key(), true},
                                               {sst->get_last_decorated_key(), true});
-        })      | std::ranges::to<dht::partition_range_vector>();
+        })      | std::ranges::to<utils::chunked_vector<dht::partition_range>>();
 
-        return dht::subtract_ranges(*_schema, non_owned_ranges, std::move(owned_ranges)).get();
+        return dht::subtract_ranges(*_schema, std::move(non_owned_ranges), std::move(owned_ranges)).get();
     }
 protected:
     compaction(compaction_group_view& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor, use_backlog_tracker use_backlog_tracker)
@@ -720,8 +721,8 @@ protected:
 
     compaction_completion_desc
     get_compaction_completion_desc(std::vector<sstables::shared_sstable> input_sstables, std::vector<sstables::shared_sstable> output_sstables) {
-        auto ranges_for_for_invalidation = get_ranges_for_invalidation(input_sstables);
-        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges_for_for_invalidation)};
+        auto ranges = get_ranges_for_invalidation(input_sstables);
+        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges)};
     }
 
     // Tombstone expiration is enabled based on the presence of sstable set.

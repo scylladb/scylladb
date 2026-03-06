@@ -17,6 +17,7 @@
 #include "utils/histogram.hh"
 #include "mutation/partition_version.hh"
 #include "utils/double-decker.hh"
+#include "utils/chunked_vector.hh"
 #include "db/cache_tracker.hh"
 #include "readers/empty.hh"
 #include "readers/mutation_source.hh"
@@ -457,7 +458,7 @@ public:
     // mutation source made prior to the call to invalidate().
     future<> invalidate(external_updater, const dht::decorated_key&);
     future<> invalidate(external_updater, const dht::partition_range& = query::full_partition_range, cache_invalidation_filter filter = [] (const auto&) { return true; });
-    future<> invalidate(external_updater, dht::partition_range_vector&&, cache_invalidation_filter filter = [] (const auto&) { return true; });
+    future<> invalidate(external_updater, utils::chunked_vector<dht::partition_range>&&, cache_invalidation_filter filter = [] (const auto&) { return true; });
 
     // Evicts entries from cache.
     //

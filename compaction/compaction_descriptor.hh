@@ -16,6 +16,7 @@
 #include "sstables/sstable_set.hh"
 #include "compaction_fwd.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
+#include "utils/chunked_vector.hh"
 
 namespace compaction {
 
@@ -38,7 +39,7 @@ struct compaction_completion_desc {
     // New, fresh SSTables that should be added to SSTable set, replacing the old ones.
     std::vector<sstables::shared_sstable> new_sstables;
     // Set of compacted partition ranges that should be invalidated in the cache.
-    dht::partition_range_vector ranges_for_cache_invalidation;
+    utils::chunked_vector<dht::partition_range> ranges_for_cache_invalidation;
 };
 
 // creates a new SSTable for a given shard
