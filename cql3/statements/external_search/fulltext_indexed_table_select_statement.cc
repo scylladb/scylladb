@@ -80,6 +80,54 @@ void validate_bm25_where_restriction(const expr::binary_operator& binop, const b
 
 } // anonymous namespace
 
+bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info, size_t index) {
+    for (auto& ps : prepared_selectors) {
+        ps.expr = expr::search_and_replace(ps.expr, [&](const expr::expression& candidate) -> std::optional<expr::expression> {
+            const auto* fc = expr::as_if<expr::function_call>(&candidate);
+            if (!fc || !expr::is_native_function_call(*fc, "bm25")) {
+                return std::nullopt;
+            }
+
+            if (!ordering_info) {
+                throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause without matching ORDER BY and WHERE clauses");
+            }
+
+            if (!ordering_info->external_value_index) {
+                ordering_info->external_value_index = index;
+            }
+
+            // Validate column matches the ORDER BY index.
+            const auto* col = extract_column_from_first_argument(*fc);
+            if (col->name_as_text() != ordering_info->index.target_column()) {
+                throw exceptions::invalid_request_exception("BM25() in SELECT must reference the same column as BM25() in WHERE and ORDER BY");
+            }
+
+            auto sel_term = extract_search_term_from_second_argument(*fc);
+
+            // Eager constant-vs-constant mismatch check.
+            const auto* sel_const = expr::as_if<expr::constant>(&sel_term);
+            const auto* ord_const = expr::as_if<expr::constant>(&ordering_info->search_term);
+            if (sel_const && ord_const && *sel_const != *ord_const) {
+                throw exceptions::invalid_request_exception("BM25() in SELECT must use the same search term as BM25() in WHERE and ORDER BY");
+            }
+
+            // Store term for runtime validation unless both are literal constants
+            // (already validated at prepare time).
+            if (!sel_const || !ord_const) {
+                ordering_info->selected_bm25_terms.push_back(std::move(sel_term));
+            }
+
+            return expr::expression(expr::external_value{
+                    .index = *ordering_info->external_value_index,
+                    .type = float_type,
+                    .replaced_expr = candidate,
+            });
+        });
+    }
+
+    return ordering_info && ordering_info->external_value_index.has_value();
+}
+
 std::optional<bm25_ordering_info> get_bm25_ordering_info(
         data_dictionary::database db,
         schema_ptr schema,
@@ -230,6 +278,13 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
     if (where_val != search_term_val) {
         throw exceptions::invalid_request_exception(
                 "Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
+    }
+
+    for (const auto& sel_term : _bm25_ordering_info.selected_bm25_terms) {
+        const auto sel_val = expr::evaluate(sel_term, options);
+        if (sel_val != search_term_val) {
+            throw exceptions::invalid_request_exception("BM25() in SELECT must use the same search term as BM25() in ORDER BY and WHERE");
+        }
     }
 
     auto search_term_bytes = std::move(search_term_val).to_bytes();

@@ -2088,10 +2088,17 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         prepared_selectors = selection::raw_selector::to_prepared_selectors(select_all, *schema, db, keyspace());
     }
 
-    for (auto& ps : prepared_selectors) {
-        if (expr::is_native_function_call(ps.expr, "bm25")) {
-            throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause");
+    // Prepare BM25() calls in SELECT: reject when absent from ORDER BY,
+    // or replace with external_value nodes for runtime score injection.
+    size_t next_external_value_index = 0;
+    if (prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, next_external_value_index)) {
+        ++next_external_value_index;
+        for (auto& term : bm25_ordering_info_opt->selected_bm25_terms) {
+            expr::fill_prepare_context(term, ctx);
         }
+    }
+
+    for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
     }
 

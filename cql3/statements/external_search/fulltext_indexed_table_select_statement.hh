@@ -18,6 +18,7 @@ struct bm25_ordering_info {
     secondary_index::index index;
     expr::expression search_term;
     std::optional<size_t> external_value_index;
+    std::vector<expr::expression> selected_bm25_terms;
 };
 
 /// Resolves BM25 ordering metadata from the query's ORDER BY clause.
@@ -27,6 +28,15 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         schema_ptr schema,
         lw_shared_ptr<const raw::select_statement::parameters> parameters,
         prepare_context& ctx);
+
+/// Processes bm25() calls in prepared_selectors:
+/// - When ordering_info is absent, throws on the first bm25() occurrence at any nesting level.
+/// - When present, validates each against ordering_info (column name at prepare time,
+///   constant terms eagerly), replaces with external_value{index, float_type},
+///   and stores non-literal search terms for runtime validation.
+/// Stores index into ordering_info->external_value_index on first bm25() occurrence.
+/// Returns true if any bm25() call was found and processed.
+bool prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info, size_t index);
 
 class fulltext_indexed_table_select_statement : public external_index_select_statement {
     bm25_ordering_info _bm25_ordering_info;
