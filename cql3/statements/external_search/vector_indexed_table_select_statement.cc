@@ -21,6 +21,7 @@
 #include "index/vector_index.hh"
 #include "types/vector.hh"
 
+#include <algorithm>
 #include <cmath>
 #include <seastar/core/future.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -117,6 +118,53 @@ public:
 };
 
 } // anonymous namespace
+
+vector_indexed_table_select_statement::rescoring_config
+vector_indexed_table_select_statement::rescoring_config::make(
+        const secondary_index::index& index,
+        const column_definition* column,
+        const cql3::selection::selection& sel) {
+    rescoring_config cfg;
+    const auto& index_options = index.metadata().options();
+
+    if (secondary_index::vector_index::is_rescoring_enabled(index_options)) {
+        const auto sim_fn_name = secondary_index::vector_index::get_cql_similarity_function_name(index_options);
+        cfg.function = seastar::make_shared<cql3::functions::vector_similarity_fct>(
+            sstring(sim_fn_name), std::vector<data_type>{column->type, column->type});
+
+        cfg.indexed_col_kind = column->kind;
+
+        if (column->is_primary_key()) {
+            cfg.index = column->component_index();
+        } else {
+            size_t stream_pos = 0;
+            for (const column_definition* def : sel.get_columns()) {
+                if (def == column) {
+                    break;
+                }
+                if (column->is_static() ? def->is_static() : def->is_regular()) {
+                    ++stream_pos;
+                }
+            }
+            cfg.index = stream_pos;
+        }
+    }
+    return cfg;
+}
+
+std::unique_ptr<cql3::selection::temporaries_provider>
+vector_indexed_table_select_statement::rescoring_config::make_similarity_provider(
+        const cql3::query_options& options,
+        const cql3::expr::expression& ann_vector_expr,
+        size_t similarity_temporary_index) const {
+    if (!is_enabled()) {
+        return nullptr;
+    }
+    auto query_vec_bytes = cql3::expr::evaluate(ann_vector_expr, options).to_bytes();
+    return std::make_unique<rescoring_similarity_provider>(
+        function, std::move(query_vec_bytes),
+        indexed_col_kind, index, similarity_temporary_index);
+}
 
 std::optional<ann_ordering_info> get_ann_ordering_info(
         data_dictionary::database db,
