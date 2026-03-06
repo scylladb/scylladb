@@ -11,6 +11,7 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/vector_similarity_fcts.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/util.hh"
@@ -20,6 +21,7 @@
 #include "index/vector_index.hh"
 #include "types/vector.hh"
 
+#include <cmath>
 #include <seastar/core/future.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/exception.hh>
@@ -42,6 +44,77 @@ std::vector<float> get_ann_ordering_vector(const select_statement::prepared_ann_
     auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(std::move(expr_value).to_bytes()));
     return util::to_vector<float>(values);
 }
+
+// Re-computes similarity scores live from the fetched embedding column.
+// Used in rescoring mode: no reliance on VS-provided distances.
+class rescoring_similarity_provider : public cql3::selection::temporaries_provider {
+    const seastar::shared_ptr<cql3::functions::vector_similarity_fct> _similarity_fct;
+    const bytes_opt _query_vec_bytes;
+    // Storage class of the indexed column. All kinds are handled in try_fill,
+    // though in practice this will only be regular or static for vector indexes.
+    const column_kind _col_kind;
+    // Unified index into the relevant data source:
+    //  - partition_key / clustering_key: component offset in the exploded key span.
+    //  - static_column / regular_column: cell-stream offset (only same-kind columns counted).
+    const size_t _index;
+    const size_t _temporary_index;
+public:
+    rescoring_similarity_provider(
+            seastar::shared_ptr<cql3::functions::vector_similarity_fct> similarity_fct,
+            bytes_opt query_vec_bytes,
+            column_kind col_kind,
+            size_t index,
+            size_t temporary_index)
+        : _similarity_fct(std::move(similarity_fct))
+        , _query_vec_bytes(std::move(query_vec_bytes))
+        , _col_kind(col_kind)
+        , _index(index)
+        , _temporary_index(temporary_index) {}
+
+    bool try_fill(
+            std::vector<cql3::raw_value>& temporaries,
+            std::span<const bytes> partition_key,
+            std::span<const bytes> clustering_key,
+            const query::result_row_view& static_row,
+            const query::result_row_view* row) const override {
+        bytes_opt row_vec_bytes;
+        switch (_col_kind) {
+        case column_kind::partition_key:
+            row_vec_bytes = partition_key[_index];
+            break;
+        case column_kind::clustering_key:
+            row_vec_bytes = clustering_key[_index];
+            break;
+        case column_kind::static_column:
+        case column_kind::regular_column: {
+            if (_col_kind == column_kind::regular_column && !row) {
+                return false;
+            }
+            auto iter = (_col_kind == column_kind::static_column) ? static_row.iterator()
+                                                                   : row->iterator();
+            for (size_t i = 0; i < _index; ++i) {
+                iter.next_atomic_cell();
+            }
+            // Vector columns are always single-cell, so next_atomic_cell is sufficient.
+            auto cell = iter.next_atomic_cell();
+            if (cell) {
+                row_vec_bytes = linearized(cell->value());
+            }
+            break;
+        }
+        }
+        auto result_bytes = _similarity_fct->execute(std::array<bytes_opt, 2>{_query_vec_bytes, row_vec_bytes});
+        if (!result_bytes) {
+            return false;
+        }
+        float similarity_value = value_cast<float>(float_type->deserialize(*result_bytes));
+        if (!std::isfinite(similarity_value)) {
+            return false;
+        }
+        temporaries[_temporary_index] = cql3::raw_value::make_value(std::move(*result_bytes));
+        return true;
+    }
+};
 
 } // anonymous namespace
 
