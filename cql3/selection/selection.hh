@@ -18,6 +18,7 @@
 #include "selector.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/functions/function.hh"
+#include "cql3/values.hh"
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
@@ -202,6 +203,7 @@ public:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
     std::vector<cql3::expr::collection_cell_metadata> _collection_element_metadata;
+    std::vector<cql3::raw_value> current_temporaries; ///< Per-row temporary values for expression evaluation.
     const query_options* _options;
 private:
     const gc_clock::time_point _now;
@@ -257,6 +259,23 @@ public:
         bool do_filter(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view* row) const;
     };
 
+    // Interface for providing computed per-row temporary values during result processing.
+    // Allows derived values (e.g., vector similarity scores) to be supplied into the
+    // expression evaluation context. Called after filtering, with direct access to all
+    // row data. The provider is responsible for extracting only the columns it needs.
+    // try_fill() returns false if the row should be dropped (e.g., NaN similarity, PK mismatch).
+    class temporaries_provider {
+    public:
+        virtual ~temporaries_provider() = default;
+        virtual bool try_fill(
+            std::vector<cql3::raw_value>& temporaries,
+            std::span<const bytes> partition_key,
+            std::span<const bytes> clustering_key,
+            const query::result_row_view& static_row,
+            const query::result_row_view* row
+        ) const = 0;
+    };
+
     result_set_builder(const selection& s, gc_clock::time_point now,
                        const query_options* options = nullptr,
                        std::vector<size_t> group_by_cell_indices = {},
@@ -286,9 +305,11 @@ public:
         std::vector<bytes>& _partition_key;
         std::vector<bytes>& _clustering_key;
         Filter _filter;
+        const temporaries_provider* _temporaries_provider;
     public:
         visitor(cql3::selection::result_set_builder& builder, const schema& s,
-                const selection& selection, Filter filter = Filter())
+                const selection& selection, Filter filter = Filter(),
+                const temporaries_provider* temporaries_provider = nullptr)
             : _builder(builder)
             , _schema(s)
             , _selection(selection)
@@ -296,6 +317,7 @@ public:
             , _partition_key(_builder.current_partition_key)
             , _clustering_key(_builder.current_clustering_key)
             , _filter(filter)
+            , _temporaries_provider(temporaries_provider)
         {}
         visitor(visitor&&) = default;
 
@@ -338,9 +360,25 @@ public:
         void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
             auto static_row_iterator = static_row.iterator();
             auto row_iterator = row.iterator();
+
+            // Filter first, before temporaries are filled
             if (!_filter(_selection, _partition_key, _clustering_key, static_row, &row)) {
                 return;
             }
+
+            // Fill temporary values with access to column data.
+            // Provider can validate PKs, compute similarities, etc.
+            if (_temporaries_provider) {
+                if (!_temporaries_provider->try_fill(
+                        _builder.current_temporaries,
+                        _partition_key,
+                        _clustering_key,
+                        static_row,
+                        &row)) {
+                    return;
+                }
+            }
+
             _builder.start_new_row();
             for (auto&& def : _selection.get_columns()) {
                 switch (def->kind) {
