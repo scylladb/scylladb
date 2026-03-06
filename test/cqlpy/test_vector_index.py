@@ -121,6 +121,14 @@ def test_create_vector_search_local_index_with_filtering_columns(cql, test_keysp
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v, f1, f2) USING 'vector_index'")
 
+def test_create_vector_search_local_index_with_part_of_partition_key(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p1 int, p2 int, c1 int, c2 int, v1 vector<float, 3>, v2 vector<float, 3>, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="Local vector index definition must contain partition key's columns only. Redundant column: c1"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, c1), v, f1, f2) USING 'vector_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1), v1, f1, f2) USING 'vector_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p2), v2, f1, f2) USING 'vector_index'")
+
 def test_create_vector_search_local_index_with_filtering_columns_on_nonvector_column(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v int, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
     with new_test_table(cql, test_keyspace, schema) as table:

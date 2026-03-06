@@ -505,11 +505,15 @@ void create_index_statement::validate_for_local_index(const schema& schema) cons
                 auto base_pk_identifiers = *index_pk | std::views::transform([&schema] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
                     return raw_ident->prepare_column_identifier(schema);
                 });
+                auto const is_vector_index = _idx_properties->custom_class && is_vector_capable_class(*_idx_properties->custom_class);
                 auto remaining_base_pk_columns = schema.partition_key_columns();
                 auto next_expected_base_column = remaining_base_pk_columns.begin();
                 for (const auto& ident : base_pk_identifiers) {
                     auto it = schema.columns_by_name().find(ident->name());
                     if (it == schema.columns_by_name().end() || !it->second->is_partition_key()) {
+                        if (is_vector_index) {
+                            throw exceptions::invalid_request_exception(format("Local vector index definition must contain partition key's columns only. Redundant column: {}", ident->to_string()));
+                        }
                         throw exceptions::invalid_request_exception(format("Local index definition must contain full partition key only. Redundant column: {}", ident->to_string()));
                     }
                     if (next_expected_base_column == remaining_base_pk_columns.end()) {
@@ -520,7 +524,7 @@ void create_index_statement::validate_for_local_index(const schema& schema) cons
                     }
                     ++next_expected_base_column;
                 }
-                if (next_expected_base_column != remaining_base_pk_columns.end()) {
+                if (!is_vector_index && next_expected_base_column != remaining_base_pk_columns.end()) {
                     throw exceptions::invalid_request_exception(format("Local index definition must contain full partition key only. Missing column: {}", next_expected_base_column->name_as_text()));
                 }
                 if (_raw_targets.size() == 1) {
