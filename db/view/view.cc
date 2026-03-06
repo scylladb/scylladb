@@ -1803,7 +1803,7 @@ endpoints_to_update get_view_natural_endpoint(
         locator::host_id me,
         const locator::effective_replication_map_ptr& base_erm,
         const locator::effective_replication_map_ptr& view_erm,
-        const locator::abstract_replication_strategy& replication_strategy,
+        const std::optional<size_t> nts_my_dc_rf,
         const dht::token& base_token,
         const dht::token& view_token,
         bool use_legacy_self_pairing,
@@ -1813,8 +1813,7 @@ endpoints_to_update get_view_natural_endpoint(
     auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
     auto& my_location = topology.get_location(me);
     auto& my_datacenter = my_location.dc;
-    auto* network_topology = dynamic_cast<const locator::network_topology_strategy*>(&replication_strategy);
-    auto rack_aware_pairing = use_tablets_rack_aware_view_pairing && network_topology;
+    auto rack_aware_pairing = use_tablets_rack_aware_view_pairing && nts_my_dc_rf;
     bool simple_rack_aware_pairing = false;
     using node_vector = std::vector<std::reference_wrapper<const locator::node>>;
     node_vector orig_base_endpoints, orig_view_endpoints;
@@ -1851,14 +1850,14 @@ endpoints_to_update get_view_natural_endpoint(
                 // view pairing as the leaving base replica.
                 // note that the recursive call will not recurse again because leaving_base is in base_nodes.
                 auto leaving_base = it->get().host_id();
-                return get_view_natural_endpoint(leaving_base, base_erm, view_erm, replication_strategy, base_token,
+                return get_view_natural_endpoint(leaving_base, base_erm, view_erm, nts_my_dc_rf, base_token,
                         view_token, use_legacy_self_pairing, use_tablets_rack_aware_view_pairing, cf_stats);
             }
         }
     }
 
     std::function<bool(const locator::node&)> is_candidate;
-    if (network_topology) {
+    if (nts_my_dc_rf) {
         is_candidate = [&] (const locator::node& node) { return node.dc() == my_datacenter; };
     } else {
         is_candidate = [&] (const locator::node&) { return true; };
@@ -1903,7 +1902,7 @@ endpoints_to_update get_view_natural_endpoint(
     // If the numbers of base and view replica differ, that means an RF change is taking place
     // and we can't use simple rack-aware pairing.
     if (rack_aware_pairing && base_endpoints.size() == view_endpoints.size()) {
-        auto dc_rf = network_topology->get_replication_factor(my_datacenter);
+        auto dc_rf = *nts_my_dc_rf;
         const auto& racks = topology.get_datacenter_rack_nodes().at(my_datacenter);
         // Simple rack-aware pairing is possible when the datacenter replication factor
         // is a multiple of the number of racks in the datacenter.
@@ -2159,12 +2158,14 @@ future<> view_update_generator::mutate_MV(
     // on the pairing algorithm.
     bool use_tablets_rack_aware_view_pairing = _db.features().tablet_rack_aware_view_pairing && ks.uses_tablets();
     auto me = base_ermp->get_topology().my_host_id();
+    const auto network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
+    const auto nts_my_dc_rf = network_topology ? std::optional<size_t>(network_topology->get_replication_factor(base_ermp->get_topology().get_datacenter())) : std::nullopt;
     static constexpr size_t max_concurrent_updates = 128;
     co_await utils::get_local_injector().inject("delay_before_get_view_natural_endpoint", 8000ms);
     co_await max_concurrent_for_each(view_updates, max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto view_ermp = erms.at(mut.s->id());
-        auto [target_endpoint, no_pairing_endpoint] = get_view_natural_endpoint(me, base_ermp, view_ermp, replication, base_token, view_token,
+        auto [target_endpoint, no_pairing_endpoint] = get_view_natural_endpoint(me, base_ermp, view_ermp, nts_my_dc_rf, base_token, view_token,
                 use_legacy_self_pairing, use_tablets_rack_aware_view_pairing, cf_stats);
         auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
         auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));

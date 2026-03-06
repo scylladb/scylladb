@@ -1322,6 +1322,9 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     auto& topology = tmptr->get_topology();
     testlog.debug("topology: {}", topology.get_datacenter_racks());
 
+    const auto nts_ptr = dynamic_cast<const locator::network_topology_strategy*>(ars_ptr.get());
+    BOOST_REQUIRE(nts_ptr);
+
     // Test tablets rack-aware base-view pairing
     auto base_token = dht::token::get_random_token();
     auto view_token = dht::token::get_random_token();
@@ -1337,7 +1340,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
             base_host,
             base_erm,
             view_erm,
-            *ars_ptr,
+            nts_ptr->get_replication_factor(topology.get_datacenter()),
             base_token,
             view_token,
             use_legacy_self_pairing,
@@ -1475,6 +1478,9 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     auto& topology = tmptr->get_topology();
     testlog.debug("topology: {}", topology.get_datacenter_racks());
 
+    const auto nts_ptr = dynamic_cast<const locator::network_topology_strategy*>(ars_ptr.get());
+    BOOST_REQUIRE(nts_ptr);
+
     // Test tablets rack-aware base-view pairing
     auto base_token = dht::token::get_random_token();
     auto view_token = dht::token::get_random_token();
@@ -1492,7 +1498,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
             base_host,
             base_erm,
             view_erm,
-            *ars_ptr,
+            nts_ptr->get_replication_factor(topology.get_datacenter()),
             base_token,
             view_token,
             use_legacy_self_pairing,

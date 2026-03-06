@@ -302,7 +302,7 @@ endpoints_to_update get_view_natural_endpoint(
     locator::host_id node,
     const locator::effective_replication_map_ptr& base_erm,
     const locator::effective_replication_map_ptr& view_erm,
-    const locator::abstract_replication_strategy& replication_strategy,
+    const std::optional<size_t> nts_my_dc_rf,
     const dht::token& base_token,
     const dht::token& view_token,
     bool use_legacy_self_pairing,
