@@ -742,12 +742,10 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
 
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
-    await manager.disable_tablet_balancing()
     cql = manager.get_cql()
 
     num_keys = 10
     tablet_count=5
-    tablet_count_for_restore=8 # should be tablet_count rounded up to the power of two
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
@@ -758,7 +756,7 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
         await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count_for_restore}, 'max_tablet_count': {tablet_count_for_restore}}};")
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int );")
 
         logger.info(f'Restore cluster via {servers[1].ip_addr}')
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
