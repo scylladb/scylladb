@@ -13,6 +13,7 @@
 #include "vector_search/vector_store_client.hh"
 
 #include <optional>
+namespace cql3::functions { class vector_similarity_fct; }
 
 namespace cql3::statements {
 
@@ -45,6 +46,36 @@ select_statement::ordering_comparator_type get_similarity_ordering_comparator(
         uint32_t similarity_column_index);
 
 class vector_indexed_table_select_statement : public select_statement {
+public:
+    /// Aggregates all rescoring-related state resolved at prepare time.
+    struct rescoring_config {
+        /// Non-null when rescoring is enabled.
+        seastar::shared_ptr<cql3::functions::vector_similarity_fct> function;
+        /// Storage class of the indexed column.
+        column_kind indexed_col_kind = column_kind::regular_column;
+        /// Unified index into the relevant data source for the indexed column:
+        ///  - partition_key / clustering_key: component_index() into the exploded key span.
+        ///  - static_column / regular_column: offset among same-kind columns in selection order
+        ///    (PK/CK columns do not consume result_row_view iterator slots).
+        size_t index = 0;
+        /// True if the indexed column is a multi-cell (collection) type.
+        /// Always false for partition/clustering key columns.
+        bool indexed_col_is_multi_cell = false;
+
+        static rescoring_config make(const secondary_index::index& index,
+                                     const column_definition* indexed_column,
+                                     const cql3::selection::selection& sel);
+
+        bool is_enabled() const { return bool(function); }
+
+        std::unique_ptr<cql3::selection::result_set_builder::temporaries_provider>
+        make_similarity_provider(
+                const cql3::query_options& options,
+                const cql3::expr::expression& ann_vector_expr,
+                size_t similarity_temporary_index) const;
+    };
+
+private:
     secondary_index::index _index;
     prepared_ann_ordering_type _prepared_ann_ordering;
     external_search::prepared_filter _prepared_filter;
