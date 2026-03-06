@@ -719,7 +719,7 @@ SEASTAR_THREAD_TEST_CASE(test_dht_subtract_ranges) {
 
     auto get_random_ranges = [&] (size_t max_count) {
         auto count = tests::random::get_int<size_t>(1, max_count);
-        dht::partition_range_vector ranges;
+        utils::chunked_vector<dht::partition_range> ranges;
         ranges.reserve(count);
 
         for (size_t i = 0; i < count; i++) {

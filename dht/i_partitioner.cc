@@ -352,6 +352,16 @@ dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& r
     return prs;
 }
 
+future<utils::chunked_vector<dht::partition_range>> to_partition_ranges_chunked(const dht::token_range_vector& ranges) {
+    utils::chunked_vector<dht::partition_range> prs;
+    prs.reserve(ranges.size());
+    for (auto& range : ranges) {
+        prs.push_back(dht::to_partition_range(range));
+        co_await coroutine::maybe_yield();
+    }
+    co_return prs;
+}
+
 std::map<unsigned, dht::partition_range_vector>
 split_range_to_shards(dht::partition_range pr, const schema& s, const sharder& raw_sharder) {
     std::map<unsigned, dht::partition_range_vector> ret;
@@ -364,11 +374,11 @@ split_range_to_shards(dht::partition_range pr, const schema& s, const sharder& r
     return ret;
 }
 
-future<dht::partition_range_vector> subtract_ranges(const schema& schema, const dht::partition_range_vector& source_ranges, dht::partition_range_vector ranges_to_subtract) {
+future<utils::chunked_vector<dht::partition_range>> subtract_ranges(const schema& schema, utils::chunked_vector<dht::partition_range> source_ranges, utils::chunked_vector<dht::partition_range> ranges_to_subtract) {
     auto cmp = dht::ring_position_comparator(schema);
     // optimize set of potentially overlapping ranges by deoverlapping them.
-    auto ranges = dht::partition_range::deoverlap(source_ranges, cmp);
-    dht::partition_range_vector res;
+    auto ranges = dht::partition_range::deoverlap(std::move(source_ranges), cmp);
+    utils::chunked_vector<dht::partition_range> res;
     res.reserve(ranges.size() * 2);
 
     auto range = ranges.begin();

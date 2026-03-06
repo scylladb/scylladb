@@ -29,6 +29,7 @@
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
 #include "utils/labels.hh"
+#include "utils/chunked_vector.hh"
 
 namespace cache {
 
@@ -1215,10 +1216,10 @@ future<> row_cache::invalidate(external_updater eu, const dht::decorated_key& dk
 }
 
 future<> row_cache::invalidate(external_updater eu, const dht::partition_range& range, cache_invalidation_filter filter) {
-    return invalidate(std::move(eu), dht::partition_range_vector({range}), std::move(filter));
+    return invalidate(std::move(eu), utils::chunked_vector<dht::partition_range>({range}), std::move(filter));
 }
 
-future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&& ranges, cache_invalidation_filter filter) {
+future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::partition_range>&& ranges, cache_invalidation_filter filter) {
     return do_update(std::move(eu), [this, ranges = std::move(ranges), filter = std::move(filter)] mutable {
         return seastar::async([this, ranges = std::move(ranges), filter = std::move(filter)] {
             auto on_failure = defer([this] () noexcept {
