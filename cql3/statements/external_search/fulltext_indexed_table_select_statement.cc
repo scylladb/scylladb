@@ -7,6 +7,7 @@
  */
 
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/external_score_provider.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expression.hh"
@@ -166,6 +167,18 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
                 "Full-text search queries do not support additional WHERE restrictions");
     }
 
+    // The external score provider needs primary key columns to match each
+    // replica row against the vector-store results. Ensure they are fetched
+    // even when the user did not select them (e.g. SELECT BM25(...) ...).
+    if (ordering_info->external_value_index) {
+        for (const auto& cdef : schema->partition_key_columns()) {
+            selection->add_column_for_post_processing(cdef);
+        }
+        for (const auto& cdef : schema->clustering_key_columns()) {
+            selection->add_column_for_post_processing(cdef);
+        }
+    }
+
     return ::make_shared<cql3::statements::fulltext_indexed_table_select_statement>(
             schema,
             bound_terms,
@@ -178,8 +191,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
             std::move(limit),
             std::move(per_partition_limit),
             stats,
-            ordering_info->index,
-            std::move(ordering_info->search_term),
+            std::move(*ordering_info),
             std::move(attrs));
 }
 
@@ -189,12 +201,11 @@ fulltext_indexed_table_select_statement::fulltext_indexed_table_select_statement
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats,
-        const secondary_index::index& index,
-        expr::expression search_term,
-        std::unique_ptr<attributes> attrs)
-    : external_index_select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices,
-              is_reversed, ordering_comparator, limit, per_partition_limit, stats, index, std::move(attrs)}
-    , _search_term{std::move(search_term)} {
+        bm25_ordering_info ordering_info, std::unique_ptr<attributes> attrs)
+    : external_index_select_statement{schema, bound_terms, parameters, selection, restrictions,
+              group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit,
+              stats, ordering_info.index, std::move(attrs)}
+    , _bm25_ordering_info{std::move(ordering_info)} {
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_table_select_statement::execute_search(
@@ -208,7 +219,7 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     auto aoe = abort_on_expiry(timeout);
 
-    auto search_term_val = expr::evaluate(_search_term, options);
+    auto search_term_val = expr::evaluate(_bm25_ordering_info.search_term, options);
     if (search_term_val.is_null()) {
         co_await coroutine::return_exception(exceptions::invalid_request_exception("Full-text search query term must not be null"));
     }
@@ -232,7 +243,10 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
 
     throwing_assert(pkeys->size() <= limit);
 
-    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
+    auto provider = _bm25_ordering_info.external_value_index
+                            ? std::make_unique<external_score_provider>(pkeys.value(), *_bm25_ordering_info.external_value_index, *_schema)
+                            : nullptr;
+    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout, std::move(provider));
 }
 
 } // namespace cql3::statements
