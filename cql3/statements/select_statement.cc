@@ -2171,7 +2171,7 @@ std::vector<float> vector_indexed_table_select_statement::get_ann_ordering_vecto
     if (expr_value.is_null()) {
         throw exceptions::invalid_request_exception(fmt::format("Unsupported null value for column {}", _prepared_ann_ordering.first->name_as_text()));
     }
-    auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes()));
+    auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(std::move(expr_value).to_bytes()));
     return util::to_vector<float>(values);
 }
 
@@ -2179,6 +2179,19 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
         service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys,
         lowres_clock::time_point timeout) const {
     auto command = prepare_command_for_base_query(qp, state, options, pkeys.size());
+
+    auto result = co_await query_base_table(qp, state, options, command, timeout, pkeys);
+
+    command->set_row_limit(get_limit(options, _limit));
+
+    co_return co_await wrap_result_to_error_message([this, command = std::move(command), &options](auto query_result) {
+        return process_results(std::move(query_result), command, options, _query_start_time_point);
+    })(std::move(result));
+}
+
+future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
+        service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
+        const std::vector<vector_search::primary_key>& pkeys) const {
 
     // For tables without clustering columns, we can optimize by querying
     // partition ranges instead of individual primary keys, since the
@@ -2194,14 +2207,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
         };
         co_return co_await query_base_table(qp, state, options, std::move(command), timeout, to_partition_ranges(pkeys));
     }
-    co_return co_await query_base_table(qp, state, options, std::move(command), timeout, pkeys);
-}
-
-future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
-        service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-        const std::vector<vector_search::primary_key>& pkeys) const {
-
-    coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> result = co_await utils::result_map_reduce(
+    co_return co_await utils::result_map_reduce(
             pkeys.begin(), pkeys.end(),
             [&](this auto, auto& key) -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
@@ -2215,25 +2221,20 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
                 co_return std::move(rqr.value().query_result);
             },
             query::result_merger{command->get_row_limit(), query::max_partitions});
-
-    co_return co_await wrap_result_to_error_message([this, &command, &options](auto result) {
-        command->set_row_limit(get_limit(options, _limit));
-        return process_results(std::move(result), command, options, _query_start_time_point);
-    })(std::move(result));
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
+future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
         service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
         std::vector<dht::partition_range> partition_ranges) const {
 
-    co_return co_await qp.proxy()
+    coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qp.proxy()
             .query_result(_query_schema, command, std::move(partition_ranges), options.get_consistency(),
                     {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
-                    std::nullopt)
-            .then(wrap_result_to_error_message([this, &options, command](service::storage_proxy::coordinator_query_result qr) {
-                command->set_row_limit(get_limit(options, _limit));
-                return this->process_results(std::move(qr.query_result), command, options, _query_start_time_point);
-            }));
+                    std::nullopt);
+    if (!rqr) {
+        co_return std::move(rqr).as_failure();
+    }
+    co_return std::move(rqr.value().query_result);
 }
 
 namespace raw {
