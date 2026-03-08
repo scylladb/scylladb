@@ -1682,6 +1682,9 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
         }
         opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _server._config.sharding_ignore_msb)});
         opts.insert({"SCYLLA_PARTITIONER", _server._config.partitioner_name});
+        if (_server._config.master_transport_port) {
+            opts.insert({"SCYLLA_MASTER_PORT", format("{:d}", *_server._config.master_transport_port)});
+        }
     }
     for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
         const sstring ext_key_name = protocol_extension_name(ext);

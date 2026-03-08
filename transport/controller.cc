@@ -72,9 +72,9 @@ future<> controller::start_server() {
     return do_start_server().finally([this] { _ops_sem.signal(); });
 }
 
-static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol = false) {
-    co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol] (cql_server& server) {
-        return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol, [&c = server.container()]() -> auto& { return c.local(); });
+static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol = false, bool master_port = false) {
+    co_await cserver.invoke_on_all([addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol, master_port] (cql_server& server) {
+        return server.listen(addr, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol, [&c = server.container()]() -> auto& { return c.local(); }, master_port);
     });
 }
 
@@ -90,6 +90,7 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
         bool is_shard_aware;
         std::shared_ptr<seastar::tls::credentials_builder> cred;
         bool proxy_protocol = false;
+        bool master_port = false;
     };
 
     _listen_addresses.clear();
@@ -157,13 +158,39 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
         _listen_addresses.push_back(configs.back().addr);
     }
 
-    co_await parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) -> future<> {
-        co_await listen_on_all_shards(cserver, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive, std::nullopt, cfg.proxy_protocol);
+    if (cfg.native_transport_master_port.is_set() && cfg.native_transport_master_port()) {
+        auto master_port_val = cfg.native_transport_master_port();
+        // Check for collision with all other CQL port settings
+        auto check_collision = [&](uint16_t other_port, const char* other_name) {
+            if (other_port && master_port_val == other_port) {
+                throw std::runtime_error(format(
+                    "native_transport_master_port ({}) must differ from {} ({})",
+                    master_port_val, other_name, other_port));
+            }
+        };
+        check_collision(cfg.native_transport_port(), "native_transport_port");
+        check_collision(cfg.native_transport_port_ssl(), "native_transport_port_ssl");
+        check_collision(cfg.native_shard_aware_transport_port(), "native_shard_aware_transport_port");
+        check_collision(cfg.native_shard_aware_transport_port_ssl(), "native_shard_aware_transport_port_ssl");
+        check_collision(cfg.native_transport_port_proxy_protocol(), "native_transport_port_proxy_protocol");
+        check_collision(cfg.native_transport_port_ssl_proxy_protocol(), "native_transport_port_ssl_proxy_protocol");
+        check_collision(cfg.native_shard_aware_transport_port_proxy_protocol(), "native_shard_aware_transport_port_proxy_protocol");
+        check_collision(cfg.native_shard_aware_transport_port_ssl_proxy_protocol(), "native_shard_aware_transport_port_ssl_proxy_protocol");
+        configs.emplace_back(listen_cfg{{ip, master_port_val}, false, cred, false, true});
+        _listen_addresses.push_back(configs.back().addr);
+    }
 
-        logger.info("Starting listening for CQL clients on {} ({}, {}{})"
-                , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
-                , cfg.proxy_protocol ? ", proxy-protocol" : ""
-        );
+    co_await parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) -> future<> {
+        co_await listen_on_all_shards(cserver, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive, std::nullopt, cfg.proxy_protocol, cfg.master_port);
+
+        if (cfg.master_port) {
+            logger.info("Starting listening for CQL clients on {} (master port, auto-detect TLS/shard)", cfg.addr);
+        } else {
+            logger.info("Starting listening for CQL clients on {} ({}, {}{})"
+                    , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
+                    , cfg.proxy_protocol ? ", proxy-protocol" : ""
+            );
+        }
     });
 }
 
@@ -251,6 +278,10 @@ future<> controller::do_start_server() {
                 // Needed for "SUPPORTED" message
                 shard_aware_transport_port_ssl = cfg.native_shard_aware_transport_port_ssl();
             }
+            std::optional<uint16_t> master_transport_port;
+            if (cfg.native_transport_master_port.is_set() && cfg.native_transport_master_port()) {
+                master_transport_port = cfg.native_transport_master_port();
+            }
             return cql_server_config {
               .timeout_config = updateable_timeout_config(cfg),
               .max_request_size = _mem_limiter.local().total_memory(),
@@ -258,6 +289,7 @@ future<> controller::do_start_server() {
               .sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits(),
               .shard_aware_transport_port = shard_aware_transport_port,
               .shard_aware_transport_port_ssl = shard_aware_transport_port_ssl,
+              .master_transport_port = master_transport_port,
               .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
               .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,

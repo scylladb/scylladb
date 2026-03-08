@@ -16,6 +16,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <seastar/net/tls.hh>
 #include <utility>
 
 namespace generic_server {
@@ -200,6 +201,12 @@ future<> connection::process()
     });
 }
 
+void connection::rewrap_streams()
+{
+    _read_buf = input_stream<char>(data_source(std::make_unique<counted_data_source_impl>(_fd.input().detach(), _conns_cpu_concurrency)));
+    _write_buf = output_stream<char>(data_sink(std::make_unique<counted_data_sink_impl>(_fd.output().detach(), _conns_cpu_concurrency)), 8192, output_stream_options{.batch_flushes = true});
+}
+
 void connection::on_connection_ready()
 {
     _conns_cpu_concurrency.stopped = true;
@@ -311,7 +318,7 @@ future<> server::shutdown() {
 }
 
 future<>
-server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol, std::function<server&()> get_shard_instance) {
+server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol, std::function<server&()> get_shard_instance, bool master_port) {
     // Note: We are making the assumption that if builder is provided it will be the same for each
     // invocation, regardless of address etc. In general, only CQL server will call this multiple times,
     // and if TLS, it will use the same cert set.
@@ -343,26 +350,34 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
     listen_options lo;
     lo.reuse_address = true;
     lo.unix_domain_socket_permissions = unix_domain_socket_permissions;
-    lo.proxy_protocol = proxy_protocol;
-    if (is_shard_aware) {
-        lo.lba = server_socket::load_balancing_algorithm::port;
+    if (master_port) {
+        lo.master_port = true;
+    } else {
+        lo.proxy_protocol = proxy_protocol;
+        if (is_shard_aware) {
+            lo.lba = server_socket::load_balancing_algorithm::port;
+        }
     }
     server_socket ss;
     bool is_tls = false;
     try {
-        ss = builder
-            ? is_tls = true, seastar::tls::listen(_credentials, addr, lo)
-            : seastar::listen(addr, lo);
+        if (master_port) {
+            ss = seastar::listen(addr, lo);
+        } else {
+            ss = builder
+                ? is_tls = true, seastar::tls::listen(_credentials, addr, lo)
+                : seastar::listen(addr, lo);
+        }
     } catch (...) {
         throw std::runtime_error(format("{} error while listening on {} -> {}", _server_name, addr, std::current_exception()));
     }
     _listeners.emplace_back(std::move(ss));
     // Each listener's do_accepts loop needs at least 1 unit to accept.
     _conns_cpu_concurrency_semaphore.signal(1);
-    _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr, is_tls)).discard_result();
+    _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr, is_tls, master_port)).discard_result();
 }
 
-future<> server::do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls) {
+future<> server::do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls, bool master_port) {
     co_await coroutine::switch_to(get_scheduling_group_for_new_connection());
     while (!_gate.is_closed()) {
         seastar::gate::holder holder(_gate);
@@ -384,13 +399,26 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                     }
                 }
             }
-            accept_result cs_sa = co_await _listeners[which].accept();
+            accept_result ar = co_await _listeners[which].accept();
             co_await coroutine::switch_to(get_scheduling_group_for_new_connection());
             if (_gate.is_closed()) {
                 break;
             }
-            auto fd = std::move(cs_sa.connection);
-            auto addr = std::move(cs_sa.remote_address);
+            auto fd = std::move(ar.connection);
+            auto addr = std::move(ar.remote_address);
+
+            bool needs_tls_wrap = false;
+            if (master_port) {
+                is_tls = ar.metadata.is_tls;
+                if (is_tls && !_credentials) {
+                    static thread_local logger::rate_limit tls_reject_rl{std::chrono::seconds(10)};
+                    _logger.log(log_level::warn, tls_reject_rl,
+                            "TLS connection detected on master port but no TLS credentials configured, rejecting");
+                    continue;
+                }
+                needs_tls_wrap = is_tls;
+            }
+
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
             auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
@@ -408,20 +436,32 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             }
             conn->_ssl_enabled = is_tls;
             // Move the processing into the background.
-            (void)futurize_invoke([this, conn, is_tls] {
-                return (is_tls
-                    ? tls::get_protocol_version(conn->_fd).then([conn](const sstring& protocol) {
-                            return tls::get_cipher_suite(conn->_fd).then(
-                                [conn, protocol](const sstring& cipher_suite) mutable {
-                                    conn->_ssl_protocol = protocol;
-                                    conn->_ssl_cipher_suite = cipher_suite;
-                                    return make_ready_future<bool>(true);
-                                });
-                        }).handle_exception([conn](std::exception_ptr ep) {
-                            return seastar::make_exception_future<bool>(std::runtime_error(fmt::format("Inspecting TLS connection failed: {}", ep)));
-                        })
-                    : make_ready_future<bool>(true)
-                ).then([conn] (bool ok){
+            // For master port TLS connections, the TLS handshake is deferred here
+            // so that a slow handshake doesn't block the accept loop.
+            (void)futurize_invoke([this, conn, is_tls, needs_tls_wrap] {
+                auto wrap_and_inspect = [this, conn, is_tls, needs_tls_wrap]() -> future<bool> {
+                    if (needs_tls_wrap) {
+                        try {
+                            conn->_fd = co_await seastar::tls::wrap_server(_credentials, std::move(conn->_fd));
+                            conn->rewrap_streams();
+                        } catch (...) {
+                            _logger.info("master port TLS wrap failed: {}", std::current_exception());
+                            co_return false;
+                        }
+                    }
+                    if (is_tls) {
+                        try {
+                            auto protocol = co_await tls::get_protocol_version(conn->_fd);
+                            auto cipher_suite = co_await tls::get_cipher_suite(conn->_fd);
+                            conn->_ssl_protocol = protocol;
+                            conn->_ssl_cipher_suite = cipher_suite;
+                        } catch (...) {
+                            std::throw_with_nested(std::runtime_error("Inspecting TLS connection failed"));
+                        }
+                    }
+                    co_return true;
+                };
+                return wrap_and_inspect().then([conn] (bool ok){
                     // Block while monitoring for lifetime/errors.
                     return ok ? conn->process() : make_ready_future<>();
                 }).then_wrapped([this, conn](auto f) {

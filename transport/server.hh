@@ -118,6 +118,7 @@ struct cql_server_config {
     unsigned sharding_ignore_msb;
     std::optional<uint16_t> shard_aware_transport_port;
     std::optional<uint16_t> shard_aware_transport_port_ssl;
+    std::optional<uint16_t> master_transport_port;
     bool allow_shard_aware_drivers = true;
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
     utils::updateable_value<uint32_t> max_concurrent_requests;
