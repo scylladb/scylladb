@@ -395,7 +395,7 @@ def test_query_exclusivestartkey_missing_sortkey(test_table_sn):
 # When Query'ing on the partition key 'right', ExclusiveStartKey must be in
 # the same partition 'right' being queried - it must not be some other
 # partition. Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
+@pytest.mark.xfail(reason="Alternator 'Query' is missing some checks on ExclusiveStartKey #26988")
 def test_query_exclusivestartkey_wrong_partition(test_table_sn):
     # The error that DynamoDB reports if the wrong partition is mentioned
     # in ExclusiveStartKey is "The provided starting key is outside query
@@ -410,7 +410,7 @@ def test_query_exclusivestartkey_wrong_partition(test_table_sn):
 # Check that ExclusiveStartKey cannot contain any spurious column names
 # beyond the actual primary key (here a partition key and sort key)
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
+@pytest.mark.xfail(reason="Alternator 'Query' is missing some checks on ExclusiveStartKey #26988")
 def test_query_exclusivestartkey_spurious_column(test_table_sn):
     p = random_string()
     # The error that DynamoDB reports if ExclusiveStartKey has spurious
@@ -440,7 +440,7 @@ def test_query_no_sort_key(test_table_s):
 # response shouldn't include the given key, the response would be completely
 # empty...  So DynamoDB doesn't allow this case at all.
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
+@pytest.mark.xfail(reason="Alternator 'Query' is missing some checks on ExclusiveStartKey #26988")
 def test_query_no_sort_key_exclusive_start_key(test_table_s):
     p = random_string()
     # DynamoDB gives the error message "The provided exclusive start key

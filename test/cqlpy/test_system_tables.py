@@ -30,11 +30,12 @@ from cassandra.protocol import Unauthorized
 # simplest case: we write N different partitions to a table, and look at how
 # close the partition count estimate is to the truth.
 
+
 # Utility function creating a temporary table, writing N partitions into
 # it and then returning the total size_estimates.partitions_count for this
 # table:
 def write_table_and_estimate_partitions(cql, test_keyspace, N):
-    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY") as table:
         write = cql.prepare(f"INSERT INTO {table} (k) VALUES (?)")
         for i in range(N):
             cql.execute(write, [i])
@@ -46,13 +47,18 @@ def write_table_and_estimate_partitions(cql, test_keyspace, N):
         nodetool.refreshsizeestimates(cql)
         # The size_estimates table has, for a keyspace/table partition, a
         # separate row for separate token ranges. We need to sum those up.
-        table_name = table[len(test_keyspace)+1:]
-        counts = [x.partitions_count for x in cql.execute(
-            f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'")]
+        table_name = table[len(test_keyspace) + 1 :]
+        counts = [
+            x.partitions_count
+            for x in cql.execute(
+                f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"
+            )
+        ]
         count = sum(counts)
         print(counts)
         print(count)
         return count
+
 
 # We expect that when write_table_and_estimate_partitions writes N partitions
 # and returns Scylla's or Cassandra's estimate on the number of partitions,
@@ -64,11 +70,14 @@ def write_table_and_estimate_partitions(cql, test_keyspace, N):
 # up to 14%. So just to be generous let's allow a 25% inaccuracy for this
 # small test. In issue #9083 we noted that Scylla had much larger errors -
 # reporting as much as 10880 (!) partitions when we have just 1000.
-@pytest.mark.xfail(reason="issue #9083")
+@pytest.mark.xfail(
+    reason="system.size_estimates.partitions_count cannot reflect the number of partitions in the table #9083"
+)
 def test_partitions_estimate_simple_small(cql, test_keyspace):
     N = 1000
     count = write_table_and_estimate_partitions(cql, test_keyspace, N)
-    assert count > N/1.25 and count < N*1.25
+    assert count > N / 1.25 and count < N * 1.25
+
 
 # For a larger test, the estimation accuracy should be better:
 # Experimentally, for 10,000 rows, Cassandra's estimation error goes
@@ -76,12 +85,15 @@ def test_partitions_estimate_simple_small(cql, test_keyspace):
 # This is a relatively long test (takes around 2 seconds), and isn't
 # needed to reproduce #9083 (the previous shorter test does it too),
 # so we skip this test.
-@pytest.mark.xfail(reason="issue #9083")
+@pytest.mark.xfail(
+    reason="system.size_estimates.partitions_count cannot reflect the number of partitions in the table #9083"
+)
 @pytest.mark.skip(reason="slow test, remove skip to try it anyway")
 def test_partitions_estimate_simple_large(cql, test_keyspace):
     N = 10000
     count = write_table_and_estimate_partitions(cql, test_keyspace, N)
-    assert count > N/1.05 and count < N*1.05
+    assert count > N / 1.05 and count < N * 1.05
+
 
 # If we write the *same* 1000 partitions to two sstables (by flushing twice,
 # and assuming that 1000 tiny partitions easily fit a memtable), and check
@@ -91,10 +103,12 @@ def test_partitions_estimate_simple_large(cql, test_keyspace):
 # Currently both Cassandra and Scylla fail this test. They are simply not
 # meant to provide accurate partition-count estimates when faced with high
 # space amplification.
-@pytest.mark.xfail(reason="partition count estimator does not use cardinality estimator")
+@pytest.mark.xfail(
+    reason="partition count estimator does not use cardinality estimator"
+)
 def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
     N = 500
-    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY") as table:
         write = cql.prepare(f"INSERT INTO {table} (k) VALUES (?)")
         for i in range(N):
             cql.execute(write, [i])
@@ -106,13 +120,18 @@ def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
         # TODO: In Scylla we should use NullCompactionStrategy to avoid the two
         # sstables from immediately being compacted together.
         nodetool.refreshsizeestimates(cql)
-        table_name = table[len(test_keyspace)+1:]
-        counts = [x.partitions_count for x in cql.execute(
-            f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'")]
+        table_name = table[len(test_keyspace) + 1 :]
+        counts = [
+            x.partitions_count
+            for x in cql.execute(
+                f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"
+            )
+        ]
         count = sum(counts)
         print(counts)
         print(count)
-        assert count > N/1.5 and count < N*1.5
+        assert count > N / 1.5 and count < N * 1.5
+
 
 # Test that deleted partitions should not be counted by the estimated
 # partitions count. Unfortunately, the current state of both Cassandra
@@ -124,20 +143,25 @@ def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
 @pytest.mark.xfail(reason="partition count estimator doesn't handle deletions")
 def test_partitions_estimate_only_deletions(cassandra_bug, cql, test_keyspace):
     N = 1000
-    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY") as table:
         delete = cql.prepare(f"DELETE FROM {table} WHERE k=?")
         for i in range(N):
             cql.execute(delete, [i])
         nodetool.flush(cql, table)
         nodetool.refreshsizeestimates(cql)
-        table_name = table[len(test_keyspace)+1:]
-        counts = [x.partitions_count for x in cql.execute(
-            f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'")]
+        table_name = table[len(test_keyspace) + 1 :]
+        counts = [
+            x.partitions_count
+            for x in cql.execute(
+                f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"
+            )
+        ]
         count = sum(counts)
         print(counts)
         print(count)
         # Count should be close to 0, not to N
-        assert count < N/1.25
+        assert count < N / 1.25
+
 
 # See issue #21223
 # Test possibility to set 'memtable_flush_period_in_ms' option for system tables
@@ -147,6 +171,10 @@ def test_alter_system_table_properties(cql, test_keyspace):
         cql.execute("ALTER TABLE system.compaction_history WITH comment = ''")
 
     with pytest.raises(Unauthorized):
-        cql.execute("ALTER TABLE system.compaction_history WITH memtable_flush_period_in_ms = 80000 AND comment = ''")
+        cql.execute(
+            "ALTER TABLE system.compaction_history WITH memtable_flush_period_in_ms = 80000 AND comment = ''"
+        )
 
-    cql.execute("ALTER TABLE system.compaction_history WITH memtable_flush_period_in_ms = 80000")
+    cql.execute(
+        "ALTER TABLE system.compaction_history WITH memtable_flush_period_in_ms = 80000"
+    )

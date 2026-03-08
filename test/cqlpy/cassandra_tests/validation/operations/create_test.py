@@ -61,7 +61,7 @@ def testCreateTinyintColumns(cql, test_keyspace):
         #assertInvalidMessage(cql, table, "Expected 1 byte for a tinyint (0)",
         #                     "INSERT INTO %s (a, b, c) VALUES (?, ?, ?)", "3", (byte) 1, ByteBufferUtil.EMPTY_BYTE_BUFFER)
 
-@pytest.mark.xfail(reason="Issue #8001")
+@pytest.mark.xfail(reason="Documented unit \"µs\" not supported for assigning a \"duration\" type #8001")
 def testCreateTableWithDurationColumns(cql, test_keyspace):
     t = unique_name()
     # Messages in Scylla and Cassandra are slightly different - Cassandra
@@ -336,7 +336,7 @@ def testCreateKeyspaceWithNetworkTopologyStrategyNoOptions(cql):
 # Test {@link ConfigurationException} is not thrown on create SimpleStrategy keyspace without any options.
 # Reproduces one aspect of #8892 (a default_keyspace_rf allows creating
 # a keyspace without specifying a replication factor).
-@pytest.mark.xfail(reason="Issue #8892")
+@pytest.mark.xfail(reason="Forbid re-adding static columns as regular and vice versa #8892")
 def testCreateKeyspaceWithSimpleStrategyNoOptions(cql):
     n = unique_name()
     execute(cql, n, "CREATE KEYSPACE %s WITH replication = { 'class' : 'SimpleStrategy' }")
@@ -587,7 +587,7 @@ def assertSchemaOption(cql, table, option, expected):
     [ks, cf] = table.split('.')
     assertRows(execute(cql, table, "SELECT " + option + " FROM system_schema.tables WHERE keyspace_name = '" + ks + "' and table_name = '" + cf + "';"), row(expected))
 
-@pytest.mark.xfail(reason="Issue #8948, #6442")
+@pytest.mark.xfail(reason="Cassandra 3.11.10 uses \"class\" instead of \"sstable_compression\" for compression settings by default #8948, Always print all schema parameters (including default values) #6442")
 def testCreateTableWithCompression(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a text, b int, c int, primary key (a, b))") as table:
         assertSchemaOption(cql, table, "compression", {"chunk_length_in_kb": "16", "class": "org.apache.cassandra.io.compress.LZ4Compressor"})

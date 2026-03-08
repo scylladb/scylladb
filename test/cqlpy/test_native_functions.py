@@ -14,17 +14,27 @@ from .util import new_test_table, unique_key_int
 from datetime import datetime
 from cassandra.protocol import InvalidRequest
 
+
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "p int, i int, g bigint, b blob, s text, t timestamp, u timeuuid, d date, PRIMARY KEY (p)") as table:
+    with new_test_table(
+        cql,
+        test_keyspace,
+        "p int, i int, g bigint, b blob, s text, t timestamp, u timeuuid, d date, PRIMARY KEY (p)",
+    ) as table:
         yield table
+
 
 @pytest.fixture(scope="module")
 def tbl_set(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace,
-                        "p int PRIMARY KEY, s1 set<int>, s2 set<int>,"
-                        "s3 set<tinyint>, m map<int, int>, s4 frozen<set<int>>") as table:
+    with new_test_table(
+        cql,
+        test_keyspace,
+        "p int PRIMARY KEY, s1 set<int>, s2 set<int>,"
+        "s3 set<tinyint>, m map<int, int>, s4 frozen<set<int>>",
+    ) as table:
         yield table
+
 
 # Check that a function that can take a column name as a parameter, can also
 # take a constant. This feature is barely useful for WHERE clauses, and
@@ -33,8 +43,15 @@ def tbl_set(cql, test_keyspace):
 def test_constant_function_parameter(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, 0x03)")
-    assert [(p,)] == list(cql.execute(f"SELECT p FROM {table1} WHERE p={p} AND b=tinyintAsBlob(3) ALLOW FILTERING"))
-    assert [(b'\x04',)] == list(cql.execute(f"SELECT tinyintAsBlob(4) FROM {table1} WHERE p={p}"))
+    assert [(p,)] == list(
+        cql.execute(
+            f"SELECT p FROM {table1} WHERE p={p} AND b=tinyintAsBlob(3) ALLOW FILTERING"
+        )
+    )
+    assert [(b"\x04",)] == list(
+        cql.execute(f"SELECT tinyintAsBlob(4) FROM {table1} WHERE p={p}")
+    )
+
 
 # According to the documentation, "The `minTimeuuid` function takes a
 # `timestamp` value t, either a timestamp or a date string.". But although
@@ -45,28 +62,34 @@ def test_constant_function_parameter(cql, table1):
 # correct.
 def test_selector_mintimeuuid(cql, table1):
     p = unique_key_int()
-    cql.execute(f"INSERT INTO {table1} (p, s, t, i) VALUES ({p}, '2013-02-02 10:00+0000', 123, 456)")
+    cql.execute(
+        f"INSERT INTO {table1} (p, s, t, i) VALUES ({p}, '2013-02-02 10:00+0000', 123, 456)"
+    )
     # We just check this works, not what the value is:
     cql.execute(f"SELECT mintimeuuid(t) FROM {table1} WHERE p={p}")
     # This doesn't work - despite the documentation, in a selector a
     # date string is not supported by mintimeuuid.
-    with pytest.raises(InvalidRequest, match='of type timestamp'):
+    with pytest.raises(InvalidRequest, match="of type timestamp"):
         cql.execute(f"SELECT mintimeuuid(s) FROM {table1} WHERE p={p}")
     # Other integer types also don't work, it must be a timestamp:
-    with pytest.raises(InvalidRequest, match='of type timestamp'):
+    with pytest.raises(InvalidRequest, match="of type timestamp"):
         cql.execute(f"SELECT mintimeuuid(i) FROM {table1} WHERE p={p}")
+
 
 # Cassandra allows the implicit (and wrong!) casting of a bigint returned
 # by writetime() to the timestamp type required by mintimeuuid(). Scylla
 # doesn't. I'm not sure which behavior we should consider correct, but it's
 # useful to have a test that demonstrates this incompatibility.
 # Reproduces #14319.
-@pytest.mark.xfail(reason="issue #14319")
+@pytest.mark.xfail(
+    reason="Maybe inconsistent handling of implicit timestamp<->bigint conversion #14319"
+)
 def test_selector_mintimeuuid_64bit(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, g) VALUES ({p}, 123)")
     cql.execute(f"SELECT mintimeuuid(g) FROM {table1} WHERE p={p}")
     cql.execute(f"SELECT mintimeuuid(writetime(g)) FROM {table1} WHERE p={p}")
+
 
 # blobasbigint() must insist to receive a properly-sized (8-byte) blob.
 # If it accepts a shorter blob (e.g., 4 bytes) and returns that to the driver,
@@ -77,8 +100,9 @@ def test_blobas_wrong_size(cql, table1):
     cql.execute(f"INSERT INTO {table1} (p, i) VALUES ({p}, 123)")
     # Cassandra and Scylla print: "In call to function system.blobasbigint,
     # value 0x0000007b is not a valid binary representation for type bigint".
-    with pytest.raises(InvalidRequest, match='blobasbigint'):
+    with pytest.raises(InvalidRequest, match="blobasbigint"):
         cql.execute(f"SELECT blobasbigint(intasblob(i)) FROM {table1} WHERE p={p}")
+
 
 # The mintimeuuid() function works with valid "timestamp"-type values, which
 # are 64-bit *signed* integers representing milliseconds since the epoch.
@@ -92,7 +116,10 @@ def test_blobas_wrong_size(cql, table1):
 def test_mintimeuuid_reasonable(cql, table1, timestamp):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, {timestamp})")
-    assert [(timestamp,)] == list(cql.execute(f"SELECT tounixtimestamp(mintimeuuid(t)) FROM {table1} WHERE p={p}"))
+    assert [(timestamp,)] == list(
+        cql.execute(f"SELECT tounixtimestamp(mintimeuuid(t)) FROM {table1} WHERE p={p}")
+    )
+
 
 # The "timestamp" column type stores a 64-bit number of milliseconds, but
 # Scylla's and Cassandra's implementation of timeuuids cannot store this
@@ -101,12 +128,18 @@ def test_mintimeuuid_reasonable(cql, table1, timestamp):
 # or to throw an exception. Crashing is not acceptable (reproduces #17035),
 # and so is returning a value, but it having the wrong timestamp (this
 # happens in Cassandra, so this test is marked a cassandra_bug)
-@pytest.mark.parametrize("timestamp", [-2**63+123, -2**62, -2**58, 2**62, 2**63-123])
+@pytest.mark.parametrize(
+    "timestamp", [-(2**63) + 123, -(2**62), -(2**58), 2**62, 2**63 - 123]
+)
 def test_mintimeuuid_extreme(cql, table1, timestamp, cassandra_bug):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, {timestamp})")
     try:
-        res = list(cql.execute(f"SELECT tounixtimestamp(mintimeuuid(t)) FROM {table1} WHERE p={p}"))
+        res = list(
+            cql.execute(
+                f"SELECT tounixtimestamp(mintimeuuid(t)) FROM {table1} WHERE p={p}"
+            )
+        )
     except:
         # If mintimeuuid() refuses these extreme values, it's fine.
         # The real bug is to return something, which is wrong (the
@@ -114,6 +147,7 @@ def test_mintimeuuid_extreme(cql, table1, timestamp, cassandra_bug):
         pass
     else:
         assert [(timestamp,)] == res
+
 
 # An example of an extreme negative timestamp is what totimestamp(123)
 # returns: As shown in test_type_date.py, the number "123" is converted to
@@ -125,9 +159,12 @@ def test_mintimeuuid_extreme(cql, table1, timestamp, cassandra_bug):
 def test_mintimeuuid_extreme_from_totimestamp(cql, table1):
     p = unique_key_int()
     try:
-        cql.execute(f"SELECT * FROM {table1} WHERE p={p} and u < mintimeuuid(totimestamp(123)) ALLOW FILTERING")
+        cql.execute(
+            f"SELECT * FROM {table1} WHERE p={p} and u < mintimeuuid(totimestamp(123)) ALLOW FILTERING"
+        )
     except:
         pass
+
 
 # According to the documentation, the toTimestamp() function can take either
 # a "timeuuid" or a "date" value and convert it to a "timestamp" type
@@ -140,12 +177,17 @@ def test_totimestamp_date(cql, table1):
     p = unique_key_int()
     # The date 2**31 is the day of the epoch, so 2**31+1 is one day later,
     # Midnight January 2nd, 1970:
-    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**31+1})")
-    assert [(datetime(1970,1,2,0,0),)] == list(cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}"))
+    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**31 + 1})")
+    assert [(datetime(1970, 1, 2, 0, 0),)] == list(
+        cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}")
+    )
     # The day 2**31-1 is one day before the epoch, and this (negative
     # timestamps) is allowed:
-    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**31-1})")
-    assert [(datetime(1969,12,31,0,0),)] == list(cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}"))
+    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**31 - 1})")
+    assert [(datetime(1969, 12, 31, 0, 0),)] == list(
+        cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}")
+    )
+
 
 # Same as above test test_totimestame_date(), but use extreme dates
 # millions of years in the past. These tests cannot be run with the
@@ -159,7 +201,7 @@ def test_totimestamp_date_extreme(cql, table1):
     # (more than a million years before our time), but at 4e16 milliseconds
     # before the epoch, it should still fit nicely into 63 bits (9e18
     # milliseconds), and should work fine.
-    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**31-2**29})")
+    cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**31 - 2**29})")
     cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}")
     # The day 2**30 is 2**30 days before the epoch - it's a useless date
     # (almost 3 million years before our time), but at 10^17 milliseconds
@@ -168,26 +210,41 @@ def test_totimestamp_date_extreme(cql, table1):
     cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**30})")
     cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}")
 
+
 # Test set_intersection() function. Not supported in Cassandra.
 def test_set_intersection_fn(cql, tbl_set, scylla_only):
     p1 = unique_key_int()
     p2 = unique_key_int()
-    cql.execute(f"INSERT INTO {tbl_set} (p, s1, s2, s3, m, s4) VALUES ({p1}, {{1,2,3}}, {{2,3,4}}, {{1}}, {{1:2, 2:3}}, {{-1,2}})")
-    cql.execute(f"INSERT INTO {tbl_set} (p, s1, s2, s3, m, s4) VALUES ({p2}, {{1,2,3}}, NULL, {{1}}, {{1:2, 2:3}}, {{-1,2}})")
+    cql.execute(
+        f"INSERT INTO {tbl_set} (p, s1, s2, s3, m, s4) VALUES ({p1}, {{1,2,3}}, {{2,3,4}}, {{1}}, {{1:2, 2:3}}, {{-1,2}})"
+    )
+    cql.execute(
+        f"INSERT INTO {tbl_set} (p, s1, s2, s3, m, s4) VALUES ({p2}, {{1,2,3}}, NULL, {{1}}, {{1:2, 2:3}}, {{-1,2}})"
+    )
     # Normal intersection.
-    assert [(set([2,3]),)] == list(cql.execute(f"SELECT set_intersection(s1, s2) FROM {tbl_set} WHERE p={p1}"))
+    assert [(set([2, 3]),)] == list(
+        cql.execute(f"SELECT set_intersection(s1, s2) FROM {tbl_set} WHERE p={p1}")
+    )
     # Intersecting with NULL.
-    assert [(None,)] == list(cql.execute(f"SELECT set_intersection(s1, s2) FROM {tbl_set} WHERE p={p2}"))
+    assert [(None,)] == list(
+        cql.execute(f"SELECT set_intersection(s1, s2) FROM {tbl_set} WHERE p={p2}")
+    )
     # Frozen and non-frozen.
-    assert [(set([2]),)] == list(cql.execute(f"SELECT set_intersection(s1, s4) FROM {tbl_set} WHERE p={p1}"))
+    assert [(set([2]),)] == list(
+        cql.execute(f"SELECT set_intersection(s1, s4) FROM {tbl_set} WHERE p={p1}")
+    )
     # Nesting
-    assert [(set([2]),)] == list(cql.execute(f"SELECT set_intersection(s1, set_intersection(s2, s4)) FROM {tbl_set} WHERE p={p1}"))
+    assert [(set([2]),)] == list(
+        cql.execute(
+            f"SELECT set_intersection(s1, set_intersection(s2, s4)) FROM {tbl_set} WHERE p={p1}"
+        )
+    )
     # Some error cases
-    with pytest.raises(InvalidRequest, match='accepts 2 arguments'):
+    with pytest.raises(InvalidRequest, match="accepts 2 arguments"):
         cql.execute(f"SELECT set_intersection(s1, s2, s3) FROM {tbl_set} WHERE p={p1}")
-    with pytest.raises(InvalidRequest, match='accepts 2 arguments'):
+    with pytest.raises(InvalidRequest, match="accepts 2 arguments"):
         cql.execute(f"SELECT set_intersection(s1) FROM {tbl_set} WHERE p={p1}")
-    with pytest.raises(InvalidRequest, match='both arguments are of set type'):
+    with pytest.raises(InvalidRequest, match="both arguments are of set type"):
         cql.execute(f"SELECT set_intersection(s1, p) FROM {tbl_set} WHERE p={p1}")
-    with pytest.raises(InvalidRequest, match='both arguments are of the same set type'):
+    with pytest.raises(InvalidRequest, match="both arguments are of the same set type"):
         cql.execute(f"SELECT set_intersection(s1, s3) FROM {tbl_set} WHERE p={p1}")

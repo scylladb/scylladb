@@ -13,12 +13,14 @@ from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 
 # Some of the lines in these tests are commented out because Scylla doesn't support arithmetic operations in literals (issue #2693).
 
+
 @pytest.fixture(scope="function")
 def skip_if_driver_doesnt_support_variable_width_types():
-    scylla_driver = 'Scylla' in DRIVER_NAME
-    driver_version = tuple(int(x) for x in DRIVER_VERSION.split('.'))
+    scylla_driver = "Scylla" in DRIVER_NAME
+    driver_version = tuple(int(x) for x in DRIVER_VERSION.split("."))
     if scylla_driver or (not scylla_driver and driver_version < (3, 29, 2)):
         pytest.skip("The driver doesn't support variable width types in vectors.")
+
 
 def test_select(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk vector<int, 2> primary key)") as table:
@@ -32,31 +34,53 @@ def test_select(cql, test_keyspace):
         # assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk = [1, 1 + 1]"), row)
 
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk = [1, ?]", 2), row)
-        assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk = [1, (int) ?]", 2), row)
+        assertRows(
+            execute(cql, table, "SELECT * FROM %s WHERE pk = [1, (int) ?]", 2), row
+        )
         # assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk = [1, 1 + (int) ?]", 1), row)
 
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk IN ([1, 2])"), row)
-        assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk IN ([1, 2], [1, 2])"), row)
+        assertRows(
+            execute(cql, table, "SELECT * FROM %s WHERE pk IN ([1, 2], [1, 2])"), row
+        )
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk IN (?)", vector), row)
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk IN ?", [vector]), row)
         # assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk IN ([1, 1 + 1])"), row)
         assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk IN ([1, ?])", 2), row)
-        assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk IN ([1, (int) ?])", 2), row)
+        assertRows(
+            execute(cql, table, "SELECT * FROM %s WHERE pk IN ([1, (int) ?])", 2), row
+        )
         # assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk IN ([1, 1 + (int) ?])", 1), row)
 
-        assertRows(execute(cql, table, "SELECT * FROM %s WHERE pk > [0, 0] AND pk < [1, 3] ALLOW FILTERING"), row)
-        assertRows(execute(cql, table, "SELECT * FROM %s WHERE token(pk) = token([1, 2])"), row)
+        assertRows(
+            execute(
+                cql,
+                table,
+                "SELECT * FROM %s WHERE pk > [0, 0] AND pk < [1, 3] ALLOW FILTERING",
+            ),
+            row,
+        )
+        assertRows(
+            execute(cql, table, "SELECT * FROM %s WHERE token(pk) = token([1, 2])"), row
+        )
 
         assertRows(execute(cql, table, "SELECT * FROM %s"), row)
 
 
 def test_selectNonPk(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(pk int primary key, value vector<int, 2>)") as table:
+    with create_table(
+        cql, test_keyspace, "(pk int primary key, value vector<int, 2>)"
+    ) as table:
         execute(cql, table, "INSERT INTO %s (pk, value) VALUES (0, [1, 2])")
-        assertRows(execute(cql, table, "SELECT * FROM %s WHERE value=[1, 2] ALLOW FILTERING"), [0, [1, 2]])
+        assertRows(
+            execute(cql, table, "SELECT * FROM %s WHERE value=[1, 2] ALLOW FILTERING"),
+            [0, [1, 2]],
+        )
+
 
 def test_insert(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk vector<int, 2> primary key)") as table:
+
         def test():
             assertRows(execute(cql, table, "SELECT * FROM %s"), [[1, 2]])
             execute(cql, table, "TRUNCATE %s")
@@ -80,8 +104,12 @@ def test_insert(cql, test_keyspace):
         # execute(cql, table, "INSERT INTO %s (pk) VALUES ([1, 1 + (int) ?])", 1)
         # test()
 
+
 def test_insertNonPK(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(pk int primary key, value vector<int, 2>)") as table:
+    with create_table(
+        cql, test_keyspace, "(pk int primary key, value vector<int, 2>)"
+    ) as table:
+
         def test():
             assertRows(execute(cql, table, "SELECT * FROM %s"), row(0, [1, 2]))
             execute(cql, table, "TRUNCATE %s")
@@ -104,13 +132,20 @@ def test_insertNonPK(cql, test_keyspace):
 
         # execute(cql, table, "INSERT INTO %s (pk, value) VALUES (0, [1, 1 + (int) ?])", 1);
         # test()
-    
-def test_invalidNumberOfDimensionsFixedWidth(cql, test_keyspace):
-    with create_table(cql, test_keyspace,"(pk int primary key, value vector<int, 2>)") as table:
 
+
+def test_invalidNumberOfDimensionsFixedWidth(cql, test_keyspace):
+    with create_table(
+        cql, test_keyspace, "(pk int primary key, value vector<int, 2>)"
+    ) as table:
         # fewer values than expected, with literals and bind markers
-        assertInvalidThrowMessage(cql, table, "Invalid vector literal",InvalidRequest,
-                                    "INSERT INTO %s (pk, value) VALUES (0, [1])")
+        assertInvalidThrowMessage(
+            cql,
+            table,
+            "Invalid vector literal",
+            InvalidRequest,
+            "INSERT INTO %s (pk, value) VALUES (0, [1])",
+        )
         # Not translated because the Python driver refuses to send incorrect
         # parameters for prepared statements
         # assertInvalidThrowMessage("Not enough bytes to read a vector<int, 2>",
@@ -118,8 +153,13 @@ def test_invalidNumberOfDimensionsFixedWidth(cql, test_keyspace):
         #                   "INSERT INTO %s (pk, value) VALUES (0, ?)", vector(1));
 
         # more values than expected, with literals and bind markers
-        assertInvalidThrowMessage(cql, table,  "Invalid vector literal",InvalidRequest,
-                                    "INSERT INTO %s (pk, value) VALUES (0, [1, 2, 3])")
+        assertInvalidThrowMessage(
+            cql,
+            table,
+            "Invalid vector literal",
+            InvalidRequest,
+            "INSERT INTO %s (pk, value) VALUES (0, [1, 2, 3])",
+        )
 
         # Not translated because the Python driver refuses to send incorrect
         # parameters for prepared statements
@@ -128,12 +168,20 @@ def test_invalidNumberOfDimensionsFixedWidth(cql, test_keyspace):
         #                           "INSERT INTO %s (pk, value) VALUES (0, ?)", vector(1, 2, 3));
 
 
-def test_invalidNumberOfDimensionsVariableWidth(cql, test_keyspace, skip_if_driver_doesnt_support_variable_width_types):
-    with create_table(cql, test_keyspace, "(pk int primary key, value vector<text, 2>)") as table:
-
+def test_invalidNumberOfDimensionsVariableWidth(
+    cql, test_keyspace, skip_if_driver_doesnt_support_variable_width_types
+):
+    with create_table(
+        cql, test_keyspace, "(pk int primary key, value vector<text, 2>)"
+    ) as table:
         # fewer values than expected, with literals and bind markers
-        assertInvalidThrowMessage(cql, table, "Invalid vector literal", InvalidRequest,
-                                    "INSERT INTO %s (pk, value) VALUES (0, ['a'])")
+        assertInvalidThrowMessage(
+            cql,
+            table,
+            "Invalid vector literal",
+            InvalidRequest,
+            "INSERT INTO %s (pk, value) VALUES (0, ['a'])",
+        )
 
         # Not translated because the Python driver refuses to send incorrect
         # parameters for prepared statements
@@ -142,29 +190,52 @@ def test_invalidNumberOfDimensionsVariableWidth(cql, test_keyspace, skip_if_driv
         #                           "INSERT INTO %s (pk, value) VALUES (0, ?)", vector("a"));
 
         # more values than expected, with literals and bind markers
-        assertInvalidThrowMessage(cql, table,"Invalid vector literal", InvalidRequest,
-                                    "INSERT INTO %s (pk, value) VALUES (0, ['a', 'b', 'c'])")
+        assertInvalidThrowMessage(
+            cql,
+            table,
+            "Invalid vector literal",
+            InvalidRequest,
+            "INSERT INTO %s (pk, value) VALUES (0, ['a', 'b', 'c'])",
+        )
 
         # Not translated because the Python driver refuses to send incorrect
         # parameters for prepared statements
         # assertInvalidThrowMessage(cql, table,"bytes", InvalidRequest,
         #                             "INSERT INTO %s (pk, value) VALUES (0, ?)", ["a", "b", "c"])
 
-def test_sandwichBetweenUDTs(cql, test_keyspace, skip_if_driver_doesnt_support_variable_width_types):
+
+def test_sandwichBetweenUDTs(
+    cql, test_keyspace, skip_if_driver_doesnt_support_variable_width_types
+):
     with create_type(cql, test_keyspace, "(y int)") as b:
         with create_type(cql, test_keyspace, f"(z vector<frozen<{b}>, 2>)") as a:
-            with create_table(cql, test_keyspace, f"(pk int primary key, value {a})") as table:
+            with create_table(
+                cql, test_keyspace, f"(pk int primary key, value {a})"
+            ) as table:
+                execute(
+                    cql,
+                    table,
+                    "INSERT INTO %s (pk, value) VALUES (0, ?)",
+                    user_type("z", [user_type("y", 1), user_type("y", 2)]),
+                )
+                assertRows(
+                    execute(cql, table, "SELECT * FROM %s"),
+                    [0, user_type("z", [user_type("y", 1), user_type("y", 2)])],
+                )
 
-                execute(cql, table, "INSERT INTO %s (pk, value) VALUES (0, ?)", user_type("z", [user_type("y", 1), user_type("y", 2)]))
-                assertRows(execute(cql, table, "SELECT * FROM %s"),
-                            [0, user_type("z", [user_type("y", 1), user_type("y", 2)])])
 
-def test_invalidElementTypeFixedWidth(cql,test_keyspace):
-    with create_table(cql, test_keyspace, "(pk int primary key, value vector<int, 2>)") as table:
-
+def test_invalidElementTypeFixedWidth(cql, test_keyspace):
+    with create_table(
+        cql, test_keyspace, "(pk int primary key, value vector<int, 2>)"
+    ) as table:
         # fixed-length bigint instead of int, with literals and bind markers
-        assertInvalidThrowMessage(cql, table,"Invalid vector literal", InvalidRequest,
-                                    "INSERT INTO %s (pk, value) VALUES (0, [(bigint) 1, (bigint) 2])")
+        assertInvalidThrowMessage(
+            cql,
+            table,
+            "Invalid vector literal",
+            InvalidRequest,
+            "INSERT INTO %s (pk, value) VALUES (0, [(bigint) 1, (bigint) 2])",
+        )
 
         # Not translated because the Python driver refuses to send incorrect
         # parameters for prepared statements
@@ -173,8 +244,13 @@ def test_invalidElementTypeFixedWidth(cql,test_keyspace):
         #                           "INSERT INTO %s (pk, value) VALUES (0, ?)", vector(1L, Long.MAX_VALUE));
 
         #  variable-length text instead of int, with literals and bind markers
-        assertInvalidThrowMessage(cql, table,"Invalid vector literal", InvalidRequest,
-                                    "INSERT INTO %s (pk, value) VALUES (0, ['a', 'b'])")
+        assertInvalidThrowMessage(
+            cql,
+            table,
+            "Invalid vector literal",
+            InvalidRequest,
+            "INSERT INTO %s (pk, value) VALUES (0, ['a', 'b'])",
+        )
 
         # Not translated because the Python driver refuses to send incorrect
         # parameters for prepared statements
@@ -183,13 +259,20 @@ def test_invalidElementTypeFixedWidth(cql,test_keyspace):
         #                         "INSERT INTO %s (pk, value) VALUES (0, ?)", vector("a", "b"));
 
 
-def test_invalidElementTypeVariableWidth(cql, test_keyspace,skip_if_driver_doesnt_support_variable_width_types):
-    with create_table(cql, test_keyspace, "(pk int primary key, value vector<text, 2>)") as table:
-
+def test_invalidElementTypeVariableWidth(
+    cql, test_keyspace, skip_if_driver_doesnt_support_variable_width_types
+):
+    with create_table(
+        cql, test_keyspace, "(pk int primary key, value vector<text, 2>)"
+    ) as table:
         # fixed-length int instead of text, with literals and bind markers
-        assertInvalidThrowMessage(cql, table, "Invalid vector literal",
-                                  InvalidRequest,
-                                  "INSERT INTO %s (pk, value) VALUES (0, [1, 2])")
+        assertInvalidThrowMessage(
+            cql,
+            table,
+            "Invalid vector literal",
+            InvalidRequest,
+            "INSERT INTO %s (pk, value) VALUES (0, [1, 2])",
+        )
         # Not translated because the Python driver refuses to send incorrect
         # parameters for prepared statements
         # assertInvalidThrowMessage("Unexpected 6 extraneous bytes after vector<text, 2> value",
@@ -197,9 +280,13 @@ def test_invalidElementTypeVariableWidth(cql, test_keyspace,skip_if_driver_doesn
         #                           "INSERT INTO %s (pk, value) VALUES (0, ?)", vector(1, 2));
 
         # variable-length varint instead of text, with literals and bind markers
-        assertInvalidThrowMessage(cql, table, "Invalid vector literal",
-                                  InvalidRequest,
-                                  "INSERT INTO %s (pk, value) VALUES (0, [(varint) 1, (varint) 2])")
+        assertInvalidThrowMessage(
+            cql,
+            table,
+            "Invalid vector literal",
+            InvalidRequest,
+            "INSERT INTO %s (pk, value) VALUES (0, [(varint) 1, (varint) 2])",
+        )
 
         # Not translated because the Python driver refuses to send incorrect
         # parameters for prepared statements
@@ -207,14 +294,18 @@ def test_invalidElementTypeVariableWidth(cql, test_keyspace,skip_if_driver_doesn
         #                           InvalidRequestException.class,
         #                           "INSERT INTO %s (pk, value) VALUES (0, ?)",
         #                           vector(BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.ONE), BigInteger.ONE));
+
+
 def test_update(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(pk int primary key, value vector<int, 2>)") as table:
+    with create_table(
+        cql, test_keyspace, "(pk int primary key, value vector<int, 2>)"
+    ) as table:
+
         def test():
             assertRows(execute(cql, table, "SELECT * FROM %s"), [0, [1, 2]])
             execute(cql, table, "TRUNCATE %s")
             assertRows(execute(cql, table, "SELECT * FROM %s"))
 
-        
         execute(cql, table, "UPDATE %s SET value = [1, 2] WHERE pk = 0")
         test()
 
@@ -233,9 +324,12 @@ def test_update(cql, test_keyspace):
         # execute(cql, table, "UPDATE %s SET value = [1, 1 + (int) ?] WHERE pk = 0", 1)
         # test()
 
+
 def test_nullValues(cql, test_keyspace):
     def assertAcceptsNullValues(t):
-        with create_table(cql, test_keyspace, f"(k int primary key, v vector<{t}, 2>)") as table:
+        with create_table(
+            cql, test_keyspace, f"(k int primary key, v vector<{t}, 2>)"
+        ) as table:
             execute(cql, table, "INSERT INTO %s (k, v) VALUES (0, null)")
             assertRows(execute(cql, table, "SELECT * FROM %s"), [0, None])
 
@@ -251,10 +345,16 @@ def test_nullValues(cql, test_keyspace):
 
 def test_emptyValues(cql, test_keyspace):
     def assertRejectsEmptyValues(t):
-        with create_table(cql, test_keyspace, f"(k int primary key, v vector<{t}, 2>)") as table:
-            assertInvalidThrowMessage(cql, table, f"Invalid HEX constant (0x) for \"v\" of type vector<{t}, 2>",
-                                      InvalidRequest,
-                                      "INSERT INTO %s (k, v) VALUES (0, 0x)")
+        with create_table(
+            cql, test_keyspace, f"(k int primary key, v vector<{t}, 2>)"
+        ) as table:
+            assertInvalidThrowMessage(
+                cql,
+                table,
+                f'Invalid HEX constant (0x) for "v" of type vector<{t}, 2>',
+                InvalidRequest,
+                "INSERT INTO %s (k, v) VALUES (0, 0x)",
+            )
 
             # Not translated because the Python driver refuses to send incorrect
             # parameters for prepared statements
@@ -265,10 +365,10 @@ def test_emptyValues(cql, test_keyspace):
 
     assertRejectsEmptyValues("int")  # fixed length
     assertRejectsEmptyValues("float")  # fixed length with special/optimized treatment
-    
+
     # The Python driver doesn't support variable width types in vectors yet.
     # assertRejectsEmptyValues("text")  # variable length
-    
+
 
 # Test commented out because it uses internal Cassandra Java APIs, not CQL
 #     @Test
@@ -338,14 +438,17 @@ def test_emptyValues(cql, test_keyspace):
 #         assertRows(execute("SELECT f([1.0, 2.0], value) FROM %s"), expected);
 #     }
 
-@pytest.mark.xfail(reason="Issue #5411")
-def test_token(cql , test_keyspace):
-    with create_table(cql, test_keyspace, "(pk vector<int, 2> primary key)") as table:
 
-        execute(cql, table,"INSERT INTO %s (pk) VALUES (?)", "abcd")
+@pytest.mark.xfail(
+    reason="Allow using terms in selection clause within SELECT statement #5411"
+)
+def test_token(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk vector<int, 2> primary key)") as table:
+        execute(cql, table, "INSERT INTO %s (pk) VALUES (?)", "abcd")
         tokenColumn = execute(cql, table, "SELECT token(pk) as t FROM %s")
         tokenTerminal = execute(cql, table, "SELECT token([1, 2]) as t FROM %s")
         assertRows(tokenColumn, tokenTerminal)
+
 
 # FIXME Scylla doesn't support java as a language for UDFs, so this test is commented out.
 # @Test

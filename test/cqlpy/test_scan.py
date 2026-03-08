@@ -23,7 +23,7 @@ from cassandra.query import SimpleStatement
 # This test focuses on cases which do not need ALLOW FILTERING. The next
 # test will focus on those that do.
 # Reproduces issue #64 and #4244
-@pytest.mark.xfail(reason="issues #64 and #4244")
+@pytest.mark.xfail(reason="CQL Multi column restrictions are allowed only on a clustering key prefix #64, Add support for mixing token, multi- and single-column restrictions #4244")
 def test_multi_column_restrictions_ck(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, c1 int, c2 int, c3 int, PRIMARY KEY (p, c1, c2, c3)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c1, c2, c3) VALUES (1, ?, ?, ?)")
@@ -99,7 +99,7 @@ def test_multi_column_range_restrictions_and_filtering(cql, test_keyspace):
 # We add another clustering key column to ensure that filtering *in*
 # a long partition is really needed - not just filtering on the partitions
 # (these are two different code paths).
-@pytest.mark.xfail(reason="issue #64")
+@pytest.mark.xfail(reason="CQL Multi column restrictions are allowed only on a clustering key prefix. #64")
 def test_multi_column_restrictions_ck_filtering(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, c0 int, c1 int, c2 int, c3 int, PRIMARY KEY (p, c0, c1, c2, c3)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c0, c1, c2, c3) VALUES (1, 1, ?, ?, ?)")
@@ -128,7 +128,7 @@ def test_multi_column_restrictions_ck_filtering(cql, test_keyspace):
 # Reproduces #4244. Contrasting with the other reproducers for #4244 above,
 # in this test the single-column restriction is on the same column as the
 # multi-column restriction, not a different column.
-@pytest.mark.xfail(reason="issue #4244")
+@pytest.mark.xfail(reason="one-element multi-column restriction should be handled like a single-column restriction #4244")
 def test_multi_column_and_single_column_restriction_same_ck(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, c1 int, c2 int, PRIMARY KEY (p, c1, c2)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c1, c2) VALUES (1, ?, ?)")
@@ -149,7 +149,7 @@ def test_multi_column_and_single_column_restriction_same_ck(cql, test_keyspace):
 # on the same column and on a different column..
 # Reproduces issue #4244 (note that this is a different aspect of #4244 than
 # the multi-column restriction problems reproduced by other tests above).
-@pytest.mark.xfail(reason="issue #4244")
+@pytest.mark.xfail(reason="one-element multi-column restriction should be handled like a single-column restriction #4244")
 def test_restriction_token_and_nontoken(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, c int, PRIMARY KEY (p, c)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c) VALUES (?, ?)")
