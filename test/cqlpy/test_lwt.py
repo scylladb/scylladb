@@ -190,7 +190,7 @@ def test_lwt_insert_if_not_exists(cql, table1):
 
 # Similarly to the above test, INSERT JSON should also accept IF NOT EXISTS
 # and work as expected with it. Reproduces issue #8682.
-@pytest.mark.xfail(reason="issue #8682")
+@pytest.mark.xfail(reason="INSERT JSON ... IF NOT EXISTS ignores IF_NOT_EXISTS #8682")
 def test_lwt_insert_json_if_not_exists(cql, table1):
     p = unique_key_int()
     # The row doesn't yet exist, IF NOT EXISTS will insert it.

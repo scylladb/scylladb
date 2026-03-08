@@ -381,7 +381,7 @@ def test_gsi_creates_and_deletes(dynamodb):
 # skipped while filling the GSI - even if Scylla actually capable of
 # representing such empty view keys (see issue #9375).
 # Reproduces issue #9424.
-@pytest.mark.xfail(reason="issue #9424")
+@pytest.mark.xfail(reason="Alternator GSIs should exclude items with empty-string key components #9424")
 def test_gsi_backfill_empty_string(dynamodb):
     # First create, and fill, a table without GSI:
     with new_test_table(dynamodb,
@@ -677,7 +677,7 @@ def test_gsi_backfill_oversized_key(dynamodb):
 # item that has an attribute longer than that should simply be skipped
 # during view building.
 # Reproduces issue #10347.
-@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+@pytest.mark.xfail(reason="Alternator doesn't limit partition and sort key lengths #10347")
 def test_gsi_backfill_key_limits(dynamodb):
     # First create, and fill, a table without GSI:
     with new_test_table(dynamodb,

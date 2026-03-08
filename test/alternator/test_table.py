@@ -314,7 +314,7 @@ def test_table_streams_off(dynamodb):
 # the result was no longer a disaster, but is still an error from CreateTable
 # saying that the column name ':attrs' is reserved.
 # Reproduces #5009
-@pytest.mark.xfail(reason="#5009: name ':attrs' not allowed for key column")
+@pytest.mark.xfail(reason="Alternator: don't forbid attribute name \":attrs\" as a key #5009")
 def test_create_table_special_column_name(dynamodb):
     for c in ['attrs', ':attrs']:
         # Try the suspicious attribute name as a partition key:
@@ -621,7 +621,7 @@ def test_delete_table_description(dynamodb):
 
 # Test that DeleteTable returns correct TableDescription (issue #11472) and has no not implemented fields (see #5026 issue)
 # after any field implementation move its testing code to the 'test_delete_table_description' test
-@pytest.mark.xfail(reason="#5026: TableDescription still doesn't implement these fields")
+@pytest.mark.xfail(reason="Alternator: missing fields in return of DescribeTable #5026")
 def test_delete_table_description_missing_fields(dynamodb):
     table_name = unique_table_name()
 

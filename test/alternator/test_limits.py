@@ -334,7 +334,7 @@ def test_limit_attribute_length_gsi_lsi_bad_incoherent_names(dynamodb):
 # attributes projected as part as ALL can be bigger (up to the usual 64KB
 # limit).
 # Reproduces issue #9169.
-@pytest.mark.xfail(reason="issue #5036: projection in GSI and LSI not supported")
+@pytest.mark.xfail(reason="Alternator: support Projection in GSI and LSI #5036")
 def test_limit_attribute_length_gsi_lsi_projection_bad(dynamodb):
     too_long_name = random_string(256)
     with pytest.raises(ClientError, match='ValidationException.*25[56]'):
@@ -751,7 +751,7 @@ def test_deeply_nested_expression_5(test_table_s):
 # decision. In any case, Alternator must have some key-length limits (the
 # internal implementation limits key length to 64 KB), so the test after this
 # one should pass.
-@pytest.mark.xfail(reason="issue #10347: sort key limits not enforced")
+@pytest.mark.xfail(reason="Alternator doesn't limit partition and sort key lengths #10347")
 def test_limit_sort_key_len_1024(test_table_ss, test_table_sb):
     p = random_string()
     # String sort key with length 1024 is fine:
@@ -789,7 +789,7 @@ def test_limit_sort_key_len_1024(test_table_ss, test_table_sb):
 # Alternator decides to adopt a different sort-key-length limit from
 # DynamoDB. We do have to adopt *some* limit because the internal Scylla
 # implementation has a 64 KB limit on key lengths.
-@pytest.mark.xfail(reason="issue #10347: sort key limits not enforced")
+@pytest.mark.xfail(reason="Alternator doesn't limit partition and sort key lengths #10347")
 def test_limit_sort_key_len(test_table_ss, test_table_sb):
     p = random_string()
     # String sort key with length 1024 is fine:
@@ -859,7 +859,7 @@ def test_limit_sort_key_len_lsi(dynamodb):
 # decision. In any case, Alternator must have some key-length limits (the
 # internal implementation limits key length to 64 KB), so even if this test
 # won't pass, the one after it should pass.
-@pytest.mark.xfail(reason="issue #10347: sort key limits not enforced")
+@pytest.mark.xfail(reason="Alternator doesn't limit partition and sort key lengths #10347")
 def test_limit_partition_key_len_2048(test_table_s, test_table_b):
     # String partition key with length 2048 is fine:
     item = {'p': 'x'*2048, 'z': 'hello'}
@@ -892,7 +892,7 @@ def test_limit_partition_key_len_2048(test_table_s, test_table_b):
 # Alternator decides to adopt a different sort-key-length limit from
 # DynamoDB. We do have to adopt *some* limit because the internal Scylla
 # implementation has a 64 KB limit on key lengths.
-@pytest.mark.xfail(reason="issue #10347: sort key limits not enforced")
+@pytest.mark.xfail(reason="Alternator doesn't limit partition and sort key lengths #10347")
 def test_limit_partition_key_len(test_table_s, test_table_b):
     # String partition key with length 2048 is fine:
     item = {'p': 'x'*2048, 'z': 'hello'}

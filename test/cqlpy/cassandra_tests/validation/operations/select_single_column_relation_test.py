@@ -390,7 +390,7 @@ def testINWithDuplicateValue(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE k1 = ? AND k2 IN (?, ?)", 1, 1, 1),
                    [1, 1, 1])
 
-@pytest.mark.xfail(reason="#10577 - max-clustering-key-restrictions-per-query is too low for this test")
+@pytest.mark.xfail(reason="Is max-clustering-key-restrictions-per-query too low? #10577")
 def testLargeClusteringINValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, v int, PRIMARY KEY (k, c))") as table:
         execute(cql, table, "INSERT INTO %s (k, c, v) VALUES (0, 0, 0)")

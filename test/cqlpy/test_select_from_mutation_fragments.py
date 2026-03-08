@@ -504,7 +504,7 @@ def test_many_partitions(cql, test_keyspace, scylla_only):
         assert len(pks) == num_partitions
 
 
-@pytest.mark.xfail(reason="issue #18768; token() filtering doesn't work with MUTATION_FRAGMENTS")
+@pytest.mark.xfail(reason="token() filtering doesn't work with mutation_fragments #18768")
 def test_mutation_fragments_vs_token(cql, test_keyspace, scylla_only):
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, c int') as table:
         print(f'INSERT INFO {table} (pk, c) VALUES (0, 0)')

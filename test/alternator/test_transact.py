@@ -25,7 +25,7 @@ from .util import random_string
 ##########################################################################
 
 # Single Put action without a condition
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_put_unconditional(test_table_s):
     p = random_string()
     x = random_string()
@@ -38,7 +38,7 @@ def test_transact_write_items_single_put_unconditional(test_table_s):
     assert item == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
 
 # Single Put action with a true condition - succeeds
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_put_true(test_table_s):
     p = random_string()
     x = random_string()
@@ -55,7 +55,7 @@ def test_transact_write_items_single_put_true(test_table_s):
 
 # Single Put action with a false condition fails with a
 # TransactionCanceledException
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_put_false(test_table_s):
     p = random_string()
     x = random_string()
@@ -75,7 +75,7 @@ def test_transact_write_items_single_put_false(test_table_s):
 # Verify that a transaction's Put action, behaves like a PutItem request,
 # and not like a CQL Insert, in that it completely replaces an existing item -
 # it doesn't merge the new data into the existing item.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_put_replaces(test_table_s):
     p = random_string()
     x = random_string()
@@ -90,7 +90,7 @@ def test_transact_write_items_single_put_replaces(test_table_s):
     assert {'p': p, 'y': y} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
 
 # Single Delete action without a condition
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_delete_unconditional(test_table_s):
     p = random_string()
     x = random_string()
@@ -106,7 +106,7 @@ def test_transact_write_items_single_delete_unconditional(test_table_s):
     assert 'Item' not in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
 
 # Single Delete action with a true condition succeeds
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_delete_true(test_table_s):
     p = random_string()
     x = random_string()
@@ -126,7 +126,7 @@ def test_transact_write_items_single_delete_true(test_table_s):
 
 # Single Delete action with a false condition fails with a
 # TransactionCanceledException
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_delete_false(test_table_s):
     p = random_string()
     x = random_string()
@@ -146,7 +146,7 @@ def test_transact_write_items_single_delete_false(test_table_s):
 
 # Single ConditionCheck action without a condition is, unsurprisingly,
 # not allowed - resulting in ValidationException
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_conditioncheck_unconditional(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*[cC]onditionExpression'):
@@ -158,7 +158,7 @@ def test_transact_write_items_single_conditioncheck_unconditional(test_table_s):
 
 # Single ConditionCheck action with a true condition succeeds, but
 # doesn't do anything (since it's just a condition check, not a write)
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_conditioncheck_true(test_table_s):
     p = random_string()
     test_table_s.meta.client.transact_write_items(TransactItems=[{
@@ -172,7 +172,7 @@ def test_transact_write_items_single_conditioncheck_true(test_table_s):
 
 # Single ConditionCheck action with a false condition fails with a
 # TransactionCanceledException
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_conditioncheck_false(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='TransactionCanceledException'):
@@ -191,7 +191,7 @@ def test_transact_write_items_single_conditioncheck_false(test_table_s):
 # those in UpdateExpression and/or ConditionExpression.
 
 # Single Update action without a condition
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_update_unconditional(test_table_s):
     p = random_string()
     item = {'p': p, 'x': 42}
@@ -208,7 +208,7 @@ def test_transact_write_items_single_update_unconditional(test_table_s):
     assert item == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
 
 # Single Update action with a true condition succeeds
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_update_true(test_table_s):
     p = random_string()
     item = {'p': p, 'x': 42}
@@ -228,7 +228,7 @@ def test_transact_write_items_single_update_true(test_table_s):
 
 # Single Update action with a false condition fails with a
 # TransactionCanceledException
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_single_update_false(test_table_s):
     p = random_string()
     item = {'p': p, 'x': 42}
@@ -255,7 +255,7 @@ def test_transact_write_items_single_update_false(test_table_s):
 # if we increment the same counter twice it happens twice. But if we do
 # use ClientRequestToken and pass the same one twice, only the first increment
 # happens.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_clientrequesttoken(test_table_s):
     p = random_string()
     item = {'p': p, 'x': 42}
@@ -295,7 +295,7 @@ def test_transact_write_items_clientrequesttoken(test_table_s):
 # table name, we can't reuse the same ClientRequestToken or we'll get a
 # IdempotentParameterMismatch error. We must use a random token - and
 # a random one-character string is not enough to avoid test flakiness.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_clientrequesttoken_length(test_table_s):
     p = random_string()
     item = {'p': p}
@@ -313,7 +313,7 @@ def test_transact_write_items_clientrequesttoken_length(test_table_s):
 
 # Check that if the same ClientRequestToken is used for two transactions,
 # but they are different, an IdempotentParameterMismatch error is thrown.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_clientrequesttoken_mismatch(test_table_s):
     transaction1 = [{'Put': {'TableName': test_table_s.name, 'Item': {'p': random_string()}}}]
     transaction2 = [{'Put': {'TableName': test_table_s.name, 'Item': {'p': random_string()}}}]
@@ -329,7 +329,7 @@ def test_transact_write_items_clientrequesttoken_mismatch(test_table_s):
 # begin with a successful TransactWriteItems transaction, where some of
 # the actions have successful conditions, and some don't have conditions
 # at all, and all the actions are performed.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_multi_action_true(test_table_s):
     p1 = random_string()
     p2 = random_string()
@@ -366,7 +366,7 @@ def test_transact_write_items_multi_action_true(test_table_s):
 # Test a transaction with several actions, one of which has a false
 # condition. The entire transaction should fail, and none of its actions
 # (not even those with true conditions or no conditions) should be performed.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_multi_action_false(test_table_s):
     p1 = random_string()
     p2 = random_string()
@@ -404,7 +404,7 @@ def test_transact_write_items_multi_action_false(test_table_s):
 # Test that it's not allowed for two actions in the same transaction to
 # target the same item (this limitation also includes ConditionCheck
 # actions).
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_multi_action_conflict(test_table_s):
     p1 = random_string()
     p2 = random_string()
@@ -448,7 +448,7 @@ def test_transact_write_items_multi_action_conflict(test_table_s):
 
 # Test that a transaction may involve more than one table, not just more than
 # one item.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_multi_table_true(test_table_s, test_table_ss):
     p1 = random_string()
     p2 = random_string()
@@ -474,7 +474,7 @@ def test_transact_write_items_multi_table_true(test_table_s, test_table_ss):
     assert item2 == test_table_ss.get_item(Key={'p': p2, 'c': c2}, ConsistentRead=True)['Item']
 
 # Check that a TransactWriteItems with zero items is not allowed.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_empty(test_table_s):
     with pytest.raises(ClientError, match='ValidationException.*[tT]ransactItems'):
         test_table_s.meta.client.transact_write_items(TransactItems=[])
@@ -482,7 +482,7 @@ def test_transact_write_items_empty(test_table_s):
 # Check that a TransactWriteItems with 100 items is allowed. The limit
 # used to be just 25 items, but it was increased to 100 in September 2022.
 # The next test will check that *more* than 100 items is not allowed.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_100(test_table_s):
     p = random_string()
     items = [{'p': p + str(i), 'x': i} for i in range(100)]
@@ -496,7 +496,7 @@ def test_transact_write_items_100(test_table_s):
         assert item == test_table_s.get_item(Key={'p': item['p']}, ConsistentRead=True)['Item']
 
 # Check that a transaction with 101 (>100) items is rejected.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_101(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*[tT]ransactItems.*100'):
@@ -515,7 +515,7 @@ def test_transact_write_items_101(test_table_s):
 # new item in the transaction - so the transaction itself reaches 5MB in
 # size. In the next test we will check what happens for Update or Delete
 # actions which may themselves have small size but refer to large items.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_put_5MB(test_table_s):
     p = random_string()
     # We will write 50 items of roughly 100KB each, reaching around 5MB
@@ -541,7 +541,7 @@ def test_transact_write_items_put_5MB(test_table_s):
 # (DynamoDB refers to it as "transaction payload" in the error messages) is
 # what matters, not the size of the items. A delete transaction that deletes
 # 5 MB of items but the transaction itself is small - is allowed.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_delete_5MB(test_table_s):
     p = random_string()
     # Write (not in a transaction) 50 items of roughly 100 KB each, so their
@@ -579,7 +579,7 @@ def test_transact_write_items_delete_5MB(test_table_s):
 # But verify that aggregate transaction size of 3MB is fine. Note that
 # individual items are limited to 400KB, so we must a transaction with
 # several smaller items.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_put_3MB(test_table_s):
     p = random_string()
     # We will write 30 items of roughly 100KB each, reaching around 3MB
@@ -611,7 +611,7 @@ def test_transact_write_items_put_3MB(test_table_s):
 #    tests.
 # 4. ThrottlingError - similar, for on-demand tables that haven't scaled
 #    enough yet.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_cancellation_reasons_conditionalcheckfailed(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='TransactionCanceledException') as e:
@@ -710,7 +710,7 @@ def test_transact_write_cancellation_reasons_conditionalcheckfailed(test_table_s
 # It's not clear how DynamoDB decided which case will return a
 # ValidationException and which a ValidationError, but let's be compatible
 # with what DynamoDB does.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_cancellation_reasons_validationerror(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='TransactionCanceledException') as e:
@@ -758,7 +758,7 @@ def test_transact_write_cancellation_reasons_validationerror(test_table_s):
 # ValidationException. Below we'll see in other tests that this is not
 # always true - in some other types of errors, we actually do get a
 # ValidationException.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_cancellation_reasons_validationerror_one(test_table_s):
     with pytest.raises(ClientError, match='TransactionCanceledException') as e:
         test_table_s.meta.client.transact_write_items(TransactItems=[
@@ -777,7 +777,7 @@ def test_transact_write_cancellation_reasons_validationerror_one(test_table_s):
 # condition to fail.
 # Note that ReturnValuesOnConditionCheckFailure is specified for a
 # specific action, not for the entire transaction.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_returnvaluesonconditioncheckfailure(test_table_s):
     p = random_string()
     item = {'p': p, 'x': 42, 'y': 'dog'}
@@ -854,7 +854,7 @@ def test_transact_write_items_returnvaluesonconditioncheckfailure(test_table_s):
 # the latter.
 
 # Check ConditionExpression reference to missing ExpressionAttributeNames
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_missing_name(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*#xyz'):
@@ -867,7 +867,7 @@ def test_transact_write_items_missing_name(test_table_s):
             }}])
 
 # Check ConditionExpression value missing in ExpressionAttributeValues
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_missing_value(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*:xyz'):
@@ -880,7 +880,7 @@ def test_transact_write_items_missing_value(test_table_s):
             }}])
 
 # Check unused name in ExpressionAttributeName
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_unused_name(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*unused.*#xyz'):
@@ -894,7 +894,7 @@ def test_transact_write_items_unused_name(test_table_s):
             }}])
 
 # Check unused value in ExpressionAttributeValues
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_unused_value(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*unused.*:xyz'):
@@ -909,7 +909,7 @@ def test_transact_write_items_unused_value(test_table_s):
 
 # Syntax error in a ConditionExpression in one action also returns a
 # ValidationException for the entire transaction, not per item:
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_syntax_error(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*Syntax error'):
@@ -928,7 +928,7 @@ def test_transact_write_items_syntax_error(test_table_s):
 # return a ValidationException here and we change the test to accept both.
 # But the important point is that the single exception is returned for the
 # entire transaction - not per item.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_write_items_serialization_exception(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='SerializationException'):
@@ -947,7 +947,7 @@ def test_transact_write_items_serialization_exception(test_table_s):
 ##########################################################################
 
 # Test basic transaction with one "Get" action
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_get_items_one(test_table_s):
     p = random_string()
     x = random_string()
@@ -965,7 +965,7 @@ def test_transact_get_items_one(test_table_s):
 
 # If a Get transaction can't find an item with the given key, it's not
 # an error - one of the Responses entries will just not have an "Item":
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_get_items_missing(test_table_s):
     p = random_string()
     ret = test_table_s.meta.client.transact_get_items(TransactItems=[
@@ -980,7 +980,7 @@ def test_transact_get_items_missing(test_table_s):
 # Test the ProjectionExpression parameter for a Get action, asking not to
 # get the entire item and rather just get specific attributes. See more
 # extensive tests for ProjectionExpression in test_projection_expression.py.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_get_items_projection_expression(test_table_s):
     p = random_string()
     item = {'p': p, 'x': 1, 'y': 2, 'z': 3}
@@ -997,7 +997,7 @@ def test_transact_get_items_projection_expression(test_table_s):
     assert {'x': item['x'], 'z': item['z']} == ret['Responses'][0]['Item']
 
 # ProjectionExpression also supports ExpressionAttributeNames.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_get_items_projection_expression_attribute_names(test_table_s):
     p = random_string()
     item = {'p': p, 'x': 1, 'y': 2, 'z': 3}
@@ -1017,7 +1017,7 @@ def test_transact_get_items_projection_expression_attribute_names(test_table_s):
 # If ExpressionAttributeNames is missing a name, or has an unused name,
 # it's an error. As we saw above in other cases, it's a ValidationException
 # for the entire transaction - not a TransactionCanceledException.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_get_items_unused_expressionattributenames(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*unused.*#qq'):
@@ -1030,7 +1030,7 @@ def test_transact_get_items_unused_expressionattributenames(test_table_s):
                 'ExpressionAttributeNames': {'#xx': 'x', '#zz': 'z', '#qq': 'q'}
             }}])
 
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_get_items_missing_expressionattributenames(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*#zz'):
@@ -1047,7 +1047,7 @@ def test_transact_get_items_missing_expressionattributenames(test_table_s):
 # read 100 small items in one transaction - the limit used to be just 25
 # items, but it was increased to 100 in September 2022 so let's verify that
 # it works.
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_get_items_100(test_table_s):
     p = random_string()
     items = [{'p': p + str(i), 'x': i} for i in range(100)]
@@ -1069,7 +1069,7 @@ def test_transact_get_items_100(test_table_s):
         assert response['Item'] == items[i]
 
 # A transaction with 100 read actions is the limit, and 101 are not allowed:
-@pytest.mark.xfail(reason="#5064 - transactions not yet supported")
+@pytest.mark.xfail(reason='Alternator: support "transactions" feature #5064')
 def test_transact_get_items_101(test_table_s):
     with pytest.raises(ClientError, match='ValidationException.*[tT]ransactItems.*100'):
         test_table_s.meta.client.transact_get_items(TransactItems=[

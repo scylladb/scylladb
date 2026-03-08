@@ -36,7 +36,7 @@ def testInsertSetIfNotExists(cql, test_keyspace, is_scylla):
                    row(True,None,None) if is_scylla else row(True))
         assertRows(execute(cql, table, "SELECT * FROM %s "), row(0, {1, 2, 3}))
 
-@pytest.mark.xfail(reason="Issue #13586")
+@pytest.mark.xfail(reason="Add support for CONTAINS and CONTAINS KEY in LWT expressions #13586")
 def testWholeUDT(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b text)") as typename:
         for frozen in [False, True]:   
@@ -266,7 +266,7 @@ def checkInvalidUDT(cql, table, condition, value, expected):
     assertInvalidThrow(cql, table, expected, "DELETE FROM %s WHERE k = 0 IF " + condition)
     assertRows(execute(cql, table, "SELECT * FROM %s"), row(0, value))
 
-@pytest.mark.xfail(reason="Issue #13624")
+@pytest.mark.xfail(reason="Add support for UDT subfields in LWT expression #13624")
 def testUDTField(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b text)") as typename:
         for frozen in [False, True]:   
@@ -395,7 +395,7 @@ def testUDTField(cql, test_keyspace):
                 checkDoesNotApplyUDT(cql, table, "v.b != null AND v.b IN ()", v)
 
 # Migrated from cql_tests.py:TestCQL.whole_list_conditional_test()
-@pytest.mark.xfail(reason="Issue #13586")
+@pytest.mark.xfail(reason="Add support for CONTAINS and CONTAINS KEY in LWT expressions #13586")
 def testWholeList(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "list<text>"
@@ -553,7 +553,7 @@ def testExpandedListItem(cql, test_keyspace):
             #check_invalid_list(cql, table, "l[null] = null", InvalidRequest)
 
 # Migrated from cql_tests.py:TestCQL.whole_set_conditional_test()
-@pytest.mark.xfail(reason="Issue #13586")
+@pytest.mark.xfail(reason="Add support for CONTAINS and CONTAINS KEY in LWT expressions #13586")
 def testWholeSet(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "set<text>"
@@ -632,7 +632,7 @@ def check_invalid_set(cql, table, condition, expected):
     assertRows(execute(cql, table, "SELECT * FROM %s"), row(0, {"bar", "foo"}))
 
 # Migrated from cql_tests.py:TestCQL.whole_map_conditional_test()
-@pytest.mark.xfail(reason="Issue #13586")
+@pytest.mark.xfail(reason="Add support for CONTAINS and CONTAINS KEY in LWT expressions #13586")
 def testWholeMap(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "map<text,text>"
@@ -800,7 +800,7 @@ def check_invalid_map(cql, table, condition, expected):
     assertInvalidThrow(cql, table, expected, "DELETE FROM %s WHERE k=0 IF " + condition)
     assertRows(execute(cql, table, "SELECT * FROM %s"), row(0, {"foo": "bar"}))
 
-@pytest.mark.xfail(reason="Issue #13586")
+@pytest.mark.xfail(reason="Add support for CONTAINS and CONTAINS KEY in LWT expressions #13586")
 def testInMarkerWithUDTs(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b text)") as typename:
         for frozen in [False, True]:
@@ -856,7 +856,7 @@ def testInMarkerWithUDTs(cql, test_keyspace):
                 assertInvalidMessage(cql, table, "unset",
                                  "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN ?", unset())
 
-@pytest.mark.xfail(reason="Issues #13586, #5855")
+@pytest.mark.xfail(reason="Add support for CONTAINS and CONTAINS KEY in LWT expressions #13586, lwt: comparing NULL collection with empty value in IF condition yields incorrect results #5855")
 def testNonFrozenEmptyCollection(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, l list<text>)") as table:
         execute(cql, table, "INSERT INTO %s (k, l) VALUES (0, null)")

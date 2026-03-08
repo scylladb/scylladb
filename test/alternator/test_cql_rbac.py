@@ -1021,7 +1021,7 @@ def test_rbac_streams(dynamodb, cql):
 # with streams enabled up-front during creation - and enabling the stream
 # later in an already existing table.
 # Reproduces issue #19798
-@pytest.mark.xfail(reason="#19798")
+@pytest.mark.xfail(reason="Auto-grant and auto-revoke missing for CDC log table #19798")
 @pytest.mark.parametrize("during_creation", [True, False])
 def test_rbac_streams_autogrant(dynamodb, cql, during_creation):
     schema = {

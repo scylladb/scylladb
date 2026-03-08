@@ -61,7 +61,7 @@ def test_selector_mintimeuuid(cql, table1):
 # doesn't. I'm not sure which behavior we should consider correct, but it's
 # useful to have a test that demonstrates this incompatibility.
 # Reproduces #14319.
-@pytest.mark.xfail(reason="issue #14319")
+@pytest.mark.xfail(reason="Maybe inconsistent handling of implicit timestamp<->bigint conversion #14319")
 def test_selector_mintimeuuid_64bit(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, g) VALUES ({p}, 123)")

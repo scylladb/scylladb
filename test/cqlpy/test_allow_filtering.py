@@ -114,7 +114,7 @@ def test_allow_filtering_partition_slice_and_restriction(cql, table1):
 # like 'v=2' doesn't change any of the above, so doesn't require filtering.
 # Reproduces #7964 on Scylla, and also wrong on Cassandra so marked
 # cassandra_bug.
-@pytest.mark.xfail(reason="#7964")
+@pytest.mark.xfail(reason="Further restricting a query already limited to a single row should not require ALLOW FILTERING #7964")
 def test_allow_filtering_single_row(cql, table1, cassandra_bug):
     check_af_optional(cql, table1, 'k=1 AND c=2', lambda row: row.k==1 and row.c==2)
     # Reproduces #7964, as ALLOW FILTERING is considered mandatory, not optional
@@ -310,7 +310,7 @@ def test_allow_filtering_prefix(cql, table3):
 # reproduces issue #5545 / #13533
 def test_allow_filtering_pk_in(cql, table1):
     check_af_optional(cql, table1, 'k IN (1,2)', lambda row: row.k in {1,2})
-@pytest.mark.xfail(reason="issue #5545, #13533: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
+@pytest.mark.xfail(reason="WHERE IN secondary_index requires ALLOW FILTERING unlike in Cassandra #5545, WHERE IN is much slower than individual selects #13533")
 def test_allow_filtering_index_in(cql, table2):
     check_af_optional(cql, table2, 'a IN (1,2)', lambda row: row.a in {1,2})
 
@@ -331,7 +331,7 @@ def table2local(cql, test_keyspace):
     wait_for_local_index(cql, table, 'k', 'a', everything)
     yield (table, everything)
     cql.execute("DROP TABLE " + table)
-@pytest.mark.xfail(reason="issue #13533: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
+@pytest.mark.xfail(reason="WHERE IN is much slower than individual selects #13533")
 def test_allow_filtering_local_index_in(cql, table2local, scylla_only):
     check_af_optional(cql, table2local, 'k = 0 AND a IN (1,2)', lambda row: row.a in {1,2})
 
@@ -465,7 +465,7 @@ def test_allow_filtering_clustering_key_multicolumn_syntax(cql, table1):
 # Moreover, if we have multiple clustering key columns, c1 and c2,
 # (c2)=(10) should be allowed just like c2=10 (and require filtering
 # just like it) - we shouldn't complain that c1 is missing. Reproduces #13250.
-@pytest.mark.xfail(reason="issue #13250")
+@pytest.mark.xfail(reason="one-element multi-column restriction should be handled like a single-column restriction #13250")
 def test_allow_filtering_compound_clustering_key_multicolumn_syntax(cql, table3):
     check_af_mandatory(cql, table3, 'c1=10', lambda row: row.c1==10)
     check_af_mandatory(cql, table3, '(c1)=(10)', lambda row: row.c1==10)

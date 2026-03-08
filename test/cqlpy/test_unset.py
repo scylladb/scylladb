@@ -74,7 +74,7 @@ def test_update_unset_value_basic(cql, table1):
 # such case the whole write request will fail instead of parts of it being
 # skipped. See discussion in pull request #12517.
 
-@pytest.mark.xfail(reason="issue #2693 - Scylla doesn't yet support arithmetic expressions")
+@pytest.mark.xfail(reason="Support arithmetic operators #2693")
 def test_update_unset_value_expr_arithmetic(cql, table1):
     p = unique_key_int()
     stmt = cql.prepare(f'UPDATE {table1} SET a=(int)?+1 WHERE p={p}')

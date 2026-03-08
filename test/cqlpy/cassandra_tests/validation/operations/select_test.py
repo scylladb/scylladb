@@ -793,7 +793,7 @@ def testSelectDistinctWithWhereClause(cql, test_keyspace):
                    [70])
 
 # Reproduces issue #10354
-@pytest.mark.xfail(reason="#10354 - we forgot to allow SELECT DISTINCT filtering on static column")
+@pytest.mark.xfail(reason="SELECT DISTINCT should allow filter on static columns, not just partition keys #10354")
 def testSelectDistinctWithWhereClauseOnStaticColumn(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, a int, s int static, s1 int static, b int, PRIMARY KEY (k, a))") as table:
         for i in range(10):
@@ -1279,7 +1279,7 @@ def testFilteringWithoutIndicesWithFrozenCollections(cql, test_keyspace):
                              "SELECT * FROM %s WHERE e[1] = ? ALLOW FILTERING",
                              UNSET_VALUE)
 # Reproduces #8627
-@pytest.mark.xfail(reason="#8627")
+@pytest.mark.xfail(reason="Cleanly reject updates with indexed values where value > 64k #8627")
 def testIndexQueryWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c blob, PRIMARY KEY (a, b))") as table:
         TOO_BIG = 1024 * 65
@@ -1298,7 +1298,7 @@ def testIndexQueryWithValueOver64K(cql, test_keyspace):
         assert_empty(execute(cql, table, "SELECT * FROM %s WHERE c = ?  ALLOW FILTERING", too_big))
 
 # Reproduces #10366
-@pytest.mark.xfail(reason="#10366 - server error instead of InvalidRequest")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #10366 - server error instead of InvalidRequest")
 def testPKQueryWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a text, b text, PRIMARY KEY (a, b))") as table:
         TOO_BIG = 1024 * 65
@@ -1307,7 +1307,7 @@ def testPKQueryWithValueOver64K(cql, test_keyspace):
                            "SELECT * FROM %s WHERE a = ?", too_big)
 
 # Reproduces #10366
-@pytest.mark.xfail(reason="#10366 - server error instead of silent return")
+@pytest.mark.xfail(reason="Enforce Key-length limits during SELECT #10366 - server error instead of silent return")
 def testCKQueryWithValueOver64K(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a text, b text, PRIMARY KEY (a, b))") as table:
         TOO_BIG = 1024 * 65
@@ -1549,7 +1549,7 @@ def testAllowFilteringOnPartitionAndClusteringKey(cql, test_keyspace):
                                     [21, 12, 25, 24, 25],
                                     [21, 12, 26, 34, 35])
 
-@pytest.mark.xfail(reason="#10358")
+@pytest.mark.xfail(reason="Comparison with UNSET_VALUE should produce an error #10358")
 def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c list<int>, d set<int>, e map<int, int>, PRIMARY KEY ((a, b)))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
@@ -1758,7 +1758,7 @@ def testFilteringOnClusteringColumns(cql, test_keyspace):
                        [21, 28, 29, 30],
                        [31, 32, 33, 34])
 
-@pytest.mark.xfail(reason="#4244")
+@pytest.mark.xfail(reason="Add support for mixing token, multi- and single-column restrictions #4244")
 def testFilteringWithMultiColumnSlices(cql, test_keyspace):
     #/----------------------------------------
     #/ Multi-column slices for clustering keys
@@ -1888,7 +1888,7 @@ def testContainsOnPartitionKey(cql, test_keyspace):
 def testContainsOnPartitionKeyPart(cql, test_keyspace):
     dotestContainsOnPartitionKey(cql, test_keyspace, "(pk frozen<map<int, int>>, ck int, v int, PRIMARY KEY ((pk, ck)))")
 
-@pytest.mark.xfail(reason="#10443")
+@pytest.mark.xfail(reason="SELECT with IN and ORDER BY orders rows per partition instead of for the entire response #10443")
 def testFilteringWithOrderClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d list<int>, PRIMARY KEY (a, b, c))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 11, 12, 13, [1,4])

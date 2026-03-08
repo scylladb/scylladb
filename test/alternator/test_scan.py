@@ -462,7 +462,7 @@ def test_scan_long_partition_tombstone_string(dynamodb, query_tombstone_page_lim
 #
 @pytest.mark.parametrize("KB", [
     pytest.param(1500, marks=pytest.mark.xfail(
-        reason="Issue #10327: small tables don't respect paging limits")),
+        reason="Page size in whole-table scan of a small table is larger than 1 MB #10327")),
     8000
 ])
 def test_scan_paging_missing_limit(dynamodb, KB):
@@ -501,7 +501,7 @@ def test_scan_exclusivestartkey_missing_sortkey(filled_test_table):
 # Check that ExclusiveStartKey cannot contain any spurious column names
 # beyond the actual primary key (here a partition key and sort key)
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
+@pytest.mark.xfail(reason="Alternator 'Query' is missing some checks on ExclusiveStartKey #26988")
 def test_scan_exclusivestartkey_spurious_column(filled_test_table):
     test_table, items = filled_test_table
     p = random_string()

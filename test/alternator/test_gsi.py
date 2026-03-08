@@ -282,7 +282,7 @@ def test_gsi_describe_indexstatus(test_table_gsi_1):
 # In addition to the basic listing of an GSI in DescribeTable tested above,
 # in this test we check additional fields that should appear in each GSI's
 # description.
-@pytest.mark.xfail(reason="issues #7550, #11466")
+@pytest.mark.xfail(reason="Alternator: missing ItemCount field in return of DescribeTable #7550, Alternator: missing IndexSizeBytes field in return of DescribeTable #11466")
 def test_gsi_describe_fields(test_table_gsi_1):
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     gsis = desc['Table']['GlobalSecondaryIndexes']
@@ -625,7 +625,7 @@ def test_gsi_wrong_type_attribute_batch(test_table_gsi_2):
 # a pre-existing table. In that case we can't reject the base-table update
 # because the oversized attribute is already there - but can just drop this
 # item from the GSI.
-@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+@pytest.mark.xfail(reason="Alternator doesn't limit partition and sort key lengths #10347")
 def test_gsi_limit_partition_key_len_2048(test_table_gsi_2):
     # A value for 'x' (the GSI's partition key) of length 2048 is fine:
     p = random_string()
@@ -651,7 +651,7 @@ def test_gsi_limit_partition_key_len_2048(test_table_gsi_2):
 # should pass even if Alternator decides to adopt a different key length
 # limits from DynamoDB. We do have to adopt *some* limit because the
 # internal Scylla implementation has a 64 KB limit on key lengths.
-@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+@pytest.mark.xfail(reason="Alternator doesn't limit partition and sort key lengths #10347")
 def test_gsi_limit_partition_key_len(test_table_gsi_2):
     # A value for 'x' (the GSI's partition key) of length 2048 is fine:
     p = random_string()
@@ -681,7 +681,7 @@ def test_gsi_limit_partition_key_len(test_table_gsi_2):
 # a pre-existing table. In that case we can't reject the base-table update
 # because the oversized attribute is already there - but can just drop this
 # item from the GSI.
-@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+@pytest.mark.xfail(reason="Alternator doesn't limit partition and sort key lengths #10347")
 def test_gsi_limit_sort_key_len_1024(test_table_gsi_5):
     # A value for 'x' (the GSI's partition key) of length 1024 is fine:
     p = random_string()
@@ -709,7 +709,7 @@ def test_gsi_limit_sort_key_len_1024(test_table_gsi_5):
 # should pass even if Alternator decides to adopt a different key length
 # limits from DynamoDB. We do have to adopt *some* limit because the
 # internal Scylla implementation has a 64 KB limit on key lengths.
-@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+@pytest.mark.xfail(reason="Alternator doesn't limit partition and sort key lengths #10347")
 def test_gsi_limit_sort_key_len(test_table_gsi_5):
     # A value for 'x' (the GSI's partition key) of length 1024 is fine:
     p = random_string()
@@ -2133,7 +2133,7 @@ def test_gsi_invalid_key_types(dynamodb):
 # implement this GSI needs to add "p" as an extra clustering key, but it
 # doesn't mean that "p" should be allowed in a KeyConditions or
 # KeyConditionExpression - it shouldn't because it's not a real range key.
-@pytest.mark.xfail(reason="Issue #26103")
+@pytest.mark.xfail(reason="Alternator streams may generate event even if item did not really change #26103")
 def test_faux_range_key_in_keyconditions(test_table_gsi_2):
     p = random_string()
     x = random_string()
@@ -2158,7 +2158,7 @@ def test_faux_range_key_in_keyconditions(test_table_gsi_2):
             KeyConditions={'z': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
                            'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
 
-@pytest.mark.xfail(reason="Issue #26103")
+@pytest.mark.xfail(reason="Alternator streams may generate event even if item did not really change #26103")
 def test_faux_range_key_in_keyconditionexpression(test_table_gsi_2):
     p = random_string()
     x = random_string()
@@ -2318,7 +2318,7 @@ def test_gsi_query_exclusivestartkey_missing_column(test_table_gsi_5):
 # When Query'ing on a certain GSI partition key and/or sort key,
 # ExclusiveStartKey must have the same partition/sort key value.
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
+@pytest.mark.xfail(reason="Alternator 'Query' is missing some checks on ExclusiveStartKey #26988")
 def test_gsi_query_exclusivestartkey_wrong_partition(test_table_gsi_5):
     # The error that DynamoDB reports if the wrong partition is mentioned
     # in ExclusiveStartKey is "The provided starting key is outside query
@@ -2369,7 +2369,7 @@ def test_gsi_query_exclusivestartkey_wrong_partition(test_table_gsi_5):
 # Check that ExclusiveStartKey cannot contain any spurious column names
 # beyond the actual primary key columns of the base and the GSI.
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
+@pytest.mark.xfail(reason="Alternator 'Query' is missing some checks on ExclusiveStartKey #26988")
 def test_gsi_query_exclusivestartkey_spurious_column(test_table_gsi_5):
     query_args = {
         'ConsistentRead': False,
