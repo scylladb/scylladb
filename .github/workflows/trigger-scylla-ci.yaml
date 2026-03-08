@@ -15,13 +15,19 @@ jobs:
       - name: Verify Org Membership
         id: verify_author
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
-            AUTHOR="${{ github.event.pull_request.user.login }}"
+          if [[ "$EVENT_NAME" == "pull_request_target" ]]; then
+            AUTHOR="$PR_AUTHOR"
+            ASSOCIATION="$PR_ASSOCIATION"
           else
-            AUTHOR="${{ github.event.comment.user.login }}"
+            AUTHOR="$COMMENT_AUTHOR"
+            ASSOCIATION="$COMMENT_ASSOCIATION"
           fi
           ORG="scylladb"
           if gh api "/orgs/${ORG}/members/${AUTHOR}" --silent 2>/dev/null; then
@@ -34,13 +40,11 @@ jobs:
       - name: Validate Comment Trigger
         if: github.event_name == 'issue_comment'
         id: verify_comment
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
         shell: bash
         run: |
-          BODY=$(cat << 'EOF'
-          ${{ github.event.comment.body }}
-          EOF
-          )
-          CLEAN_BODY=$(echo "$BODY" | grep -v '^[[:space:]]*>')
+          CLEAN_BODY=$(echo "$COMMENT_BODY" | grep -v '^[[:space:]]*>')
 
           if echo "$CLEAN_BODY" | grep -qi '@scylladbbot' && echo "$CLEAN_BODY" | grep -qi 'trigger-ci'; then
             echo "trigger=true" >> $GITHUB_OUTPUT
