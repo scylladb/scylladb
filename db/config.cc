@@ -168,6 +168,18 @@ const config_type& config_type_for<bool>() {
     return ct;
 }
 
+static json::json_return_type unified_port_to_json(const db::native_transport_unified_port_config& config) {
+    json::json_return_type result(json::json_return_type::body_writer_type{});
+    result._res = fmt::format("{}", config);
+    return result;
+}
+
+template <>
+const config_type& config_type_for<db::native_transport_unified_port_config>() {
+    static config_type ct("unified listener configuration", unified_port_to_json);
+    return ct;
+}
+
 template <>
 const config_type& config_type_for<uint16_t>() {
     static config_type ct("integer", value_to_json<uint16_t>);
@@ -396,6 +408,18 @@ const config_type& config_type_for<compression_parameters>() {
 }
 
 namespace YAML {
+
+template<>
+struct convert<db::native_transport_unified_port_config> {
+    static bool decode(const Node& node, db::native_transport_unified_port_config& config) {
+        try {
+            config = db::native_transport_unified_port_config::decode(node);
+        } catch (const std::exception& e) {
+            throw utils::invalid_config_value_error(fmt::format("native_transport_unified_port: {}", e.what()));
+        }
+        return true;
+    }
+};
 
 // yaml-cpp conversion would do well to have some enable_if-stuff to make it possible
 // to do more broad spectrum converters.
@@ -1281,6 +1305,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Like native_transport_port_proxy_protocol, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
     , native_shard_aware_transport_port_ssl_proxy_protocol(this, "native_shard_aware_transport_port_ssl_proxy_protocol", value_status::Used, 0,
         "Like native_transport_port_ssl_proxy_protocol, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
+    , native_transport_unified_port(this, "native_transport_unified_port", value_status::Used, native_transport_unified_port_config{},
+        "Unified CQL listener configuration with port, encryption, and shard_routing fields. "
+        "Supports explicit shard headers and trusted PROXY protocol metadata. Disabled (port 0) by default.")
     , native_transport_max_threads(this, "native_transport_max_threads", value_status::Invalid, 128,
         "The maximum number of thread handling requests. The meaning is the same as rpc_max_threads.\n"
         "Default is different (128 versus unlimited).\n"
@@ -2239,6 +2266,7 @@ template struct utils::config_file::named_value<utils::config_file::string_map>;
 template struct utils::config_file::named_value<utils::config_file::string_list>;
 
 // db-specific types (extern-declared in db/config.hh):
+template struct utils::config_file::named_value<db::native_transport_unified_port_config>;
 template struct utils::config_file::named_value<db::tri_mode_restriction>;
 template struct utils::config_file::named_value<db::seed_provider_type>;
 template struct utils::config_file::named_value<db::hints::host_filter>;
