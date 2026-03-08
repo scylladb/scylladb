@@ -1767,7 +1767,7 @@ def test_index_filtering2_scan_and_per_partition_limit(cql, test_keyspace, use_i
 # the ALLOW FILTERING request right after the CREATE INDEX causes an
 # exception in SecondaryIndexManagement and a failed read. This is despite
 # CASSANDRA-8505 claiming that this issue was already fixed in 2015.
-@pytest.mark.xfail(reason="issue #7963")
+@pytest.mark.xfail(reason="issue #7963", strict=False)
 def test_unbuilt_index_not_used(cql, test_keyspace, cassandra_bug):
     # The bigger "count" is the slower the test and the higher the chance
     # of reproducing the bug #7963. With dev build on my laptop, count=100
