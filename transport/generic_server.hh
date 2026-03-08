@@ -83,6 +83,10 @@ public:
 
     virtual void shutdown();
 
+    // Recreate _read_buf and _write_buf from the current _fd.
+    // Must be called after replacing _fd (e.g. after TLS wrapping on master port).
+    void rewrap_streams();
+
     void switch_tenant(execute_under_tenant_type execute);
 
     static execute_under_tenant_type no_tenant();
@@ -147,10 +151,11 @@ public:
         bool is_shard_aware, bool keepalive,
         std::optional<file_permissions> unix_domain_socket_permissions,
         bool proxy_protocol = false,
-        std::function<server&()> get_shard_instance = {}
+        std::function<server&()> get_shard_instance = {},
+        bool master_port = false
         );
 
-    future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls);
+    future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls, bool master_port = false);
 
 protected:
     virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) = 0;
