@@ -36,4 +36,6 @@ compile_commands.json
 clang_build
 .idea/
 nuke
-rust/target
+rust/**/target
+rust/**/Cargo.lock
+test/resource/wasm/rust/target
