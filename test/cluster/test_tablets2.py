@@ -1324,7 +1324,7 @@ async def create_cluster(manager: ManagerClient, num_dcs: int, num_racks: int, n
     return servers
 
 
-class TestContext:
+class Context:
     def __init__(self, ks: str, table: str, rf: int, initial_tablets: int, num_keys: int):
         self.ks = ks
         self.table = table
@@ -1347,7 +1347,7 @@ async def create_and_populate_table(manager: ManagerClient, rf: int = 3, initial
         ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': {initial_tablets}}}")
         await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, c int)")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{table} (pk, c) VALUES ({k}, 1);") for k in range(num_keys)])
-        yield TestContext(ks, table, rf, initial_tablets, num_keys)
+        yield Context(ks, table, rf, initial_tablets, num_keys)
     finally:
         await cql.run_async(f"DROP KEYSPACE {ks}")
 

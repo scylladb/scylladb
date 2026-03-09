@@ -182,7 +182,7 @@ async def test_tombstone_gc_insert_flush(manager: ManagerClient):
 async def test_tablet_manual_repair_all_tokens(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = "all"
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
 
     await guarantee_repair_time_next_second()

@@ -61,7 +61,7 @@ async def test_startup_no_auth_response(manager: ManagerClient, build_mode):
             session = c.connect()
             logging.info("Performing SELECT(*) FROM system.clients")
             res = session.execute("SELECT COUNT(*) FROM system.clients WHERE connection_stage = 'AUTHENTICATING' ALLOW FILTERING;")
-            count = res[0][0]
+            count = res.one()[0]
             logging.info(f"Observed {count} AUTHENTICATING connections...")
             if count >= num_connections/2:
                 connections_observed = True
