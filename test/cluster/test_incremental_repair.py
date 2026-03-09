@@ -555,14 +555,19 @@ async def do_test_tablet_incremental_repair_merge_error(manager, error):
 
     scylla_path = await manager.server_get_exe(server.server_id)
 
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_log = await manager.server_open_log(coord_serv.server_id)
+
     # Trigger merge and error in merge
-    s1_mark = await logs[0].mark()
-    await inject_error_on(manager, error, servers[:1])
+    mark = await coord_log.mark()
+    await inject_error_on(manager, error, [coord_serv])
     await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
-    await logs[0].wait_for(f'Got {error}', from_mark=s1_mark)
+    await inject_error_on(manager, "tablet_force_tablet_count_decrease_once", servers)
+    await coord_log.wait_for(f'Got {error}', from_mark=mark)
     await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
-    await manager.server_stop(servers[0].server_id)
-    await manager.server_start(servers[0].server_id)
+    await manager.server_stop(coord_serv.server_id)
+    await manager.server_start(coord_serv.server_id)
 
     for server in servers:
         await manager.server_stop_gracefully(server.server_id)
