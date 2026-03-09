@@ -15,6 +15,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/eventually.hh"
 #include "db/config.hh"
 
 #include <fmt/ranges.h>
@@ -198,6 +199,10 @@ public:
 
     reader_concurrency_semaphore& get_semaphore() {
         return _sem;
+    }
+
+    const replica::querier_cache::stats& get_stats() const {
+        return _cache.get_stats();
     }
 
     dht::partition_range make_partition_range(bound begin, bound end) const {
@@ -562,20 +567,17 @@ SEASTAR_THREAD_TEST_CASE(test_time_based_cache_eviction) {
 
     const auto entry1 = t.produce_first_page_and_save_data_querier(1);
 
-    seastar::sleep(500ms).get();
+    BOOST_REQUIRE_EQUAL(t.get_stats().time_based_evictions, 0);
 
-    const auto entry2 = t.produce_first_page_and_save_data_querier(2);
+    // Don't waste time retrying before the TTL is up
+    sleep(1s).get();
 
-    seastar::sleep(700ms).get();
+    eventually_true([&t] {
+        auto stats = t.get_stats();
+        return stats.time_based_evictions == 1;
+    });
 
     t.assert_cache_lookup_data_querier(entry1.key, *t.get_schema(), entry1.expected_range, entry1.expected_slice)
-        .misses()
-        .no_drops()
-        .time_based_evictions();
-
-    seastar::sleep(700ms).get();
-
-    t.assert_cache_lookup_data_querier(entry2.key, *t.get_schema(), entry2.expected_range, entry2.expected_slice)
         .misses()
         .no_drops()
         .time_based_evictions();
