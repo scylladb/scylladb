@@ -1181,6 +1181,8 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
     }
     _sst.get_stats().on_cell_write();
+
+    thread::maybe_yield();
 }
 
 void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker) {
