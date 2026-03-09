@@ -224,6 +224,20 @@ class ScyllaCluster:
                 self.manager.server_update_config(server_id=node.server_id, config_options=values)
         return self
 
+    def remove(self, node: ScyllaNode, wait_other_notice: bool = False) -> None:
+        """Remove a node from the cluster (stop + removenode).
+
+        Mirrors the old ccmlib ``Cluster.remove(node)`` semantics: the node
+        is stopped first, then a running peer initiates the Scylla removenode
+        operation so the node is properly evicted from the topology.
+        """
+        if node.is_running():
+            node.stop(gently=False, wait_other_notice=wait_other_notice)
+        live_nodes = [n for n in self.nodelist() if n.is_running() and n.server_id != node.server_id]
+        assert live_nodes, "No live nodes to initiate removenode"
+        initiator = live_nodes[0]
+        self.manager.remove_node(initiator.server_id, node.server_id)
+
     def flush(self) -> None:
         self.nodetool("flush")
 
