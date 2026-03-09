@@ -140,7 +140,8 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
     auto task_type = hint.get_task_type();
     auto tablet_id_opt = tablet_id_provided(task_type) ? std::make_optional(hint.get_tablet_id()) : std::nullopt;
 
-    size_t tablet_count = _ss.get_token_metadata().tablets().get_tablet_map(table).tablet_count();
+    const auto& tablets = _ss.get_token_metadata().tablets();
+    size_t tablet_count = tablets.has_tablet_map(table) ? tablets.get_tablet_map(table).tablet_count() : 0;
     auto res = co_await get_status_helper(id, std::move(hint));
     if (!res) {
         co_return std::nullopt;
@@ -183,6 +184,10 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
     }
 
     res->status.state = tasks::task_manager::task_state::done; // Failed repair task is retried.
+    if (!_ss.get_token_metadata().tablets().has_tablet_map(table)) {
+        res->status.end_time = db_clock::now();
+        co_return res->status;
+    }
     if (is_migration_task(task_type)) {
         auto& replicas = _ss.get_token_metadata().tablets().get_tablet_map(table).get_tablet_info(tablet_id_opt.value()).replicas;
         auto migration_failed = std::all_of(replicas.begin(), replicas.end(), [&] (const auto& replica) { return res->pending_replica.has_value() && replica != res->pending_replica.value(); });
@@ -265,7 +270,15 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
     status_helper res;
     auto table = hint.get_table_id();
     auto task_type = hint.get_task_type();
-    auto schema = _ss._db.local().get_tables_metadata().get_table(table).schema();
+    auto table_ptr = _ss._db.local().get_tables_metadata().get_table_if_exists(table);
+    if (!table_ptr) {
+        co_return tasks::task_status {
+            .task_id = id,
+            .kind = tasks::task_kind::cluster,
+            .is_abortable = co_await is_abortable(std::move(hint)),
+        };
+    }
+    auto schema = table_ptr->schema();
     res.status = {
         .task_id = id,
         .kind = tasks::task_kind::cluster,

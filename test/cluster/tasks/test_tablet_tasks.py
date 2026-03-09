@@ -98,6 +98,50 @@ async def test_tablet_repair_task(manager: ManagerClient):
 
     await asyncio.gather(repair_task(), check_and_abort_repair_task(manager, tm, servers, module_name, ks))
 
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_wait_with_table_drop(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    injection = "tablet_virtual_task_wait"
+
+    cmdline = [
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline)
+    assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
+
+    token = -1
+    await enable_injection(manager, servers, "repair_tablet_fail_on_rpc_call")
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, await_completion=False)
+
+    repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, "user_repair", keyspace=ks)
+
+    task = repair_tasks[0]
+    assert task.scope == "table"
+    assert task.keyspace == ks
+    assert task.table == "test"
+    assert task.state in ["created", "running"]
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    await enable_injection(manager, [servers[0]], injection)
+
+    async def wait_for_task():
+        status_wait = await tm.wait_for_task(servers[0].ip_addr, task.task_id)
+        assert status_wait.state == "done"
+
+    async def drop_table():
+        await log.wait_for(f'"{injection}"', from_mark=mark)
+        await disable_injection(manager, servers, "repair_tablet_fail_on_rpc_call")
+        await manager.get_cql().run_async(f"DROP TABLE {ks}.test")
+        await manager.api.message_injection(servers[0].ip_addr, injection)
+
+    await asyncio.gather(wait_for_task(), drop_table())
+
+    await disable_injection(manager, servers, injection)
+
 async def check_repair_task_list(tm: TaskManagerClient, servers: list[ServerInfo], module_name: str, keyspace: str):
     def get_task_with_id(repair_tasks, task_id):
         tasks_with_id1 = [task for task in repair_tasks if task.task_id == task_id]
