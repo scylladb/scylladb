@@ -91,7 +91,7 @@ async def test_group0_recovers_after_partial_command_application(manager: Manage
         logger.info("Restart the first node with an error injection that simulates the bug, expecting a crash")
         config["error_injections_at_startup"].append("group0_enable_sm_immediately")
         cdc_generation_not_present_error = "data for CDC generation [a-f0-9\\-]* not present"
-        manager.ignore_cores_log_patterns.extend(cdc_generation_not_present_error)
+        manager.ignore_cores_log_patterns.append(cdc_generation_not_present_error)
         await manager.server_update_config(srv1.server_id, config_options=config)
         await manager.server_start(srv1.server_id, expected_error=cdc_generation_not_present_error)
 
