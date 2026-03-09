@@ -149,11 +149,11 @@ async def _smoke_test(manager: ManagerClient, key_provider: KeyProviderFactory,
     """helper to create cluster, cfs, data and verify it after restart"""
     cfg = options | key_provider.configuration_parameters()
 
-    servers: list[ServerInfo] = await manager.servers_add(servers_num = num_servers, config=cfg)
+    servers: list[ServerInfo] = await manager.servers_add(servers_num = num_servers, config=cfg, auto_rack_dc='dc1')
     cql = manager.cql
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
-    async with await create_ks(manager) as ks:
+    async with await create_ks(manager, replication_factor = num_servers) as ks:
         # to reduce test time, create one cf for every alg/len combo we test.
         # avoids rebooting cluster for every check.
         async with contextlib.AsyncExitStack() as stack:
