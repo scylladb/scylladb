@@ -316,6 +316,17 @@ experimental:
     example, a single PutItem is represented by a REMOVE + MODIFY event,
     instead of just a single MODIFY or INSERT.
     <https://github.com/scylladb/scylla/issues/6930>
+  * Alternator Streams cannot always distinguish between INSERT and MODIFY
+    events - the distinction depends on whether the item existed before the
+    change. Alternator Streams may also produce spurious REMOVE or MODIFY
+    events when a non-existent item is deleted or when an item is set to the
+    same value it already had.
+    This incompatibility can be resolved by setting the configuration option
+    ``alternator_streams_increased_compatibility=true``, but this comes with
+    a performance penalty because Alternator needs to read the old value of
+    the item during data-modifying operations on tables with Alternator
+    Streams enabled. By default (``alternator_streams_increased_compatibility=false``),
+    this incompatibility remains.
     <https://github.com/scylladb/scylla/issues/6918>
   * In GetRecords responses, Alternator sets `eventSource` to
     `scylladb:alternator`, rather than `aws:dynamodb`, and doesn't set the
