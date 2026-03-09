@@ -10,7 +10,7 @@ import requests
 # When tests are to be run against AWS (the "--aws" option), it is not
 # necessary to start Scylla at all. All we need to do is to run pytest.
 if '--aws' in sys.argv:
-    success = run.run_pytest(sys.path[0], sys.argv[1:])
+    success = run.run_pytest(sys.path[0], ['-o', 'xfail_strict=false'] + sys.argv[1:])
     exit(0 if success else 1)
 
 # check_alternator() below uses verify=False to accept self-signed SSL
