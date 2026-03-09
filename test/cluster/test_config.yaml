@@ -48,5 +48,6 @@ run_in_dev:
   - dtest/commitlog_test
   - dtest/cfid_test
   - dtest/rebuild_test
+  - dtest/alternator_stream_tests
 run_in_debug:
   - random_failures/test_random_failures
