@@ -2794,12 +2794,18 @@ future<> storage_service::raft_decommission() {
     }
 }
 
-future<> storage_service::decommission() {
-    return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
-        return seastar::async([&ss] {
+future<> storage_service::decommission(sharded<db::snapshot_ctl>& snapshot_ctl) {
+    return run_with_api_lock(sstring("decommission"), [&] (storage_service& ss) {
+        return seastar::async([&] {
             if (ss._operation_mode != mode::NORMAL) {
                 throw std::runtime_error(::format("Node in {} state; wait for status to become normal or restart", ss._operation_mode));
             }
+
+            snapshot_ctl.invoke_on_all([](auto& sctl) {
+                return sctl.disable_all_operations();
+            }).get();
+            slogger.info("DECOMMISSIONING: disabled backup and snapshots");
+
             ss.raft_decommission().get();
 
             ss.stop_transport().get();

@@ -11,7 +11,7 @@ import pytest
 import time
 import random
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.cluster.object_store.conftest import format_tuples
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
 from test.pylib.rest_client import read_barrier
@@ -19,6 +19,7 @@ from test.pylib.util import unique_name, wait_all
 from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
+from test.pylib.rest_client import HTTPError
 import statistics
 
 logger = logging.getLogger(__name__)
@@ -174,9 +175,8 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
     assert status is not None
     assert status['state'] == 'done'
 
-
-async def do_test_backup_abort(manager: ManagerClient, object_storage,
-                               breakpoint_name, min_files, max_files = None):
+async def do_test_backup_helper(manager: ManagerClient, object_storage,
+                                breakpoint_name, handler, num_servers: int = 1):
     '''helper for backup abort testing'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -186,10 +186,9 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
            'task_ttl_in_seconds': 300
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
-    server = await manager.server_add(config=cfg, cmdline=cmd)
+    server = (await manager.servers_add(num_servers, config=cfg, cmdline=cmd))[0]
     ks, cf = create_ks_and_cf(manager.get_cql())
     snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
-    assert len(files) > 1
     workdir = await manager.server_get_workdir(server.server_id)
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
 
@@ -206,26 +205,35 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
 
     print(f'Started task {tid}, aborting it early')
     await log.wait_for(breakpoint_name + ': waiting', from_mark=mark)
-    await manager.api.abort_task(server.ip_addr, tid)
-    await manager.api.message_injection(server.ip_addr, breakpoint_name)
-    status = await manager.api.wait_task(server.ip_addr, tid)
-    print(f'Status: {status}')
-    assert (status is not None) and (status['state'] == 'failed')
-    assert "seastar::abort_requested_exception (abort requested)" in status['error']
+    await handler(server, prefix, files, tid)
 
-    objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
-    uploaded_count = 0
-    for f in files:
-        in_backup = f'{prefix}/{f}' in objects
-        print(f'Check {f} is in backup: {in_backup}')
-        if in_backup:
-            uploaded_count += 1
-    # Note: since s3 client is abortable and run async, we might fail even the first file
-    # regardless of if we set the abort status before or after the upload is initiated.
-    # Parallelism is a pain.
-    assert min_files <= uploaded_count < len(files)
-    assert max_files is None or uploaded_count < max_files
+async def do_test_backup_abort(manager: ManagerClient, object_storage,
+                               breakpoint_name, min_files, max_files = None):
+    '''helper for backup abort testing'''
 
+    async def abort_and_check(server, prefix, files, tid):
+        assert len(files) > 1
+        await manager.api.abort_task(server.ip_addr, tid)
+        await manager.api.message_injection(server.ip_addr, breakpoint_name)
+        status = await manager.api.wait_task(server.ip_addr, tid)
+        print(f'Status: {status}')
+        assert (status is not None) and (status['state'] == 'failed')
+        assert "seastar::abort_requested_exception (abort requested)" in status['error']
+
+        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+        uploaded_count = 0
+        for f in files:
+            in_backup = f'{prefix}/{f}' in objects
+            print(f'Check {f} is in backup: {in_backup}')
+            if in_backup:
+                uploaded_count += 1
+        # Note: since s3 client is abortable and run async, we might fail even the first file
+        # regardless of if we set the abort status before or after the upload is initiated.
+        # Parallelism is a pain.
+        assert min_files <= uploaded_count < len(files)
+        assert max_files is None or uploaded_count < max_files
+
+    await do_test_backup_helper(manager, object_storage, breakpoint_name, abort_and_check)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -971,3 +979,39 @@ async def test_restore_primary_replica_different_domain(manager: ManagerClient, 
         streamed_to = set([ r[1].group(1) for r in res ])
         logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}')
         assert len(streamed_to) == 2
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_decommision_waits_for_backup(manager: ManagerClient, object_storage):
+    '''check that backing up a snapshot for a keyspace blocks decommission'''
+
+    async def decommission_and_check(server: ServerInfo, prefix: str, files, tid):
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        async def finish_backup():
+            # wait for snapshot to stop on waiting for backup
+            await log.wait_for("Waiting for snapshot/backup tasks to finish", from_mark=mark)
+
+            mark2 = await log.mark()
+
+            # let the backup run and finish
+            await manager.api.message_injection(server.ip_addr, "backup_task_pre_upload")
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert (status is not None) and (status['state'] == 'done')
+
+            objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+            uploaded_count = 0
+            # all files should be uploaded. note: can be zero due to two nodes
+            for f in files:
+                in_backup = f'{prefix}/{f}' in objects
+                print(f'Check {f} is in backup: {in_backup}')
+                if in_backup:
+                    uploaded_count += 1
+            assert uploaded_count == len(files)
+            # Now wait for decommission to finish
+            await log.wait_for("DECOMMISSIONING: disabled backup and snapshots", from_mark=mark2)
+
+        await asyncio.gather(manager.decommission_node(server.server_id), finish_backup())
+
+    await do_test_backup_helper(manager, object_storage, "backup_task_pre_upload", decommission_and_check, 2)
+

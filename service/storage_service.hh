@@ -77,6 +77,7 @@ namespace db {
 class system_distributed_keyspace;
 class system_keyspace;
 class batchlog_manager;
+class snapshot_ctl;
 namespace view {
 class view_builder;
 class view_building_worker;
@@ -666,7 +667,7 @@ private:
     inet_address_vector_replica_set get_natural_endpoints(const sstring& keyspace, const schema_ptr& schema, const replica::column_family& cf, const partition_key& pk) const;
 
 public:
-    future<> decommission();
+    future<> decommission(sharded<db::snapshot_ctl>&);
 
 private:
     future<> unbootstrap();

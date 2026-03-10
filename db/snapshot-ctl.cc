@@ -39,8 +39,17 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::stor
 }
 
 future<> snapshot_ctl::stop() {
-    co_await _ops.close();
+    co_await disable_all_operations();
     co_await _task_manager_module->stop();
+}
+
+future<> snapshot_ctl::disable_all_operations() {
+    if (!_ops.is_closed()) {
+        if (_ops.get_count()) {
+            snap_log.info("Waiting for snapshot/backup tasks to finish");
+        }
+        co_await _ops.close();
+    }
 }
 
 future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter) {

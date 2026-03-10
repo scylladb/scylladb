@@ -835,9 +835,9 @@ rest_force_keyspace_flush(http_context& ctx, std::unique_ptr<http::request> req)
 
 static
 future<json::json_return_type>
-rest_decommission(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+rest_decommission(sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& ssc, std::unique_ptr<http::request> req) {
         apilog.info("decommission");
-        return ss.local().decommission().then([] {
+        return ss.local().decommission(ssc).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
 }
@@ -1782,7 +1782,7 @@ rest_bind(FuncType func, BindArgs&... args) {
     return std::bind_front(func, std::ref(args)...);
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& ssc, service::raft_group0_client& group0_client) {
     ss::get_token_endpoint.set(r, rest_bind(rest_get_token_endpoint, ctx, ss));
     ss::toppartitions_generic.set(r, rest_bind(rest_toppartitions_generic, ctx));
     ss::get_release_version.set(r, rest_bind(rest_get_release_version, ss));
@@ -1799,7 +1799,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::reset_cleanup_needed.set(r, rest_bind(rest_reset_cleanup_needed, ctx, ss));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
     ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
-    ss::decommission.set(r, rest_bind(rest_decommission, ss));
+    ss::decommission.set(r, rest_bind(rest_decommission, ss, ssc));
     ss::move.set(r, rest_bind(rest_move, ss));
     ss::remove_node.set(r, rest_bind(rest_remove_node, ss));
     ss::exclude_node.set(r, rest_bind(rest_exclude_node, ss));
@@ -2141,6 +2141,7 @@ void unset_snapshot(http_context& ctx, routes& r) {
     ss::start_backup.unset(r);
     cf::get_true_snapshots_size.unset(r);
     cf::get_all_true_snapshots_size.unset(r);
+    ss::decommission.unset(r);
 }
 
 }

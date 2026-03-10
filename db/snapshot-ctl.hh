@@ -120,6 +120,8 @@ public:
 
     future<int64_t> true_snapshots_size();
     future<int64_t> true_snapshots_size(sstring ks, sstring cf);
+
+    future<> disable_all_operations();
 private:
     config _config;
     sharded<replica::database>& _db;
