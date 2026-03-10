@@ -902,6 +902,62 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Ma
             # So the best thing to do is to make sure restore task finishes at all
             await asyncio.wait_for(manager.api.wait_task(servers[1].ip_addr, tid), timeout=60)
 
+@pytest.mark.parametrize(("min_tablet_count_before_backup", "max_tablet_count_before_backup", "min_tablet_count_before_restore", "max_tablet_count_before_restore"), [
+    (1, 1, 2, 2),
+    (4, 4, 2, 2),
+])
+async def test_restore_tablets_with_different_tablet_hints(build_mode: str, manager: ManagerClient, object_storage,
+                                                           min_tablet_count_before_backup, max_tablet_count_before_backup,
+                                                           min_tablet_count_before_restore, max_tablet_count_before_restore):
+    '''This test checks:
+    1. That restore with tablets works when the tablet count changes between backup and restore (currently by
+    altering the table with tablets hints set to the tablet count from the backup manifest).
+    2. The restore code is well equipped to handle potential shards not owning any tablets, or nodes not owning any tablets,
+    thus verifying that the tablet count written in the manifest is calculated correctly and that restore code
+    can handle tablet counts of 0'''
+
+    topology = topo(rf = 1, nodes = 3, racks = 1, dcs = 1)
+
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+
+    cql = manager.get_cql()
+
+    # We need enough keys to have a high probability of spanning keys all over the tablet ranges.
+    # The SSTable downloading code will throw sstables_partially_contained unless the restoring code
+    # correctly sets the tablet hints to what was originally populated in the backup manifest.
+    num_keys = 1000
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {min_tablet_count_before_backup}, 'max_tablet_count': {max_tablet_count_before_backup}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        snap_name,_ = await take_snapshot(ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {min_tablet_count_before_restore}, 'max_tablet_count': {max_tablet_count_before_restore}}};")
+
+        logger.info(f'Restore cluster via {servers[1].ip_addr}')
+        manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
+        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter,object_storage.address, object_storage.bucket_name, manifests)
+        status = await manager.api.wait_task(servers[1].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done')
+
+        # FIXME:Disable the tablet balancer before checking mutations to avoid
+        # MUTATION_FRAGMENTS returning inconsistent results during inter-node
+        # tablet migrations (different nodes see different ERM stages).
+        await manager.disable_tablet_balancing()
+        await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+
+        # Verify that restore used the tablet hints from the backup manifest,
+        # not the ones set on the pre-restore table.
+        # FIXME: this check will be removed as it's irelevant after we implement the cleanup phase of tablet aware restore
+        # but the test will remain relevant as it was designed to fail if the restore code doesnt properly fix the tablet
+        # count to what was written in the backup manifest.
+        desc = (await cql.run_async(f"DESC TABLE {ks}.test"))[0].create_statement
+        assert f"'min_tablet_count': '{min_tablet_count_before_backup}'" in desc, f"Expected min_tablet_count={min_tablet_count_before_backup} in: {desc}"
+        assert f"'max_tablet_count': '{max_tablet_count_before_backup}'" in desc, f"Expected max_tablet_count={max_tablet_count_before_backup} in: {desc}"
 
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
