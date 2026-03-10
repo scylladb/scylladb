@@ -122,10 +122,10 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, locator::loa
             return make_ready_future();
         });
         // Move tablet size in load_stats to account for the migration
-        if (mig.src.host != mig.dst.host) {
+        if (mig.src && mig.dst && mig.src->host != mig.dst->host) {
             auto& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
             const dht::token_range trange = tmap.get_token_range(mig.tablet.tablet);
-            lw_shared_ptr<locator::load_stats> new_stats = load_stats.migrate_tablet_size(mig.src.host, mig.dst.host, mig.tablet, trange);
+            lw_shared_ptr<locator::load_stats> new_stats = load_stats.migrate_tablet_size(mig.src->host, mig.dst->host, mig.tablet, trange);
 
             if (new_stats) {
                 load_stats = std::move(*new_stats);

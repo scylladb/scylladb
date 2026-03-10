@@ -126,18 +126,26 @@ struct hash<locator::range_based_tablet_id> {
 
 namespace locator {
 
-/// Creates a new replica set with old_replica replaced by new_replica.
-/// If there is no old_replica, the set is returned unchanged.
+/// Returns a copy of the replica set with the following modifications:
+/// - If both old_replica and new_replica are set, old_replica is substituted
+///   with new_replica. If old_replica is not found in rs, the set is returned as-is.
+/// - If only old_replica is set, it is removed from the result.
+/// - If only new_replica is set, it is appended to the result.
 inline
-tablet_replica_set replace_replica(const tablet_replica_set& rs, tablet_replica old_replica, tablet_replica new_replica) {
+tablet_replica_set replace_replica(const tablet_replica_set& rs, std::optional<tablet_replica> old_replica, std::optional<tablet_replica> new_replica) {
     tablet_replica_set result;
     result.reserve(rs.size());
     for (auto&& r : rs) {
-        if (r == old_replica) {
-            result.push_back(new_replica);
+        if (old_replica.has_value() && r == old_replica.value()) {
+            if (new_replica.has_value()) {
+                result.push_back(new_replica.value());
+            }
         } else {
             result.push_back(r);
         }
+    }
+    if (!old_replica.has_value() && new_replica.has_value()) {
+        result.push_back(new_replica.value());
     }
     return result;
 }
@@ -356,8 +364,8 @@ bool is_post_cleanup(tablet_replica replica, const tablet_info& tinfo, const tab
 struct tablet_migration_info {
     locator::tablet_transition_kind kind;
     locator::global_tablet_id tablet;
-    locator::tablet_replica src;
-    locator::tablet_replica dst;
+    std::optional<locator::tablet_replica> src;
+    std::optional<locator::tablet_replica> dst;
 };
 
 class tablet_map;
