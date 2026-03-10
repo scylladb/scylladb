@@ -2334,6 +2334,15 @@ static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
     }
 }
 
+static future<repair_rows_on_wire> clone_gently(const repair_rows_on_wire& rows) {
+    repair_rows_on_wire cloned;
+    for (const auto& row : rows) {
+        cloned.push_back(row);
+        co_await seastar::coroutine::maybe_yield();
+    }
+    co_return cloned;
+}
+
 static future<> repair_put_row_diff_with_rpc_stream_process_op(
         sharded<repair_service>& repair,
         locator::host_id from,
@@ -2360,7 +2369,9 @@ static future<> repair_put_row_diff_with_rpc_stream_process_op(
                 co_await rm->put_row_diff_handler(std::move(*fp));
                 rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
             } else {
-                co_await rm->put_row_diff_handler(*fp);
+                // Gently clone to avoid copy stall on destination shard
+                repair_rows_on_wire local_rows = co_await clone_gently(*fp);
+                co_await seastar::when_all_succeed(rm->put_row_diff_handler(std::move(local_rows)), utils::clear_gently(fp));
                 rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
             }
         });
