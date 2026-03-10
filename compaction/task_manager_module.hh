@@ -613,6 +613,7 @@ private:
     reshape_mode _mode;
     compaction_sstable_creator_fn _creator;
     std::function<bool (const sstables::shared_sstable&)> _filter;
+    bool _quarantine_orphaned_sstables;
 public:
     table_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -621,13 +622,15 @@ public:
             sharded<replica::database>& db,
             reshape_mode mode,
             compaction_sstable_creator_fn creator,
-            std::function<bool (const sstables::shared_sstable&)> filter) noexcept
+            std::function<bool (const sstables::shared_sstable&)> filter,
+            bool quarantine_orphaned_sstables) noexcept
         : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "table", std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
         , _dir(dir)
         , _db(db)
         , _mode(mode)
         , _creator(std::move(creator))
         , _filter(std::move(filter))
+        , _quarantine_orphaned_sstables(quarantine_orphaned_sstables)
     {}
 protected:
     virtual future<> run() override;
@@ -641,6 +644,7 @@ private:
     compaction_sstable_creator_fn _creator;
     std::function<bool (const sstables::shared_sstable&)> _filter;
     uint64_t& _total_shard_size;
+    bool _quarantine_orphaned_sstables;
 
     future<> reshape_compaction_group(compaction::compaction_group_view& t, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info);
 public:
@@ -653,7 +657,8 @@ public:
             reshape_mode mode,
             compaction_sstable_creator_fn creator,
             std::function<bool (const sstables::shared_sstable&)> filter,
-            uint64_t& total_shard_size) noexcept
+            uint64_t& total_shard_size,
+            bool quarantine_orphaned_sstables) noexcept
         : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)
         , _dir(dir)
         , _db(db)
@@ -661,6 +666,7 @@ public:
         , _creator(std::move(creator))
         , _filter(std::move(filter))
         , _total_shard_size(total_shard_size)
+        , _quarantine_orphaned_sstables(quarantine_orphaned_sstables)
     {}
 protected:
     virtual future<> run() override;

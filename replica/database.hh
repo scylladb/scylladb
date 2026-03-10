@@ -723,7 +723,7 @@ private:
     // Select a compaction group from a given key.
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const;
     // Select a compaction group from a given sstable based on its token range.
-    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const;
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst, bool abort_on_error = true) const;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
     void for_each_compaction_group(std::function<void(compaction_group&)> action);
@@ -1334,6 +1334,9 @@ public:
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_compaction_group_view(std::function<future<>(compaction::compaction_group_view&)> action);
     compaction::compaction_group_view& compaction_group_view_for_sstable(const sstables::shared_sstable& sst) const;
+    // Select a compaction group view from a given sstable based on its token range.
+    // If the SSTable doesn't belong to any existing compaction group, quarantine the SSTable and return null.
+    future<compaction::compaction_group_view*> maybe_compaction_group_view_for_sstable(const sstables::shared_sstable& sst, bool quarantine_orphaned_sstables = false) const;
 
     // Uncoditionally erase sst from `sstables_requiring_cleanup`
     // Returns true iff sst was found and erased.
@@ -1478,6 +1481,10 @@ public:
 
 using no_such_keyspace = data_dictionary::no_such_keyspace;
 using no_such_column_family = data_dictionary::no_such_column_family;
+
+struct no_such_storage_group : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 
 struct database_config {
     seastar::scheduling_group memtable_scheduling_group;

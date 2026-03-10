@@ -798,7 +798,7 @@ future<> table_reshaping_compaction_task_impl::run() {
         uint64_t total_shard_size = 0;
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<shard_reshaping_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, d, _db, _mode, _creator, _filter, total_shard_size);
+        auto task = co_await compaction_module.make_and_start_task<shard_reshaping_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, d, _db, _mode, _creator, _filter, total_shard_size, _quarantine_orphaned_sstables);
         co_await task->done();
         co_return total_shard_size;
     }, uint64_t(0), std::plus<uint64_t>());
@@ -816,8 +816,10 @@ future<> shard_reshaping_compaction_task_impl::run() {
 
     std::unordered_map<compaction::compaction_group_view*, std::unordered_set<sstables::shared_sstable>> sstables_grouped_by_compaction_group;
     for (auto& sstable : _dir.get_unshared_local_sstables()) {
-        auto& t = table.compaction_group_view_for_sstable(sstable);
-        sstables_grouped_by_compaction_group[&t].insert(sstable);
+        compaction_group_view* t = co_await table.maybe_compaction_group_view_for_sstable(sstable, _quarantine_orphaned_sstables);
+        if (t) {
+            sstables_grouped_by_compaction_group[t].insert(sstable);
+        }
     }
 
     // reshape sstables individually within the compaction groups

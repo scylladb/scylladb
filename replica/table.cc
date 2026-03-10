@@ -659,14 +659,14 @@ void storage_group_manager::remove_storage_group(size_t id) {
     if (auto it = _storage_groups.find(id); it != _storage_groups.end()) {
         _storage_groups.erase(it);
     } else {
-        throw std::out_of_range(format("remove_storage_group: storage group with id={} not found", id));
+        throw no_such_storage_group(format("remove_storage_group: storage group with id={} not found", id));
     }
 }
 
 storage_group& storage_group_manager::storage_group_for_id(const schema_ptr& s, size_t i) const {
     auto it = _storage_groups.find(i);
     if (it == _storage_groups.end()) [[unlikely]] {
-        throw std::out_of_range(format("Storage wasn't found for tablet {} of table {}.{}", i, s->ks_name(), s->cf_name()));
+        throw no_such_storage_group(format("Storage wasn't found for tablet {} of table {}.{}", i, s->ks_name(), s->cf_name()));
     }
     return *it->second.get();
 }
@@ -724,7 +724,7 @@ public:
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override {
         return get_compaction_group();
     }
-    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override {
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst, bool abort_on_error = true) const override {
         return get_compaction_group();
     }
     size_t log2_storage_groups() const override {
@@ -900,7 +900,7 @@ public:
     compaction_group& compaction_group_for_token(dht::token token) const override;
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override;
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override;
-    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst, bool abort_on_error = true) const override;
 
     size_t log2_storage_groups() const override {
         return log2ceil(tablet_map().tablet_count());
@@ -1259,16 +1259,15 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
     return _sg_manager->compaction_group_for_key(key, s);
 }
 
-compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
-    auto [first_id, first_range_side] = storage_group_of(sst->get_first_decorated_key().token());
-    auto [last_id, last_range_side] = storage_group_of(sst->get_last_decorated_key().token());
-
-    if (first_id != last_id) {
-        on_internal_error(tlogger, format("Unable to load SSTable {} that belongs to tablets {} and {}",
-                                          sst->get_filename(), first_id, last_id));
-    }
-
+compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst, bool abort_on_error) const {
     try {
+        auto [first_id, first_range_side] = storage_group_of(sst->get_first_decorated_key().token());
+        auto [last_id, last_range_side] = storage_group_of(sst->get_last_decorated_key().token());
+
+        if (first_id != last_id) {
+            throw no_such_storage_group(format("SSTable belongs to more than one tablet: {} and {}", first_id, last_id));
+        }
+
         auto& sg = storage_group_for_id(first_id);
 
         if (first_range_side != last_range_side) {
@@ -1276,13 +1275,18 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
         }
 
         return *sg.select_compaction_group(first_range_side);
-    } catch (std::out_of_range& e) {
-        on_internal_error(tlogger, format("Unable to load SSTable {} : {}", sst->get_filename(), e.what()));
+    } catch (const no_such_storage_group& e) {
+        auto msg = fmt::format("Unable to load SSTable {} : {}", sst, e.what());
+        if (abort_on_error) {
+            on_fatal_internal_error(tlogger, msg);
+        } else {
+            throw no_such_storage_group(std::move(msg));
+        }
     }
 }
 
-compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
-    return _sg_manager->compaction_group_for_sstable(sst);
+compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst, bool abort_on_error) const {
+    return _sg_manager->compaction_group_for_sstable(sst, abort_on_error);
 }
 
 future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
@@ -1416,10 +1420,14 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
 
 future<>
 table::do_add_sstable_and_update_cache(sstables::shared_sstable new_sst, sstables::offstrategy offstrategy, bool trigger_compaction) {
-    auto& cg = compaction_group_for_sstable(new_sst);
+  try {
+    // Allow skipping orphaned SSTables that are already quarantined
+    auto& cg = compaction_group_for_sstable(new_sst, !new_sst->is_quarantined());
     // Hold gate to make share compaction group is alive.
     auto holder = cg.async_gate().hold();
     co_await do_add_sstable_and_update_cache(cg, new_sst, offstrategy, trigger_compaction);
+  } catch (const no_such_storage_group& e) {
+  }
 }
 
 future<>
@@ -4914,6 +4922,27 @@ future<> table::parallel_foreach_compaction_group_view(std::function<future<>(co
 compaction::compaction_group_view& table::compaction_group_view_for_sstable(const sstables::shared_sstable& sst) const {
     auto& cg = compaction_group_for_sstable(sst);
     return cg.view_for_sstable(sst);
+}
+
+future<compaction::compaction_group_view*> table::maybe_compaction_group_view_for_sstable(const sstables::shared_sstable& sst, bool quarantine_orphaned_sstables) const {
+    try {
+        auto& cg = compaction_group_for_sstable(sst, false);
+        co_return &cg.view_for_sstable(sst);
+    } catch (const no_such_storage_group& e) {
+        if (quarantine_orphaned_sstables) {
+            auto sstable_identifier = sst->sstable_identifier();
+            std::time_t created_at_millis = sstable_identifier ? utils::UUID_gen::unix_timestamp(sstable_identifier->uuid()).count() : 0;
+            auto originating_host_id = sst->get_stats_metadata().originating_host_id.value_or(locator::host_id());
+            tlogger.error("{} sstable_id={} created_at={:%FT%T},{:03d} originating_host_id={}: Move SSTable to quarantine.", std::current_exception(),
+                    sstable_identifier,
+                    fmt::gmtime(created_at_millis / 1000), static_cast<int>(created_at_millis % 1000),
+                    originating_host_id);
+        } else {
+            on_internal_error(tlogger, e.what());
+        }
+    }
+    co_await sst->change_state(sstables::sstable_state::quarantine);
+    co_return nullptr;
 }
 
 data_dictionary::table
