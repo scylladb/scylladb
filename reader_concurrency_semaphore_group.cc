@@ -8,6 +8,13 @@
 
 #include "reader_concurrency_semaphore_group.hh"
 
+void reader_concurrency_semaphore_shared_pool::wake_front_waiter() noexcept {
+    auto& sem = _notify_list.front().get();
+    _notify_list.pop_front();
+    sem._on_shared_pool_notify_list = false;
+    sem.maybe_wake_execution_loop();
+}
+
 void reader_concurrency_semaphore_shared_pool::repay(ssize_t amount) noexcept {
     _available_memory += amount;
     if (_available_memory > _total_memory)  [[unlikely]] {
@@ -16,6 +23,38 @@ void reader_concurrency_semaphore_shared_pool::repay(ssize_t amount) noexcept {
                 "shared reader concurrency semaphore pool over-repaid memory: available={}, total={}, repaid={}; clamping available memory to total",
                 _available_memory, _total_memory, amount);
         _available_memory = _total_memory;
+    }
+    // Wake a single semaphore rather than all of them.  We pop from the front
+    // (FIFO) so that every registered semaphore gets a turn: each woken
+    // semaphore re-registers at the back if it still has blocked waiters,
+    // giving round-robin fairness.  If the woken semaphore borrows some of the
+    // returned memory it hands the rest off to the next waiter via
+    // maybe_wake_next_waiter(), so a single large return can satisfy several
+    // waiters in order without skipping the head of the line.
+    if (!_notify_list.empty()) {
+        wake_front_waiter();
+    }
+}
+
+void reader_concurrency_semaphore_shared_pool::maybe_wake_next_waiter() noexcept {
+    if (available_memory() > 0 && !_notify_list.empty()) {
+        wake_front_waiter();
+    }
+}
+
+void reader_concurrency_semaphore_shared_pool::request_wakeup(reader_concurrency_semaphore& sem) noexcept {
+    if (!sem._on_shared_pool_notify_list) {
+        sem._on_shared_pool_notify_list = true;
+        _notify_list.emplace_back(sem);
+    }
+}
+
+void reader_concurrency_semaphore_shared_pool::unregister_wakeup(reader_concurrency_semaphore& sem) noexcept {
+    if (sem._on_shared_pool_notify_list) {
+        sem._on_shared_pool_notify_list = false;
+        std::erase_if(_notify_list, [&sem](std::reference_wrapper<reader_concurrency_semaphore> ref) {
+            return &ref.get() == &sem;
+        });
     }
 }
 

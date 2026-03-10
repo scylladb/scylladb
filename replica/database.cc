@@ -424,7 +424,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(uint32_t(1)),
             utils::updateable_value(0.0f),
-            reader_concurrency_semaphore::register_metrics::yes)
+            reader_concurrency_semaphore::register_metrics::yes,
+            reader_concurrency_semaphore_shared_pool::empty_pool())
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction", reader_concurrency_semaphore::register_metrics::no)
     , _system_read_concurrency_sem(
@@ -437,7 +438,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(uint32_t(1)),
             utils::updateable_value(0.0f),
-            reader_concurrency_semaphore::register_metrics::yes)
+            reader_concurrency_semaphore::register_metrics::yes,
+            reader_concurrency_semaphore_shared_pool::empty_pool())
     , _view_update_read_concurrency_semaphores_group(
             max_memory_concurrent_view_update_reads(),
             utils::updateable_value<int>(max_count_concurrent_view_update_reads),

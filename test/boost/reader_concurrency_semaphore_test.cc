@@ -2230,7 +2230,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_count) {
             utils::updateable_value<uint32_t>(kill_multiplier),
             utils::updateable_value<uint32_t>(cpu_concurrency),
             utils::updateable_value<float>(preemptive_abort_factor),
-            reader_concurrency_semaphore::register_metrics::no);
+            reader_concurrency_semaphore::register_metrics::no,
+            reader_concurrency_semaphore_shared_pool::empty_pool());
     auto stop_sem = deferred_stop(semaphore);
 
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(count(), initial_memory));
@@ -2260,7 +2261,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concu
             utils::updateable_value<uint32_t>(kill_multiplier),
             utils::updateable_value(cpu_concurrency),
             utils::updateable_value<float>(preemptive_abort_factor),
-            reader_concurrency_semaphore::register_metrics::no);
+            reader_concurrency_semaphore::register_metrics::no,
+            reader_concurrency_semaphore_shared_pool::empty_pool());
     auto stop_sem = deferred_stop(semaphore);
 
     auto require_can_admit = [&] (bool expected_can_admit, const char* description,
@@ -2313,7 +2315,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_wait_queue_overload_c
             utils::updateable_value<uint32_t>(4),
             utils::updateable_value<uint32_t>(1),
             utils::updateable_value<float>(0.0f),
-            reader_concurrency_semaphore::register_metrics::no);
+            reader_concurrency_semaphore::register_metrics::no,
+            reader_concurrency_semaphore_shared_pool::empty_pool());
     auto stop_sem = deferred_stop(semaphore);
 
     reader_permit_opt permit1 = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}).get();
@@ -2367,7 +2370,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_double_permit_abort) 
             utils::updateable_value<uint32_t>(400),
             utils::updateable_value<uint32_t>(2),
             utils::updateable_value<float>(0.0f),
-            reader_concurrency_semaphore::register_metrics::no);
+            reader_concurrency_semaphore::register_metrics::no,
+            reader_concurrency_semaphore_shared_pool::empty_pool());
     auto stop_sem = deferred_stop(semaphore);
 
     reader_permit_opt permit1 = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}).get();
@@ -2469,7 +2473,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_always_admit_one_perm
             utils::updateable_value<uint32_t>(400),
             utils::updateable_value<uint32_t>(1),
             utils::updateable_value<float>(0.0f),
-            reader_concurrency_semaphore::register_metrics::no);
+            reader_concurrency_semaphore::register_metrics::no,
+            reader_concurrency_semaphore_shared_pool::empty_pool());
     auto stop_sem = deferred_stop(semaphore);
 
     // Scenario1: all memory use used by tracking permit (not consuming count resources)
@@ -2511,7 +2516,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_release_base_resource
             utils::updateable_value<uint32_t>(400),
             utils::updateable_value<uint32_t>(1),
             utils::updateable_value<float>(0.0f),
-            reader_concurrency_semaphore::register_metrics::no);
+            reader_concurrency_semaphore::register_metrics::no,
+            reader_concurrency_semaphore_shared_pool::empty_pool());
     auto stop_sem = deferred_stop(semaphore);
 
     const auto expected_base_resources = reader_resources{1, 1024};
