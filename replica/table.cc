@@ -3690,7 +3690,6 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         tlogger.debug("Taking snapshot of {}.{}: name={}", s->ks_name(), s->cf_name(), name);
 
         std::vector<snapshot_sstable_set> sstable_sets(smp::count);
-        std::vector<int64_t> tablet_counts(smp::count);
 
         co_await writer->init();
         co_await smp::invoke_on_all([&] -> future<> {
@@ -3698,7 +3697,6 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
             auto [tables, permit] = co_await t.snapshot_sstables();
             auto sstables_metadata = co_await t.get_sstables_manager().take_snapshot(std::move(tables), name);
             sstable_sets[this_shard_id()] = make_foreign(std::make_unique<utils::chunked_vector<sstables::sstable_snapshot_metadata>>(std::move(sstables_metadata)));
-            tablet_counts[this_shard_id()] = t.calculate_tablet_count();
         });
         co_await writer->sync();
 
@@ -3712,12 +3710,13 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         });
         tlogger.debug("snapshot {}: seal_snapshot", name);
         const auto& topology = sharded_db.local().get_token_metadata().get_topology();
-        std::optional<int64_t> min_tablet_count;
+        std::optional<int64_t> tablet_count;
         if (t.uses_tablets()) {
-            SCYLLA_ASSERT(!tablet_counts.empty());
-            min_tablet_count = *std::ranges::min_element(tablet_counts);
+            auto erm = t.get_effective_replication_map();
+            auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+            tablet_count = tm.tablet_count();
         }
-        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, std::move(opts), s, min_tablet_count).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, std::move(opts), s, tablet_count).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
