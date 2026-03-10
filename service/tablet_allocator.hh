@@ -46,6 +46,7 @@ struct load_balancer_dc_stats {
     uint64_t stop_skip_limit = 0;
     uint64_t stop_batch_size = 0;
     uint64_t cross_rack_collocations = 0;
+    uint64_t rebuilds_produced = 0;
 
     load_balancer_dc_stats operator-(const load_balancer_dc_stats& other) const {
         return {
@@ -65,6 +66,7 @@ struct load_balancer_dc_stats {
             stop_skip_limit - other.stop_skip_limit,
             stop_batch_size - other.stop_batch_size,
             cross_rack_collocations - other.cross_rack_collocations,
+            rebuilds_produced - other.rebuilds_produced,
         };
     }
 };
@@ -92,6 +94,8 @@ struct load_balancer_cluster_stats {
     uint64_t resizes_finalized = 0;
     uint64_t auto_repair_needs_repair_nr = 0;
     uint64_t auto_repair_enabled_nr = 0;
+
+    uint64_t repairs_produced = 0;
 };
 
 using dc_name = sstring;

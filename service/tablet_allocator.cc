@@ -54,6 +54,8 @@ void load_balancer_stats_manager::setup_metrics(const dc_name& dc, load_balancer
                          stats.migrations_skipped)(dc_lb),
         sm::make_counter("cross_rack_collocations", sm::description("number of co-locating migrations which move replica across racks"),
                          stats.cross_rack_collocations)(dc_lb),
+        sm::make_counter("rebuilds_produced", sm::description("number of rebuilds produced by the load balancer"),
+                         stats.rebuilds_produced)(dc_lb),
     });
 }
 
@@ -80,7 +82,9 @@ void load_balancer_stats_manager::setup_metrics(load_balancer_cluster_stats& sta
         sm::make_counter("auto_repair_needs_repair_nr", sm::description("number of tablets with auto repair enabled that currently needs repair"),
             stats.auto_repair_needs_repair_nr),
         sm::make_counter("auto_repair_enabled_nr", sm::description("number of tablets with auto repair enabled"),
-            stats.auto_repair_enabled_nr)
+            stats.auto_repair_enabled_nr),
+        sm::make_counter("repairs_produced", sm::description("number of repairs produced by the load balancer"),
+                         stats.repairs_produced),
     });
 }
 
@@ -1289,6 +1293,7 @@ public:
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
                 plans.push_back(repair_plan{gid, info, range, last_token, diff, is_user_reuqest});
+                ++_stats.for_cluster().repairs_produced;
             });
         }
 
@@ -3375,6 +3380,10 @@ public:
                 _current_stats->migrations_produced++;
                 mark_as_scheduled(mig);
                 plan.add(std::move(mig));
+
+                if (kind == tablet_transition_kind::rebuild || kind == tablet_transition_kind::rebuild_v2) {
+                    ++_current_stats->rebuilds_produced;
+                }
             } else {
                 // Shards are overloaded with streaming. Do not include the migration in the plan, but
                 // continue as if it was in the hope that we will find a migration which can be executed without
