@@ -31,6 +31,7 @@ in individual sections
         | scylla_build_id
         | scylla_version
         | ext_timestamp_stats
+        | schema
         | components_digests
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
@@ -65,6 +66,14 @@ It is derived from the sstable uuid generation, upon creation (or uniquely gener
 if the sstable has numerical generation).  Yet, unlike the sstable that may
 change if the sstable is migrated to a different shard or node, the sstable
 identifier is stable and copied with the rest of the scylla metadata.
+
+`schema` (tag 11): the schema of the table the sstable belongs to. It stores
+the most important fields: the table id and version (as UUIDs), keyspace name,
+table name, and a list of all columns with their kind, name and type. It is not
+a complete schema equivalent to the one stored in the system schema tables, but
+it contains enough information for tools like
+[scylla-sstable](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst)
+to parse an sstable in a self-sufficient manner.
 
 `components_digests` (tag 12): a `map<component_type, uint32_t>` with CRC32 digests of
 all SSTable component files that are checksummed during write. Each entry maps a component
@@ -169,3 +178,28 @@ row, and cell sizes and about number of rows in partition.
 For each entry, it keeps the largest value for the entry type,
 the respective large_data threshold and the number of entities
 that are above the threshold.
+
+## schema subcomponent
+
+    schema = table_id table_schema_version keyspace_name table_name column_count column_description*
+    table_id = uuid
+    table_schema_version = uuid
+    uuid = uuid_high_bits uuid_low_bits
+    uuid_high_bits = be64
+    uuid_low_bits = be64
+    keyspace_name = string32
+    table_name = string32
+    column_count = be32
+    column_description = column_kind column_name column_type
+    column_kind = byte    // 1=partition_key, 2=clustering_key, 3=static_column, 4=regular_column
+    column_name = string32
+    column_type = string32    // CQL type name (e.g. "org.apache.cassandra.db.marshal.UTF8Type")
+    string32 = string32_size byte*
+    string32_size = be32
+
+The schema subcomponent stores the most important schema fields of the table the
+sstable belongs to. It serves as an alternative schema source to the one stored
+in the statistics component, which lacks column names and other metadata. Unlike
+the full schema stored in the system schema tables, it is not intended to be
+comprehensive, but it contains enough information for tools like scylla-sstable
+to parse an sstable in a self-sufficient manner.
