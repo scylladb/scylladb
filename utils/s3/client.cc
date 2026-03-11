@@ -37,6 +37,7 @@
 #include <seastar/http/exception.hh>
 #include "default_aws_retry_strategy.hh"
 #include "db/config.hh"
+#include "utils/exceptions.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
 #include "utils/s3/client.hh"

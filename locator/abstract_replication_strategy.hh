@@ -20,6 +20,7 @@
 #include "utils/simple_hashers.hh"
 #include "tablets.hh"
 #include "data_dictionary/consistency_config_options.hh"
+#include "locator/replication_strategy_type.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -37,13 +38,6 @@ extern logging::logger rslogger;
 
 using inet_address = gms::inet_address;
 using token = dht::token;
-
-enum class replication_strategy_type {
-    simple,
-    local,
-    network_topology,
-    everywhere_topology,
-};
 
 using replication_strategy_config_option = std::variant<sstring, rack_list>;
 using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;
@@ -628,11 +622,6 @@ inline mutable_static_erm_ptr make_local_effective_replication_map_ptr(replicati
 }
 
 } // namespace locator
-
-template <>
-struct fmt::formatter<locator::replication_strategy_type> : fmt::formatter<string_view> {
-    auto format(locator::replication_strategy_type, fmt::format_context& ctx) const -> decltype(ctx.out());
-};
 
 template <>
 struct fmt::formatter<locator::static_effective_replication_map::factory_key> : fmt::formatter<string_view> {
