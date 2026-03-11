@@ -40,6 +40,7 @@
 #include "utils/s3/aws_throttling_controller.hh"
 #include "utils/s3/noop_throttling_controller.hh"
 #include "db/config.hh"
+#include "utils/exceptions.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
 #include "utils/s3/client.hh"
