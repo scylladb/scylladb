@@ -68,6 +68,7 @@ public:
     using resources = reader_resources;
 
     friend class reader_permit;
+    friend struct reader_concurrency_semaphore_tester;
 
     enum class evict_reason {
         permit, // evicted due to permit shortage

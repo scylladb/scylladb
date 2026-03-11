@@ -26,6 +26,7 @@
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/testing/on_internal_error.hh>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -34,6 +35,13 @@
 #include "readers/from_mutations.hh"
 #include "replica/database.hh" // new_reader_base_cost is there :(
 #include "db/config.hh"
+
+// Provides access to private members of reader_concurrency_semaphore for testing.
+struct reader_concurrency_semaphore_tester {
+    static void signal(reader_concurrency_semaphore& sem, reader_resources r) {
+        sem.signal(r);
+    }
+};
 
 BOOST_AUTO_TEST_SUITE(reader_concurrency_semaphore_test)
 
@@ -2593,6 +2601,37 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_preemptive_abort_requ
 
     // Shouldn't fail if SCYLLADB-1016 is fixed.
     permit2 = {};
+}
+
+// Verify that signal() detects and corrects a negative resource leak.
+// When a bug causes available resources to exceed initial resources
+// after signal(), the semaphore should report the negative leak via
+// on_internal_error_noexcept and clamp _resources back to _initial_resources
+// so that consumed_resources() never goes negative.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_signal_detects_negative_resource_leak) {
+    const auto initial = reader_resources{2, 2048};
+
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial.count, initial.memory);
+    auto stop_sem = deferred_stop(semaphore);
+
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial);
+    BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources{});
+
+    // Simulate a negative leak: signal more resources than were ever consumed.
+    // This would happen if a bug double-returned resources or inflated
+    // the amount returned to signal().
+    // signal() calls on_internal_error_noexcept which would abort in
+    // test mode, so temporarily disable that.
+    const auto leaked = reader_resources{1, 512};
+    {
+        seastar::testing::scoped_no_abort_on_internal_error no_abort;
+        reader_concurrency_semaphore_tester::signal(semaphore, leaked);
+    }
+
+    // signal() should have detected the over-return and clamped
+    // available resources back to initial.
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial);
+    BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources{});
 }
 
 BOOST_AUTO_TEST_SUITE_END()
