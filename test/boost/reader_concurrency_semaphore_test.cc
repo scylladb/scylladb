@@ -2555,4 +2555,44 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_release_base_resource
     }
 }
 
+// Reproducer for https://scylladb.atlassian.net/browse/SCYLLADB-1016
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_preemptive_abort_requested_memory_leak) {
+    const ssize_t memory = 1024;
+    const uint32_t serialize_limit_multiplier = 2;
+
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(),
+            2, // count
+            memory,
+            100, // max queue length
+            utils::updateable_value(serialize_limit_multiplier),
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()), // kill limit multiplier
+            utils::updateable_value<uint32_t>(1), // cpu concurrency
+            utils::updateable_value<float>(1.0f)); // preemptive abort factor
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit1 = semaphore.obtain_permit(nullptr, "permit1", memory/2, db::no_timeout, {}).get();
+    reader_permit_opt permit2 = semaphore.obtain_permit(nullptr, "permit2", memory/2, db::timeout_clock::now() + 60s, {}).get();
+
+    auto units1 = permit1.request_memory(memory * serialize_limit_multiplier).get();
+    auto mem_fut = permit2->request_memory(1024);
+    BOOST_REQUIRE(!mem_fut.available());
+
+    // Triggers maybe_admit_waiters()
+    units1.reset_to_zero();
+    BOOST_REQUIRE(eventually_true([&] { return mem_fut.failed(); }));
+    BOOST_REQUIRE_THROW(std::rethrow_exception(mem_fut.get_exception()), semaphore_aborted);
+
+    // on_granted_memory() consumes stale _requested_memory (1024) + 512,
+    // but resource_units only tracks 512 — the difference leaks.
+    { auto u = permit2->request_memory(512).get(); }
+
+    // Destroy permit2 and verify ~impl() detects the leak.
+    auto prev_internal_errors = seastar::internal::internal_errors;
+    auto reset_abort = defer([prev = set_abort_on_internal_error(false)] {
+        set_abort_on_internal_error(prev);
+    });
+    permit2 = {};
+    BOOST_REQUIRE_GT(seastar::internal::internal_errors, prev_internal_errors);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
