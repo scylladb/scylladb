@@ -36,6 +36,7 @@
 #include "audit/audit_rule.hh"
 #include "audit/audit.hh"
 #include "config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "extensions.hh"
 #include "sstables/compressor.hh"
 #include "utils/log.hh"
