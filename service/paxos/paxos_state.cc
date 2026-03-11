@@ -454,7 +454,7 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
     auto ps_ptr = qp.get_prepared(cache_key);
     if (!ps_ptr) {
         const auto msg_ptr = co_await qp.prepare(req, qs, cql3::internal_dialect());
-        ps_ptr = std::move(msg_ptr->get_prepared());
+        ps_ptr = msg_ptr->get_prepared();
         if (!ps_ptr) {
             on_internal_error(paxos_state::logger, "prepared statement is null");
         }

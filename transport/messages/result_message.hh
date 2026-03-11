@@ -13,6 +13,7 @@
 #include <concepts>
 
 #include "cql3/result_set.hh"
+#include "cql3/prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_options.hh"
 
@@ -30,14 +31,14 @@ namespace messages {
 
 class result_message::prepared : public result_message {
 private:
-    cql3::statements::prepared_statement::checked_weak_ptr _prepared;
+    cql3::prepared_statements_cache::pinned_value_type _prepared_entry;
     cql3::prepared_metadata _metadata;
     ::shared_ptr<const cql3::metadata> _result_metadata;
 protected:
-    prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared, bool support_lwt_opt);
+    prepared(cql3::prepared_statements_cache::pinned_value_type prepared_entry, bool support_lwt_opt);
 public:
-    cql3::statements::prepared_statement::checked_weak_ptr& get_prepared() {
-        return _prepared;
+    cql3::statements::prepared_statement::checked_weak_ptr get_prepared() {
+        return (*_prepared_entry)->checked_weak_from_this();
     }
 
     const cql3::prepared_metadata& metadata() const {
@@ -49,7 +50,7 @@ public:
     }
 
     cql3::cql_metadata_id_type get_metadata_id() const {
-        return _prepared->get_metadata_id();
+        return (*_prepared_entry)->get_metadata_id();
     }
 
     class cql;
@@ -166,8 +167,8 @@ std::ostream& operator<<(std::ostream& os, const result_message::set_keyspace& m
 class result_message::prepared::cql : public result_message::prepared {
     bytes _id;
 public:
-    cql(const bytes& id, cql3::statements::prepared_statement::checked_weak_ptr p, bool support_lwt_opt)
-        : result_message::prepared(std::move(p), support_lwt_opt)
+    cql(const bytes& id, cql3::prepared_statements_cache::pinned_value_type prepared_entry, bool support_lwt_opt)
+        : result_message::prepared(std::move(prepared_entry), support_lwt_opt)
         , _id{id}
     { }
 

@@ -105,6 +105,7 @@ public:
     static const std::chrono::minutes entry_expiry;
 
     using key_type = prepared_cache_key_type;
+    using pinned_value_type = cache_value_ptr;
     using value_type = checked_weak_ptr;
     using statement_is_too_big = typename cache_type::entry_is_too_big;
 
@@ -117,8 +118,13 @@ public:
     {}
 
     template <typename LoadFunc>
+    future<pinned_value_type> get_pinned(const key_type& key, LoadFunc&& load) {
+        return _cache.get_ptr(key.key(), [load = std::forward<LoadFunc>(load)] (const cache_key_type&) { return load(); });
+    }
+
+    template <typename LoadFunc>
     future<value_type> get(const key_type& key, LoadFunc&& load) {
-        return _cache.get_ptr(key.key(), [load = std::forward<LoadFunc>(load)] (const cache_key_type&) { return load(); }).then([] (cache_value_ptr v_ptr) {
+        return get_pinned(key, std::forward<LoadFunc>(load)).then([] (cache_value_ptr v_ptr) {
             return make_ready_future<value_type>((*v_ptr)->checked_weak_from_this());
         });
     }

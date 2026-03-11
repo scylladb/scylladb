@@ -67,14 +67,17 @@ void result_message::visitor_base::visit(const result_message::exception& ex) {
     ex.throw_me();
 }
 
-result_message::prepared::prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared, bool support_lwt_opt)
-        : _prepared(std::move(prepared))
+result_message::prepared::prepared(cql3::prepared_statements_cache::pinned_value_type prepared_entry, bool support_lwt_opt)
+        : _prepared_entry(std::move(prepared_entry))
         , _metadata(
-            _prepared->bound_names,
-            _prepared->partition_key_bind_indices,
-            support_lwt_opt ? _prepared->statement->is_conditional() : false)
-        , _result_metadata{extract_result_metadata(_prepared->statement)}
+            (*_prepared_entry)->bound_names,
+            (*_prepared_entry)->partition_key_bind_indices,
+            support_lwt_opt ? (*_prepared_entry)->statement->is_conditional() : false)
+        , _result_metadata{extract_result_metadata((*_prepared_entry)->statement)}
 {
+    for (const auto& w : (*_prepared_entry)->warnings){
+        add_warning(w);
+    }
 }
 
 ::shared_ptr<const cql3::metadata> result_message::prepared::extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
