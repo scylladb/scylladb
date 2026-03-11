@@ -36,6 +36,7 @@
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/tablet_allocator.hh"
 #include "compaction/compaction_manager.hh"
+#include "replica/tablets.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossip_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
