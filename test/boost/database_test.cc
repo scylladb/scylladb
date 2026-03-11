@@ -61,6 +61,7 @@
 #include "test/boost/database_test.hh"
 #include "test/lib/random_schema.hh"
 #include "dht/i_partitioner.hh"
+#include <seastar/core/reactor.hh>
 
 using namespace std::chrono_literals;
 using namespace sstables;
