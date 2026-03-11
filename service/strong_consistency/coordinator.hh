@@ -10,6 +10,7 @@
 
 #include "mutation/mutation.hh"
 #include "query/query-result.hh"
+#include "locator/tablets.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/util/noncopyable_function.hh>
