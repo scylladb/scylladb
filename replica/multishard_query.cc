@@ -10,6 +10,7 @@
 #include "replica/multishard_query.hh"
 #include "mutation_query.hh"
 #include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "query/query-result-writer.hh"
 #include "query/query_result_merger.hh"
 #include "readers/multishard.hh"
