@@ -44,6 +44,7 @@
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "db/view/view_builder.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"

@@ -16,7 +16,7 @@
 #include <seastar/util/program-options.hh>
 #include <seastar/util/log.hh>
 
-#include "locator/abstract_replication_strategy.hh"
+#include "locator/replication_strategy_type.hh"
 #include "seastarx.hh"
 #include "utils/config_file.hh"
 #include "utils/enum_option.hh"
