@@ -48,6 +48,7 @@
 #include "bytes.hh"
 #include "utils/class_registrator.hh"
 #include "cql3/query_processor.hh"
+#include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/system_keyspace.hh"
 #include "serializer.hh"

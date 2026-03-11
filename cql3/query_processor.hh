@@ -35,7 +35,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
 #include "db/consistency_level_type.hh"
-#include "db/config.hh"
+#include "db/consistency_level_restriction.hh"
 #include "utils/enum_option.hh"
 #include "service/storage_proxy_fwd.hh"
 
