@@ -17,154 +17,42 @@ from random import randint
 
 import pytest
 
-from types import SimpleNamespace
-
 import colorama
-import glob
 import itertools
 import logging
 import multiprocessing
 import os
 import pathlib
 import resource
-import signal
 import subprocess
 import sys
 import time
-import xml.etree.ElementTree as ET
-from typing import TYPE_CHECKING, Any
 
 import humanfriendly
 import treelib
 
 from scripts import coverage
-from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, TEST_DIR, TESTPY_PREPARED_ENVIRONMENT
+from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to
 from test.pylib import coverage_utils
 from test.pylib.suite.base import (
-    SUITE_CONFIG_FILENAME,
-    Test,
     TestSuite,
-    init_testsuite_globals,
-    output_is_a_tty,
     palette,
-    prepare_environment,
 )
-from test.pylib.resource_gather import run_resource_watcher
 from test.pylib.util import LogPrefixAdapter, get_configured_modes
 
-if TYPE_CHECKING:
-    from typing import List
-
-PYTEST_RUNNER_DIRECTORIES = [
-    TEST_DIR / 'boost',
-    TEST_DIR / 'ldap',
-    TEST_DIR / 'raft',
-    TEST_DIR / 'unit',
-    TEST_DIR / 'vector_search',
-    TEST_DIR / 'alternator',
-    TEST_DIR / 'broadcast_tables',
-    TEST_DIR / 'cql',
-    TEST_DIR / 'cqlpy',
-    TEST_DIR / 'rest_api',
-    TEST_DIR / 'nodetool',
-    TEST_DIR / 'scylla_gdb',
-    TEST_DIR / 'cluster',
-]
-
 launch_time = time.monotonic()
-
-
-class TabularConsoleOutput:
-    """Print test progress to the console"""
-
-    def __init__(self, verbose: bool, test_count: int) -> None:
-        self.verbose = verbose
-
-        if not output_is_a_tty:
-            self.verbose = True
-
-        self.test_count = test_count
-        self.last_test_no = 0
-
-    def print_start_blurb(self) -> None:
-        print("="*80)
-        print("{:10s} {:^8s} {:^7s} {:8s} {}".format("[N/TOTAL]", "SUITE", "MODE", "RESULT", "TEST"))
-        print("-"*78)
-        print("")
-
-    def print_end_blurb(self) -> None:
-        print("-"*78)
-
-    def print_progress(self, test: Test) -> None:
-        self.last_test_no += 1
-        status = ""
-        if test.success:
-            logging.debug("Test {} is flaky {}".format(test.uname,
-                                                       test.is_flaky_failure))
-            if test.is_flaky_failure:
-                status = palette.warn("[ FLKY ]")
-            else:
-                status = palette.ok("[ PASS ]")
-        else:
-            status = palette.fail("[ FAIL ]")
-        msg = "{:10s} {:^8s} {:^7s} {:8s} {}".format(
-            f"[{self.last_test_no}/{self.test_count}]",
-            test.suite.name, test.mode[:7],
-            status,
-            test.uname
-        )
-        if not self.verbose:
-            if test.success:
-                print("\033[A", end="\r")
-                print("\033[K", end="\r")
-                print(msg)
-            else:
-                print("\033[A", end="\r")
-                print("\033[K", end="\r")
-                print(f"{msg}\n")
-        else:
-            msg += " {:.2f}s".format(test.time_end - test.time_start)
-            print(msg)
-
-
-def setup_signal_handlers(loop, signaled) -> None:
-
-    async def shutdown(loop, signo, signaled):
-        print("\nShutdown requested... Aborting tests:"),
-        signaled.signo = signo
-        signaled.set()
-
-    # Use a lambda to avoid creating a coroutine until
-    # the signal is delivered to the loop - otherwise
-    # the coroutine will be dangling when the loop is over,
-    # since it's never going to be invoked
-    for signo in [signal.SIGINT, signal.SIGTERM]:
-        loop.add_signal_handler(signo, lambda: asyncio.create_task(shutdown(loop, signo, signaled)))
 
 
 def parse_cmd_line() -> argparse.Namespace:
     """ Print usage and process command line options. """
     parser = argparse.ArgumentParser(description='Scylla test runner', formatter_class=argparse.RawTextHelpFormatter)
 
-    directories = '\n'.join(f" - {str(item.relative_to(TOP_SRC_DIR))}" for item in PYTEST_RUNNER_DIRECTORIES)
     name_help = textwrap.dedent("""\
         Can be empty. List of test names or path to test files, to look for.
-        There are two runners: test.py and pytest.
-
-        test.py works in the following way:
-        Each name is used as a substring to look for in the path to test file,
-        e.g. "mem" will run all tests that have "mem" in their name in all
-        suites, "nodetool/test_compact" will only enable tests starting with
-        "test_compact" in "nodetool" suite, and 
-        "nodetool/test_compact::test_all_keyspaces" to narrow down to a 
-        certain test case.
-
-        pytest runner works in the following way:
+        
         provide the path to the test file for execution or path to the directory
         to narrow you can use function name 'test/boost/aggregate_fcts_test.cc::test_aggregate_avg'
-
-        Pytest directories are:
-        """) + directories + "\n\nDefault: run all tests in all suites."
+        """)
 
     parser.add_argument(
         "name",
@@ -212,8 +100,7 @@ def parse_cmd_line() -> argparse.Namespace:
                                  "DEBUG"],
                         dest="log_level")
     parser.add_argument('-k', metavar="EXPRESSION", action="store",
-                        help=f"Supported only for tests in {[str(d) for d in PYTEST_RUNNER_DIRECTORIES]} "
-                        "directories. Only run tests which match the given substring expression. An expression is a Python evaluable expression where all names are "
+                        help="Only run tests which match the given substring expression. An expression is a Python evaluable expression where all names are "
                         "substring-matched against test names and their parent classes. Example: -k 'test_method or test_other' matches all test functions and "
                         "classes whose name contains 'test_method' or 'test_other', while -k 'not test_method' matches those that don't contain 'test_method' "
                         "in their names. -k 'not test_method and not test_other' will eliminate the matches. Additionally keywords are matched to classes and "
@@ -313,35 +200,15 @@ def parse_cmd_line() -> argparse.Namespace:
     return args
 
 
-async def find_tests(options: argparse.Namespace) -> None:
-    for f in TEST_DIR.glob("*"):
-        config = pathlib.Path(f) / SUITE_CONFIG_FILENAME
-        if config.is_file():
-            for mode in options.modes:
-                suite = TestSuite.opt_create(config=config, options=options, mode=mode)
-                await suite.add_test_list()
-
-def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]:
+def run_pytest(options: argparse.Namespace) -> int:
     # When tests are executed in parallel on different hosts, we need to distinguish results from them.
     # So HOST_ID needed to not overwrite results from different hosts during Jenkins will copy to one directory.
 
-    failed_tests = []
     temp_dir = pathlib.Path(options.tmpdir).absolute()
+
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
-    files_to_run = []
-    if options.name:
-        for name in options.name:
-            file_name = name
-            if '::' in name:
-                file_name, _ = name.split('::', maxsplit=1)
-            if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
-                files_to_run.append(name)
-    else:
-        files_to_run = [ TOP_SRC_DIR / 'test/']
-    if not files_to_run:
-        logging.info('Skipping pytest execution because no tests were selected for pytest.')
-        return 0, []
+    files_to_run = options.name or [str(TOP_SRC_DIR / 'test/')]
     args = [
         '--color=yes',
         f'--repeat={options.repeat}',
@@ -358,7 +225,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             "--log-level=DEBUG",  # Capture logs
             f'--junit-xml={junit_output_file}',
             "-rf",
-            '--test-py-init',
             f'-n{threads}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
@@ -394,201 +260,36 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.markers:
         args.append(f'-m={options.markers}')
     args.extend(files_to_run)
-    pytest.main(args=args)
+    exit_code = pytest.main(args=args)
 
-    if options.list_tests:
-        return 0, []
-
-    suite = ET.parse(junit_output_file).getroot().find('testsuite')
-    total_tests = int(suite.get('tests'))
-
-    # Find failed tests in the pytest XML output, create a SimpleNamespace for each to mimic the Test class to be able
-    # to print the summary later
-    for test_case in suite.findall('testcase'):
-        if test_case.find('error') is not None or test_case.find('failure') is not None:
-            classname = test_case.get('classname')
-            if classname.endswith('.cc'):
-                file_path, extension = test_case.get('classname').rsplit('.', 1)
-            else:
-                extension = 'py'
-                file_path = '/'.join(x for x in test_case.get('classname').split('.') if x.islower())
-            # get the test name without mode name
-            test_name = test_case.get('name').split('.')[0]
-            test = SimpleNamespace()
-
-            test.name = f"test/{file_path.replace('.', '/')}.{extension}::{test_name}"
-            # print_summary used to print additional information about the failed test that is called in verbose mode
-            # This is needed to mimic the Test class and not fail the run summary output
-            test.print_summary = Test.print_summary
-
-            failed_tests.append(test)
-
-    return total_tests, failed_tests
-
-
-
-async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> tuple[int | Any, list[
-    SimpleNamespace]] | None:
-    failed_tests = []
-    console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
-    signaled_task = asyncio.create_task(signaled.wait())
-    pending = {signaled_task}
-
-    async def cancel(pending, msg):
-        for task in pending:
-            task.cancel(msg)
-        await asyncio.wait(pending, return_when=asyncio.ALL_COMPLETED)
-        print("...done")
-
-    async def reap(done, pending, signaled):
-        nonlocal console
-        if signaled.is_set():
-            await cancel(pending, "Signal received")
-        failed = 0
-        for coro in done:
-            result = coro.result()
-            if isinstance(result, bool):
-                continue    # skip signaled task result
-            if not result.success:
-                failed += 1
-            if not result.did_not_run:
-                console.print_progress(result)
-        return failed
-
-    total_tests = 0
-    max_failures = options.max_failures
-    failed = 0
-    deadline = time.perf_counter() + options.session_timeout
-    try:
-        # Run pytest in an executor to avoid blocking the event loop
-        # This allows resource monitoring to run concurrently
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, run_pytest, options)
-        total_tests += result[0]
-        failed_tests.extend(result[1])
-        console.print_start_blurb()
-        TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
-        for test in TestSuite.all_tests():
-            # +1 for 'signaled' event
-            if len(pending) > options.jobs:
-                # Wait for some task to finish
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                failed += await reap(done, pending, signaled)
-                if time.perf_counter() > deadline:
-                    print("Session timeout reached")
-                    await cancel(pending, "Session timeout reached")
-                if max_failures != 0 and max_failures <= failed:
-                    print("Too much failures, stopping")
-                    await cancel(pending, "Too much failures, stopping")
-            pending.add(asyncio.create_task(test.suite.run(test, options)))
-        # Wait & reap ALL tasks but signaled_task
-        # Do not use asyncio.ALL_COMPLETED to print a nice progress report
-        while len(pending) > 1:
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            failed += await reap(done, pending, signaled)
-            if max_failures != 0 and max_failures <= failed:
-                print("Too much failures, stopping")
-                await cancel(pending, "Too much failures, stopping")
-    finally:
-        await TestSuite.artifacts.cleanup_before_exit()
-
-    console.print_end_blurb()
-    return total_tests, failed_tests
-
-
-def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: argparse.Namespace, failed_pytest_tests: list[SimpleNamespace], total_tests_pytest: int) -> None:
     rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu_used = rusage.ru_stime + rusage.ru_utime
     cpu_available = (time.monotonic() - launch_time) * multiprocessing.cpu_count()
-    utilization = cpu_used / cpu_available
-    print(f"CPU utilization: {utilization*100:.1f}%")
-    total_tests = TestSuite.test_count() + total_tests_pytest
-    if failed_tests or failed_pytest_tests:
-        all_fails = [*failed_tests, *failed_pytest_tests]
-        print(f'The following test(s) have failed: {" ".join(t.name for t in all_fails)}')
-        if options.verbose:
-            for test in failed_tests:
-                test.print_summary()
-                print("-"*78)
-        if cancelled_tests > 0:
-            print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed, {cancelled_tests} cancelled")
-        else:
-            print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed")
-    if total_tests == 0:
-        print( palette.warn(f"No tests were run, nothing to report. Please check your test selection criteria. "
-                            f"Due to the recent changes in the test.py, if you want to run a test from one of the "
-                            f"following directories: \n"
-                            f"{'\n'.join([f'{str(item.relative_to(TOP_SRC_DIR))}' for item in PYTEST_RUNNER_DIRECTORIES])}\nPlease use the path "
-                            f"to the test file with extension, e.g. 'test/boost/memtable_test.cc' instead of "
-                            f"'boost/memtable_test'"))
+    print(f"CPU utilization: {cpu_used / cpu_available * 100:.1f}%")
 
-
-def open_log(tmpdir: str, log_file_name: str, log_level: str) -> None:
-    pathlib.Path(tmpdir).mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        filename=os.path.join(tmpdir, log_file_name),
-        filemode="w",
-        level=log_level,
-        format="%(asctime)s.%(msecs)03d %(levelname)s> %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    logging.critical("Started %s", " ".join(sys.argv))
+    return exit_code
 
 
 async def main() -> int:
 
     options = parse_cmd_line()
 
-    await find_tests(options)
     if options.list_tests:
-        print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
-                         for t in TestSuite.all_tests()]))
-        run_pytest(options)
-        return 0
-
-    open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
-    init_testsuite_globals()
-    await prepare_environment(
-        tempdir_base=pathlib.Path(options.tmpdir),
-        modes=options.modes,
-        gather_metrics=options.gather_metrics,
-        save_log_on_success=options.save_log_on_success,
-        toxiproxy_byte_limit=options.byte_limit,
-    )
-    os.environ[TESTPY_PREPARED_ENVIRONMENT] = '1'
-
-    if options.manual_execution and TestSuite.test_count() > 1:
-        print('--manual-execution only supports running a single test, but multiple selected: {}'.format(
-            [t.path for t in TestSuite.tests()][:3])) # Print whole t.path; same shortname may be in different dirs.
-        return 1
-
-    signaled = asyncio.Event()
-    stop_event = asyncio.Event()
-    resource_watcher = run_resource_watcher(options.gather_metrics, signaled, stop_event, options.tmpdir)
-
-    setup_signal_handlers(asyncio.get_running_loop(), signaled)
+        return run_pytest(options)
 
     try:
         logging.info('running all tests')
-        total_tests_pytest, failed_pytest_tests = await run_all_tests(signaled, options)
+        # Run pytest in the default thread pool executor so the event loop stays
+        # responsive (e.g. signal handlers continue to work while pytest runs).
+        loop = asyncio.get_running_loop()
+        exit_code = await loop.run_in_executor(None, run_pytest, options)
         logging.info('after running all tests')
-        stop_event.set()
-        async with asyncio.timeout(5):
-            await resource_watcher
     except asyncio.CancelledError:
         print('\ntests cancelled by signal')
         return 1
     except Exception as e:
         print(palette.fail(e))
         raise
-
-    if signaled.is_set():
-        return -signaled.signo      # type: ignore
-
-    failed_tests = [test for test in TestSuite.all_tests() if test.failed]
-    cancelled_tests = sum(1 for test in TestSuite.all_tests() if test.did_not_run)
-
-    print_summary(failed_tests, cancelled_tests, options, failed_pytest_tests, total_tests_pytest)
 
     if 'coverage' in options.modes:
         coverage.generate_coverage_report(path_to("coverage", "tests"))
@@ -598,7 +299,7 @@ async def main() -> int:
 
     # Note: failure codes must be in the ranges 0-124, 126-127,
     #       to cooperate with git bisect's expectations
-    return 0 if not failed_tests else 1
+    return exit_code
 
 
 async def process_coverage(options):
