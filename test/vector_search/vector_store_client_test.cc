@@ -371,6 +371,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 auto* err = std::get_if<vector_store_client::service_error>(&keys.error());
                 BOOST_CHECK(err != nullptr);
                 BOOST_CHECK_EQUAL(err->status, status_type::not_found);
+                BOOST_CHECK_EQUAL(err->message, "idx2 not found");
 
                 // missing primary_keys in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
@@ -1208,6 +1209,37 @@ SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
                 BOOST_CHECK_EXCEPTION(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"),
                         exceptions::invalid_request_exception, [](const exceptions::invalid_request_exception& ex) {
                             return ex.what() == std::string("Vector Store request was aborted");
+                        });
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}
+
+/// Verify that the HTTP error description from the vector store is propagated
+/// through the CQL interface as part of the invalid_request_exception message.
+SEASTAR_TEST_CASE(vector_store_client_cql_error_contains_http_error_description) {
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+                co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+
+                // Configure mock to return 404 with a specific error message
+                server->next_ann_response({status_type::not_found, "index does not exist"});
+
+                BOOST_CHECK_EXCEPTION(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"),
+                        exceptions::invalid_request_exception, [](const exceptions::invalid_request_exception& ex) {
+                            auto msg = std::string(ex.what());
+                            // Verify the error message contains both the HTTP status and the error description
+                            return msg.find("404") != std::string::npos && msg.find("index does not exist") != std::string::npos;
                         });
             },
             cfg)

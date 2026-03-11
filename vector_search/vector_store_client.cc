@@ -320,10 +320,9 @@ struct vector_store_client::impl {
         }
 
         if (resp->status != status_type::ok) {
-            vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, seastar::value_of([&resp] {
-                return response_content_to_sstring(resp->content);
-            }));
-            co_return std::unexpected{service_error{resp->status}};
+            auto error_content = response_content_to_sstring(resp->content);
+            vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, error_content);
+            co_return std::unexpected{service_error{resp->status, std::move(error_content)}};
         }
 
         try {

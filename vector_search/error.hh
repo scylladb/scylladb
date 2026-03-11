@@ -28,6 +28,7 @@ struct service_unavailable_error {};
 /// The error from the vector-store service.
 struct service_error {
     seastar::http::reply::status_type status; ///< The HTTP status code from the vector-store service.
+    seastar::sstring message; ///< The error message from the vector-store service.
 };
 
 /// An unsupported reply format from the vector-store service.
@@ -35,7 +36,7 @@ struct service_reply_format_error {};
 
 struct error_visitor {
     seastar::sstring operator()(service_error e) const {
-        return fmt::format("Vector Store error: HTTP status {}", e.status);
+        return fmt::format("Vector Store error: HTTP status {}, message: {}", e.status, e.message);
     }
     seastar::sstring operator()(disabled_error) const {
         return fmt::format("Vector Store is disabled");
