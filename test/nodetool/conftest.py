@@ -84,6 +84,12 @@ def rest_api_mock_server(request, server_address):
             break
         except requests.exceptions.ConnectionError:
             time.sleep(interval)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                # The server is up but the endpoint is not ready yet, keep waiting
+                time.sleep(interval)
+            else:
+                raise
     else:
         server_process.terminate()
         server_process.wait()
