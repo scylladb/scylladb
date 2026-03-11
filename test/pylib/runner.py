@@ -132,21 +132,7 @@ def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]
         logger.info("ScyllaDB log file: %s", scylla_log_filename)
 
 
-def testpy_test_fixture_scope(fixture_name: str, config: pytest.Config) -> _pytest.scope._ScopeName:
-    """Dynamic scope for fixtures which rely on a current test.py suite/test.
-
-    test.py runs tests file-by-file as separate pytest sessions, so, `session` scope is effectively close to be the
-    same as `module` (can be a difference in the order.)  In case of running tests with bare pytest command, we
-    need to use `module` scope to maintain same behavior as test.py, since we run all tests in one pytest session.
-    """
-    if getattr(config.option, "test_py_init", False):
-        return "module"
-    return "session"
-
-testpy_test_fixture_scope.__test__ = False
-
-
-@pytest.fixture(scope=testpy_test_fixture_scope, autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def build_mode(request: pytest.FixtureRequest) -> str:
     params_stash = get_params_stash(node=request.node)
     if params_stash is None:
@@ -154,7 +140,7 @@ def build_mode(request: pytest.FixtureRequest) -> str:
     return params_stash[BUILD_MODE]
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     def scale_timeout_inner(timeout: int | float) -> int | float:
         return scale_timeout_by_mode(build_mode, timeout)
@@ -162,7 +148,7 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     return scale_timeout_inner
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 async def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> Test | None:
     """Create an instance of Test class for the current test.py test."""
 

@@ -13,7 +13,6 @@ import pytest
 
 from test.cqlpy.conftest import host, cql, this_dc  # add required fixtures
 from test.pylib.cql_repl import CQL_TEST_SUFFIX, CqlFile
-from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.suite.base import get_testpy_test
 from test.pylib.suite.python import add_host_option, add_cql_connection_options
 
@@ -61,7 +60,7 @@ def cql_test_connection(cql: Session) -> Generator[None]:
         pytest.fail(f"Scylla appears to have crashed: {exc}")
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope, autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def keyspace(cql: Session, this_dc: str) -> Generator[str]:
     """Create a random keyspace for this pytest session.
 

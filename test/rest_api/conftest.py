@@ -14,7 +14,6 @@ import requests
 
 from test.cqlpy.conftest import host, cql, this_dc  # add required fixtures
 from test.cqlpy.util import unique_name, new_test_keyspace, keyspace_has_tablets, is_scylla
-from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.suite.python import add_host_option, add_cql_connection_options
 
 # By default, tests run against a Scylla server listening
@@ -50,7 +49,7 @@ class RestApiSession:
 # "api" fixture: set up client object for communicating with Scylla API.
 # The host/port combination of the server are determined by the --host and
 # --port options, and defaults to localhost and 10000, respectively.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def rest_api(request, host):
     port = request.config.getoption('api_port')
     return RestApiSession(host, port)
@@ -58,14 +57,14 @@ def rest_api(request, host):
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
 # which do not exist on Apache Cassandra. A test using this fixture will be
 # skipped if running with "run-cassandra".
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def scylla_only(cql):
     # We recognize Scylla by checking if there is any system table whose name
     # contains the word "scylla":
     if not is_scylla(cql):
         pytest.skip('Scylla-only test skipped')
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def has_tablets(cql):
     with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:
         return keyspace_has_tablets(cql, keyspace)
@@ -80,7 +79,7 @@ def skip_without_tablets(scylla_only, has_tablets):
     if not has_tablets:
         pytest.skip("Test needs tablets experimental feature on")
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_keyspace_vnodes(cql, this_dc, has_tablets):
     name = unique_name()
     if has_tablets:
@@ -91,7 +90,7 @@ def test_keyspace_vnodes(cql, this_dc, has_tablets):
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_keyspace(cql, this_dc):
     name = unique_name()
     cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")

@@ -19,7 +19,6 @@ from test import TOP_SRC_DIR, path_to
 from test.nodetool.rest_api_mock import set_expected_requests, expected_request, get_expected_requests, \
     get_unexpected_requests, expected_requests_manager
 from test.pylib.db.model import Test
-from test.pylib.runner import testpy_test_fixture_scope
 
 
 def pytest_addoption(parser):
@@ -40,7 +39,7 @@ class ServerAddress(NamedTuple):
     port: int
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 async def server_address(request, testpy_test: None|Test):
     # unshare(1) -rn drops us in a new network namespace in which the "lo" is
     # not up yet, so let's set it up first.
@@ -65,7 +64,7 @@ async def server_address(request, testpy_test: None|Test):
         await testpy_test.suite.hosts.release_host(ip)
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def rest_api_mock_server(request, server_address):
     server_process = subprocess.Popen([sys.executable,
                                        os.path.join(os.path.dirname(__file__), "rest_api_mock.py"),
@@ -96,7 +95,7 @@ def rest_api_mock_server(request, server_address):
         server_process.wait()
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def jmx(request, rest_api_mock_server):
     if request.config.getoption("nodetool") == "scylla":
         yield
@@ -157,7 +156,7 @@ def jmx(request, rest_api_mock_server):
     jmx_process.wait()
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def nodetool_path(request, build_mode):
     if request.config.getoption("nodetool") == "scylla":
         return path_to(build_mode, "scylla")

@@ -19,7 +19,6 @@ import tempfile
 import time
 import random
 
-from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.suite.python import PythonTest, add_host_option, add_cql_connection_options, add_s3_options
 from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
 from .nodetool import scylla_log
@@ -37,7 +36,7 @@ def pytest_addoption(parser):
     add_s3_options(parser)
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 async def host(request, testpy_test: PythonTest | None):
     if testpy_test is None:
         yield request.config.getoption("--host")
@@ -49,7 +48,7 @@ async def host(request, testpy_test: PythonTest | None):
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
 # --port options, and defaults to localhost and 9042, respectively.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def cql(request, host):
     port = request.config.getoption("--port")
     try:
@@ -95,11 +94,11 @@ cql_test_connection.scylla_crashed = False
 # syntax that needs to specify a DC name explicitly. For this, will have
 # a "this_dc" fixture to figure out the name of the current DC, so it can be
 # used in NetworkTopologyStrategy.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_keyspace_tablets(cql, this_dc, has_tablets):
     if not is_scylla(cql) or not has_tablets:
         yield None
@@ -110,7 +109,7 @@ def test_keyspace_tablets(cql, this_dc, has_tablets):
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_keyspace_vnodes(cql, this_dc, has_tablets):
     name = unique_name()
     if has_tablets:
@@ -124,7 +123,7 @@ def test_keyspace_vnodes(cql, this_dc, has_tablets):
 # "test_keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_keyspace(request, test_keyspace_vnodes, test_keyspace_tablets, cql, this_dc):
     if hasattr(request, "param"):
         if request.param == "vnodes":
@@ -144,7 +143,7 @@ def test_keyspace(request, test_keyspace_vnodes, test_keyspace_tablets, cql, thi
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
 # which do not exist on Apache Cassandra. A test using this fixture will be
 # skipped if running with "run-cassandra".
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def scylla_only(cql):
     # We recognize Scylla by checking if there is any system table whose name
     # contains the word "scylla":
@@ -155,7 +154,7 @@ def scylla_only(cql):
 # the test, it is expected to fail (xfail) on Cassandra. It should be used
 # in rare cases where we consider Scylla's behavior to be the correct one,
 # and Cassandra's to be the bug.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def cassandra_bug(cql):
     # We recognize Scylla by checking if there is any system table whose name
     # contains the word "scylla":
@@ -204,7 +203,7 @@ def random_seed():
 # If such a process exists, we verify that it is Scylla, and return the
 # executable's path. If we can't find the Scylla executable we use
 # pytest.skip() to skip tests relying on this executable.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def scylla_path(cql):
     pid = local_process_id(cql)
     if not pid:
@@ -242,7 +241,7 @@ def temp_workdir():
     with tempfile.TemporaryDirectory() as workdir:
         yield workdir
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def has_tablets(cql, this_dc):
     with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "': 1}") as keyspace:
         return keyspace_has_tablets(cql, keyspace)

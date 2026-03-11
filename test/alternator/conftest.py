@@ -16,7 +16,6 @@ import re
 
 from test.alternator.util import create_test_table, is_aws, scylla_log
 from test.cqlpy.conftest import host  # add required fixtures
-from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.suite.python import add_host_option
 from urllib.parse import urlparse
 from functools import cache
@@ -74,7 +73,7 @@ def pytest_collection_modifyitems(config, items):
 # If this function can't connect to CQL, it will return an arbitrary
 # user/secret pair, and hope it would work if alternator-enforce-authorization
 # is off.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def get_valid_alternator_role():
     from cassandra.cluster import Cluster, NoHostAvailable
     from cassandra.auth import PlainTextAuthProvider
@@ -116,7 +115,7 @@ def get_valid_alternator_role():
 # or a local Alternator installation on http://localhost:8080 - depending on the
 # existence of the "--aws" option. In the future we should provide options
 # for choosing other Amazon regions or local installations.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def dynamodb(request, get_valid_alternator_role):
     # Disable boto3's client-side validation of parameters. This validation
     # only makes it impossible for us to test various error conditions,
@@ -145,7 +144,7 @@ def dynamodb(request, get_valid_alternator_role):
     yield res
     res.meta.client.close()
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
     def _new_dynamodb_session(user='cassandra', password='secret_pass'):
         ses = boto3.Session()
@@ -162,7 +161,7 @@ def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
             config=conf)
     return _new_dynamodb_session
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def dynamodbstreams(request, get_valid_alternator_role):
     # Disable boto3's client-side validation of parameters. This validation
     # only makes it impossible for us to test various error conditions,
@@ -234,7 +233,7 @@ dynamodb_test_connection.scylla_crashed = False
 # time, we can also remove just tables older than a particular age. Such
 # mechanism will allow running tests in parallel, without the risk of deleting
 # a parallel run's temporary tables.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_table(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -253,7 +252,7 @@ def test_table(dynamodb):
 
 # The following fixtures test_table_* are similar to test_table but create
 # tables with different key schemas.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_table_s(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
@@ -262,35 +261,35 @@ def test_table_s(dynamodb):
     table.delete()
 # test_table_s_2 has exactly the same schema as test_table_s, and is useful
 # for tests which need two different tables with the same schema.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_table_s_2(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ])
     yield table
     table.delete()
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_table_b(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'B' } ])
     yield table
     table.delete()
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_table_sb(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'B' } ])
     yield table
     table.delete()
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_table_sn(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'N' } ])
     yield table
     table.delete()
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def test_table_ss(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
@@ -307,7 +306,7 @@ def test_table_ss(dynamodb):
 # This table is supposed to be read from, not updated nor overwritten.
 # This fixture returns both a table object and the description of all items
 # inserted into it.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def filled_test_table(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -342,7 +341,7 @@ def filled_test_table(dynamodb):
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
 # which do not exist on AWS DynamoDB. A test using this fixture will be
 # skipped if running with "--aws".
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def scylla_only(dynamodb):
     if is_aws(dynamodb):
         pytest.skip('Scylla-only feature not supported by AWS')
@@ -353,7 +352,7 @@ def scylla_only(dynamodb):
 # corect one, and DynamoDB's to be the bug. Tests using this fixture should
 # have a prominent comment explaining why we believe this to be a bug in
 # DynamoDB.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def dynamodb_bug(dynamodb):
     if is_aws(dynamodb):
         pytest.xfail('A known bug in AWS DynamoDB')
@@ -362,12 +361,12 @@ def dynamodb_bug(dynamodb):
 # If we're not testing Scylla, or the REST API port (10000) is not available,
 # the test using this fixture will be skipped with a message about the REST
 # API not being available.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def rest_api(dynamodb, optional_rest_api):
     if optional_rest_api is None:
         pytest.skip('Cannot connect to Scylla REST API')
     return optional_rest_api
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def optional_rest_api(dynamodb):
     if is_aws(dynamodb):
         return None
@@ -388,7 +387,7 @@ def optional_rest_api(dynamodb):
 # below to xfail or skip a test which is known to be failing with tablets.
 # This is a temporary measure - eventually everything in Scylla should work
 # correctly with tablets, and these fixtures can be removed.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def has_tablets(dynamodb, test_table):
     # We rely on some knowledge of Alternator internals:
     # 1. For table with name X, Scylla creates a keyspace called alternator_X
@@ -426,7 +425,7 @@ def skip_tablets(has_tablets):
 # If we're not testing Scylla, or the CQL port is not available on the same
 # IP address as the Alternator IP address, a test using this fixture will
 # be skipped with a message about the CQL API not being available.
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 def cql(dynamodb):
     from cassandra.auth import PlainTextAuthProvider
     from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT, NoHostAvailable

@@ -19,7 +19,6 @@ from multiprocessing import Event
 from pathlib import Path
 from typing import TYPE_CHECKING
 from test import TOP_SRC_DIR, path_to
-from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
@@ -182,7 +181,7 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bo
                    )
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 async def manager_api_sock_path(request: pytest.FixtureRequest, testpy_test: Test | None) -> AsyncGenerator[str]:
     if testpy_test is None:
         yield request.config.getoption("--manager-api")
@@ -213,7 +212,7 @@ async def manager_api_sock_path(request: pytest.FixtureRequest, testpy_test: Tes
             future.result()
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
+@pytest.fixture(scope="module")
 async def manager_internal(request: pytest.FixtureRequest, manager_api_sock_path: str) -> Callable[[], ManagerClient]:
     """Session fixture to prepare client object for communicating with the Cluster API.
        Pass the Unix socket path where the Manager server API is listening.
