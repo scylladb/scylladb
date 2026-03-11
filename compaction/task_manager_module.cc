@@ -12,6 +12,7 @@
 #include "compaction/task_manager_module.hh"
 #include "compaction/compaction_manager.hh"
 #include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
 #include "utils/error_injection.hh"

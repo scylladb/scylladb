@@ -1057,6 +1057,10 @@ std::optional<locator::tablet_routing_info_v2> table::tablet_routing_info_v2_for
     return _erm->check_tablet_version(token, block);
 }
 
+bool table::uses_static_sharding() const {
+    return !_erm || _erm->get_replication_strategy().is_vnode_based();
+}
+
 storage_group::storage_group(compaction_group_ptr cg)
         : _main_cg(cg)
         , _async_gate(format("[storage_group {}.{} {}]", cg->schema()->ks_name(), cg->schema()->cf_name(), cg->group_id()))
