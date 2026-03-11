@@ -371,7 +371,7 @@ public:
     }
 
     void on_preemptive_aborted() {
-        if (_state != reader_permit::state::waiting_for_admission && _state != reader_permit::state::waiting_for_memory) {
+        if (_state != reader_permit::state::waiting_for_admission) {
             on_internal_error(rcslog, format("on_preemptive_aborted(): permit in invalid state {}", _state));
         }
 
@@ -1533,19 +1533,24 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
             // + permit.timeout() < db::no_timeout -- to avoid preemptively aborting reads without timeout.
             //                                        Useful is tests when _preemptive_abort_factor is set to 1.0
             //                                        to avoid additional sleeps to wait for the read to be shed.
-            const auto time_budget = permit.timeout() - permit.created();
-            const auto remaining_time = permit.timeout() - db::timeout_clock::now();
-            if (remaining_time > db::timeout_clock::duration::zero() &&
-                    permit.timeout() < db::no_timeout &&
-                    remaining_time <= _preemptive_abort_factor() * time_budget) {
-                permit.on_preemptive_aborted();
-                using ms = std::chrono::milliseconds;
-                tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] read shed as unlikely to finish (elapsed: {}, timeout: {}, preemptive_factor: {})",
-                               _name,
-                               std::chrono::duration_cast<ms>(time_budget - remaining_time),
-                               std::chrono::duration_cast<ms>(time_budget),
-                               _preemptive_abort_factor());
-                continue;
+            //
+            // Only apply to permits waiting for admission -- permits waiting for memory are already
+            // executing reads and should not be preemptively aborted.
+            if (permit.get_state() == reader_permit::state::waiting_for_admission) {
+                const auto time_budget = permit.timeout() - permit.created();
+                const auto remaining_time = permit.timeout() - db::timeout_clock::now();
+                if (remaining_time > db::timeout_clock::duration::zero() &&
+                        permit.timeout() < db::no_timeout &&
+                        remaining_time <= _preemptive_abort_factor() * time_budget) {
+                    permit.on_preemptive_aborted();
+                    using ms = std::chrono::milliseconds;
+                    tracing::trace(permit.trace_state(), "[reader concurrency semaphore {}] read shed as unlikely to finish (elapsed: {}, timeout: {}, preemptive_factor: {})",
+                                   _name,
+                                   std::chrono::duration_cast<ms>(time_budget - remaining_time),
+                                   std::chrono::duration_cast<ms>(time_budget),
+                                   _preemptive_abort_factor());
+                    continue;
+                }
             }
 
             if (permit.get_state() == reader_permit::state::waiting_for_memory) {

@@ -2409,6 +2409,10 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_double_permit_abort) 
 }
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abort_preemptively_aborted_permit) {
+    simple_schema s;
+    const auto schema = s.schema();
+    const std::string test_name = get_name();
+
     const auto initial_resources = reader_concurrency_semaphore::resources{2, 2 * 1024};
     const auto serialize_multiplier = 2;
     // Ensure permits are shed immediately during admission.
@@ -2421,27 +2425,24 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abort_preemptively_ab
 
     // Set a ridiculously long timeout to ensure permit will not be rejected due to timeout
     auto timeout = db::timeout_clock::now() + 60min;
-    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get();
-    auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, timeout, {}).get();
+    auto permit1 = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}).get();
+    auto units1 = permit1.request_memory(2024).get();
 
-    auto permit2_units1 = permit2.request_memory(1024).get();
-    auto permit1_units = permit1.request_memory(8 * 1024).get();
+    reader_permit_opt permit2_holder;
+    auto permit2_fut = semaphore.with_permit(schema, test_name.c_str(), 1024, timeout, {}, permit2_holder, [] (reader_permit) {
+        BOOST_FAIL("unexpected call to with permit lambda");
+        return make_ready_future<>();
+    });
 
-    // permit1 is now the blessed one
+    // Triggers maybe_admit_waiters()
+    units1.reset_to_zero();
 
-    auto permit2_units2_fut = permit2.request_memory(1024);
-    BOOST_REQUIRE(!permit2_units2_fut.available());
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, 1);
+    BOOST_REQUIRE(eventually_true([&] { return permit2_fut.failed(); }));
+    BOOST_REQUIRE_THROW(permit2_fut.get(), named_semaphore_aborted);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().total_reads_shed_due_to_overload, 1);
 
-    permit1_units.reset_to_zero();
-
-    const auto futures_failed = eventually_true([&] { return permit2_units2_fut.failed(); });
-    BOOST_CHECK(futures_failed);
-    BOOST_CHECK_EQUAL(semaphore.get_stats().total_reads_shed_due_to_overload, 1);
-
-    simple_schema ss;
-    auto irh = semaphore.register_inactive_read(make_empty_mutation_reader(ss.schema(), permit2));
-    BOOST_REQUIRE_THROW(permit2_units2_fut.get(), named_semaphore_aborted);
+    auto irh = semaphore.register_inactive_read(make_empty_mutation_reader(schema, *permit2_holder));
+    BOOST_CHECK(!irh);
 }
 
 /// Test that if no count resources are currently used, a single permit is always admitted regardless of available memory.
@@ -2586,13 +2587,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_preemptive_abort_requ
     // but resource_units only tracks 512 — the difference leaks.
     { auto u = permit2->request_memory(512).get(); }
 
-    // Destroy permit2 and verify ~impl() detects the leak.
-    auto prev_internal_errors = seastar::internal::internal_errors;
-    auto reset_abort = defer([prev = set_abort_on_internal_error(false)] {
-        set_abort_on_internal_error(prev);
-    });
+    // Shouldn't fail if SCYLLADB-1016 is fixed.
     permit2 = {};
-    BOOST_REQUIRE_GT(seastar::internal::internal_errors, prev_internal_errors);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
