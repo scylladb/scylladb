@@ -14,11 +14,12 @@
 #include "gc_clock.hh"
 #include "db/commitlog/replay_position.hh"
 #include "dht/token.hh"
-#include "locator/abstract_replication_strategy.hh"
-#include "locator/token_metadata.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/interval.hh"
 #include "utils/chunked_vector.hh"
+
+namespace locator { class abstract_replication_strategy; }
+namespace db { class system_keyspace; }
 
 namespace replica {
 class database;
