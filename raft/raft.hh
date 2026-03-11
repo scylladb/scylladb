@@ -17,6 +17,7 @@
 #include <seastar/core/abort_source.hh>
 #include "bytes_ostream.hh"
 #include "internal.hh"
+#include "raft/raft_fwd.hh"
 #include "logical_clock.hh"
 #include "bounded_clock.hh"
 
@@ -28,20 +29,6 @@ using command = bytes_ostream;
 using command_cref = std::reference_wrapper<const command>;
 
 extern seastar::logger logger;
-
-// This is user provided id for a snapshot
-using snapshot_id = internal::tagged_id<struct snapshot_id_tag>;
-// Unique identifier of a server in a Raft group
-using server_id = internal::tagged_id<struct server_id_tag>;
-// Unique identifier of a Raft group
-using group_id = raft::internal::tagged_id<struct group_id_tag>;
-
-// This type represents the raft term
-using term_t = raft::internal::tagged_uint64<struct term_tag>;
-// This type represensts the index into the raft log
-using index_t = raft::internal::tagged_uint64<struct index_tag>;
-// Identifier for a read barrier request
-using read_id = raft::internal::tagged_uint64<struct read_id_tag>;
 
 // Opaque connection properties. May contain ip:port pair for instance.
 // This value is disseminated between cluster member

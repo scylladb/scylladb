@@ -61,6 +61,7 @@
 #include "keys/clustering_key_filter.hh"
 #include "readers/from_mutations.hh"
 #include "readers/from_fragments.hh"
+#include <seastar/core/reactor.hh>
 
 using namespace std::chrono_literals;
 
