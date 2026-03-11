@@ -35,6 +35,7 @@
 #include "idl/group0_state_machine.dist.impl.hh"
 #include "service/migration_manager.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "mutation/timestamp.hh"

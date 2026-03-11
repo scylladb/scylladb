@@ -37,6 +37,7 @@
 #include "replica/tablets.hh"
 #include "lang/manager.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "compaction/compaction_manager.hh"
 #include "cql3/expr/expression.hh"
 #include "types/types.hh"

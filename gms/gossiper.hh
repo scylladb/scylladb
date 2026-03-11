@@ -35,6 +35,8 @@
 #include "locator/types.hh"
 #include "gms/gossip_address_map.hh"
 
+#include "gms/loaded_endpoint_state.hh"
+
 namespace gms {
 
 class gossip_digest_syn;
@@ -71,10 +73,6 @@ struct gossip_config {
     utils::updateable_value<utils::UUID> recovery_leader;
 };
 
-struct loaded_endpoint_state {
-    gms::inet_address endpoint;
-    std::optional<locator::endpoint_dc_rack> opt_dc_rack;
-};
 
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
