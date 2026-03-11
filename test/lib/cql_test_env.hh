@@ -19,6 +19,7 @@
 #include "db/view/view_building_worker.hh"
 #include "db/view/view_update_generator.hh"
 #include "service/qos/service_level_controller.hh"
+#include "db/config.hh"
 #include "replica/database.hh"
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_options_fwd.hh"
