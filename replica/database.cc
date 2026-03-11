@@ -29,6 +29,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/try_future.hh>
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "db/system_keyspace_sstables_registry.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/commitlog/commitlog.hh"

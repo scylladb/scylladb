@@ -13,6 +13,7 @@
 #include "locator/tablet_sharder.hh"
 #include "locator/token_range_splitter.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
 #include "utils/stall_free.hh"

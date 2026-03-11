@@ -19,6 +19,7 @@
 #include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
 #include "locator/host_id.hh"

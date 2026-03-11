@@ -22,6 +22,7 @@
 #include "utils/chunked_vector.hh"
 #include "utils/overloaded_functor.hh"
 #include "service/storage_service.hh"
+#include "gms/gossiper.hh"
 #include "tasks/task_handler.hh"
 #include "task_manager.hh"
 #include "tasks/virtual_task_hint.hh"

@@ -12,6 +12,7 @@
 #include <seastar/core/when_all.hh>
 #include "utils/allocation_strategy.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "db/large_data_handler.hh"
 #include "keys/keys.hh"
 #include "mutation/mutation_partition.hh"
