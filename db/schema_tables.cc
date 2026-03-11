@@ -77,6 +77,7 @@
 #include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/functions/user_aggregate.hh"
 

@@ -49,6 +49,7 @@
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
