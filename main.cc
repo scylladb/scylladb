@@ -94,6 +94,7 @@
 #include "sstables/exceptions.hh"
 #include "gms/feature_service.hh"
 #include "replica/distributed_loader.hh"
+#include "replica/tablets.hh"
 #include "sstables_loader.hh"
 #include "cql3/cql_config.hh"
 #include "transport/controller.hh"
