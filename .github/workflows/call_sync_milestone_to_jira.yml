@@ -1,8 +1,8 @@
-﻿name: Call Jira release creation for new milestone
+name: Call Jira release creation for new milestone
 
 on:
   milestone:
-    types: [created]
+    types: [created, closed]
 
 jobs:
   sync-milestone-to-jira:
