@@ -39,7 +39,7 @@
 #include "db/commitlog/commitlog_types.hh"
 #include "logstor/logstor.hh"
 #include "schema/schema_fwd.hh"
-#include "db/view/view.hh"
+#include "mutation/frozen_mutation.hh"
 #include "db/snapshot-ctl.hh"
 #include "memtable.hh"
 #include "db/row_cache.hh"
