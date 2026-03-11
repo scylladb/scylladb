@@ -18,7 +18,9 @@
 #include "utils/assert.hh"
 #include "utils/estimated_histogram.hh"
 #include <algorithm>
+#include <sstream>
 #include "db/data_listeners.hh"
+#include "utils/hash.hh"
 #include "storage_service.hh"
 #include "compaction/compaction_manager.hh"
 #include "unimplemented.hh"
@@ -340,6 +342,56 @@ uint64_t accumulate_on_active_memtables(replica::table& t, noncopyable_function<
         ret += action(mt);
     });
     return ret;
+}
+
+static
+future<json::json_return_type>
+rest_toppartitions_generic(sharded<replica::database>& db, std::unique_ptr<http::request> req) {
+        bool filters_provided = false;
+
+        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
+        if (auto filters = req->get_query_param("table_filters"); !filters.empty()) {
+            filters_provided = true;
+            std::stringstream ss { filters };
+            std::string filter;
+            while (!filters.empty() && ss.good()) {
+                std::getline(ss, filter, ',');
+                table_filters.emplace(parse_fully_qualified_cf_name(filter));
+            }
+        }
+
+        std::unordered_set<sstring> keyspace_filters {};
+        if (auto filters = req->get_query_param("keyspace_filters"); !filters.empty()) {
+            filters_provided = true;
+            std::stringstream ss { filters };
+            std::string filter;
+            while (!filters.empty() && ss.good()) {
+                std::getline(ss, filter, ',');
+                keyspace_filters.emplace(std::move(filter));
+            }
+        }
+
+        // when the query is empty return immediately
+        if (filters_provided && table_filters.empty() && keyspace_filters.empty()) {
+            apilog.debug("toppartitions query: processing results");
+            cf::toppartitions_query_results results;
+
+            results.read_cardinality = 0;
+            results.write_cardinality = 0;
+
+            return make_ready_future<json::json_return_type>(results);
+        }
+
+        api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
+        api::req_param<unsigned> capacity(*req, "capacity", 256);
+        api::req_param<unsigned> list_size(*req, "list_size", 10);
+
+        apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
+            !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration.value, list_size.value, capacity.value);
+
+        return seastar::do_with(db::toppartitions_query(db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [] (db::toppartitions_query& q) {
+            return run_toppartitions_query(q);
+        });
 }
 
 void set_column_family(http_context& ctx, routes& r, sharded<replica::database>& db) {
@@ -1047,6 +1099,10 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         });
     });
 
+    ss::toppartitions_generic.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return rest_toppartitions_generic(db, std::move(req));
+    });
+
     cf::force_major_compaction.set(r, [&ctx, &db](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         if (!req->get_query_param("split_output").empty()) {
             fail(unimplemented::cause::API);
@@ -1213,6 +1269,7 @@ void unset_column_family(http_context& ctx, routes& r) {
     cf::get_sstable_count_per_level.unset(r);
     cf::get_sstables_for_key.unset(r);
     cf::toppartitions.unset(r);
+    ss::toppartitions_generic.unset(r);
     cf::force_major_compaction.unset(r);
     ss::get_load.unset(r);
     ss::get_metrics_load.unset(r);

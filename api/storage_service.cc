@@ -17,9 +17,7 @@
 #include "gms/feature_service.hh"
 #include "schema/schema_builder.hh"
 #include "sstables/sstables_manager.hh"
-#include "utils/hash.hh"
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <time.h>
 #include <algorithm>
@@ -610,56 +608,6 @@ rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss
         }
 
         co_return json::json_return_type(stream_range_as_array(token_endpoints, &map_to_json<dht::token, gms::inet_address>));
-}
-
-static
-future<json::json_return_type>
-rest_toppartitions_generic(http_context& ctx, std::unique_ptr<http::request> req) {
-        bool filters_provided = false;
-
-        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
-        if (auto filters = req->get_query_param("table_filters"); !filters.empty()) {
-            filters_provided = true;
-            std::stringstream ss { filters };
-            std::string filter;
-            while (!filters.empty() && ss.good()) {
-                std::getline(ss, filter, ',');
-                table_filters.emplace(parse_fully_qualified_cf_name(filter));
-            }
-        }
-
-        std::unordered_set<sstring> keyspace_filters {};
-        if (auto filters = req->get_query_param("keyspace_filters"); !filters.empty()) {
-            filters_provided = true;
-            std::stringstream ss { filters };
-            std::string filter;
-            while (!filters.empty() && ss.good()) {
-                std::getline(ss, filter, ',');
-                keyspace_filters.emplace(std::move(filter));
-            }
-        }
-
-        // when the query is empty return immediately
-        if (filters_provided && table_filters.empty() && keyspace_filters.empty()) {
-            apilog.debug("toppartitions query: processing results");
-            httpd::column_family_json::toppartitions_query_results results;
-
-            results.read_cardinality = 0;
-            results.write_cardinality = 0;
-
-            return make_ready_future<json::json_return_type>(results);
-        }
-
-        api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
-        api::req_param<unsigned> capacity(*req, "capacity", 256);
-        api::req_param<unsigned> list_size(*req, "list_size", 10);
-
-        apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
-            !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration.value, list_size.value, capacity.value);
-
-        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [] (db::toppartitions_query& q) {
-            return run_toppartitions_query(q);
-        });
 }
 
 static
@@ -1787,7 +1735,6 @@ rest_bind(FuncType func, BindArgs&... args) {
 
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
     ss::get_token_endpoint.set(r, rest_bind(rest_get_token_endpoint, ctx, ss));
-    ss::toppartitions_generic.set(r, rest_bind(rest_toppartitions_generic, ctx));
     ss::get_release_version.set(r, rest_bind(rest_get_release_version, ss));
     ss::get_scylla_release_version.set(r, rest_bind(rest_get_scylla_release_version, ss));
     ss::get_schema_version.set(r, rest_bind(rest_get_schema_version, ss));
@@ -1867,7 +1814,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
 void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_token_endpoint.unset(r);
-    ss::toppartitions_generic.unset(r);
     ss::get_release_version.unset(r);
     ss::get_scylla_release_version.unset(r);
     ss::get_schema_version.unset(r);
