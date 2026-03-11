@@ -204,12 +204,19 @@ private:
         }
     }
 
-    void on_permit_inactive(reader_permit::state st) {
-        // If the permit is registered as inactive, while waiting for memory,
-        // clear the memory amount, the requests are failed anyway.
+    // Clear _requested_memory if the permit is leaving the waiting_for_memory
+    // state. The pending memory request is being failed, so _requested_memory
+    // must be reset to prevent a subsequent request_memory() from accumulating
+    // on top of the stale value, which would cause on_granted_memory() to
+    // consume more than the returned resource_units tracks.
+    void maybe_clear_requested_memory() noexcept {
         if (_state == reader_permit::state::waiting_for_memory) {
             _requested_memory = {};
         }
+    }
+
+    void on_permit_inactive(reader_permit::state st) {
+        maybe_clear_requested_memory();
         _state = st;
         if (_marked_as_awaits) {
             on_permit_not_awaits();
@@ -374,6 +381,8 @@ public:
         if (_state != reader_permit::state::waiting_for_admission && _state != reader_permit::state::waiting_for_memory) {
             on_internal_error(rcslog, format("on_preemptive_aborted(): permit in invalid state {}", _state));
         }
+
+        maybe_clear_requested_memory();
 
         auto ex = named_semaphore_aborted(_semaphore._name);
         _ex = std::make_exception_ptr(ex);

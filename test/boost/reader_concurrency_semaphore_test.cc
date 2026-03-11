@@ -2592,13 +2592,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_preemptive_abort_requ
     // but resource_units only tracks 512 — the difference leaks.
     { auto u = permit2->request_memory(512).get(); }
 
-    // Destroy permit2 and verify ~impl() detects the leak.
-    auto prev_internal_errors = seastar::internal::internal_errors;
-    auto reset_abort = defer([prev = set_abort_on_internal_error(false)] {
-        set_abort_on_internal_error(prev);
-    });
+    // Shouldn't fail if SCYLLADB-1016 is fixed.
     permit2 = {};
-    BOOST_REQUIRE_GT(seastar::internal::internal_errors, prev_internal_errors);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
