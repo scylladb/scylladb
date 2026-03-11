@@ -40,6 +40,7 @@
 #include "readers/forwardable.hh"
 #include "readers/compacting.hh"
 #include "readers/nonforwardable.hh"
+#include <seastar/core/reactor.hh>
 
 struct mock_consumer {
     struct result {
