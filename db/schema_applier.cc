@@ -35,6 +35,7 @@
 #include "view_info.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
+#include "db/config.hh"
 #include "lang/manager.hh"
 #include "db/system_keyspace.hh"
 #include "compaction/compaction_manager.hh"
