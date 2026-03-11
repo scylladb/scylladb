@@ -7,7 +7,6 @@ Each only checks that the command does not fail - but not what it does or return
 """
 
 import pytest
-import re
 
 from test.scylla_gdb.conftest import execute_gdb_command
 
@@ -24,16 +23,6 @@ pytestmark = [
 ]
 
 
-@pytest.fixture(scope="module")
-def sstable(gdb_cmd):
-    """Finds sstable"""
-    result = execute_gdb_command(gdb_cmd, full_command="python get_sstables()").stdout
-    match = re.search(r"(\(sstables::sstable \*\) 0x)([0-9a-f]+)", result)
-    sstable_pointer = match.group(0).strip() if match else None
-
-    return sstable_pointer
-
-
 @pytest.mark.parametrize(
     "command",
     [
@@ -41,10 +30,8 @@ def sstable(gdb_cmd):
         "sstable-index-cache",
     ],
 )
-def test_sstable(gdb_cmd, command, sstable):
-    assert sstable, "No sstable was found"
-
-    result = execute_gdb_command(gdb_cmd, f"{command} {sstable}")
+def test_sstable(gdb_cmd, command):
+    result = execute_gdb_command(gdb_cmd, f"{command} $get_sstable()")
     assert result.returncode == 0, (
         f"GDB command {command} failed. stdout: {result.stdout} stderr: {result.stderr}"
     )
