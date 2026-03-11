@@ -697,7 +697,7 @@ future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::prepare(sstring query_string, const service::client_state& client_state, cql3::dialect d) {
     try {
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
-        auto prep_ptr = co_await _prepared_cache.get(key, [this, &query_string, &client_state, d] {
+        auto prep_entry = co_await _prepared_cache.get_pinned(key, [this, &query_string, &client_state, d] {
                 auto prepared = get_statement(query_string, client_state, d);
                 prepared->calculate_metadata_id();
                 auto bound_terms = prepared->statement->get_bound_terms();
@@ -711,13 +711,13 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
                 return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
             });
 
-        const auto& warnings = prep_ptr->warnings;
-        const auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key), std::move(prep_ptr),
+        co_await utils::get_local_injector().inject(
+                "query_processor_prepare_wait_after_cache_get",
+                utils::wait_for_message(std::chrono::seconds(60)));
+  
+        auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key), std::move(prep_entry),
                     client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK));
-        for (const auto& w : warnings) {
-            msg->add_warning(w);
-        }
-        co_return ::shared_ptr<cql_transport::messages::result_message::prepared>(std::move(msg));
+        co_return std::move(msg);
     } catch(typename prepared_statements_cache::statement_is_too_big&) {
         throw prepared_statement_is_too_big(query_string);
     }
