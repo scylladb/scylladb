@@ -28,6 +28,7 @@
 #include "utils/log.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_builder.hh"
+#include "db/view/view.hh"
 #include <ranges>
 #include <vector>
 #include <string>
