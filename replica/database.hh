@@ -8,7 +8,8 @@
 
 #pragma once
 
-#include "locator/abstract_replication_strategy.hh"
+#include "locator/abstract_replication_strategy_fwd.hh"
+#include "locator/token_metadata.hh"
 #include "index/secondary_index_manager.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -1120,9 +1121,7 @@ public:
         _config.enable_incremental_backups = val;
     }
 
-    bool uses_static_sharding() const {
-        return !_erm || _erm->get_replication_strategy().is_vnode_based();
-    }
+    bool uses_static_sharding() const;
 
     /*!
      * \brief get sstables by key
@@ -1535,9 +1534,7 @@ public:
     // Get the keyspace static effective replication map, for non-tablets keyspaces
     locator::static_effective_replication_map_ptr get_static_effective_replication_map() const;
 
-    bool uses_tablets() const {
-        return _replication_strategy->uses_tablets();
-    }
+    bool uses_tablets() const;
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
     void add_or_update_column_family(const schema_ptr& s);

@@ -975,6 +975,10 @@ bool table::uses_tablets() const {
     return _erm && _erm->get_replication_strategy().uses_tablets();
 }
 
+bool table::uses_static_sharding() const {
+    return !_erm || _erm->get_replication_strategy().is_vnode_based();
+}
+
 storage_group::storage_group(compaction_group_ptr cg)
         : _main_cg(cg)
         , _async_gate(format("[storage_group {}.{} {}]", cg->schema()->ks_name(), cg->schema()->cf_name(), cg->group_id()))

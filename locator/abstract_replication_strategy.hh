@@ -21,6 +21,7 @@
 #include "tablets.hh"
 #include "data_dictionary/consistency_config_options.hh"
 #include "locator/replication_strategy_type.hh"
+#include "locator/abstract_replication_strategy_fwd.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -234,8 +235,6 @@ public:
     auto& operator*();
 };
 
-using replication_strategy_ptr = seastar::shared_ptr<const abstract_replication_strategy>;
-using mutable_replication_strategy_ptr = seastar::shared_ptr<abstract_replication_strategy>;
 
 /// \brief Represents effective replication (assignment of replicas to keys).
 ///
@@ -371,10 +370,6 @@ class static_effective_replication_map;
 class vnode_effective_replication_map;
 class local_effective_replication_map;
 
-using static_effective_replication_map_ptr = shared_ptr<const static_effective_replication_map>;
-using mutable_static_effective_replication_map_ptr = shared_ptr<static_effective_replication_map>;
-using static_erm_ptr = static_effective_replication_map_ptr;
-using mutable_static_erm_ptr = mutable_static_effective_replication_map_ptr;
 
 // Holds the full replication_map resulting from applying the
 // effective replication strategy over the given token_metadata

@@ -519,6 +519,10 @@ locator::static_effective_replication_map_ptr keyspace::get_static_effective_rep
     return _effective_replication_map;
 }
 
+bool keyspace::uses_tablets() const {
+    return _replication_strategy->uses_tablets();
+}
+
 } // namespace replica
 
 void backlog_controller::adjust() {
