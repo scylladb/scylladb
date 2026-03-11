@@ -543,6 +543,22 @@ def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: b
             prepare_dir(tempdir_base / mode / "pytest", "*", save_log_on_success)
 
 
+def _make_service_logger(logger_name: str, log_file: pathlib.Path) -> logging.Logger:
+    """Return a logger that writes exclusively to *log_file*.
+
+    Disables propagation to the root logger so service start/stop messages
+    never appear on the console.
+    """
+    svc_logger = logging.getLogger(logger_name)
+    svc_logger.propagate = False
+    svc_logger.setLevel(logging.DEBUG)
+    if not svc_logger.handlers:
+        handler = logging.FileHandler(log_file)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        svc_logger.addHandler(handler)
+    return svc_logger
+
+
 @universalasync.async_to_sync_wraps
 async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_limit: int):
     hosts = HostRegistry()
@@ -559,7 +575,10 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     ms = MinioServer(
         tempdir_base=str(tempdir_base),
         address=await hosts.lease_host(),
-        logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
+        logger=LogPrefixAdapter(
+            logger=_make_service_logger("minio", tempdir_base / "minio.log"),
+            extra={"prefix": "minio"},
+        ),
     )
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
@@ -569,7 +588,10 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     mock_s3_server = MockS3Server(
         host=await hosts.lease_host(),
         port=2012,
-        logger=LogPrefixAdapter(logger=logging.getLogger("s3_mock"), extra={"prefix": "s3_mock"}),
+        logger=LogPrefixAdapter(
+            logger=_make_service_logger("s3_mock", tempdir_base / "s3_mock.log"),
+            extra={"prefix": "s3_mock"},
+        ),
     )
     await mock_s3_server.start()
     TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
@@ -581,7 +603,10 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         minio_uri=minio_uri,
         max_retries=3,
         seed=int(time.time()),
-        logger=LogPrefixAdapter(logger=logging.getLogger("s3_proxy"), extra={"prefix": "s3_proxy"}),
+        logger=LogPrefixAdapter(
+            logger=_make_service_logger("s3_proxy", tempdir_base / "s3_proxy.log"),
+            extra={"prefix": "s3_proxy"},
+        ),
     )
     await proxy_s3_server.start()
     TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
