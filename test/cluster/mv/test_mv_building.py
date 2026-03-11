@@ -119,8 +119,7 @@ async def test_view_building_during_drop_index(manager: ManagerClient):
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
     cmdline = ['--smp=4']
-    cfg = {"commitlog_sync_period_in_ms": 1000}
-    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(1, cmdline=cmdline)
     server = servers[0]
 
     logger.info("Populate table")
@@ -132,7 +131,7 @@ async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (p, c) VALUES ({k}, {k+1});") for k in range(n_partitions)])
 
     # pause the last shard so it won't be registered
-    await manager.api.enable_injection(server.ip_addr, "add_new_view_pause_last_shard", one_shot=True)
+    await manager.api.enable_injection(server.ip_addr, "add_new_view_fail_last_shard", one_shot=False)
 
     await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT p, c FROM {ks}.test WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p)")
 
@@ -142,10 +141,9 @@ async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
         if len(rows) > 0:
             return True
     await wait_for(some_registered, time.time() + 60)
-    await asyncio.sleep(2) # ensure commitlog sync
 
     # restart while some shards registered but the last shard didn't
-    await manager.server_stop(server.server_id)
+    await manager.server_stop_gracefully(server.server_id)
 
     await manager.server_start(server.server_id)
     cql = await reconnect_driver(manager)

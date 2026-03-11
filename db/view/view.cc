@@ -2647,7 +2647,7 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     }
 
     if (this_shard_id() == smp::count - 1) {
-        co_await utils::get_local_injector().inject("add_new_view_pause_last_shard", utils::wait_for_message(5min));
+        inject_failure("add_new_view_fail_last_shard");
     }
 
     co_await _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), step.current_token());
