@@ -7,6 +7,7 @@
  */
 
 #include "server.hh"
+#include "gms/gossiper.hh"
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"

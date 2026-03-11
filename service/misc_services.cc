@@ -14,6 +14,7 @@
 #include "load_broadcaster.hh"
 #include "cache_hitrate_calculator.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "gms/application_state.hh"
 #include "service/storage_proxy.hh"
 #include "service/view_update_backlog_broker.hh"
