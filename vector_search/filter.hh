@@ -55,7 +55,7 @@ public:
 };
 
 /// Prepares a filter from CQL statement restrictions for use in Vector Store service.
-/// This function extracts primary key restrictions from the statement_restrictions
+/// This function extracts restrictions from the statement_restrictions
 /// and prepares them for serialization to JSON compatible to Vector Store service filtering API.
 prepared_filter prepare_filter(const cql3::restrictions::statement_restrictions& restrictions, bool allow_filtering);
 

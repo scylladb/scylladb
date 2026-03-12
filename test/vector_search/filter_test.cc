@@ -407,4 +407,44 @@ SEASTAR_TEST_CASE(to_json_no_bind_markers_uses_cache) {
     });
 }
 
+SEASTAR_TEST_CASE(to_json_nonprimary_key_eq) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table ks.t(pk int, ck int, r int, v vector<float, 3>, primary key(pk, ck))");
+
+        auto restr = make_restrictions("pk=1 and r=42", e);
+        auto json = get_restrictions_json(restr, true);
+
+        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"==","lhs":"r","rhs":42}],"allow_filtering":true})json";
+        BOOST_CHECK_EQUAL(json, expected);
+    });
+}
+
+SEASTAR_TEST_CASE(to_json_nonprimary_key_range) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table ks.t(pk int, ck int, r int, v vector<float, 3>, primary key(pk, ck))");
+
+        auto restr = make_restrictions("pk=1 and r>10 and r<100", e);
+        auto json = get_restrictions_json(restr, true);
+
+        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":">","lhs":"r","rhs":10},{"type":"<","lhs":"r","rhs":100}],"allow_filtering":true})json";
+        BOOST_CHECK_EQUAL(json, expected);
+    });
+}
+
+SEASTAR_TEST_CASE(to_json_nonprimary_key_bind_marker) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table ks.t(pk int, ck int, r int, v vector<float, 3>, primary key(pk, ck))");
+
+        auto restr = make_restrictions("pk=1 and r=?", e);
+        auto filter = vector_search::prepare_filter(restr, true);
+
+        std::vector<raw_value> bind_values = {raw_value::make_value(int32_type->decompose(99))};
+        auto options = make_query_options(std::move(bind_values));
+        auto json = rjson::print(filter.to_json(options));
+
+        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"==","lhs":"r","rhs":99}],"allow_filtering":true})json";
+        BOOST_CHECK_EQUAL(json, expected);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

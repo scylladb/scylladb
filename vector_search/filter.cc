@@ -186,11 +186,15 @@ prepared_filter prepare_filter(const cql3::restrictions::statement_restrictions&
 
     auto& partition_key_restrictions = restrictions.get_partition_key_restrictions();
     auto& clustering_columns_restrictions = restrictions.get_clustering_columns_restrictions();
+    auto& nonprimary_key_restrictions = restrictions.get_nonprimary_key_restrictions();
 
     expression_to_prepared(partition_key_restrictions, prepared_restrictions);
     expression_to_prepared(clustering_columns_restrictions, prepared_restrictions);
+    expression_to_prepared(nonprimary_key_restrictions, prepared_restrictions);
 
-    bool has_bind_markers = cql3::expr::contains_bind_marker(partition_key_restrictions) || cql3::expr::contains_bind_marker(clustering_columns_restrictions);
+    bool has_bind_markers = cql3::expr::contains_bind_marker(partition_key_restrictions)
+            || cql3::expr::contains_bind_marker(clustering_columns_restrictions)
+            || cql3::expr::contains_bind_marker(nonprimary_key_restrictions);
 
     if (!has_bind_markers) {
         auto cached_json = restrictions_to_json(prepared_restrictions, allow_filtering, cql3::query_options({}));
