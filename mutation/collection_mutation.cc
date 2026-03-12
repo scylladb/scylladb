@@ -261,7 +261,7 @@ static collection_mutation serialize_collection_mutation(
 
         writev(v.serialize());
     }
-    return collection_mutation(type, ret);
+    return collection_mutation(type, std::move(ret));
 }
 
 collection_mutation collection_mutation_description::serialize(const abstract_type& type) const {
