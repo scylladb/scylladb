@@ -142,14 +142,7 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
                 if (_col.is_atomic()) {
                     throw std::runtime_error("An atomic cell expected, got a collection");
                 }
-                // FIXME: Pass view to cell to avoid copy
-                auto&& outer = current_allocator();
-                with_allocator(standard_allocator(), [&] {
-                    auto cell = read_collection_cell(*_col.type(), ccv);
-                    with_allocator(outer, [&] {
-                        _visitor.accept_collection(_id, cell);
-                    });
-                });
+                _visitor.accept_collection(_id, read_collection_cell(*_col.type(), ccv));
             }
             void operator()(ser::unknown_variant_type&) const {
                 throw std::runtime_error("Trying to deserialize unknown cell type");

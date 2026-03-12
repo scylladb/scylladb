@@ -15,10 +15,13 @@
 
 #include "mutation/frozen_mutation.hh"
 #include "mutation/async_utils.hh"
+#include "mutation/collection_mutation.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
+#include "test/lib/random_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "types/map.hh"
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
@@ -205,4 +208,54 @@ SEASTAR_TEST_CASE(frozen_mutation_is_consumed_in_order) {
 
     validate_consume(s, fm, m);
     co_await validate_consume_gently(s, fm, m);
+}
+
+// Tests that freeze/unfreeze works correctly with mutations containing large collection cells.
+// Exercises the code path in streamed_mutation_freezer and serialize_mutation_fragments()
+// which switched from std::deque to utils::chunked_vector for clustering rows (issue #28275).
+SEASTAR_THREAD_TEST_CASE(test_freeze_unfreeze_with_large_collection_cells) {
+    const auto collection_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+    schema_ptr s = new_table()
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("v_atomic", bytes_type)
+        .with_column("v_collection", collection_type)
+        .build();
+
+    constexpr size_t cell_size_min = 8 * 1024;
+    constexpr size_t cell_size_max = 15 * 1024;
+    constexpr size_t num_entries = 50;
+    constexpr size_t num_rows = 10;
+
+    const partition_key pk = partition_key::from_single_value(*s, serialized("key"));
+    mutation m(s, pk);
+    const auto& cdef_atomic = *s->get_column_definition("v_atomic");
+    const auto& cdef_collection = *s->get_column_definition("v_collection");
+
+    auto make_atomic_cell = [&] (atomic_cell::collection_member cm) {
+        const auto cell_size = tests::random::get_int(cell_size_min, cell_size_max);
+        auto cell_value = tests::random::get_bytes(cell_size);
+        return atomic_cell::make_live(*bytes_type, new_timestamp(), std::move(cell_value), cm);
+    };
+
+    for (size_t r = 0; r < num_rows; ++r) {
+        const auto ck = clustering_key::from_single_value(*s, serialized(format("ck_{}", r)));
+
+        m.set_clustered_cell(ck, cdef_atomic, atomic_cell_or_collection(make_atomic_cell(atomic_cell::collection_member::no)));
+
+        collection_mutation_description cmd;
+        for (size_t i = 0; i < num_entries; ++i) {
+            cmd.cells.emplace_back(int32_type->decompose(int32_t(i)), make_atomic_cell(atomic_cell::collection_member::yes));
+        }
+        m.set_clustered_cell(ck, cdef_collection, atomic_cell_or_collection(cmd.serialize(*collection_type)));
+    }
+
+    for (auto do_freeze_gently : {false, true}) {
+        for (auto do_unfreeze_gently : {false, true}) {
+            testlog.debug("test_freeze_unfreeze_with_large_collection_cells: freeze_gently={} unfreeze_gently={}", do_freeze_gently, do_unfreeze_gently);
+            auto frozen = do_freeze_gently ? freeze_gently(m).get() : freeze(m);
+            auto unfrozen = do_unfreeze_gently ? unfreeze_gently(frozen, s).get() : frozen.unfreeze(s);
+            assert_that(unfrozen).is_equal_to(m);
+        }
+    }
 }
