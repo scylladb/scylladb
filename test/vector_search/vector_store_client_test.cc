@@ -71,6 +71,136 @@ auto get_metrics_value(sstring metric_name, const auto& all_metrics) {
     return all_metrics->values[distance(cbegin(all_metadata), m)].cbegin();
 }
 
+<<<<<<< HEAD
+||||||| parent of 00269ca839 (Merge '[Backport 2025.4] vector_search: test: fix HTTPS client test flakiness' from Scylladb[bot])
+class configure {
+    std::reference_wrapper<vector_search::vector_store_client> vs_ref;
+
+public:
+    explicit configure(vector_search::vector_store_client& vs)
+        : vs_ref(vs) {
+        with_dns_refresh_interval(seconds(2));
+        with_wait_for_client_timeout(milliseconds(100));
+        with_dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
+            co_return inet_address("127.0.0.1");
+        });
+    }
+
+    configure& with_dns_refresh_interval(milliseconds interval) {
+        vector_store_client_tester::set_dns_refresh_interval(vs_ref.get(), interval);
+        return *this;
+    }
+
+    configure& with_wait_for_client_timeout(milliseconds timeout) {
+        vector_store_client_tester::set_wait_for_client_timeout(vs_ref.get(), timeout);
+        return *this;
+    }
+
+    configure& with_dns(std::map<std::string, std::optional<std::string>> dns_) {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns_)](auto const& host) -> future<std::vector<inet_address>> {
+            auto value = dns.at(host);
+            if (value) {
+                co_return std::vector<inet_address>{inet_address(*value)};
+            }
+            co_return std::vector<inet_address>{};
+        });
+        return *this;
+    }
+
+    configure& with_dns(std::map<std::string, std::vector<std::string>> dns) {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns)](auto const& host) -> future<std::vector<inet_address>> {
+            std::vector<inet_address> ret;
+            for (auto const& ip : dns.at(host)) {
+                ret.push_back(inet_address(ip));
+            }
+            co_return ret;
+        });
+        return *this;
+    }
+
+    configure& with_dns_resolver(std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [r = std::move(resolver)](auto host) -> future<std::vector<inet_address>> {
+            auto addr = co_await r(host);
+            if (addr) {
+                co_return std::vector<inet_address>{*addr};
+            }
+            co_return std::vector<inet_address>{};
+        });
+        return *this;
+    }
+};
+
+cql_test_config make_config() {
+    cql_test_config cfg;
+    cfg.initial_tablets = 1;
+    return cfg;
+}
+
+=======
+class configure {
+    std::reference_wrapper<vector_search::vector_store_client> vs_ref;
+
+public:
+    explicit configure(vector_search::vector_store_client& vs)
+        : vs_ref(vs) {
+        with_dns_refresh_interval(seconds(2));
+        with_wait_for_client_timeout(STANDARD_WAIT);
+        with_dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
+            co_return inet_address("127.0.0.1");
+        });
+    }
+
+    configure& with_dns_refresh_interval(milliseconds interval) {
+        vector_store_client_tester::set_dns_refresh_interval(vs_ref.get(), interval);
+        return *this;
+    }
+
+    configure& with_wait_for_client_timeout(milliseconds timeout) {
+        vector_store_client_tester::set_wait_for_client_timeout(vs_ref.get(), timeout);
+        return *this;
+    }
+
+    configure& with_dns(std::map<std::string, std::optional<std::string>> dns_) {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns_)](auto const& host) -> future<std::vector<inet_address>> {
+            auto value = dns.at(host);
+            if (value) {
+                co_return std::vector<inet_address>{inet_address(*value)};
+            }
+            co_return std::vector<inet_address>{};
+        });
+        return *this;
+    }
+
+    configure& with_dns(std::map<std::string, std::vector<std::string>> dns) {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns)](auto const& host) -> future<std::vector<inet_address>> {
+            std::vector<inet_address> ret;
+            for (auto const& ip : dns.at(host)) {
+                ret.push_back(inet_address(ip));
+            }
+            co_return ret;
+        });
+        return *this;
+    }
+
+    configure& with_dns_resolver(std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [r = std::move(resolver)](auto host) -> future<std::vector<inet_address>> {
+            auto addr = co_await r(host);
+            if (addr) {
+                co_return std::vector<inet_address>{*addr};
+            }
+            co_return std::vector<inet_address>{};
+        });
+        return *this;
+    }
+};
+
+cql_test_config make_config() {
+    cql_test_config cfg;
+    cfg.initial_tablets = 1;
+    return cfg;
+}
+
+>>>>>>> 00269ca839 (Merge '[Backport 2025.4] vector_search: test: fix HTTPS client test flakiness' from Scylladb[bot])
 timeout_config make_query_timeout(std::chrono::seconds timeout) {
     timeout_config cfg{};
     cfg.read_timeout = timeout;
