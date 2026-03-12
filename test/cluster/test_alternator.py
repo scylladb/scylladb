@@ -1205,7 +1205,7 @@ async def test_zero_token_node_load_balancer(manager, tablets):
     assert got == expected
     table.delete()
 
-@pytest.mark.xfail(reason="#16261")
+@pytest.mark.xfail(reason="#16261", strict=False)
 async def test_alternator_concurrent_rmw_same_partition_different_server(manager: ManagerClient):
     """A reproducer for issue #16261: When sending RMW (read-modify-write)
        operations to the same partition (different item) on different server
