@@ -429,7 +429,7 @@ future<utils::chunked_vector<mutation>> service_level_controller::get_create_dri
 future<std::optional<service::group0_guard>> service_level_controller::migrate_to_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks) {
     // Don't try creating driver service level too often if it already failed.
     // We don't want to block the topology coordinator.
-    if (_last_unsuccessful_driver_sl_creation_attemp + 5min < seastar::lowres_clock::now()) {
+    if (_sl_data_accessor && _last_unsuccessful_driver_sl_creation_attemp + 5min < seastar::lowres_clock::now()) {
         sl_logger.info("migrate_to_driver_service_level: starting sl:{} creation", service_level_controller::driver_service_level_name);
         try {
             service::group0_batch mc{std::move(guard)};
