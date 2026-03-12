@@ -201,6 +201,10 @@ public:
         return _clustering_columns_restrictions;
     }
 
+    const expr::expression& get_nonprimary_key_restrictions() const {
+        return _nonprimary_key_restrictions;
+    }
+
     // Get a set of columns restricted by the IS NOT NULL restriction.
     // IS NOT NULL is a special case that is handled separately from other restrictions.
     const std::unordered_set<const column_definition*> get_not_null_columns() const;
