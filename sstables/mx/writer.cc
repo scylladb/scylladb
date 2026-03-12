@@ -1221,8 +1221,6 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
     }
     _sst.get_stats().on_cell_write();
-
-    thread::maybe_yield();
 }
 
 void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker) {
@@ -1273,6 +1271,7 @@ void writer::write_collection(bytes_ostream& writer, const clustering_key_prefix
         }
         for (const auto& [cell_path, cell]: mview.cells) {
             write_cell(writer, clustering_key, cell, cdef, properties, cell_path);
+            thread::maybe_yield();
         }
         _c_stats.cells_count += collection_elements;
     });
