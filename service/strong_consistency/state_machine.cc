@@ -58,7 +58,7 @@ public:
             for (const auto& c: command) {
                 auto is = ser::as_input_stream(c);
                 auto cmd = ser::deserialize(is, std::type_identity<raft_command>{});
-                muts.push_back(std::move(cmd.mutation));
+                muts.insert(muts.end(), std::make_move_iterator(cmd.mutations.begin()), std::make_move_iterator(cmd.mutations.end()));
             }
             // Hold pointers to schemas until `_db.apply()` is finished
             auto schemas = co_await get_schema_and_upgrade_mutations(muts);

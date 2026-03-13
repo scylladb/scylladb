@@ -13,7 +13,7 @@ namespace service {
 namespace strong_consistency {
 
 struct raft_command {
-    frozen_mutation mutation;
+    utils::chunked_vector<frozen_mutation> mutations;
 };
 
 } // namespace strong_consistency
