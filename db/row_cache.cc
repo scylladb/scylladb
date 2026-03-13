@@ -214,11 +214,7 @@ void cache_tracker::clear() {
 }
 
 void cache_tracker::touch(rows_entry& e) {
-    // last dummy may not be linked if evicted
-    if (e.is_linked()) {
-        _lru.remove(e);
-    }
-    _lru.add(e);
+    _lru.touch(e);
 }
 
 void cache_tracker::insert(cache_entry& entry) {
