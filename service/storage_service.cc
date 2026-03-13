@@ -61,6 +61,7 @@
 #include "gms/inet_address.hh"
 #include "utils/log.hh"
 #include "service/migration_manager.hh"
+#include "schema/schema_builder.hh"
 #include "service/raft/raft_group0.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
@@ -3117,6 +3118,81 @@ future<> storage_service::wait_for_topology_not_busy() {
         release_guard(std::move(guard));
         co_await _topology_state_machine.event.when();
         guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+    }
+}
+
+future<> storage_service::alter_table_with_tablet_hints(schema_ptr schema,
+                                                        std::optional<size_t> min_tablet_count,
+                                                        std::optional<size_t> max_tablet_count,
+                                                        bool wait_balancer) {
+    if (this_shard_id() != 0) {
+        on_internal_error(slogger, "Only shard 0 can execute alter_table_with_tablet_hints");
+    }
+
+    if (!min_tablet_count && !max_tablet_count) {
+        slogger.info("alter_table_with_tablet_hints: no tablet hints to set for {}.{}, skipping",
+            schema->ks_name(), schema->cf_name());
+        co_return;
+    }
+
+    if (wait_balancer && min_tablet_count != max_tablet_count) {
+        throw std::invalid_argument(format(
+            "wait_balancer requires both min_tablet_count and max_tablet_count to be provided and equal, got min={} max={}",
+            min_tablet_count ? to_sstring(*min_tablet_count) : "nullopt",
+            max_tablet_count ? to_sstring(*max_tablet_count) : "nullopt"));
+    }
+
+    std::map<sstring, sstring> tablet_options;
+    if (min_tablet_count) {
+        tablet_options["min_tablet_count"] = to_sstring(*min_tablet_count);
+    }
+    if (max_tablet_count) {
+        tablet_options["max_tablet_count"] = to_sstring(*max_tablet_count);
+    }
+
+    schema_builder builder(schema);
+    builder.set_tablet_options(std::move(tablet_options));
+    auto modified_schema = builder.build();
+
+    auto& mm = _migration_manager.local();
+    auto& sp = mm.get_storage_proxy();
+
+    while (true) {
+        auto group0_guard = co_await mm.start_group0_operation();
+        auto ts = group0_guard.write_timestamp();
+        sstring description = format("Altering table {}.{} with tablet count hints min_tablet_count={} max_tablet_count={}",
+            schema->ks_name(), schema->cf_name(),
+            min_tablet_count ? to_sstring(*min_tablet_count) : "unchanged",
+            max_tablet_count ? to_sstring(*max_tablet_count) : "unchanged");
+
+        auto mutations = co_await prepare_column_family_update_announcement(sp, modified_schema, /*view_updates=*/{}, ts);
+
+        if (!mutations.empty()) {
+            try {
+                co_await mm.announce(std::move(mutations), std::move(group0_guard), description);
+                break;
+            } catch (group0_concurrent_modification&) {
+                slogger.info("Concurrent operation is detected while starting, retrying.");
+            }
+        }
+    }
+
+    if (!wait_balancer) {
+        co_return;
+    }
+
+    while (true) {
+        auto tmptr = get_token_metadata_ptr();
+        auto& tmap = tmptr->tablets().get_tablet_map(schema->id());
+        auto tablet_count = tmap.tablet_count();
+
+        // FIXME: Checking tablet_count <= max_tablet_count should be enough, but the restore code currently has a limitation and it cannot handle
+        // any merges or splits until the restore transitions are done
+        if (tablet_count == *max_tablet_count) {
+            break;
+        }
+        co_await _topology_state_machine.event.when();
+        // FIXME: add an abort_source propagated from the root of the restore operation (SCYLLADB-1076)
     }
 }
 

@@ -25,6 +25,7 @@
 #include "sstables/storage.hh"
 #include "sstables_loader.hh"
 #include "replica/database_fwd.hh"
+#include "replica/tablets.hh"
 #include "tasks/task_handler.hh"
 #include "service/storage_proxy.hh"
 #include "replica/schema_describe_helper.hh"
@@ -178,4 +179,37 @@ SEASTAR_TEST_CASE(test_snapshot_cql_tables_api_works, *boost::unit_test::precond
 
         BOOST_CHECK_EQUAL(result_schema, schema);
     }, db_cfg_ptr);
+}
+
+void verify_tablet_options(cql_test_env& env, table_id tid, size_t desired_count, bool hints_expected) {
+    auto schema = env.local_db().find_schema(tid);
+    auto schema_desc = schema->describe(replica::make_schema_describe_helper(schema, env.local_db().as_data_dictionary()), cql3::describe_option::STMTS);
+    auto create_stmt = schema_desc.create_statement.value().linearize();
+
+    auto min_tablet_count = fmt::format("'min_tablet_count': '{}'", desired_count);
+    auto max_tablet_count = fmt::format("'max_tablet_count': '{}'", desired_count);
+
+    BOOST_CHECK_EQUAL(create_stmt.find(min_tablet_count) != sstring::npos, hints_expected);
+    BOOST_CHECK_EQUAL(create_stmt.find(max_tablet_count) != sstring::npos, hints_expected);
+}
+
+SEASTAR_TEST_CASE(test_restore_alter_table_with_tablet_hints, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& env) {
+        table_id tid = env.local_db().find_uuid("ks", "cf");
+
+        auto token_metadata = env.local_db().get_token_metadata_ptr();
+        auto& tmap = token_metadata->tablets().get_tablet_map(tid);
+        auto desired_count = tmap.tablet_count();
+
+        verify_tablet_options(env, tid, desired_count, false);
+
+        auto schema = env.local_db().find_schema(tid);
+
+        env.get_storage_service().local().alter_table_with_tablet_hints(schema, desired_count, desired_count).get();
+
+        verify_tablet_options(env, tid, desired_count, true);
+    }, false, db_cfg_ptr, 10);
 }
