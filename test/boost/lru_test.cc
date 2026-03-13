@@ -36,8 +36,11 @@ struct test_evictable : public evictable {
 // Count-Min Sketch Tests
 // ---------------------------------------------------------------------------
 
+// Width = 2^test_sketch_width_log2 = 1024 counters per row.
+static constexpr size_t test_sketch_width_log2 = 10;
+
 BOOST_AUTO_TEST_CASE(test_count_min_sketch_basic) {
-    utils::count_min_sketch sketch(10); // width = 1024
+    utils::count_min_sketch sketch(test_sketch_width_log2);
 
     // An unseen key should have estimate 0.
     BOOST_REQUIRE_EQUAL(sketch.estimate(42), 0);
@@ -57,7 +60,7 @@ BOOST_AUTO_TEST_CASE(test_count_min_sketch_basic) {
 }
 
 BOOST_AUTO_TEST_CASE(test_count_min_sketch_max_counter) {
-    utils::count_min_sketch sketch(10);
+    utils::count_min_sketch sketch(test_sketch_width_log2);
 
     for (int i = 0; i < 20; ++i) {
         sketch.increment(1);
@@ -67,7 +70,7 @@ BOOST_AUTO_TEST_CASE(test_count_min_sketch_max_counter) {
 }
 
 BOOST_AUTO_TEST_CASE(test_count_min_sketch_reset) {
-    utils::count_min_sketch sketch(10);
+    utils::count_min_sketch sketch(test_sketch_width_log2);
 
     sketch.increment(1);
     sketch.increment(1);

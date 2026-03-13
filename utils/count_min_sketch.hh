@@ -25,6 +25,7 @@ class count_min_sketch {
     static constexpr size_t depth = 4;
     static constexpr uint64_t reset_mask = 0x7777777777777777ULL;
 
+    // Hash seeds from splitmix64 sequence, chosen for low correlation between rows.
     static constexpr uint64_t seeds[depth] = {
         0x9e3779b97f4a7c15ULL,
         0xbf58476d1ce4e5b9ULL,

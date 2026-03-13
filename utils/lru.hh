@@ -121,6 +121,10 @@ private:
     static constexpr size_t sketch_width_log2 = 16;
     static constexpr size_t sketch_width = size_t(1) << sketch_width_log2;
     static constexpr size_t sample_threshold = sketch_width * 10;
+    // Window segment target: ~1% of total cache entries.
+    static constexpr size_t window_percent = 1;
+    // Protected segment target: ~80% of total cache entries.
+    static constexpr size_t protected_percent = 80;
 
     utils::count_min_sketch _sketch{sketch_width_log2};
     size_t _window_size = 0;
@@ -133,11 +137,11 @@ private:
     }
 
     size_t max_window_size() const noexcept {
-        return std::max(size_t(1), total_size() / 100);
+        return std::max(size_t(1), total_size() * window_percent / 100);
     }
 
     size_t max_protected_size() const noexcept {
-        return total_size() * 80 / 100;
+        return total_size() * protected_percent / 100;
     }
 
     static uint64_t entry_key(const evictable& e) noexcept {
@@ -157,7 +161,10 @@ private:
             case lru_segment::window: return _window;
             case lru_segment::probation: return _probation;
             case lru_segment::protected_: return _protected;
-            default: SCYLLA_ASSERT(false && "invalid segment"); __builtin_unreachable();
+            default: {
+                SCYLLA_ASSERT(false && "invalid segment");
+                __builtin_unreachable();
+            }
         }
     }
 
@@ -189,12 +196,6 @@ private:
     void add_to_segment(evictable& e, lru_segment seg) noexcept {
         e._segment = seg;
         segment_list(seg).push_back(e);
-        increment_size(seg);
-    }
-
-    void add_to_segment_front(evictable& e, lru_segment seg) noexcept {
-        e._segment = seg;
-        segment_list(seg).push_front(e);
         increment_size(seg);
     }
 
