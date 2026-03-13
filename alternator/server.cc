@@ -16,9 +16,9 @@
 #include <seastar/http/function_handlers.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/defer.hh>
-#include <seastar/util/short_streams.hh>
 #include "seastarx.hh"
 #include "error.hh"
 #include "service/client_state.hh"
@@ -997,6 +997,12 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         if (https_port || https_port_proxy_protocol) {
             set_routes(_https_server._routes);
             _https_server.set_content_streaming(true);
+            auto https_accept_sg = _sl_controller.get_driver_scheduling_group().value_or(default_scheduling_group());
+            // Run the HTTPS accept loop in sl:driver. This covers connection setup,
+            // including TLS handshakes, but not HTTP request processing.
+            // Request processing starts in the default scheduling group; Alternator
+            // applies the authenticated user's service level after signature verification.
+            _https_server.set_request_scheduling_group(default_scheduling_group());
 
             if (this_shard_id() == 0) {
                 _credentials = creds->build_reloadable_server_credentials([this](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
@@ -1014,15 +1020,17 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
             } else {
                 _credentials = creds->build_server_credentials();
             }
-            if (https_port) {
-                _https_server.listen(socket_address{addr, *https_port}, _credentials).get();
-            }
-            if (https_port_proxy_protocol) {
-                listen_options lo;
-                lo.reuse_address = true;
-                lo.proxy_protocol = true;
-                _https_server.listen(socket_address{addr, *https_port_proxy_protocol}, lo, _credentials).get();
-            }
+            with_scheduling_group(https_accept_sg, [this, addr, https_port, https_port_proxy_protocol] {
+                if (https_port) {
+                    _https_server.listen(socket_address{addr, *https_port}, _credentials).get();
+                }
+                if (https_port_proxy_protocol) {
+                    listen_options lo;
+                    lo.reuse_address = true;
+                    lo.proxy_protocol = true;
+                    _https_server.listen(socket_address{addr, *https_port_proxy_protocol}, lo, _credentials).get();
+                }
+            }).get();
             _enabled_servers.push_back(std::ref(_https_server));
         }
     });
@@ -1116,4 +1124,3 @@ const char* api_error::what() const noexcept {
 }
 
 }
-
