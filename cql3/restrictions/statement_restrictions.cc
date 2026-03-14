@@ -1375,13 +1375,13 @@ statement_restrictions::statement_restrictions(private_tag,
                     throw exceptions::invalid_request_exception("Mixing single column relations and multi column relations on clustering columns is not allowed");
                 }
 
-                if (restr.op == expr::oper_t::EQ) {
+                if (pred.equality) {
                     throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes an Equal",
                         expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
-                } else if (restr.op == expr::oper_t::IN) {
+                } else if (pred.is_in) {
                     throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes a IN",
                                                                     expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
-                } else if (is_slice(restr.op)) {
+                } else if (pred.is_slice) {
                     if (!expr::has_slice(_clustering_columns_restrictions)) {
                         throw exceptions::invalid_request_exception(format("Column \"{}\" cannot be restricted by both an equality and an inequality relation",
                                                                     expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
@@ -1393,7 +1393,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     }
 
                     // Don't allow to mix plain and SCYLLA_CLUSTERING_BOUND bounds
-                    if (other_slice->order != restr.order) {
+                    if (other_slice->order != pred.order) {
                         static auto order2str = [](auto o) { return o == expr::comparison_order::cql ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
                         throw exceptions::invalid_request_exception(
                                 format("Invalid combination of restrictions ({} / {})",
@@ -1401,16 +1401,16 @@ statement_restrictions::statement_restrictions(private_tag,
                     }
 
                     // Here check that there aren't two < <= or two > and >=
-                    auto is_greater = [](expr::oper_t op) {return op == expr::oper_t::GT || op == expr::oper_t::GTE; };
-                    auto is_less = [](expr::oper_t op) {return op == expr::oper_t::LT || op == expr::oper_t::LTE; };
+                    auto is_lower_bound = [](const expr::binary_operator& b) { return b.op == expr::oper_t::GT || b.op == expr::oper_t::GTE; };
+                    auto is_upper_bound = [](const expr::binary_operator& b) { return b.op == expr::oper_t::LT || b.op == expr::oper_t::LTE; };
 
-                    if (is_greater(restr.op) && is_greater(other_slice->op)) {
+                    if (pred.is_lower_bound && is_lower_bound(*other_slice)) {
                         throw exceptions::invalid_request_exception(format(
                         "More than one restriction was found for the start bound on {}",
                             expr::get_columns_in_commons(restr, *other_slice)));
                     }
 
-                    if (is_less(restr.op) && is_less(other_slice->op)) {
+                    if (pred.is_upper_bound && is_upper_bound(*other_slice)) {
                         throw exceptions::invalid_request_exception(format(
                             "More than one restriction was found for the end bound on {}",
                             expr::get_columns_in_commons(restr, *other_slice)));
