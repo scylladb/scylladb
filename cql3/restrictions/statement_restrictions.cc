@@ -1323,23 +1323,6 @@ static std::vector<predicate> extract_clustering_prefix_restrictions(
     return prefix;
 }
 
-static
-const column_definition*
-extract_column_from_is_not_null_restriction(const expr::binary_operator& restr) {
-    const expr::column_value* lhs_col_def = expr::as_if<expr::column_value>(&restr.lhs);
-    // The "IS NOT NULL" restriction is only supported (and
-    // mandatory) for materialized view creation:
-    if (lhs_col_def == nullptr) {
-        throw exceptions::invalid_request_exception("IS NOT only supports single column");
-    }
-    // currently, the grammar only allows the NULL argument to be
-    // "IS NOT", so this assertion should not be able to fail
-    if (!expr::is<expr::constant>(restr.rhs) || !expr::as<expr::constant>(restr.rhs).is_null()) {
-        throw exceptions::invalid_request_exception("Only IS NOT NULL is supported");
-    }
-    return lhs_col_def->col;
-}
-
 statement_restrictions::statement_restrictions(private_tag,
         data_dictionary::database db,
         schema_ptr schema,
@@ -1365,17 +1348,22 @@ statement_restrictions::statement_restrictions(private_tag,
         prepared_where_clause.push_back(std::move(prepared_restriction));
     }
 
+    std::vector<predicate> predicates;
     for (auto& prepared_restriction : prepared_where_clause) {
-        auto& restr = prepared_restriction;
-        if (restr.op == expr::oper_t::IS_NOT) {
-            // Handle IS NOT NULL restrictions separately
-            auto col = extract_column_from_is_not_null_restriction(restr);
+        auto preds = to_predicates(prepared_restriction, _schema.get());
+        predicates.insert(predicates.end(), std::make_move_iterator(preds.begin()), std::make_move_iterator(preds.end()));
+    }
+
+    for (auto& pred : predicates) {
+        auto& restr = expr::as<expr::binary_operator>(pred.filter);
+        if (pred.is_not_null_single_column) {
+            auto* col = require_on_single_column(pred);
             _not_null_columns.insert(col);
 
             if (!for_view) {
-                throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", restr));
+                throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", pred.filter));
             }
-        } else if (is_multi_column(restr)) {
+        } else if (pred.is_multi_column) {
             // Multi column restrictions are only allowed on clustering columns
             if (is_empty_restriction(_clustering_columns_restrictions)) {
                 _clustering_columns_restrictions = restr;
@@ -1433,7 +1421,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", restr));
                 }
             }
-        } else if (has_partition_token(restr, *_schema)) {
+        } else if (std::holds_alternative<on_partition_key_token>(pred.on)) {
             // Token always restricts the partition key
             if (!partition_key_restrictions_is_empty() && !has_token_restrictions()) {
                 throw exceptions::invalid_request_exception(
@@ -1446,8 +1434,8 @@ statement_restrictions::statement_restrictions(private_tag,
             }
 
             _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
-        } else if (is_single_column_restriction(restr)) {
-            const column_definition* def = get_the_only_column(restr).col;
+        } else if (std::holds_alternative<on_column>(pred.on)) {
+            const column_definition* def = std::get<on_column>(pred.on).column;
             if (def->is_partition_key()) {
                 // View definition allows PK slices, because it's not a performance problem.
                 if (restr.op != expr::oper_t::EQ && restr.op != expr::oper_t::IN && !allow_filtering && !for_view) {
@@ -1475,7 +1463,7 @@ statement_restrictions::statement_restrictions(private_tag,
                         "Mixing single column relations and multi column relations on clustering columns is not allowed");
                 }
 
-                const column_definition* new_column = get_the_only_column(restr).col;
+                const column_definition* new_column = std::get<on_column>(pred.on).column;
                 const column_definition* last_column = expr::get_last_column_def(_clustering_columns_restrictions);
 
                 if (last_column != nullptr && !allow_filtering) {
@@ -1497,11 +1485,11 @@ statement_restrictions::statement_restrictions(private_tag,
                 _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, restr);
             }
         } else {
-            throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", restr));
+            throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", pred.filter));
         }
 
-        if (prepared_restriction.op != expr::oper_t::IS_NOT) {
-            _where.push_back(prepared_restriction);
+        if (!pred.is_not_null_single_column) {
+            _where.push_back(restr);
         }
     }
     if (!_where.empty()) {
