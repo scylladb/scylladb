@@ -377,6 +377,11 @@ to_predicates(
                                   .filter = oper,
                                   .on = on_column{col.col},
                                   .is_singleton = (oper.op == oper_t::EQ),
+                                  .equality = (oper.op == oper_t::EQ),
+                                  .is_slice = expr::is_slice(oper.op),
+                                  .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
+                                  .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
+                                  .order = oper.order,
                               });
                             } else if (oper.op == oper_t::IN) {
                               auto solve = [oper, type, cdef] (const query_options& options) {
@@ -387,6 +392,8 @@ to_predicates(
                                   .filter = oper,
                                   .on = on_column{col.col},
                                   .is_singleton = false,
+                                  .is_in = true,
+                                  .order = oper.order,
                               });
                             } else if (oper.op == oper_t::CONTAINS || oper.op == oper_t::CONTAINS_KEY) {
                               auto solve = [oper] (const query_options& options) {
@@ -401,6 +408,7 @@ to_predicates(
                                   .filter = oper,
                                   .on = on_column{col.col},
                                   .is_singleton = false,
+                                  .order = oper.order,
                               });
                             }
                             return cannot_solve_on_column(oper, col.col);
@@ -428,6 +436,8 @@ to_predicates(
                                 .filter = oper,
                                 .on = on_column{col.col},
                                 .is_singleton = true,
+                                .equality = true,
+                                .order = oper.order,
                             });
                           }
                             return cannot_solve_on_column(oper, col.col);
@@ -451,6 +461,12 @@ to_predicates(
                                 .on = on_clustering_key_prefix{std::move(columns)},
                                 .is_singleton = oper.op == oper_t::EQ,
                                 .is_multi_column = true,
+                                .equality = (oper.op == oper_t::EQ),
+                                .is_in = (oper.op == oper_t::IN),
+                                .is_slice = expr::is_slice(oper.op),
+                                .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
+                                .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
+                                .order = oper.order,
                             });
                         },
                         [&] (const function_call& token_fun_call) -> std::vector<predicate> {
@@ -490,6 +506,11 @@ to_predicates(
                             .filter = oper,
                             .on = on_partition_key_token{table_schema_opt},
                             .is_singleton = (oper.op == oper_t::EQ),
+                            .equality = (oper.op == oper_t::EQ),
+                            .is_slice = expr::is_slice(oper.op),
+                            .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
+                            .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
+                            .order = oper.order,
                           });
                         },
                         [&] (const binary_operator&) -> std::vector<predicate> {

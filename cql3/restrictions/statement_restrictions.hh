@@ -80,6 +80,12 @@ struct predicate {
     bool comparable = true;
     bool is_multi_column = false;
     bool is_not_null_single_column = false;
+    bool equality = false;        // operator is EQ
+    bool is_in = false;           // operator is IN
+    bool is_slice = false;        // operator is LT/LTE/GT/GTE
+    bool is_upper_bound = false;  // operator is LT/LTE
+    bool is_lower_bound = false;  // operator is GT/GTE
+    expr::comparison_order order = expr::comparison_order::cql;
 };
 
 ///In some cases checking if columns have indexes is undesired of even
