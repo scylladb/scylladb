@@ -493,6 +493,7 @@ public:
     named_value<bool> enable_cql_config_updates;
     named_value<bool> enable_parallelized_aggregation;
     named_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
+    named_value<uint32_t> max_relations_in_where_clause;
     named_value<uint32_t> select_internal_page_size;
 
     named_value<uint16_t> alternator_port;
