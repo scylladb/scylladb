@@ -17,7 +17,7 @@
 #include "utils/lru.hh"
 
 // A concrete evictable for testing.
-struct test_evictable : public evictable {
+struct test_evictable final : public evictable {
     int id;
     bool was_evicted = false;
 
@@ -25,10 +25,6 @@ struct test_evictable : public evictable {
 
     void on_evicted() noexcept override {
         was_evicted = true;
-    }
-
-    ~test_evictable() {
-        // Ensure unlinked before destruction.
     }
 };
 
