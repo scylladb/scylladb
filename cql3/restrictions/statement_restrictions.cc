@@ -71,9 +71,8 @@ extern bool has_supporting_index(
         const expression&, const secondary_index::secondary_index_manager&, allow_local_index allow_local);
 
 // Looks at each column individually and checks whether some index can support restrictions on this single column.
-// Expression has to consist only of single column restrictions.
 extern bool index_supports_some_column(
-    const expression&,
+    const single_column_restrictions_map&,
     const secondary_index::secondary_index_manager&,
     allow_local_index allow_local);
 
@@ -757,11 +756,9 @@ bool has_supporting_index(
 }
 
 bool index_supports_some_column(
-        const expression& e,
+        const single_column_restrictions_map& single_col_restrictions,
         const secondary_index::secondary_index_manager& index_manager,
         allow_local_index allow_local) {
-    single_column_restrictions_map single_col_restrictions = get_single_column_restrictions_map(e);
-
     for (auto&& [col, col_restrictions] : single_col_restrictions) {
         if (has_supporting_index(col_restrictions, index_manager, allow_local)) {
             return true;
@@ -1267,7 +1264,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 && !type.is_delete();
         _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
                 && !type.is_delete();
-        _has_queriable_regular_index = index_supports_some_column(_nonprimary_key_restrictions, sim, allow_local)
+        _has_queriable_regular_index = index_supports_some_column(_single_column_nonprimary_key_restrictions, sim, allow_local)
                 && !type.is_delete();
     } else {
         _has_queriable_ck_index = false;
@@ -1698,8 +1695,8 @@ bool statement_restrictions::clustering_columns_restrictions_have_supporting_ind
         const secondary_index::secondary_index_manager& index_manager,
         expr::allow_local_index allow_local) const {
     // Single column restrictions can be handled by the existing code
-    if (!contains_multi_column_restriction(_clustering_columns_restrictions)) {
-        return index_supports_some_column(_clustering_columns_restrictions, index_manager, allow_local);
+    if (!_has_multi_column) {
+        return index_supports_some_column(_single_column_clustering_key_restrictions, index_manager, allow_local);
     }
 
     // Multi column restrictions have to be handled separately
@@ -1776,7 +1773,7 @@ bool statement_restrictions::parition_key_restrictions_have_supporting_index(con
         return false;
     }
 
-    return index_supports_some_column(_partition_key_restrictions, index_manager, allow_local);
+    return index_supports_some_column(_single_column_partition_key_restrictions, index_manager, allow_local);
 }
 
 void statement_restrictions::process_clustering_columns_restrictions(bool for_view, bool allow_filtering) {
