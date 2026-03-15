@@ -1355,6 +1355,7 @@ statement_restrictions::statement_restrictions(private_tag,
     }
 
     bool ck_is_empty = true;
+    bool has_mc_clustering = false;
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
@@ -1368,11 +1369,10 @@ statement_restrictions::statement_restrictions(private_tag,
             if (ck_is_empty) {
                 _clustering_columns_restrictions = pred.filter;
                 ck_is_empty = false;
+                has_mc_clustering = true;
             } else {
 
-                if (!find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
-                            return expr::is<expr::tuple_constructor>(b.lhs);
-                })) {
+                if (!has_mc_clustering) {
                     throw exceptions::invalid_request_exception("Mixing single column relations and multi column relations on clustering columns is not allowed");
                 }
 
@@ -1457,9 +1457,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, pred.filter);
                 _partition_range_is_simple &= !pred.is_in;
             } else if (def->is_clustering_key()) {
-                if (find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
-                            return expr::is<expr::tuple_constructor>(b.lhs);
-                        })) {
+                if (has_mc_clustering) {
                     throw exceptions::invalid_request_exception(
                         "Mixing single column relations and multi column relations on clustering columns is not allowed");
                 }
