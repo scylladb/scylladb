@@ -122,6 +122,9 @@ using partition_range_restrictions = std::variant<
         token_range_restrictions,
         single_column_partition_range_restrictions>;
 
+// A map of per-column predicate vectors, ordered by schema position.
+using single_column_predicate_vectors = std::map<const column_definition*, std::vector<predicate>, expr::schema_pos_column_definition_comparator>;
+
 /**
  * The restrictions corresponding to the relations specified on the where-clause of CQL query.
  */
@@ -328,12 +331,6 @@ public:
     std::vector<const column_definition*> get_column_defs_for_filtering(data_dictionary::database db) const;
 
     /**
-     * Gives a score that the index has - index with the highest score will be chosen
-     * in find_idx()
-     */
-    int score(const secondary_index::index& index) const;
-
-    /**
      * Determines the index to be used with the restriction.
      * @param db - the data_dictionary::database context (for extracting index manager)
      * @return If an index can be used, an optional containing this index, otherwise an empty optional.
@@ -372,8 +369,6 @@ public:
 
     schema_ptr get_view_schema() const { return _view_schema; }
 private:
-    std::pair<std::optional<secondary_index::index>, expr::expression> do_find_idx(const secondary_index::secondary_index_manager& sim) const;
-
     void process_partition_key_restrictions(bool for_view, bool allow_filtering, statements::statement_type type);
 
     /**
@@ -401,7 +396,11 @@ private:
     void add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema);
 
     unsigned int num_clustering_prefix_columns_that_need_not_be_filtered() const;
-    void calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(data_dictionary::database db);
+    void calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(
+            data_dictionary::database db,
+            const single_column_predicate_vectors& sc_pk_pred_vectors,
+            const single_column_predicate_vectors& sc_ck_pred_vectors,
+            const single_column_predicate_vectors& sc_nonpk_pred_vectors);
     get_partition_key_ranges_fn_t build_partition_key_ranges_fn() const;
     get_clustering_bounds_fn_t build_get_clustering_bounds_fn() const;
     get_clustering_bounds_fn_t build_get_global_index_clustering_ranges_fn() const;
