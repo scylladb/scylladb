@@ -1507,21 +1507,20 @@ statement_restrictions::statement_restrictions(private_tag,
         if (!has_token_restrictions()) {
             _single_column_partition_key_restrictions = get_single_column_restrictions_map(_partition_key_restrictions);
         }
-        if (!contains_multi_column_restriction(_clustering_columns_restrictions)) {
+        if (!has_mc_clustering) {
             _single_column_clustering_key_restrictions = get_single_column_restrictions_map(_clustering_columns_restrictions);
         }
         _single_column_nonprimary_key_restrictions = get_single_column_restrictions_map(_nonprimary_key_restrictions);
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(_where, _schema);
         _partition_range_restrictions = extract_partition_range(_where, _schema);
     }
-    _has_multi_column = find_binop(_clustering_columns_restrictions, is_multi_column);
+    _has_multi_column = has_mc_clustering;
     if (_check_indexes) {
         auto cf = db.find_column_family(schema);
         auto& sim = cf.get_index_manager();
         const expr::allow_local_index allow_local(
                 !has_partition_key_unrestricted_components()
                 && partition_key_restrictions_is_all_eq());
-        _has_multi_column = find_binop(_clustering_columns_restrictions, is_multi_column);
         _has_queriable_ck_index = clustering_columns_restrictions_have_supporting_index(sim, allow_local)
                 && !type.is_delete();
         _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
