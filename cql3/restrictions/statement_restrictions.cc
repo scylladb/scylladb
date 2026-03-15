@@ -360,6 +360,7 @@ to_predicates(
                                   .filter = oper,
                                   .on = on_column{col.col},
                                   .is_not_null_single_column = true,
+                                  .op = oper.op,
                               });
                             }
                             if (is_compare(oper.op)) {
@@ -381,6 +382,7 @@ to_predicates(
                                   .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
                                   .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
                                   .order = oper.order,
+                                  .op = oper.op,
                               });
                             } else if (oper.op == oper_t::IN) {
                               auto solve = [oper, type, cdef] (const query_options& options) {
@@ -393,6 +395,7 @@ to_predicates(
                                   .is_singleton = false,
                                   .is_in = true,
                                   .order = oper.order,
+                                  .op = oper.op,
                               });
                             } else if (oper.op == oper_t::CONTAINS || oper.op == oper_t::CONTAINS_KEY) {
                               auto solve = [oper] (const query_options& options) {
@@ -408,6 +411,7 @@ to_predicates(
                                   .on = on_column{col.col},
                                   .is_singleton = false,
                                   .order = oper.order,
+                                  .op = oper.op,
                               });
                             }
                             return cannot_solve_on_column(oper, col.col);
@@ -437,6 +441,8 @@ to_predicates(
                                 .is_singleton = true,
                                 .equality = true,
                                 .order = oper.order,
+                                .op = oper.op,
+                                .is_subscript = true,
                             });
                           }
                             return cannot_solve_on_column(oper, col.col);
@@ -466,6 +472,7 @@ to_predicates(
                                 .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
                                 .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
                                 .order = oper.order,
+                                .op = oper.op,
                             });
                         },
                         [&] (const function_call& token_fun_call) -> std::vector<predicate> {
@@ -510,6 +517,7 @@ to_predicates(
                             .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
                             .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
                             .order = oper.order,
+                            .op = oper.op,
                           });
                         },
                         [&] (const binary_operator&) -> std::vector<predicate> {
@@ -740,6 +748,67 @@ secondary_index::index::supports_expression_v is_supported_by_helper(const expre
 bool is_supported_by(const expression& expr, const secondary_index::index& idx) {
     auto s = is_supported_by_helper(expr, idx);
     return s != secondary_index::index::supports_expression_v::from_bool(false);
+}
+
+// Like is_supported_by_helper, but operates on a single predicate instead of walking
+// an expression tree.  Returns how an index supports this predicate: UsualYes, CollectionYes, or No.
+static secondary_index::index::supports_expression_v
+is_predicate_supported_by(const predicate& pred, const secondary_index::index& idx) {
+    using ret_t = secondary_index::index::supports_expression_v;
+    if (!pred.op) {
+        return ret_t::from_bool(false);
+    }
+    return std::visit(overloaded_functor{
+        [&] (const on_column& oc) -> ret_t {
+            if (pred.is_subscript) {
+                return idx.supports_subscript_expression(*oc.column, *pred.op);
+            }
+            return idx.supports_expression(*oc.column, *pred.op);
+        },
+        [&] (const on_clustering_key_prefix& ocp) -> ret_t {
+            // Single-element tuple_constructor: treat like a single column
+            if (ocp.columns.size() == 1) {
+                return idx.supports_expression(*ocp.columns[0], *pred.op);
+            }
+            // Multi-element tuple: index cannot avoid filtering
+            return ret_t::from_bool(false);
+        },
+        [&] (const on_partition_key_token&) -> ret_t {
+            return ret_t::from_bool(false);
+        },
+        [&] (const on_row&) -> ret_t {
+            return ret_t::from_bool(false);
+        },
+    }, pred.on);
+}
+
+using single_column_predicate_vectors = std::map<const column_definition*, std::vector<predicate>, schema_pos_column_definition_comparator>;
+
+// Like index_supports_some_column, but operates on per-column predicate vectors
+// instead of walking per-column expression trees.
+static bool index_supports_some_column(
+        const single_column_predicate_vectors& per_column_predicates,
+        const secondary_index::secondary_index_manager& index_manager,
+        allow_local_index allow_local) {
+    using namespace secondary_index;
+    for (auto& [col, preds] : per_column_predicates) {
+        for (const auto& idx : index_manager.list_indexes()) {
+            if (!allow_local && idx.metadata().local()) {
+                continue;
+            }
+            // AND all predicate results for this column-index pair, mirroring the
+            // conjunction logic in is_supported_by_helper.  Initialize with the
+            // first predicate (not from_bool(true)) to preserve CollectionYes.
+            auto result = is_predicate_supported_by(preds[0], idx);
+            for (size_t i = 1; i < preds.size(); ++i) {
+                result = result && is_predicate_supported_by(preds[i], idx);
+            }
+            if (result) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 
@@ -1050,6 +1119,9 @@ statement_restrictions::statement_restrictions(private_tag,
     std::unordered_map<const column_definition*, predicate> pk_range_preds;
     std::vector<predicate> mc_ck_preds;
     std::unordered_map<const column_definition*, predicate> sc_ck_preds;
+    single_column_predicate_vectors sc_pk_pred_vectors;
+    single_column_predicate_vectors sc_ck_pred_vectors;
+    single_column_predicate_vectors sc_nonpk_pred_vectors;
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
@@ -1160,6 +1232,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     auto [it, inserted] = _single_column_partition_key_restrictions.try_emplace(def, expr::conjunction{});
                     it->second = expr::make_conjunction(std::move(it->second), pred.filter);
                 }
+                sc_pk_pred_vectors[def].push_back(pred);
                 if (pred.equality || pred.is_in) {
                     auto [it, inserted] = pk_range_preds.try_emplace(def, pred);
                     if (!inserted) {
@@ -1196,6 +1269,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     auto [it, inserted] = _single_column_clustering_key_restrictions.try_emplace(def, expr::conjunction{});
                     it->second = expr::make_conjunction(std::move(it->second), pred.filter);
                 }
+                sc_ck_pred_vectors[def].push_back(pred);
                 {
                     auto [it, inserted] = sc_ck_preds.try_emplace(def, pred);
                     if (!inserted) {
@@ -1214,6 +1288,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     auto [it, inserted] = _single_column_nonprimary_key_restrictions.try_emplace(def, expr::conjunction{});
                     it->second = expr::make_conjunction(std::move(it->second), pred.filter);
                 }
+                sc_nonpk_pred_vectors[def].push_back(pred);
             }
         } else {
             throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", pred.filter));
@@ -1260,11 +1335,17 @@ statement_restrictions::statement_restrictions(private_tag,
         const expr::allow_local_index allow_local(
                 !has_partition_key_unrestricted_components()
                 && partition_key_restrictions_is_all_eq());
-        _has_queriable_ck_index = clustering_columns_restrictions_have_supporting_index(sim, allow_local)
+        if (!_has_multi_column) {
+            _has_queriable_ck_index = index_supports_some_column(sc_ck_pred_vectors, sim, allow_local)
+                    && !type.is_delete();
+        } else {
+            _has_queriable_ck_index = clustering_columns_restrictions_have_supporting_index(sim, allow_local)
+                    && !type.is_delete();
+        }
+        _has_queriable_pk_index = !has_token
+                && index_supports_some_column(sc_pk_pred_vectors, sim, allow_local)
                 && !type.is_delete();
-        _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
-                && !type.is_delete();
-        _has_queriable_regular_index = index_supports_some_column(_single_column_nonprimary_key_restrictions, sim, allow_local)
+        _has_queriable_regular_index = index_supports_some_column(sc_nonpk_pred_vectors, sim, allow_local)
                 && !type.is_delete();
     } else {
         _has_queriable_ck_index = false;

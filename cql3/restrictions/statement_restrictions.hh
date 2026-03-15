@@ -86,6 +86,8 @@ struct predicate {
     bool is_upper_bound = false;  // operator is LT/LTE
     bool is_lower_bound = false;  // operator is GT/GTE
     expr::comparison_order order = expr::comparison_order::cql;
+    std::optional<expr::oper_t> op;  // the binary operator, if any
+    bool is_subscript = false;       // whether the LHS is a subscript (map element access)
 };
 
 ///In some cases checking if columns have indexes is undesired of even
