@@ -1358,7 +1358,7 @@ statement_restrictions::statement_restrictions(private_tag,
             _view_schema = view_schema;
 
             if (im.local()) {
-                prepare_indexed_local(*view_schema);
+                prepare_indexed_local(*view_schema, sc_pk_pred_vectors, sc_ck_pred_vectors, sc_nonpk_pred_vectors);
             } else {
                 prepare_indexed_global(*view_schema);
             }
@@ -2696,7 +2696,10 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
     };
 }
 
-void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema) {
+void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema,
+        const single_column_predicate_vectors& sc_pk_pred_vectors,
+        const single_column_predicate_vectors& sc_ck_pred_vectors,
+        const single_column_predicate_vectors& sc_nonpk_pred_vectors) {
     if (!_partition_range_is_simple) {
         return;
     }
@@ -2708,14 +2711,27 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema)
     const column_definition& indexed_column = idx_tbl_schema.column_at(column_kind::clustering_key, 0);
     const column_definition& indexed_column_base_schema = *_schema->get_column_definition(indexed_column.name());
 
-    // Find index column restrictions in the WHERE clause
-    std::vector<expr::expression> idx_col_restrictions =
-        extract_single_column_restrictions_for_column(_where, indexed_column_base_schema);
-    expr::expression idx_col_restriction_expr = expr::expression(expr::conjunction{std::move(idx_col_restrictions)});
+    // Find index column restrictions in the pre-built predicate vectors
+    const single_column_predicate_vectors* pvecs;
+    switch (indexed_column_base_schema.kind) {
+    case column_kind::partition_key:  pvecs = &sc_pk_pred_vectors; break;
+    case column_kind::clustering_key: pvecs = &sc_ck_pred_vectors; break;
+    default:                          pvecs = &sc_nonpk_pred_vectors; break;
+    }
+    auto it = pvecs->find(&indexed_column_base_schema);
+    if (it == pvecs->end()) {
+        on_internal_error(rlogger, format("prepare_indexed_local: no predicates found for column {}", indexed_column_base_schema.name_as_text()));
+    }
+    const auto& preds = it->second;
 
-    // Translate the restriction to use column from the index schema and add it
-    expr::expression replaced_idx_restriction = replace_column_def(idx_col_restriction_expr, &indexed_column);
-    _idx_tbl_ck_prefix->push_back(to_predicate_on_column(replaced_idx_restriction, &indexed_column, _schema.get()));
+    // Translate each predicate to use column from the index schema, then merge
+    auto folded = std::ranges::fold_left_first(
+        preds | std::views::transform([&indexed_column](const predicate& p) {
+            return replace_column_def(p, &indexed_column);
+        }),
+        make_conjunction
+    );
+    _idx_tbl_ck_prefix->push_back(std::move(*folded));
 
     // Add restrictions for the clustering key
     add_clustering_restrictions_to_idx_ck_prefix(idx_tbl_schema);

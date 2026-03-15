@@ -480,7 +480,10 @@ public:
 private:
     /// Prepares internal data for evaluating index-table queries.  Must be called before
     /// get_local_index_clustering_ranges().
-    void prepare_indexed_local(const schema& idx_tbl_schema);
+    void prepare_indexed_local(const schema& idx_tbl_schema,
+            const single_column_predicate_vectors& sc_pk_pred_vectors,
+            const single_column_predicate_vectors& sc_ck_pred_vectors,
+            const single_column_predicate_vectors& sc_nonpk_pred_vectors);
 
     /// Prepares internal data for evaluating index-table queries.  Must be called before
     /// get_global_index_clustering_ranges() or get_global_index_token_clustering_ranges().
