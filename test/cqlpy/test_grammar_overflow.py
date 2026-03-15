@@ -48,36 +48,42 @@ def nested_relation(depth):
     """Build (((... p=1 ...)))"""
     return "(" * depth + "p=1" + ")" * depth
 
-# The default max_function_call_nesting is 32.  Use a depth large enough
+# The default max_function_call_nesting is 12.  Use a depth large enough
 # to overflow the evaluator stack before the fix is in place.
 DEPTH = 100000
 
+SHALLOW_DEPTH = 10
 
-@pytest.mark.skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1003")
 def test_deeply_nested_function_in_selector(cql, table1, scylla_only):
     """Deeply nested function calls in a SELECT selector must be rejected."""
     selector = nested_function_selector(DEPTH)
     with pytest.raises(SyntaxException):
         cql.execute(f"SELECT {selector} FROM {table1}")
+    # see that shallow nesting is accepted
+    selector = nested_function_selector(SHALLOW_DEPTH)
+    cql.execute(f"SELECT {selector} FROM {table1}")
 
 
-@pytest.mark.skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1003")
 def test_deeply_nested_cast_in_selector(cql, table1, scylla_only):
     """Deeply nested CAST() in a SELECT selector must be rejected."""
     selector = nested_cast_selector(DEPTH)
     with pytest.raises(SyntaxException):
         cql.execute(f"SELECT {selector} FROM {table1}")
+    # see that shallow nesting is accepted
+    selector = nested_cast_selector(SHALLOW_DEPTH)
+    cql.execute(f"SELECT {selector} FROM {table1}")
 
 
-@pytest.mark.skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1003")
 def test_deeply_nested_function_in_term(cql, table1, scylla_only):
     """Deeply nested function calls in a WHERE term must be rejected."""
     term = nested_function_term(DEPTH)
     with pytest.raises(SyntaxException):
         cql.execute(f"SELECT * FROM {table1} WHERE v = {term} ALLOW FILTERING")
+    # see that shallow nesting is accepted
+    term = nested_function_term(SHALLOW_DEPTH-1) # -1 because the cast adds one more level of nesting, see nested_function_term()
+    cql.execute(f"SELECT * FROM {table1} WHERE v = {term} ALLOW FILTERING")
 
 
-@pytest.mark.skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1003")
 def test_deeply_nested_c_cast_in_term(cql, table1, scylla_only):
     """Deeply nested C-style casts in a WHERE term must be rejected."""
     term = nested_c_cast_term(DEPTH)
@@ -87,14 +93,15 @@ def test_deeply_nested_c_cast_in_term(cql, table1, scylla_only):
     term = nested_c_cast_term(SHALLOW_DEPTH)
     cql.execute(f"SELECT * FROM {table1} WHERE v = {term} ALLOW FILTERING")
 
-@pytest.mark.skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1003")
 def test_deeply_nested_relation(cql, table1, scylla_only):
     """Deeply nested parentheses in a WHERE relation must be rejected."""
     relation = nested_relation(DEPTH)
     with pytest.raises(SyntaxException):
         cql.execute(f"SELECT * FROM {table1} WHERE {relation} ALLOW FILTERING")
+    # see that shallow nesting is accepted
+    relation = nested_relation(SHALLOW_DEPTH)
+    cql.execute(f"SELECT * FROM {table1} WHERE {relation} ALLOW FILTERING")
 
-@pytest.mark.skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1003")
 def test_lots_of_opening_paren_not_closed(cql, table1, scylla_only):
     """An opening parenthesis with no closing parenthesis must be rejected."""
     with pytest.raises(SyntaxException):
