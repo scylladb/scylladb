@@ -1397,7 +1397,7 @@ statement_restrictions::statement_restrictions(private_tag,
                         static auto order2str = [](auto o) { return o == expr::comparison_order::cql ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
                         throw exceptions::invalid_request_exception(
                                 format("Invalid combination of restrictions ({} / {})",
-                                order2str(other_slice->order), order2str(restr.order)));
+                                order2str(other_slice->order), order2str(pred.order)));
                     }
 
                     // Here check that there aren't two < <= or two > and >=
@@ -1438,7 +1438,7 @@ statement_restrictions::statement_restrictions(private_tag,
             const column_definition* def = std::get<on_column>(pred.on).column;
             if (def->is_partition_key()) {
                 // View definition allows PK slices, because it's not a performance problem.
-                if (restr.op != expr::oper_t::EQ && restr.op != expr::oper_t::IN && !allow_filtering && !for_view) {
+                if (!pred.equality && !pred.is_in && !allow_filtering && !for_view) {
                     throw exceptions::invalid_request_exception(
                             "Only EQ and IN relation are supported on the partition key "
                             "(unless you use the token() function or ALLOW FILTERING)");
@@ -1454,7 +1454,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 }
 
                 _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
-                _partition_range_is_simple &= !find(restr, expr::oper_t::IN);
+                _partition_range_is_simple &= !pred.is_in;
             } else if (def->is_clustering_key()) {
                 if (find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
                             return expr::is<expr::tuple_constructor>(b.lhs);
@@ -1473,7 +1473,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     }
 
                     if (schema->position(*new_column) < schema->position(*last_column)) {
-                        if (has_slice(restr)) {
+                        if (pred.is_slice) {
                             throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                                 last_column->name_as_text(), new_column->name_as_text()));
                         }
