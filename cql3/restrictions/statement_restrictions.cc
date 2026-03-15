@@ -629,34 +629,6 @@ to_predicate_on_column(
     return std::move(*ret);
 }
 
-// Convert an expression to a predicate on a column. If cdef is nullptr, the predicate
-// is on the partition key token.
-static
-predicate
-to_predicate_on_clustering_key_prefix(
-        const expression& expr,
-        const schema* table_schema_opt) {
-    auto predicates = to_predicates(expr, table_schema_opt);
-    std::vector<predicate> collected;
-    for (auto& predicate : predicates) {
-        if (std::holds_alternative<on_clustering_key_prefix>(predicate.on)) {
-            collected.push_back(std::move(predicate));
-            continue;
-        }
-    }
-    if (collected.empty()) {
-        on_internal_error(rlogger, "to_predicate_on_clustering_key_prefix: no predicates found");
-    }
-    auto ret = std::ranges::fold_left_first(
-        collected | std::views::as_rvalue,
-        make_conjunction
-    );
-    if (!ret) {
-        on_internal_error(rlogger, "to_predicate_on_clustering_key_prefix: no predicates found");
-    }
-    return std::move(*ret);
-}
-
 interval<managed_bytes> to_range(const value_set& s) {
     return std::visit(overloaded_functor{
             [] (const interval<managed_bytes>& r) { return r; },
@@ -1039,170 +1011,6 @@ statement_restrictions::statement_restrictions(private_tag, schema_ptr schema, b
     , _partition_range_is_simple(true)
 { }
 
-template <typename Visitor>
-concept visitor_with_binary_operator_context = requires (Visitor v) {
-    { v.current_binary_operator } -> std::convertible_to<const expr::binary_operator*>;
-};
-
-void with_current_binary_operator(
-        visitor_with_binary_operator_context auto& visitor,
-        std::invocable<const expr::binary_operator&> auto func) {
-    if (!visitor.current_binary_operator) {
-        throw std::logic_error("Evaluation expected within binary operator");
-    }
-    func(*visitor.current_binary_operator);
-}
-
-
-/// Extracts where_clause atoms with clustering-column LHS and copies them to a vector.  These elements define the
-/// boundaries of any clustering slice that can possibly meet where_clause.  This vector can be calculated before
-/// binding expression markers, since LHS and operator are always known.
-static std::vector<predicate> extract_clustering_prefix_restrictions(
-        std::span<const expr::expression> where_clause, schema_ptr schema) {
-    using namespace expr;
-
-    /// Collects all clustering-column restrictions from an expression.  Presumes the expression only uses
-    /// conjunction to combine subexpressions.
-    struct visitor {
-        schema_ptr table_schema;
-        std::vector<predicate> multi; ///< All multi-column restrictions.
-        /// All single-clustering-column restrictions, grouped by column.  Each value is either an atom or a
-        /// conjunction of atoms.
-        std::unordered_map<const column_definition*, predicate> single;
-        const binary_operator* current_binary_operator = nullptr;
-
-        void operator()(const conjunction& c) {
-            std::ranges::for_each(c.children, [this] (const expression& child) { expr::visit(*this, child); });
-        }
-
-        void operator()(const binary_operator& b) {
-            if (current_binary_operator) {
-                throw std::logic_error("Nested binary operators are not supported");
-            }
-            current_binary_operator = &b;
-            expr::visit(*this, b.lhs);
-            current_binary_operator = nullptr;
-        }
-
-        void operator()(const tuple_constructor& tc) {
-            std::vector<const column_definition*> prefix;
-            for (auto& e : tc.elements) {
-                if (auto cv = expr::as_if<column_value>(&e)) {
-                    prefix.push_back(cv->col);
-                } else {
-                    on_internal_error(rlogger, fmt::format("extract_clustering_prefix_restrictions: tuple of non-column_value: {}", tc));
-                }
-            }
-            with_current_binary_operator(*this, [&] (const binary_operator& b) {
-                multi.push_back(to_predicate_on_clustering_key_prefix(b, table_schema.get()));
-            });
-        }
-
-        void operator()(const column_value& cv) {
-            auto s = &cv;
-            with_current_binary_operator(*this, [&] (const binary_operator& b) {
-                if (s->col->is_clustering_key()) {
-                    auto a = to_predicate_on_column(b, s->col, table_schema.get());
-                    const auto [it, inserted] = single.try_emplace(s->col, std::move(a));
-                    if (!inserted) {
-                        it->second = make_conjunction(std::move(it->second), std::move(a));
-                    }
-                }
-            });
-        }
-
-        void operator()(const subscript& sub) {
-            const column_value& cval = get_subscripted_column(sub.val);
-
-            with_current_binary_operator(*this, [&] (const binary_operator& b) {
-                if (cval.col->is_clustering_key()) {
-                    auto a = to_predicate_on_column(b, cval.col, table_schema.get());
-                    const auto [it, inserted] = single.try_emplace(cval.col, std::move(a));
-                    if (!inserted) {
-                        it->second = make_conjunction(std::move(it->second), std::move(a));
-                    }
-                }
-            });
-        }
-
-        void operator()(const function_call& fun_call) {
-            if (is_partition_token_for_schema(fun_call, *table_schema)) {
-                // A token cannot be a clustering prefix restriction
-                return;
-            }
-
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(function_call)");
-        }
-
-        void operator()(const constant&) {}
-
-        void operator()(const unresolved_identifier&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(unresolved_identifier)");
-        }
-
-        void operator()(const column_mutation_attribute&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(column_mutation_attribute)");
-        }
-
-        void operator()(const cast&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(cast)");
-        }
-
-        void operator()(const field_selection&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(field_selection)");
-        }
-
-        void operator()(const bind_variable&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(bind_variable)");
-        }
-
-        void operator()(const untyped_constant&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(untyped_constant)");
-        }
-
-        void operator()(const collection_constructor&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(collection_constructor)");
-        }
-
-        void operator()(const usertype_constructor&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(usertype_constructor)");
-        }
-
-        void operator()(const temporary&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(temporary)");
-        }
-    };
-    visitor v {
-        .table_schema = schema
-    };
-
-    for (auto& e : where_clause) {
-        expr::visit(v, e);
-    }
-
-    if (!v.multi.empty()) {
-        return std::move(v.multi);
-    }
-
-    std::vector<predicate> prefix;
-    for (const auto& col : schema->clustering_key_columns()) {
-        const auto found = v.single.find(&col);
-        if (found == v.single.end()) { // Any further restrictions are skipping the CK order.
-            break;
-        }
-        if (find_needs_filtering(found->second.filter)) { // This column's restriction doesn't define a clear bound.
-            // TODO: if this is a conjunction of filtering and non-filtering atoms, we could split them and add the
-            // latter to the prefix.
-            break;
-        }
-        prefix.push_back(found->second);
-        if (has_slice(found->second.filter)) {
-            break;
-        }
-    }
-    return prefix;
-}
-
 statement_restrictions::statement_restrictions(private_tag,
         data_dictionary::database db,
         schema_ptr schema,
@@ -1243,6 +1051,8 @@ statement_restrictions::statement_restrictions(private_tag,
     bool has_token = false;
     std::optional<predicate> token_pred;
     std::unordered_map<const column_definition*, predicate> pk_range_preds;
+    std::vector<predicate> mc_ck_preds;
+    std::unordered_map<const column_definition*, predicate> sc_ck_preds;
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
@@ -1258,6 +1068,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 ck_is_empty = false;
                 has_mc_clustering = true;
                 first_mc_pred = &pred;
+                mc_ck_preds.push_back(pred);
                 if (pred.is_slice) {
                     ck_has_slice = true;
                 }
@@ -1301,6 +1112,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     }
 
                     _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
+                    mc_ck_preds.push_back(pred);
                     ck_has_slice = true;
                 } else {
                     throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", pred.filter));
@@ -1387,6 +1199,12 @@ statement_restrictions::statement_restrictions(private_tag,
                     auto [it, inserted] = _single_column_clustering_key_restrictions.try_emplace(def, expr::conjunction{});
                     it->second = expr::make_conjunction(std::move(it->second), pred.filter);
                 }
+                {
+                    auto [it, inserted] = sc_ck_preds.try_emplace(def, pred);
+                    if (!inserted) {
+                        it->second = make_conjunction(std::move(it->second), pred);
+                    }
+                }
                 if (pred.is_slice) {
                     ck_has_slice = true;
                 }
@@ -1409,7 +1227,25 @@ statement_restrictions::statement_restrictions(private_tag,
         }
     }
     if (!_where.empty()) {
-        _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(_where, _schema);
+        if (!mc_ck_preds.empty()) {
+            _clustering_prefix_restrictions = std::move(mc_ck_preds);
+        } else {
+            std::vector<predicate> prefix;
+            for (const auto& col : _schema->clustering_key_columns()) {
+                const auto found = sc_ck_preds.find(&col);
+                if (found == sc_ck_preds.end()) {
+                    break;
+                }
+                if (find_needs_filtering(found->second.filter)) {
+                    break;
+                }
+                prefix.push_back(found->second);
+                if (has_slice(found->second.filter)) {
+                    break;
+                }
+            }
+            _clustering_prefix_restrictions = std::move(prefix);
+        }
         if (token_pred) {
             _partition_range_restrictions = token_range_restrictions{
                 .token_restrictions = std::move(*token_pred),
