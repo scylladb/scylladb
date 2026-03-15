@@ -10,6 +10,7 @@
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "raft/raft.hh"
+#include "locator/tablets.hh"
 #include "schema/schema.hh"
 #include "replica/database.hh"
 #include "locator/tablet_replication_strategy.hh"
@@ -123,12 +124,49 @@ void stats::register_stats() {
     });
 }
 
-static const locator::tablet_replica* find_replica(const locator::tablet_info& tinfo, locator::host_id id) {
-    const auto it = std::ranges::find_if(tinfo.replicas,
+static const locator::tablet_replica* find_replica(const locator::tablet_replica_set& replicas, locator::host_id id) {
+    const auto it = std::ranges::find_if(replicas,
         [&] (const locator::tablet_replica& r) {
             return r.host == id;
         });
-    return it == tinfo.replicas.end() ? nullptr : &*it;
+    return it == replicas.end() ? nullptr : &*it;
+}
+
+static locator::tablet_replica_set get_tablet_replicas(const locator::tablet_info& tinfo, const locator::tablet_transition_info* trinfo) {
+    if (!trinfo) {
+        return tinfo.replicas;
+    }
+
+    using namespace locator;
+
+    switch (trinfo->stage) {
+        case tablet_transition_stage::start_migration:
+        case tablet_transition_stage::sc_add_nonvoter:
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
+        case tablet_transition_stage::rebuild_repair:
+        case tablet_transition_stage::streaming:
+        case tablet_transition_stage::sc_snapshot_transfer:
+            return tinfo.replicas;
+        case tablet_transition_stage::sc_become_voter: {
+            auto replicas = tinfo.replicas;
+            if (trinfo->pending_replica) {
+                replicas.push_back(*trinfo->pending_replica);
+            }
+            return replicas;
+        }
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::end_migration:
+            return trinfo->next;
+        case tablet_transition_stage::sc_cleanup_target:
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+            return tinfo.replicas;
+        case tablet_transition_stage::repair:
+        case tablet_transition_stage::end_repair:
+        case tablet_transition_stage::restore:
+            return tinfo.replicas;
+    }
 }
 
 // Subscribe target to sources and return an array of the corresponding
@@ -164,7 +202,7 @@ struct coordinator::operation_ctx {
     raft_server raft_server;
     locator::tablet_id tablet_id;
     const locator::tablet_raft_info& raft_info;
-    const locator::tablet_info& tablet_info;
+    locator::tablet_replica_set replicas;
 };
 
 // Select closest replica from a tablet replica set, preferring replicas in same rack
@@ -238,13 +276,15 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     const auto tablet_id = tablet_map.get_tablet_id(token);
     const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
     const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
+    const auto* trinfo = tablet_map.get_tablet_transition_info(tablet_id);
+    auto replicas = get_tablet_replicas(tablet_info, trinfo);
 
-    if (!contains(tablet_info.replicas, this_replica)) {
+    if (!contains(replicas, this_replica)) {
         // For writes, check the leader cache to avoid an extra roundtrip.
         // For now, reads skip the cache because any replica can serve them.
         if (use_leader_cache) {
             if (const auto cached = _groups_manager.leader_cache().get(raft_info.group_id)) {
-                if (const auto* target = find_replica(tablet_info, *cached); target && _gossiper.is_alive(target->host)) {
+                if (const auto* target = find_replica(replicas, *cached); target && _gossiper.is_alive(target->host)) {
                     return make_ready_future<value_or_redirect<operation_ctx>>(
                         redirect_to_leader(*target, _groups_manager, raft_info.group_id));
                 }
@@ -252,7 +292,7 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
                 _groups_manager.leader_cache().erase(raft_info.group_id);
             }
         }
-        auto target = select_closest_replica(_gossiper, tablet_info.replicas, token,
+        auto target = select_closest_replica(_gossiper, replicas, token,
                 erm->get_token_metadata().get_topology());
         if (use_leader_cache) {
             return make_ready_future<value_or_redirect<operation_ctx>>(
@@ -265,13 +305,13 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
         "sc_coordinator_wait_before_acquire_server", utils::wait_for_message(5min)
     ).then([this, tid = schema.id(), &raft_info, &as] {
         return _groups_manager.acquire_server(tid, raft_info.group_id, as);
-    }).then([erm = std::move(erm), tablet_id, &raft_info, &tablet_info] (raft_server server) mutable {
+    }).then([erm = std::move(erm), tablet_id, &raft_info, replicas = std::move(replicas)] (raft_server server) mutable {
         return make_ready_future<value_or_redirect<operation_ctx>>(operation_ctx {
             .erm = std::move(erm),
             .raft_server = std::move(server),
             .tablet_id = tablet_id,
             .raft_info = raft_info,
-            .tablet_info = tablet_info
+            .replicas = std::move(replicas)
         });
     });
 }
@@ -361,12 +401,12 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         auto disposition = op.raft_server.begin_mutate(aoe.abort_source());
         if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
-            const auto* target = find_replica(op.tablet_info, leader_host_id);
+            const auto* target = find_replica(op.replicas, leader_host_id);
             if (!target) {
                 on_internal_error(logger,
                     ::format("table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
                         schema->ks_name(), schema->cf_name(), op.tablet_id,
-                        leader_host_id, op.tablet_info.replicas));
+                        leader_host_id, op.replicas));
             }
             co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
         }
@@ -488,11 +528,11 @@ auto coordinator::query(schema_ptr schema,
             auto disposition = op.raft_server.begin_read(aoe.abort_source());
             if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
                 const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
-                const auto* target = find_replica(op.tablet_info, leader_host_id);
+                const auto* target = find_replica(op.replicas, leader_host_id);
                 if (!target) {
                     on_internal_error(logger,
                         ::format("query(): table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
-                            schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.tablet_info.replicas));
+                            schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.replicas));
                 }
                 co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
             }
