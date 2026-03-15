@@ -1356,6 +1356,7 @@ statement_restrictions::statement_restrictions(private_tag,
 
     bool ck_is_empty = true;
     bool has_mc_clustering = false;
+    bool ck_has_slice = false;
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
@@ -1370,6 +1371,9 @@ statement_restrictions::statement_restrictions(private_tag,
                 _clustering_columns_restrictions = pred.filter;
                 ck_is_empty = false;
                 has_mc_clustering = true;
+                if (pred.is_slice) {
+                    ck_has_slice = true;
+                }
             } else {
 
                 if (!has_mc_clustering) {
@@ -1383,7 +1387,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes a IN",
                                                                     expr::get_columns_in_commons(_clustering_columns_restrictions, pred.filter)));
                 } else if (pred.is_slice) {
-                    if (!expr::has_slice(_clustering_columns_restrictions)) {
+                    if (!ck_has_slice) {
                         throw exceptions::invalid_request_exception(format("Column \"{}\" cannot be restricted by both an equality and an inequality relation",
                                                                     expr::get_columns_in_commons(_clustering_columns_restrictions, pred.filter)));
                     }
@@ -1418,6 +1422,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     }
 
                     _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
+                    ck_has_slice = true;
                 } else {
                     throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", pred.filter));
                 }
@@ -1466,7 +1471,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 const column_definition* last_column = expr::get_last_column_def(_clustering_columns_restrictions);
 
                 if (last_column != nullptr && !allow_filtering) {
-                    if (has_slice(_clustering_columns_restrictions) && schema->position(*new_column) > schema->position(*last_column)) {
+                    if (ck_has_slice && schema->position(*new_column) > schema->position(*last_column)) {
                         throw exceptions::invalid_request_exception(format("Clustering column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                             new_column->name_as_text(), last_column->name_as_text()));
                     }
@@ -1481,6 +1486,9 @@ statement_restrictions::statement_restrictions(private_tag,
 
                 _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
                 ck_is_empty = false;
+                if (pred.is_slice) {
+                    ck_has_slice = true;
+                }
             } else {
                 _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, pred.filter);
             }
