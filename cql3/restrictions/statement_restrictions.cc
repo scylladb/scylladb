@@ -1490,6 +1490,10 @@ statement_restrictions::statement_restrictions(private_tag,
 
                 _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
                 ck_is_empty = false;
+                {
+                    auto [it, inserted] = _single_column_clustering_key_restrictions.try_emplace(def, expr::conjunction{});
+                    it->second = expr::make_conjunction(std::move(it->second), pred.filter);
+                }
                 if (pred.is_slice) {
                     ck_has_slice = true;
                 }
@@ -1512,9 +1516,6 @@ statement_restrictions::statement_restrictions(private_tag,
         }
     }
     if (!_where.empty()) {
-        if (!has_mc_clustering) {
-            _single_column_clustering_key_restrictions = get_single_column_restrictions_map(_clustering_columns_restrictions);
-        }
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(_where, _schema);
         _partition_range_restrictions = extract_partition_range(_where, _schema);
     }
