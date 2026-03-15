@@ -106,3 +106,26 @@ def test_lots_of_opening_paren_not_closed(cql, table1, scylla_only):
     """An opening parenthesis with no closing parenthesis must be rejected."""
     with pytest.raises(SyntaxException):
         cql.execute(f"SELECT * FROM {table1} WHERE " + "(" * DEPTH)
+
+# The default max_relations_in_where_clause is 100.
+OVER_LIMIT = 200
+
+def make_where_clause(n):
+    """Build a WHERE clause with n relations: p = 1 AND v = 1 AND v = 1 ..."""
+    return "p = 1" + " AND v = 1" * (n - 1)
+
+
+@pytest.mark.skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1002")
+def test_too_many_relations_in_where_clause(cql, table1, scylla_only):
+    """A WHERE clause with too many relations must be rejected."""
+    where = make_where_clause(OVER_LIMIT)
+    with pytest.raises(SyntaxException):
+        cql.execute(f"SELECT * FROM {table1} WHERE {where} ALLOW FILTERING")
+
+
+def test_reasonable_number_of_relations_allowed(cql, table1, scylla_only):
+    """A WHERE clause within the limit should be accepted."""
+    where = make_where_clause(50)
+    # Should not raise - we just need it to parse successfully.
+    # The query itself may return no rows, that's fine.
+    cql.execute(f"SELECT * FROM {table1} WHERE {where} ALLOW FILTERING")
