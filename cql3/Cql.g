@@ -477,7 +477,13 @@ countArgument
 
 whereClause returns [uexpression clause]
     @init { std::vector<expression> terms; }
-    : e1=relation { terms.push_back(std::move(e1)); } (K_AND en=relation { terms.push_back(std::move(en)); })*
+    : e1=relation { terms.push_back(std::move(e1)); }
+      (K_AND en=relation {
+          terms.push_back(std::move(en));
+          if (terms.size() > _dialect.max_relations_in_where_clause) {
+              add_recognition_error("too many relations in WHERE clause");
+          }
+      })*
         { clause = conjunction{std::move(terms)}; }
     ;
 

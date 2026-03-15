@@ -115,7 +115,6 @@ def make_where_clause(n):
     return "p = 1" + " AND v = 1" * (n - 1)
 
 
-@pytest.mark.skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-1002")
 def test_too_many_relations_in_where_clause(cql, table1, scylla_only):
     """A WHERE clause with too many relations must be rejected."""
     where = make_where_clause(OVER_LIMIT)
