@@ -1358,6 +1358,7 @@ statement_restrictions::statement_restrictions(private_tag,
     bool has_mc_clustering = false;
     bool ck_has_slice = false;
     const column_definition* ck_last_column = nullptr;
+    const predicate* first_mc_pred = nullptr;
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
@@ -1372,6 +1373,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 _clustering_columns_restrictions = pred.filter;
                 ck_is_empty = false;
                 has_mc_clustering = true;
+                first_mc_pred = &pred;
                 if (pred.is_slice) {
                     ck_has_slice = true;
                 }
@@ -1393,33 +1395,25 @@ statement_restrictions::statement_restrictions(private_tag,
                                                                     expr::get_columns_in_commons(_clustering_columns_restrictions, pred.filter)));
                     }
 
-                    const expr::binary_operator* other_slice = expr::find_in_expression<expr::binary_operator>(_clustering_columns_restrictions, [](const expr::binary_operator){return true;});
-                    if (other_slice == nullptr) {
-                        on_internal_error(rlogger, "add_multi_column_clustering_key_restriction: _clustering_columns_restrictions is empty!");
-                    }
-
                     // Don't allow to mix plain and SCYLLA_CLUSTERING_BOUND bounds
-                    if (other_slice->order != pred.order) {
+                    if (first_mc_pred->order != pred.order) {
                         static auto order2str = [](auto o) { return o == expr::comparison_order::cql ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
                         throw exceptions::invalid_request_exception(
                                 format("Invalid combination of restrictions ({} / {})",
-                                order2str(other_slice->order), order2str(pred.order)));
+                                order2str(first_mc_pred->order), order2str(pred.order)));
                     }
 
                     // Here check that there aren't two < <= or two > and >=
-                    auto is_lower_bound = [](const expr::binary_operator& b) { return b.op == expr::oper_t::GT || b.op == expr::oper_t::GTE; };
-                    auto is_upper_bound = [](const expr::binary_operator& b) { return b.op == expr::oper_t::LT || b.op == expr::oper_t::LTE; };
-
-                    if (pred.is_lower_bound && is_lower_bound(*other_slice)) {
+                    if (pred.is_lower_bound && first_mc_pred->is_lower_bound) {
                         throw exceptions::invalid_request_exception(format(
                         "More than one restriction was found for the start bound on {}",
-                            expr::get_columns_in_commons(pred.filter, *other_slice)));
+                            expr::get_columns_in_commons(pred.filter, first_mc_pred->filter)));
                     }
 
-                    if (pred.is_upper_bound && is_upper_bound(*other_slice)) {
+                    if (pred.is_upper_bound && first_mc_pred->is_upper_bound) {
                         throw exceptions::invalid_request_exception(format(
                             "More than one restriction was found for the end bound on {}",
-                            expr::get_columns_in_commons(pred.filter, *other_slice)));
+                            expr::get_columns_in_commons(pred.filter, first_mc_pred->filter)));
                     }
 
                     _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
