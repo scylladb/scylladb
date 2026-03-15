@@ -1354,6 +1354,7 @@ statement_restrictions::statement_restrictions(private_tag,
         predicates.insert(predicates.end(), std::make_move_iterator(preds.begin()), std::make_move_iterator(preds.end()));
     }
 
+    bool ck_is_empty = true;
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
@@ -1364,8 +1365,9 @@ statement_restrictions::statement_restrictions(private_tag,
             }
         } else if (pred.is_multi_column) {
             // Multi column restrictions are only allowed on clustering columns
-            if (is_empty_restriction(_clustering_columns_restrictions)) {
+            if (ck_is_empty) {
                 _clustering_columns_restrictions = pred.filter;
+                ck_is_empty = false;
             } else {
 
                 if (!find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
@@ -1480,6 +1482,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 }
 
                 _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
+                ck_is_empty = false;
             } else {
                 _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, pred.filter);
             }
