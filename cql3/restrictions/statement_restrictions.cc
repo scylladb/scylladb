@@ -65,17 +65,6 @@ interval<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix&
 /// True iff the index can support the entire expression.
 extern bool is_supported_by(const expression&, const secondary_index::index&);
 
-/// True iff any of the indices from the manager can support the entire expression.  If allow_local, use all
-/// indices; otherwise, use only global indices.
-extern bool has_supporting_index(
-        const expression&, const secondary_index::secondary_index_manager&, allow_local_index allow_local);
-
-// Looks at each column individually and checks whether some index can support restrictions on this single column.
-extern bool index_supports_some_column(
-    const single_column_restrictions_map&,
-    const secondary_index::secondary_index_manager&,
-    allow_local_index allow_local);
-
 inline bool needs_filtering(oper_t op) {
     return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE) ||
            (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
@@ -844,31 +833,6 @@ static bool multi_column_predicates_have_supporting_index(
     return false;
 }
 
-
-bool has_supporting_index(
-        const expression& expr,
-        const secondary_index::secondary_index_manager& index_manager,
-        allow_local_index allow_local) {
-    const auto indexes = index_manager.list_indexes();
-    const auto support = std::bind(is_supported_by, std::ref(expr), std::placeholders::_1);
-    return allow_local ? std::ranges::any_of(indexes, support)
-            : std::ranges::any_of(
-                    indexes | std::views::filter([] (const secondary_index::index& i) { return !i.metadata().local(); }),
-                    support);
-}
-
-bool index_supports_some_column(
-        const single_column_restrictions_map& single_col_restrictions,
-        const secondary_index::secondary_index_manager& index_manager,
-        allow_local_index allow_local) {
-    for (auto&& [col, col_restrictions] : single_col_restrictions) {
-        if (has_supporting_index(col_restrictions, index_manager, allow_local)) {
-            return true;
-        }
-    }
-
-    return false;
-}
 
 bool is_on_collection(const binary_operator& b) {
     if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
