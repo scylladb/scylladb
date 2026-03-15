@@ -102,19 +102,6 @@ auto both_closed(std::vector<bytes> lb, std::vector<bytes> ub) {
     clustering_key_prefix cklb(std::move(lb)), ckub(std::move(ub));
     return query::clustering_range({{cklb, inclusive}}, {{ckub, inclusive}});
 }
-
-expr::tuple_constructor
-column_definitions_as_tuple_constructor(const std::vector<const column_definition*>& defs) {
-    std::vector<expr::expression> columns;
-    std::vector<data_type> column_types;
-    columns.reserve(defs.size());
-    for (auto& def : defs) {
-        columns.push_back(expr::column_value{def});
-        column_types.push_back(def->type);
-    }
-    data_type ttype = tuple_type_impl::get_instance(std::move(column_types));
-    return expr::tuple_constructor{std::move(columns), std::move(ttype)};
-}
 } // anonymous namespace
 
 SEASTAR_TEST_CASE(slice_empty_restriction) {
@@ -986,156 +973,119 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
     });
 }
 
-
-// Currently expression doesn't have operator==().
-// Implementing it is ugly, because there are shared pointers and the term base class.
-// For testing purposes checking stringified expressions is enough.
-static bool expression_eq(const expr::expression& e1, const expr::expression& e2) {
-    return to_string(e1) == to_string(e2);
+/// Helper to get statement_restrictions from a parsed WHERE clause string.
+static shared_ptr<const restrictions::statement_restrictions> make_restrictions(
+        std::string_view where_clause, cql_test_env& env,
+        const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
+    prepare_context ctx;
+    auto factors = where_clause.empty()
+            ? std::vector<expr::expression>{}
+            : boolean_factors(cql3::util::where_clause_to_relations(where_clause, cql3::dialect{}));
+    return restrictions::analyze_statement_restrictions(
+            env.data_dictionary(),
+            env.local_db().find_schema(keyspace_name, table_name),
+            statements::statement_type::SELECT,
+            expr::conjunction{std::move(factors)},
+            ctx,
+            /*contains_only_static_columns=*/false,
+            /*for_view=*/false,
+            /*allow_filtering=*/true,
+            restrictions::check_indexes::yes);
 }
 
-static void assert_expr_vec_eq(
-    const std::vector<expr::expression>& v1,
-    const std::vector<expr::expression>& v2,
-    const std::source_location& loc = std::source_location::current()) {
-
-    if (std::equal(v1.begin(), v1.end(), v2.begin(), v2.end(), expression_eq)) {
-        return;
+/// Extract (column_name, operator) pairs from each boolean factor of a conjunction expression.
+/// Each factor must be a binary_operator whose LHS is a column_value or subscript.
+static std::vector<std::pair<sstring, expr::oper_t>> factor_ops(const expr::expression& e) {
+    std::vector<std::pair<sstring, expr::oper_t>> result;
+    for (auto& factor : expr::boolean_factors(e)) {
+        BOOST_REQUIRE_MESSAGE(expr::is<expr::binary_operator>(factor),
+            fmt::format("expected binary_operator, got: {}", factor));
+        auto& binop = expr::as<expr::binary_operator>(factor);
+        const auto& cv = expr::get_subscripted_column(binop.lhs);
+        result.emplace_back(cv.col->name_as_text(), binop.op);
     }
-
-    std::string error_msg = fmt::format("Location: {}:{}, Expression vectors not equal! [{}] != [{}]",
-                                        loc.file_name(), loc.line(), fmt::join(v1, ", "), fmt::join(v2, ", "));
-
-    BOOST_FAIL(error_msg);
+    return result;
 }
 
-// Unit tests for extract_column_restrictions function
-BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
-    using namespace expr;
+// Test that restrictions are correctly routed to per-column maps and that each
+// per-column entry contains exactly the right boolean factors (verified by column
+// name and operator, not just count).  This is the higher-level replacement for
+// the old extract_single_column_restrictions_for_column test.
+SEASTAR_TEST_CASE(per_column_restriction_routing) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table ks.trc(pk1 int, pk2 int, ck1 int, ck2 int, v1 int, v2 int, v3 int, "
+                         "primary key((pk1, pk2), ck1, ck2))");
 
-    auto make_column = [](const char* name, column_kind kind, int id) -> column_definition {
-        column_definition definition(name, int32_type, kind, id);
+        auto schema = e.local_db().find_schema("ks", "trc");
 
-        // column_definition has to have column_specifiction because to_string uses it for column name
-        ::shared_ptr<column_identifier> identifier = ::make_shared<column_identifier>(name, true);
-        column_specification specification("ks", "cf", std::move(identifier), int32_type);
-        definition.column_specification = make_lw_shared<column_specification>(
-            std::move(specification));
+        using op = expr::oper_t;
+        using col_op = std::pair<sstring, expr::oper_t>;
 
-        return definition;
-    };
+        // Multiple single-column restrictions on regular columns are correctly
+        // accumulated per-column, while unrestricted columns don't appear.
+        {
+            auto sr = make_restrictions(
+                "pk1=1 AND pk2=2 AND ck1=3 AND ck2=4 AND v1=5 AND v1<10 AND v1>0 AND v2=6",
+                e, "trc");
 
-    column_definition col_pk1 = make_column("pk1", column_kind::partition_key, 0);
-    column_definition col_pk2 = make_column("pk2", column_kind::partition_key, 1);
-    column_definition col_ck1 = make_column("ck1", column_kind::clustering_key, 0);
-    column_definition col_ck2 = make_column("ck2", column_kind::clustering_key, 1);
-    column_definition col_r1 = make_column("r2", column_kind::regular_column, 0);
-    column_definition col_r2 = make_column("r2", column_kind::regular_column, 1);
-    column_definition col_r3 = make_column("r3", column_kind::regular_column, 2);
+            // --- Non-PK per-column map ---
+            auto& npk = sr->get_non_pk_restriction();
+            BOOST_CHECK_EQUAL(npk.size(), 2u);
 
-    // Empty input test
-    assert_expr_vec_eq(cql3::restrictions::extract_single_column_restrictions_for_column({}, col_pk1), {});
+            auto* v1_def = schema->get_column_definition("v1");
+            auto* v2_def = schema->get_column_definition("v2");
+            auto* v3_def = schema->get_column_definition("v3");
 
-    // BIG_WHERE test
-    // big_where contains:
-    // WHERE pk1 = 0 AND pk2 = 0 AND ck1 = 0 AND ck2 = 0 AND r1 = 0 AND r2 = 0
-    // AND (pk1, pk2) < (0, 0) AND (pk1, ck2, r1) = (0, 0, 0) AND (r1, r2) > 0
-    // AND ((c1, c2) < (0, 0) AND r1 < 0)
-    // AND pk2 > 0 AND r2 > 0
-    // AND token(pk1, pk2) > 0 AND token(pk1, pk2) < 0
-    // AND TRUE AND FALSE
-    // AND token(pk1, pk2)
-    // AND pk1 AND pk2
-    // AND (pk1, pk2)
-    std::vector<expression> big_where;
-    expr::constant zero_value = constant(raw_value::make_value(I(0)), int32_type);
+            BOOST_REQUIRE(npk.contains(v1_def));
+            BOOST_REQUIRE(npk.contains(v2_def));
+            BOOST_CHECK(!npk.contains(v3_def));
 
-    expression pk1_restriction(binary_operator(column_value(&col_pk1), oper_t::EQ, zero_value));
-    expression pk2_restriction(binary_operator(column_value(&col_pk2), oper_t::EQ, zero_value));
-    expression pk2_restriction2(binary_operator(column_value(&col_pk2), oper_t::GT, zero_value));
-    expression ck1_restriction(binary_operator(column_value(&col_ck1), oper_t::EQ, zero_value));
-    expression ck2_restriction(binary_operator(column_value(&col_ck2), oper_t::EQ, zero_value));
-    expression r1_restriction(binary_operator(column_value(&col_r1), oper_t::EQ, zero_value));
-    expression r1_restriction2(binary_operator(column_value(&col_r1), oper_t::LT, zero_value));
-    expression r1_restriction3(binary_operator(column_value(&col_r1), oper_t::GT, zero_value));
-    expression r2_restriction(binary_operator(column_value(&col_r2), oper_t::EQ, zero_value));
+            // v1 should have EQ, LT, GT (in WHERE-clause order).
+            BOOST_CHECK_EQUAL(factor_ops(npk.at(v1_def)),
+                (std::vector<col_op>{{"v1", op::EQ}, {"v1", op::LT}, {"v1", op::GT}}));
+            // v2 should have a single EQ.
+            BOOST_CHECK_EQUAL(factor_ops(npk.at(v2_def)),
+                (std::vector<col_op>{{"v2", op::EQ}}));
 
-    auto make_multi_column_restriction = [](std::vector<const column_definition*> columns, oper_t oper) -> expression {
-        tuple_constructor column_tuple(column_definitions_as_tuple_constructor(columns));
+            // --- PK expression: pk1=1 AND pk2=2 ---
+            BOOST_CHECK_EQUAL(factor_ops(sr->get_partition_key_restrictions()),
+                (std::vector<col_op>{{"pk1", op::EQ}, {"pk2", op::EQ}}));
 
-        std::vector<managed_bytes_opt> zeros_tuple_elems(columns.size(), managed_bytes_opt(I(0)));
-        data_type tup_type = tuple_type_impl::get_instance(std::vector<data_type>(columns.size(), int32_type));
-        managed_bytes tup_bytes = tuple_type_impl::build_value_fragmented(std::move(zeros_tuple_elems));
-        constant zeros_tuple(raw_value::make_value(std::move(tup_bytes)), std::move(tup_type));
+            // --- CK expression: ck1=3 AND ck2=4 ---
+            BOOST_CHECK_EQUAL(factor_ops(sr->get_clustering_columns_restrictions()),
+                (std::vector<col_op>{{"ck1", op::EQ}, {"ck2", op::EQ}}));
+        }
 
-        return binary_operator(column_tuple, oper, std::move(zeros_tuple));
-    };
+        // Multi-column CK restriction doesn't appear in single-column non-PK map.
+        {
+            auto sr = make_restrictions(
+                "pk1=1 AND pk2=2 AND (ck1, ck2) > (0, 0) AND v1=5",
+                e, "trc");
 
-    expression pk1_pk2_restriction = make_multi_column_restriction({&col_pk1, &col_pk2}, oper_t::LT);
-    expression pk1_ck2_r1_restriction = make_multi_column_restriction({&col_pk1, &col_ck2, &col_r1}, oper_t::EQ);
-    expression r1_r2_restriction = make_multi_column_restriction({&col_r1, &col_r2}, oper_t::GT);
+            auto& npk = sr->get_non_pk_restriction();
+            BOOST_CHECK_EQUAL(npk.size(), 1u);
 
-    std::vector<expression> conjunction_elems;
-    expression ck1_ck2_restriction = make_multi_column_restriction({&col_ck1, &col_ck2}, oper_t::LT);
-    expression conjunction_expr = conjunction{std::vector{ck1_ck2_restriction, r1_restriction2}};
+            auto* v1_def = schema->get_column_definition("v1");
+            BOOST_REQUIRE(npk.contains(v1_def));
+            BOOST_CHECK_EQUAL(factor_ops(npk.at(v1_def)),
+                (std::vector<col_op>{{"v1", op::EQ}}));
 
-    function_call token_expr = function_call {
-        .func = functions::function_name::native_function("token"),
-        .args = {column_value(&col_pk1), column_value(&col_pk2)}
-    };
-    expression token_lt_restriction = binary_operator(token_expr, oper_t::LT, zero_value);
-    expression token_gt_restriction = binary_operator(token_expr, oper_t::GT, zero_value);
+            // CK expression should have 1 factor: the multi-column (ck1, ck2) > (0, 0).
+            // The multi-column restriction's LHS is a tuple_constructor, not a single
+            // column_value, so we verify only the count and operator here.
+            auto ck_factors = expr::boolean_factors(sr->get_clustering_columns_restrictions());
+            BOOST_CHECK_EQUAL(ck_factors.size(), 1u);
+            BOOST_REQUIRE(expr::is<expr::binary_operator>(ck_factors[0]));
+            BOOST_CHECK(expr::as<expr::binary_operator>(ck_factors[0]).op == op::GT);
+        }
 
-    expression true_restriction = constant::make_bool(true);
-    expression false_restriction = constant::make_bool(false);
-    expression pk1_expr = column_value(&col_pk1);
-    expression pk2_expr = column_value(&col_pk1);
-    data_type ttype = tuple_type_impl::get_instance({int32_type, int32_type});
-    expression pk1_pk2_expr = tuple_constructor{{expression{column_value{&col_pk1}},
-                                                 expression{column_value{&col_pk2}}},
-                                                std::move(ttype)};
-
-    big_where.push_back(pk1_restriction);
-    big_where.push_back(pk2_restriction);
-    big_where.push_back(ck1_restriction);
-    big_where.push_back(ck2_restriction);
-    big_where.push_back(r1_restriction);
-    big_where.push_back(r2_restriction);
-    big_where.push_back(pk1_pk2_restriction);
-    big_where.push_back(pk1_ck2_r1_restriction);
-    big_where.push_back(r1_r2_restriction);
-    big_where.push_back(conjunction_expr);
-    big_where.push_back(pk2_restriction2);
-    big_where.push_back(r1_restriction3);
-    big_where.push_back(token_lt_restriction);
-    big_where.push_back(token_gt_restriction);
-    big_where.push_back(true_restriction);
-    big_where.push_back(false_restriction);
-    big_where.push_back(token_expr);
-    big_where.push_back(pk1_expr);
-    big_where.push_back(pk2_expr);
-    big_where.push_back(pk1_pk2_expr);
-
-    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where, col_pk1),
-        {pk1_restriction});
-
-    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where, col_pk2),
-        {pk2_restriction, pk2_restriction2});
-
-    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where, col_ck1),
-        {ck1_restriction});
-
-    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where, col_ck2),
-        {ck2_restriction});
-
-    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where, col_r1),
-        {r1_restriction, r1_restriction2, r1_restriction3});
-
-    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where, col_r2),
-        {r2_restriction});
-
-    assert_expr_vec_eq(restrictions::extract_single_column_restrictions_for_column(big_where, col_r3),
-        {});
+        // Unrestricted table: all maps are empty.
+        {
+            auto sr = make_restrictions("", e, "trc");
+            BOOST_CHECK(sr->get_non_pk_restriction().empty());
+            BOOST_CHECK(restrictions::is_empty_restriction(sr->get_clustering_columns_restrictions()));
+        }
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
