@@ -88,17 +88,6 @@ extern bool is_on_collection(const binary_operator&);
 // Uses column_defintion::operator== for comparison, columns with the same name but different schema will not be equal.
 bool has_eq_restriction_on_column(const column_definition& column, const expression& e);
 
-// Checks whether this expression contains restrictions on one single column.
-// There might be more than one restriction, but exactly one column.
-// The expression must be prepared.
-bool is_single_column_restriction(const expression&);
-
-// Gets the only column from a single_column_restriction expression.
-const column_value& get_the_only_column(const expression&);
-
-// Extracts map of single column restrictions for each column from expression
-single_column_restrictions_map get_single_column_restrictions_map(const expression&);
-
 
 bool contains_multi_column_restriction(const expression&);
 
@@ -897,68 +886,6 @@ std::vector<expression> extract_single_column_restrictions_for_column(std::span<
     }
 
     return std::move(v.restrictions);
-}
-
-static std::optional<std::reference_wrapper<const column_value>> get_single_column_restriction_column(const expression& e) {
-    if (find_in_expression<unresolved_identifier>(e, [](const auto&) {return true;})) {
-        on_internal_error(expr_logger,
-            seastar::format("get_single_column_restriction_column expects a prepared expression, but it's not: {}", e));
-    }
-
-    const column_value* the_only_column = nullptr;
-    bool expression_is_single_column = false;
-
-    for_each_expression<column_value>(e,
-        [&](const column_value& cval) {
-            if (the_only_column == nullptr) {
-                // It's the first column_value we've encountered - set it as the only column
-                the_only_column = &cval;
-                expression_is_single_column = true;
-                return;
-            }
-
-            if (cval.col != the_only_column->col) {
-                // In case any other column is encountered the restriction
-                // restricts more than one column.
-                expression_is_single_column = false;
-            }
-        }
-    );
-
-    if (expression_is_single_column) {
-        return std::cref(*the_only_column);
-    } else {
-        return std::nullopt;
-    }
-}
-
-bool is_single_column_restriction(const expression& e) {
-    return get_single_column_restriction_column(e).has_value();
-}
-
-const column_value& get_the_only_column(const expression& e) {
-    std::optional<std::reference_wrapper<const column_value>> result = get_single_column_restriction_column(e);
-
-    if (!result.has_value()) {
-        on_internal_error(expr_logger,
-            format("get_the_only_column - bad expression: {}", e));
-    }
-
-    return *result;
-}
-
-single_column_restrictions_map get_single_column_restrictions_map(const expression& e) {
-    single_column_restrictions_map result;
-
-    std::vector<const column_definition*> sorted_defs = get_sorted_column_defs(e);
-    for (const column_definition* cdef : sorted_defs) {
-        expression col_restrictions = conjunction {
-            .children = extract_single_column_restrictions_for_column(std::span(&e, 1), *cdef)
-        };
-        result.emplace(cdef, std::move(col_restrictions));
-    }
-
-    return result;
 }
 
 bool is_empty_restriction(const expression& e) {
@@ -2817,31 +2744,16 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
 // read). For example, if we have the filter "c1 < 3 and c2 > 3", c1 does not
 // need filtering but c2 does so num_prefix_columns_that_need_not_be_filtered
 // will be 1.
+//
+// _clustering_prefix_restrictions is already built with exactly this logic
+// (iterating CK columns in schema order, stopping at gaps, needs-filtering
+// predicates, and after a slice), so its size is the answer.  Multi-column
+// restrictions are treated as needing filtering.
 unsigned int statement_restrictions::num_clustering_prefix_columns_that_need_not_be_filtered() const {
-    if (contains_multi_column_restriction(_clustering_columns_restrictions)) {
+    if (_has_multi_column) {
         return 0;
     }
-
-    single_column_restrictions_map column_restrictions =
-        get_single_column_restrictions_map(_clustering_columns_restrictions);
-
-    // Restrictions currently need filtering in three cases:
-    // 1. any of them is a CONTAINS restriction
-    // 2. restrictions do not form a contiguous prefix (i.e. there are gaps in it)
-    // 3. a SLICE restriction isn't on a last place
-    column_id position = 0;
-    unsigned int count = 0;
-    for (const auto& restriction : column_restrictions | std::views::values) {
-        if (find_needs_filtering(restriction)
-            || position != get_the_only_column(restriction).col->id) {
-            return count;
-        }
-        if (!has_slice(restriction)) {
-            position = get_the_only_column(restriction).col->id + 1;
-        }
-        count++;
-    }
-    return count;
+    return _clustering_prefix_restrictions.size();
 }
 
 get_clustering_bounds_fn_t
