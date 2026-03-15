@@ -796,15 +796,48 @@ static bool index_supports_some_column(
             if (!allow_local && idx.metadata().local()) {
                 continue;
             }
+            if (preds.empty()) {
+                continue;
+            }
             // AND all predicate results for this column-index pair, mirroring the
-            // conjunction logic in is_supported_by_helper.  Initialize with the
-            // first predicate (not from_bool(true)) to preserve CollectionYes.
+            // conjunction logic in is_supported_by_helper.  Seed with the first
+            // predicate's result instead of from_bool(true) (which is UsualYes)
+            // so that CollectionYes values are preserved through the chain.
             auto result = is_predicate_supported_by(preds[0], idx);
             for (size_t i = 1; i < preds.size(); ++i) {
                 result = result && is_predicate_supported_by(preds[i], idx);
             }
             if (result) {
                 return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Check if any index supports any multi-column clustering predicate.
+// For each predicate in mc_preds, checks if any column in the predicate's
+// columns list is supported by the index for that predicate's operator.
+static bool multi_column_predicates_have_supporting_index(
+        const std::vector<predicate>& mc_preds,
+        const secondary_index::secondary_index_manager& index_manager,
+        allow_local_index allow_local) {
+    for (const auto& idx : index_manager.list_indexes()) {
+        if (!allow_local && idx.metadata().local()) {
+            continue;
+        }
+        for (const auto& pred : mc_preds) {
+            if (!pred.op) {
+                continue;
+            }
+            auto* ocp = std::get_if<on_clustering_key_prefix>(&pred.on);
+            if (!ocp) {
+                continue;
+            }
+            for (const auto* col : ocp->columns) {
+                if (idx.supports_expression(*col, *pred.op)) {
+                    return true;
+                }
             }
         }
     }
@@ -1339,7 +1372,7 @@ statement_restrictions::statement_restrictions(private_tag,
             _has_queriable_ck_index = index_supports_some_column(sc_ck_pred_vectors, sim, allow_local)
                     && !type.is_delete();
         } else {
-            _has_queriable_ck_index = clustering_columns_restrictions_have_supporting_index(sim, allow_local)
+            _has_queriable_ck_index = multi_column_predicates_have_supporting_index(mc_ck_preds, sim, allow_local)
                     && !type.is_delete();
         }
         _has_queriable_pk_index = !has_token
@@ -1771,91 +1804,6 @@ const column_definition& statement_restrictions::unrestricted_column(column_kind
             "no missing columns with kind {} found in expression {}",
             to_sstring(kind), restrictions));
 };
-
-bool statement_restrictions::clustering_columns_restrictions_have_supporting_index(
-        const secondary_index::secondary_index_manager& index_manager,
-        expr::allow_local_index allow_local) const {
-    // Single column restrictions can be handled by the existing code
-    if (!_has_multi_column) {
-        return index_supports_some_column(_single_column_clustering_key_restrictions, index_manager, allow_local);
-    }
-
-    // Multi column restrictions have to be handled separately
-    for (const auto& index : index_manager.list_indexes()) {
-        if (!allow_local && index.metadata().local()) {
-            continue;
-        }
-        if (multi_column_clustering_restrictions_are_supported_by(index)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool statement_restrictions::multi_column_clustering_restrictions_are_supported_by(
-        const secondary_index::index& index) const {
-    // Slice restrictions have to be checked depending on the clustering slice
-    if (has_slice(_clustering_columns_restrictions)) {
-        bounds_slice clustering_slice = get_clustering_slice();
-
-        const expr::column_value* supported_column =
-            find_in_expression<expr::column_value>(_clustering_columns_restrictions,
-                [&](const expr::column_value& cval) -> bool {
-                    return clustering_slice.is_supported_by(*cval.col, index);
-                }
-        );
-        return supported_column != nullptr;
-    }
-
-    // Otherwise it has to be a single binary operator with EQ or IN.
-    // This is checked earlier during add_restriction.
-    const expr::binary_operator* single_binop =
-        expr::as_if<expr::binary_operator>(&_clustering_columns_restrictions);
-    if (single_binop == nullptr) {
-        on_internal_error(rlogger, format(
-            "multi_column_clustering_restrictions_are_supported_by more than one non-slice restriction: {}",
-            _clustering_columns_restrictions));
-    }
-
-    if (single_binop->op != expr::oper_t::IN && single_binop->op != expr::oper_t::EQ) {
-        on_internal_error(rlogger, format("Disallowed multi column restriction: {}", *single_binop));
-    }
-
-    const expr::column_value* supported_column =
-        find_in_expression<expr::column_value>(_clustering_columns_restrictions,
-            [&](const expr::column_value& cval) -> bool {
-                return index.supports_expression(*cval.col, single_binop->op);
-            }
-    );
-    return supported_column != nullptr;
-}
-
-bounds_slice statement_restrictions::get_clustering_slice() const {
-    std::optional<bounds_slice> result;
-
-    expr::for_each_expression<expr::binary_operator>(_clustering_columns_restrictions,
-        [&](const expr::binary_operator& binop) {
-            bounds_slice cur_slice = bounds_slice::from_binary_operator(binop);
-            if (!result.has_value()) {
-                result = cur_slice;
-            } else {
-                result->merge(cur_slice);
-            }
-        }
-    );
-
-    return *result;
-}
-
-bool statement_restrictions::parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager,
-                                      expr::allow_local_index allow_local) const {
-    // Token restrictions can't be supported by an index
-    if (has_token_restrictions()) {
-        return false;
-    }
-
-    return index_supports_some_column(_single_column_partition_key_restrictions, index_manager, allow_local);
-}
 
 void statement_restrictions::process_clustering_columns_restrictions(bool for_view, bool allow_filtering) {
     if (!has_clustering_columns_restriction()) {
