@@ -1355,7 +1355,6 @@ statement_restrictions::statement_restrictions(private_tag,
     }
 
     for (auto& pred : predicates) {
-        auto& restr = expr::as<expr::binary_operator>(pred.filter);
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
             _not_null_columns.insert(col);
@@ -1366,7 +1365,7 @@ statement_restrictions::statement_restrictions(private_tag,
         } else if (pred.is_multi_column) {
             // Multi column restrictions are only allowed on clustering columns
             if (is_empty_restriction(_clustering_columns_restrictions)) {
-                _clustering_columns_restrictions = restr;
+                _clustering_columns_restrictions = pred.filter;
             } else {
 
                 if (!find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
@@ -1377,14 +1376,14 @@ statement_restrictions::statement_restrictions(private_tag,
 
                 if (pred.equality) {
                     throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes an Equal",
-                        expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
+                        expr::get_columns_in_commons(_clustering_columns_restrictions, pred.filter)));
                 } else if (pred.is_in) {
                     throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes a IN",
-                                                                    expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
+                                                                    expr::get_columns_in_commons(_clustering_columns_restrictions, pred.filter)));
                 } else if (pred.is_slice) {
                     if (!expr::has_slice(_clustering_columns_restrictions)) {
                         throw exceptions::invalid_request_exception(format("Column \"{}\" cannot be restricted by both an equality and an inequality relation",
-                                                                    expr::get_columns_in_commons(_clustering_columns_restrictions, restr)));
+                                                                    expr::get_columns_in_commons(_clustering_columns_restrictions, pred.filter)));
                     }
 
                     const expr::binary_operator* other_slice = expr::find_in_expression<expr::binary_operator>(_clustering_columns_restrictions, [](const expr::binary_operator){return true;});
@@ -1407,18 +1406,18 @@ statement_restrictions::statement_restrictions(private_tag,
                     if (pred.is_lower_bound && is_lower_bound(*other_slice)) {
                         throw exceptions::invalid_request_exception(format(
                         "More than one restriction was found for the start bound on {}",
-                            expr::get_columns_in_commons(restr, *other_slice)));
+                            expr::get_columns_in_commons(pred.filter, *other_slice)));
                     }
 
                     if (pred.is_upper_bound && is_upper_bound(*other_slice)) {
                         throw exceptions::invalid_request_exception(format(
                             "More than one restriction was found for the end bound on {}",
-                            expr::get_columns_in_commons(restr, *other_slice)));
+                            expr::get_columns_in_commons(pred.filter, *other_slice)));
                     }
 
-                    _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
+                    _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
                 } else {
-                    throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", restr));
+                    throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", pred.filter));
                 }
             }
         } else if (std::holds_alternative<on_partition_key_token>(pred.on)) {
@@ -1433,7 +1432,7 @@ statement_restrictions::statement_restrictions(private_tag,
                                         ", ")));
             }
 
-            _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
+            _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, pred.filter);
         } else if (std::holds_alternative<on_column>(pred.on)) {
             const column_definition* def = std::get<on_column>(pred.on).column;
             if (def->is_partition_key()) {
@@ -1453,7 +1452,7 @@ statement_restrictions::statement_restrictions(private_tag,
                                             ", ")));
                 }
 
-                _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
+                _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, pred.filter);
                 _partition_range_is_simple &= !pred.is_in;
             } else if (def->is_clustering_key()) {
                 if (find_binop(_clustering_columns_restrictions, [] (const expr::binary_operator& b) {
@@ -1480,16 +1479,16 @@ statement_restrictions::statement_restrictions(private_tag,
                     }
                 }
 
-                _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, restr);
+                _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
             } else {
-                _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, restr);
+                _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, pred.filter);
             }
         } else {
             throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", pred.filter));
         }
 
         if (!pred.is_not_null_single_column) {
-            _where.push_back(restr);
+            _where.push_back(pred.filter);
         }
     }
     if (!_where.empty()) {
