@@ -1460,6 +1460,10 @@ statement_restrictions::statement_restrictions(private_tag,
 
                 _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, pred.filter);
                 pk_is_empty = false;
+                {
+                    auto [it, inserted] = _single_column_partition_key_restrictions.try_emplace(def, expr::conjunction{});
+                    it->second = expr::make_conjunction(std::move(it->second), pred.filter);
+                }
                 _partition_range_is_simple &= !pred.is_in;
             } else if (def->is_clustering_key()) {
                 if (has_mc_clustering) {
@@ -1508,9 +1512,6 @@ statement_restrictions::statement_restrictions(private_tag,
         }
     }
     if (!_where.empty()) {
-        if (!has_token_restrictions()) {
-            _single_column_partition_key_restrictions = get_single_column_restrictions_map(_partition_key_restrictions);
-        }
         if (!has_mc_clustering) {
             _single_column_clustering_key_restrictions = get_single_column_restrictions_map(_clustering_columns_restrictions);
         }
