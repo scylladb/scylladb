@@ -1357,6 +1357,7 @@ statement_restrictions::statement_restrictions(private_tag,
     bool ck_is_empty = true;
     bool has_mc_clustering = false;
     bool ck_has_slice = false;
+    const column_definition* ck_last_column = nullptr;
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
@@ -1468,7 +1469,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 }
 
                 const column_definition* new_column = std::get<on_column>(pred.on).column;
-                const column_definition* last_column = expr::get_last_column_def(_clustering_columns_restrictions);
+                const column_definition* last_column = ck_last_column;
 
                 if (last_column != nullptr && !allow_filtering) {
                     if (ck_has_slice && schema->position(*new_column) > schema->position(*last_column)) {
@@ -1488,6 +1489,9 @@ statement_restrictions::statement_restrictions(private_tag,
                 ck_is_empty = false;
                 if (pred.is_slice) {
                     ck_has_slice = true;
+                }
+                if (ck_last_column == nullptr || schema->position(*new_column) > schema->position(*ck_last_column)) {
+                    ck_last_column = new_column;
                 }
             } else {
                 _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, pred.filter);
