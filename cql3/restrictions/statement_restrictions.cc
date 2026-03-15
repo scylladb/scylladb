@@ -1360,6 +1360,7 @@ statement_restrictions::statement_restrictions(private_tag,
     const column_definition* ck_last_column = nullptr;
     const predicate* first_mc_pred = nullptr;
     bool pk_is_empty = true;
+    bool has_token = false;
     for (auto& pred : predicates) {
         if (pred.is_not_null_single_column) {
             auto* col = require_on_single_column(pred);
@@ -1425,7 +1426,7 @@ statement_restrictions::statement_restrictions(private_tag,
             }
         } else if (std::holds_alternative<on_partition_key_token>(pred.on)) {
             // Token always restricts the partition key
-            if (!pk_is_empty && !has_token_restrictions()) {
+            if (!pk_is_empty && !has_token) {
                 throw exceptions::invalid_request_exception(
                         seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                                 fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
@@ -1437,6 +1438,7 @@ statement_restrictions::statement_restrictions(private_tag,
 
             _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, pred.filter);
             pk_is_empty = false;
+            has_token = true;
         } else if (std::holds_alternative<on_column>(pred.on)) {
             const column_definition* def = std::get<on_column>(pred.on).column;
             if (def->is_partition_key()) {
@@ -1446,7 +1448,7 @@ statement_restrictions::statement_restrictions(private_tag,
                             "Only EQ and IN relation are supported on the partition key "
                             "(unless you use the token() function or ALLOW FILTERING)");
                 }
-                if (has_token_restrictions()) {
+                if (has_token) {
                     throw exceptions::invalid_request_exception(
                             seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                                 fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
