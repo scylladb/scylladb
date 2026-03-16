@@ -145,8 +145,10 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
 
 future<> client::update_credentials_and_rearm() {
     _credentials = co_await _creds_provider_chain.get_aws_credentials();
-    _creds_invalidation_timer.rearm(_credentials.expires_at);
-    _creds_update_timer.rearm(_credentials.expires_at - 1h);
+    if (_credentials) {
+        _creds_invalidation_timer.rearm(_credentials.expires_at);
+        _creds_update_timer.rearm(_credentials.expires_at - 1h);
+    }
 }
 
 future<> client::authorize(http::request& req) {
