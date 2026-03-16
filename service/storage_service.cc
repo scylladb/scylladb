@@ -987,7 +987,7 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
                     frozen_muts_to_apply.push_back(co_await freeze_gently(mut));
                 } else {
                     co_await for_each_split_mutation(std::move(mut), max_size, [&] (mutation m) -> future<> {
-                        frozen_muts_to_apply.push_back(co_await freeze_gently(mut));
+                        frozen_muts_to_apply.push_back(co_await freeze_gently(m));
                     });
                 }
             }
