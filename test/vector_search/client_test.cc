@@ -78,7 +78,9 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_server_returned_client_erro
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
     BOOST_CHECK(client.is_up());
-    BOOST_CHECK(res);
+    if (!res) {
+        BOOST_FAIL("Expected successful request, but got error: " << std::visit(error_visitor{}, res.error()));
+    }
     BOOST_CHECK_EQUAL(res.value().status, seastar::http::reply::status_type::bad_request);
 
     co_await client.close();
@@ -96,7 +98,8 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_request_is_aborted) {
 
     BOOST_CHECK(client.is_up());
     BOOST_REQUIRE(!res);
-    BOOST_CHECK(std::holds_alternative<aborted_error>(res.error()));
+    BOOST_CHECK_MESSAGE(std::holds_alternative<aborted_error>(res.error()),
+            "Expected aborted_error, got: " << std::visit(error_visitor{}, res.error()));
 
     co_await client.close();
     co_await server->stop();
@@ -112,7 +115,9 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_server_returned_server_erro
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
     BOOST_CHECK(client.is_up());
-    BOOST_CHECK(res);
+    if (!res) {
+        BOOST_FAIL("Expected successful request, but got error: " << std::visit(error_visitor{}, res.error()));
+    }
     BOOST_CHECK_EQUAL(res->status, seastar::http::reply::status_type::internal_server_error);
 
     co_await client.close();
@@ -129,7 +134,9 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_server_returned_service_una
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
     BOOST_CHECK(client.is_up());
-    BOOST_CHECK(res);
+    if (!res) {
+        BOOST_FAIL("Expected successful request, but got error: " << std::visit(error_visitor{}, res.error()));
+    }
     BOOST_CHECK_EQUAL(res->status, seastar::http::reply::status_type::service_unavailable);
 
     co_await client.close();
@@ -145,7 +152,8 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_down_when_server_is_not_available) 
 
     BOOST_CHECK(!client.is_up());
     BOOST_REQUIRE(!res);
-    BOOST_CHECK(std::holds_alternative<service_unavailable_error>(res.error()));
+    BOOST_CHECK_MESSAGE(std::holds_alternative<service_unavailable_error>(res.error()),
+            "Expected service_unavailable_error, got: " << std::visit(error_visitor{}, res.error()));
 
     co_await client.close();
     co_await down_server->stop();
@@ -163,7 +171,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(becomes_up_when_server_status_is_servi
     auto became_up = co_await repeat_until([&client]() -> future<bool> {
         co_return client.is_up();
     });
-    BOOST_CHECK(became_up);
+    BOOST_CHECK_MESSAGE(became_up, "Timed out waiting for client to become up");
 
     co_await client.close();
     co_await server->stop();
@@ -190,7 +198,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(remains_down_when_server_status_is_not
             // waiting for 2 status requests to be sure that node had a chance to become up
             co_return server->status_requests().size() >= 2;
         });
-        BOOST_CHECK(got_2_status_requests);
+        BOOST_CHECK_MESSAGE(got_2_status_requests, "Timed out waiting for 2 status requests");
         BOOST_CHECK(!client.is_up());
 
         co_await client.close();
@@ -209,7 +217,8 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_down_when_connection_times_out) {
 
     BOOST_CHECK(!client.is_up());
     BOOST_REQUIRE(!res);
-    BOOST_CHECK(std::holds_alternative<service_unavailable_error>(res.error()));
+    BOOST_CHECK_MESSAGE(std::holds_alternative<service_unavailable_error>(res.error()),
+            "Expected service_unavailable_error, got: " << std::visit(error_visitor{}, res.error()));
 
     co_await unreachable.close();
     co_await client.close();

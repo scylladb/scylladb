@@ -337,9 +337,11 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(similarity_function_returns_correctly_
                         BOOST_CHECK_EQUAL(rows.size(), 2);
                         BOOST_CHECK_EQUAL(rms->rs().result_set().get_metadata().column_count(), 2);
                         BOOST_CHECK_EQUAL(get_id_col_value(rows.at(0)), 1);
-                        BOOST_CHECK(is_similarity_eq(get_similarity_col_value(rows.at(0)), params.expected_similarity[0]));
+                        BOOST_CHECK_MESSAGE(is_similarity_eq(get_similarity_col_value(rows.at(0)), params.expected_similarity[0]),
+                                "Similarity mismatch for row 0: got " << get_similarity_col_value(rows.at(0)) << ", expected " << params.expected_similarity[0]);
                         BOOST_CHECK_EQUAL(get_id_col_value(rows.at(1)), 2);
-                        BOOST_CHECK(is_similarity_eq(get_similarity_col_value(rows.at(1)), params.expected_similarity[1]));
+                        BOOST_CHECK_MESSAGE(is_similarity_eq(get_similarity_col_value(rows.at(1)), params.expected_similarity[1]),
+                                "Similarity mismatch for row 1: got " << get_similarity_col_value(rows.at(1)) << ", expected " << params.expected_similarity[1]);
                     }
                 },
                 make_config(format("http://server.node:{}", server->port())))
@@ -414,9 +416,11 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(select_similarity_function_other_than_
                 BOOST_CHECK_EQUAL(rows.size(), 2);
                 BOOST_CHECK_EQUAL(rms->rs().result_set().get_metadata().column_count(), 2);
                 BOOST_CHECK_EQUAL(get_id_col_value(rows.at(0)), 1);
-                BOOST_CHECK(is_similarity_eq(get_similarity_col_value(rows.at(0)), params.expected_similarity[1]));
+                BOOST_CHECK_MESSAGE(is_similarity_eq(get_similarity_col_value(rows.at(0)), params.expected_similarity[1]),
+                        "Similarity mismatch for row 0: got " << get_similarity_col_value(rows.at(0)) << ", expected " << params.expected_similarity[1]);
                 BOOST_CHECK_EQUAL(get_id_col_value(rows.at(1)), 2);
-                BOOST_CHECK(is_similarity_eq(get_similarity_col_value(rows.at(1)), params.expected_similarity[0]));
+                BOOST_CHECK_MESSAGE(is_similarity_eq(get_similarity_col_value(rows.at(1)), params.expected_similarity[0]),
+                        "Similarity mismatch for row 1: got " << get_similarity_col_value(rows.at(1)) << ", expected " << params.expected_similarity[0]);
             },
             make_config(format("http://server.node:{}", server->port())))
             .finally(seastar::coroutine::lambda([&] -> future<> {
