@@ -45,7 +45,7 @@ future<std::unique_ptr<vs_mock_server>> make_available(std::unique_ptr<unavailab
 
 } // namespace
 
-SEASTAR_TEST_CASE(is_up_after_construction) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_after_construction) {
     auto server = co_await make_vs_mock_server();
     client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
@@ -55,7 +55,7 @@ SEASTAR_TEST_CASE(is_up_after_construction) {
     co_await server->stop();
 }
 
-SEASTAR_TEST_CASE(is_up_when_server_returned_ok_status) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_server_returned_ok_status) {
     abort_source_timeout as;
     auto server = co_await make_vs_mock_server();
     client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
@@ -69,7 +69,7 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_ok_status) {
     co_await server->stop();
 }
 
-SEASTAR_TEST_CASE(is_up_when_server_returned_client_error_status) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_server_returned_client_error_status) {
     abort_source_timeout as;
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::bad_request, "Bad request"});
@@ -85,7 +85,7 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_client_error_status) {
     co_await server->stop();
 }
 
-SEASTAR_TEST_CASE(is_up_when_request_is_aborted) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_request_is_aborted) {
     abort_source as;
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::ok, "{}"});
@@ -102,7 +102,7 @@ SEASTAR_TEST_CASE(is_up_when_request_is_aborted) {
     co_await server->stop();
 }
 
-SEASTAR_TEST_CASE(is_up_when_server_returned_server_error_status) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_server_returned_server_error_status) {
     abort_source_timeout as;
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::internal_server_error, "Internal Server Error"});
@@ -119,7 +119,7 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_server_error_status) {
     co_await server->stop();
 }
 
-SEASTAR_TEST_CASE(is_up_when_server_returned_service_unavailable_status) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_server_returned_service_unavailable_status) {
     abort_source_timeout as;
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::service_unavailable, "Service Unavailable"});
@@ -136,7 +136,7 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_service_unavailable_status) {
     co_await server->stop();
 }
 
-SEASTAR_TEST_CASE(is_down_when_server_is_not_available) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_down_when_server_is_not_available) {
     abort_source_timeout as;
     auto down_server = co_await make_unavailable_server();
     client client{client_test_logger, make_endpoint(down_server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
@@ -151,7 +151,7 @@ SEASTAR_TEST_CASE(is_down_when_server_is_not_available) {
     co_await down_server->stop();
 }
 
-SEASTAR_TEST_CASE(becomes_up_when_server_status_is_serving) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(becomes_up_when_server_status_is_serving) {
     abort_source_timeout as;
     auto down_server = co_await make_unavailable_server();
     client client{client_test_logger, make_endpoint(down_server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
@@ -170,7 +170,7 @@ SEASTAR_TEST_CASE(becomes_up_when_server_status_is_serving) {
     co_await down_server->stop();
 }
 
-SEASTAR_TEST_CASE(remains_down_when_server_status_is_not_serving) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(remains_down_when_server_status_is_not_serving) {
     abort_source_timeout as;
     std::vector<sstring> non_serving_statuses{
             "INITIALIZING",
@@ -199,7 +199,7 @@ SEASTAR_TEST_CASE(remains_down_when_server_status_is_not_serving) {
     }
 }
 
-SEASTAR_TEST_CASE(is_down_when_connection_times_out) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_down_when_connection_times_out) {
     abort_source_timeout as;
     auto unreachable = co_await make_unreachable_socket();
     client client{client_test_logger, client::endpoint_type{unreachable.host, unreachable.port, seastar::net::inet_address(unreachable.host)},

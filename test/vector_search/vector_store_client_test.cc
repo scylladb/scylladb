@@ -121,7 +121,7 @@ BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
 }
 
 /// Resolving of the hostname is started in start_background_tasks()
-SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_dns_started) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
@@ -138,7 +138,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
 }
 
 /// Unable to resolve the hostname
-SEASTAR_TEST_CASE(vector_store_client_test_dns_resolve_failure) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_dns_resolve_failure) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto as = abort_source_timeout();
@@ -155,7 +155,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolve_failure) {
 }
 
 /// Resolving of the hostname is repeated after errors
-SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_dns_resolving_repeated) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
@@ -220,7 +220,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
 }
 
 /// Minimal interval between DNS refreshes is respected
-SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_dns_refresh_respects_interval) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
@@ -257,7 +257,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
 }
 
 /// DNS refresh could be aborted
-SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_dns_refresh_aborted) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     seastar::condition_variable wait_for_abort;
@@ -282,7 +282,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
     co_await vs.stop();
 }
 
-SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_ann_test_disabled) {
     co_await do_with_cql_env([](cql_test_env& env) -> future<> {
         auto as = abort_source_timeout();
         auto schema = co_await create_test_table(env, "ks", "vs");
@@ -294,7 +294,7 @@ SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
     });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_ann_addr_unavailable) {
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set("http://bad.authority.here:6080");
     co_await do_with_cql_env(
@@ -316,7 +316,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
             cfg);
 }
 
-SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_ann_service_unavailable) {
     auto cfg = make_config();
     auto server = co_await make_unavailable_server();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
@@ -339,7 +339,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
             });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_ann_service_aborted) {
     auto cfg = make_config();
     auto server = co_await make_unavailable_server();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
@@ -367,7 +367,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
             });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_ann_request) {
     auto server = co_await make_vs_mock_server();
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
@@ -447,7 +447,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
             });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_request) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_filtering_ann_request) {
     auto server = co_await make_vs_mock_server();
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
@@ -475,7 +475,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_request) {
             });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_cql) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_filtering_ann_cql) {
     // Similar to `vector_store_client_test_filtering_ann_request`,
     // but uses CQL query to verify that the WHERE clause expression (this time with IN operator) is handled correctly.
     using namespace test::vector_search;
@@ -513,7 +513,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_cql) {
             });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_uri_update_to_empty) {
     auto cfg = config();
     auto count = 0;
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
@@ -541,7 +541,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
     co_await vs.stop();
 }
 
-SEASTAR_TEST_CASE(vector_store_client_uri_update_to_non_empty) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_uri_update_to_non_empty) {
     auto cfg = config();
     std::vector<std::string> resolved;
     auto vs = vector_store_client{cfg};
@@ -563,7 +563,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_non_empty) {
     co_await vs.stop();
 }
 
-SEASTAR_TEST_CASE(vector_store_client_uri_update_to_invalid) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_uri_update_to_invalid) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
@@ -578,7 +578,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_invalid) {
     co_await vs.stop();
 }
 
-SEASTAR_TEST_CASE(vector_store_client_uri_update) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_uri_update) {
     // Test verifies that when vector store uri is update, the client
     // will switch to the new uri within the DNS refresh interval.
     auto s1 = co_await make_vs_mock_server();
@@ -614,7 +614,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_multiple_ips_high_availability) {
 
     auto responding_s = co_await make_vs_mock_server();
     auto unavail_s = co_await make_unavailable_server(responding_s->port());
@@ -648,7 +648,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_multiple_ips_load_balancing) {
 
     auto s1 = co_await make_vs_mock_server();
     auto s2 = co_await make_vs_mock_server(s1->port());
@@ -679,7 +679,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_multiple_uris_high_availability) {
 
     auto responding_s = co_await make_vs_mock_server();
     auto unavail_s = co_await make_unavailable_server();
@@ -713,7 +713,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_multiple_uris_load_balancing) {
 
     auto s1 = co_await make_vs_mock_server();
     auto s2 = co_await make_vs_mock_server();
@@ -744,7 +744,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_search_metrics_test) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_search_metrics_test) {
 
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set("http://good.authority.here:6080");
@@ -766,7 +766,7 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
             cfg);
 }
 
-SEASTAR_TEST_CASE(vector_store_client_test_paging_warning) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_paging_warning) {
     auto s1 = co_await make_vs_mock_server();
 
     auto cfg = make_config();
@@ -792,7 +792,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_paging_warning) {
             });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_test_paging_warning_doesnt_show_when_paging_disabled) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_paging_warning_doesnt_show_when_paging_disabled) {
     auto s1 = co_await make_vs_mock_server();
 
     auto cfg = make_config();
@@ -817,7 +817,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_paging_warning_doesnt_show_when_pagin
             });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_test_paging_warning_doesnt_show_when_limit_less_than_page_size) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_paging_warning_doesnt_show_when_limit_less_than_page_size) {
     auto s1 = co_await make_vs_mock_server();
 
     auto cfg = make_config();
@@ -842,7 +842,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_paging_warning_doesnt_show_when_limit
             });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_node_recovery_after_backoff) {
     auto unavail_server = co_await make_unavailable_server();
     std::unique_ptr<vs_mock_server> avail_server;
     constexpr auto HOSTNAME = "server.node";
@@ -882,7 +882,7 @@ SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failures) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_single_status_check_after_concurrent_failures) {
     using keys = std::expected<vector_store_client::primary_keys, vector_store_client::ann_error>;
 
     auto unavail_s = co_await make_unavailable_server();
@@ -927,7 +927,7 @@ SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failu
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_connection_timeout_cfg) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_updates_backoff_max_time_from_read_connection_timeout_cfg) {
     auto unavail_s = co_await make_unavailable_server();
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://unavail.node:{}", unavail_s->port()));
@@ -973,7 +973,7 @@ SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_connect
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_secondary_uri) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_secondary_uri) {
     auto primary = co_await make_unavailable_server();
     auto secondary = co_await make_vs_mock_server();
     auto cfg = make_config();
@@ -999,7 +999,7 @@ SEASTAR_TEST_CASE(vector_store_client_secondary_uri) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_secondary_uri_only) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_secondary_uri_only) {
     auto secondary = co_await make_vs_mock_server();
     auto cfg = make_config();
     cfg.db_config->vector_store_secondary_uri.set(format("http://secondary.node:{}", secondary->port()));
@@ -1021,7 +1021,7 @@ SEASTAR_TEST_CASE(vector_store_client_secondary_uri_only) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_https) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_https) {
     certificates certs;
     auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
     auto cfg = make_config();
@@ -1047,7 +1047,7 @@ SEASTAR_TEST_CASE(vector_store_client_https) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_https_rewrite_ca_cert) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_https_rewrite_ca_cert) {
     auto broken_cert = co_await seastar::make_tmp_file();
     certificates certs;
     auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
@@ -1102,7 +1102,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_rewrite_ca_cert) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_https_wrong_hostname) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_https_wrong_hostname) {
     certificates certs;
     auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
     const auto hostname = fmt::format("wrong.{}", certs.server_cert_cn());
@@ -1128,7 +1128,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_wrong_hostname) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_https_wrong_cacert_verification_error) {
     auto broken_cert = co_await seastar::make_tmp_file();
     certificates certs;
     auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
@@ -1155,7 +1155,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error_host_is_ip) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_https_wrong_cacert_verification_error_host_is_ip) {
     auto broken_cert = co_await seastar::make_tmp_file();
     certificates certs;
     auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
@@ -1182,7 +1182,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error_host
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_high_availability_unreachable) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_high_availability_unreachable) {
     auto server = co_await make_vs_mock_server();
     auto unreachable = co_await make_unreachable_socket();
 
@@ -1218,7 +1218,7 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_unreachable) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_abort_due_to_query_timeout) {
     auto server = co_await make_vs_mock_server();
     server->ann_response_delay(std::chrono::seconds(10));
 
@@ -1246,7 +1246,7 @@ SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
 
 /// Verify that the HTTP error description from the vector store is propagated
 /// through the CQL interface as part of the invalid_request_exception message.
-SEASTAR_TEST_CASE(vector_store_client_cql_error_contains_http_error_description) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_cql_error_contains_http_error_description) {
     co_await do_with_vector_store_mock([](cql_test_env& env, vs_mock_server& server) -> future<> {
         co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
 
@@ -1268,7 +1268,7 @@ SEASTAR_TEST_CASE(vector_store_client_cql_error_contains_http_error_description)
 // on the SELECT query:
 //     ANN ordering by vector requires the column to be indexed using 'vector_index'.
 // Reproduces SCYLLADB-635.
-SEASTAR_TEST_CASE(vector_store_client_vector_index_with_additional_filtering_column) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_vector_index_with_additional_filtering_column) {
     co_await do_with_vector_store_mock([](cql_test_env& env, vs_mock_server&) -> future<> {
         // Create a vector index on the embedding column, including ck1 for filtered ANN search support.
         co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding, ck1) USING 'vector_index'");
@@ -1277,7 +1277,7 @@ SEASTAR_TEST_CASE(vector_store_client_vector_index_with_additional_filtering_col
     });
 }
 
-SEASTAR_TEST_CASE(vector_store_client_local_vector_index) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_local_vector_index) {
     co_await do_with_vector_store_mock([](cql_test_env& env, vs_mock_server&) -> future<> {
         // Create a local vector index on the 'embedding' column.
         co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test ((pk1, pk2), embedding) USING 'vector_index'");
