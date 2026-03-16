@@ -221,10 +221,16 @@ private:
         sst->set_sstable_level(0);
         auto units = co_await sst_manager.dir_semaphore().get_units(1);
         sstables::sstable_open_config cfg {
+            .unsealed_sstable = true,
             .ignore_component_digest_mismatch = db.get_config().ignore_component_digest_mismatch(),
         };
         co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()), cfg);
-        co_await table.add_sstable_and_update_cache(sst);
+        co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
+            if (loading_sst == sst) {
+                auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
+                co_await loading_sst->seal_sstable(writer_cfg.backup);
+            }
+        });
     }
 
     future<>
@@ -295,7 +301,8 @@ private:
                         sstables::sstable_state::normal,
                         sstables::sstable::component_basename(
                             _table.schema()->ks_name(), _table.schema()->cf_name(), descriptor.version, gen, descriptor.format, it->first),
-                        sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend()});
+                        sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend(),
+                                                           .leave_unsealed = true});
                     auto out = co_await sstable_sink->output(foptions, stream_options);
 
                     input_stream src(co_await [this, &it, sstable, f = files.at(it->first)]() -> future<input_stream<char>> {
