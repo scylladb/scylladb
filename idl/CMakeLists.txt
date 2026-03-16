@@ -48,6 +48,7 @@ set(idl_headers
   messaging_service.idl.hh
   paxos.idl.hh
   raft.idl.hh
+  raft_util.idl.hh
   raft_storage.idl.hh
   group0.idl.hh
   hinted_handoff.idl.hh
