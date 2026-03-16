@@ -22,8 +22,6 @@
 #include "cql3/statements/select_statement.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
-#include "test/lib/log.hh"
-#include <cstdio>
 #include <functional>
 #include <chrono>
 #include <memory>
@@ -40,7 +38,6 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/net/tcp.hh>
-#include <tuple>
 #include <variant>
 #include <vector>
 #include <filesystem>
