@@ -1214,7 +1214,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     future<> _filling_fiber = make_ready_future<>();
 
     static content_range parse_content_range(const std::string& header) {
-        std::regex pattern(R"(bytes (\d+)-(\d+)/(\d+))");
+        static const std::regex pattern(R"(bytes (\d+)-(\d+)/(\d+))");
         std::smatch match;
 
         if (std::regex_match(header, match, pattern)) {
