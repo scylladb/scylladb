@@ -1297,11 +1297,11 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
 
         logger.info("Force compaction of split sstable containing expired tombstone")
         await manager.api.stop_compaction(servers[0].ip_addr, "SPLIT")
-        await manager.api.keyspace_compaction(servers[0].ip_addr, ks)
-
-        await s1_log.wait_for(f"split_sstable_rewrite: released", from_mark=s1_mark)
+        compaction_task = asyncio.create_task(manager.api.keyspace_compaction(servers[0].ip_addr, ks))
 
         await manager.api.disable_injection(servers[0].ip_addr, "split_sstable_rewrite")
+        await s1_log.wait_for(f"split_sstable_rewrite: released", from_mark=s1_mark)
+        await compaction_task
 
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
         await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
