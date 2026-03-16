@@ -423,19 +423,34 @@ def test_streams_operations(test_table_s, dynamodbstreams, metrics):
 # to update latencies for one kind of operation (#17616, and compare #9406),
 # and to do that checking that ..._count increases for that op is enough.
 @contextmanager
-def check_sets_latency(metrics, operation_names):
+def check_sets_latency_by_metric(metrics, operation_names, metric_name):
     the_metrics = get_metrics(metrics)
-    saved_latency_count = { x: get_metric(metrics, 'scylla_alternator_op_latency_count', {'op': x}, the_metrics) for x in operation_names }
+    saved_latency_count = { x: get_metric(metrics, f'{metric_name}_count', {'op': x}, the_metrics) for x in operation_names }
     yield
     the_metrics = get_metrics(metrics)
     for op in operation_names:
         # The total "count" on all shards should strictly increase
-        assert saved_latency_count[op] < get_metric(metrics, 'scylla_alternator_op_latency_count', {'op': op}, the_metrics)
+        assert saved_latency_count[op] < get_metric(metrics, f'{metric_name}_count', {'op': op}, the_metrics)
+
+def check_sets_latency(metrics, operation_names):
+    return check_sets_latency_by_metric(metrics, operation_names, 'scylla_alternator_op_latency')
 
 # Test latency metrics for PutItem, GetItem, DeleteItem, UpdateItem.
 # We can't check what exactly the latency is - just that it gets updated.
 def test_item_latency(test_table_s, metrics):
     with check_sets_latency(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem', 'BatchWriteItem', 'BatchGetItem']):
+        p = random_string()
+        test_table_s.put_item(Item={'p': p})
+        test_table_s.get_item(Key={'p': p})
+        test_table_s.delete_item(Key={'p': p})
+        test_table_s.update_item(Key={'p': p})
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
+
+def test_item_latency_per_table(test_table_s, metrics):
+    with check_sets_latency_by_metric(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem', 'BatchWriteItem', 'BatchGetItem'], 'scylla_alternator_table_op_latency'):
         p = random_string()
         test_table_s.put_item(Item={'p': p})
         test_table_s.get_item(Key={'p': p})
