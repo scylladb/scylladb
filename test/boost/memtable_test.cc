@@ -1004,7 +1004,20 @@ SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
     }, db_config);
 }
 
-SEASTAR_TEST_CASE(memtable_flush_period) {
+static auto check_has_error_injection() {
+    return boost::unit_test::precondition([](auto){
+        return 
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+            true
+#else
+            false
+#endif
+        ;
+    });
+}
+
+SEASTAR_TEST_CASE(memtable_flush_period, *check_has_error_injection()) {
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
     auto db_config = make_shared<db::config>();
     db_config->enable_cache.set(false);
     return do_with_cql_env_thread([](cql_test_env& env) {
@@ -1028,6 +1041,9 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
         t.apply(m);
         BOOST_REQUIRE_EQUAL(t.sstables_count(), 0); // add mutation and check there are no sstables for this table
 
+        auto& errj = utils::get_local_injector();
+        errj.enable("table_seal_post_flush_waiters", true);
+
         // change schema to set memtable flush period
         // we use small value in this test but it is impossible to set the period less than 60000ms using ALTER TABLE construction
         schema_builder b(t.schema());
@@ -1035,8 +1051,10 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
         schema_ptr s2 = b.build();
         t.set_schema(s2);
 
-        sleep(500ms).get(); // wait until memtable flush starts at least once
-        BOOST_REQUIRE(t.sstables_count() == 1 || t.get_stats().pending_flushes > 0);    // flush started
+        BOOST_TEST_MESSAGE("Wait for flush");
+        errj.inject("table_seal_post_flush_waiters", utils::wait_for_message(std::chrono::minutes(2))).get();
+        BOOST_TEST_MESSAGE("Flush received");
+
         BOOST_REQUIRE(eventually_true([&] { // wait until memtable will be flushed at least once
             return t.sstables_count() == 1;
         }));
@@ -1047,6 +1065,10 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
             .produces(m)
             .produces_end_of_stream();
     }, db_config);
+#else
+    BOOST_TEST_MESSAGE("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev)");
+    return make_ready_future<>();
+#endif
 }
 
 SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
