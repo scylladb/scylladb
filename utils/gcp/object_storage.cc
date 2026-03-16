@@ -1107,7 +1107,7 @@ future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, st
     }
 }
 
-future<utils::gcp::storage::object_info> utils::gcp::storage::client::merge_objects(std::string_view bucket_in, std::string_view dest_object_name, std::vector<std::string> source_object_names, rjson::value metadata, seastar::abort_source* as) {
+future<utils::gcp::storage::object_info> utils::gcp::storage::client::merge_objects(std::string_view bucket_in, std::string_view dest_object_name, const std::vector<std::string>& source_object_names, rjson::value metadata, seastar::abort_source* as) {
     rjson::value compose = rjson::empty_object();
     rjson::value source_objects = rjson::empty_array();
 

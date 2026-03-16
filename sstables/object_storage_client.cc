@@ -276,7 +276,7 @@ public:
             co_await f.close();
 
             auto names = ranges | std::views::transform([](auto& p) { return p.name; }) | std::ranges::to<std::vector<std::string>>();
-            co_await _client->merge_objects(bucket, object, std::move(names), {}, as);
+            co_await _client->merge_objects(bucket, object, names, {}, as);
 
             co_await parallel_for_each(names, [this, bucket](auto& name) -> future<> {
                 co_await _client->delete_object(bucket, name);
