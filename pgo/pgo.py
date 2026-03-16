@@ -410,6 +410,8 @@ async def start_node(executable: PathLike, cluster_workdir: PathLike, addr: str,
         f"--alternator-write-isolation=only_rmw_uses_lwt",
         f"--authenticator=PasswordAuthenticator",
         f"--authorizer=CassandraAuthorizer",
+        '--experimental-features=logstor',
+        '--logstor-disk-size-in-mb=32'
     ] + list(extra_opts)
     training_logger.info(f"Using maintenance socket {socket}")
     return await run(['bash', '-c', fr"""exec {shlex.join(command)} >{q(logfile)} 2>&1"""], cwd=cluster_workdir)
@@ -820,6 +822,19 @@ async def train_repair(executable: PathLike, workdir: PathLike) -> None:
 
 trainers["repair"] = ("repair_dataset", train_repair)
 populators["repair_dataset"] = populate_repair
+
+# LOGSTOR ==================================================
+
+async def populate_logstor(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["user", "profile=./conf/logstor.yaml", "ops(row-insert=1)"], n=100000, cl="local_quorum", node=server)
+
+async def train_logstor(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_train(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["user", "profile=./conf/logstor.yaml", "ops(row-insert=1,read-cache=1,read-disk=1)"], n=100000, cl="local_quorum", node=server)
+
+trainers["logstor"] = ("logstor_dataset", train_logstor)
+populators["logstor_dataset"] = populate_logstor
 
 ################################################################################
 # Training procedures
