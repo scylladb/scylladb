@@ -79,6 +79,54 @@ and to the TRUNCATE data definition query.
 
 In addition, the timeout parameter can be applied to SELECT queries as well.
 
+## USING OVERSAMPLING
+
+The `USING OVERSAMPLING` clause allows specifying a per-request oversampling factor for
+vector queries that use the `ORDER BY ... ANN OF` clause for approximate nearest neighbor (ANN) search.
+
+Oversampling is a multiplier that controls how many candidate vectors are initially retrieved from 
+the vector index before filtering to the final result set. For example, if a query asks for 10 results 
+(`LIMIT 10`) with an oversampling factor of 2.0, the system retrieves 20 candidates from the vector 
+index, then filters and rescores (if enabled) to return the top 10 results. Higher oversampling values 
+can improve query accuracy, particularly when using quantized vectors with rescoring enabled, at the 
+cost of increased latency.
+
+The per-request oversampling value, if provided, takes precedence over the index-level `oversampling` 
+option specified when creating the vector index. This allows fine-tuning the accuracy/performance 
+trade-off on a per-query basis without modifying the index configuration.
+
+Supported values are floating-point numbers between 1.0 and 100.0, inclusive. The value 1.0 means no 
+oversampling (retrieve exactly `LIMIT` candidates).
+
+Examples:
+```cql
+SELECT image_id FROM ImageEmbeddings
+  ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 10
+  USING OVERSAMPLING 2.0;
+```
+
+```cql
+SELECT image_id, similarity_cosine(embedding, [0.1, 0.2, 0.3, 0.4])
+  FROM ImageEmbeddings
+  ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5
+  USING OVERSAMPLING 3.5;
+```
+
+Working with prepared statements, the oversampling factor can be provided as a bind marker:
+
+```cql
+SELECT image_id FROM ImageEmbeddings
+  ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 10
+  USING OVERSAMPLING ?;
+```
+
+The `USING OVERSAMPLING` clause is only valid for vector queries using the `ORDER BY ... ANN OF` clause. 
+Attempting to use it with non-vector queries will result in an error.
+
+For more information about vector queries and vector indexes, see the 
+[SELECT statement documentation](dml/select.md#using-oversampling) and 
+[Vector Index documentation](secondary-indexes.md#create-vector-index-statement).
+
 ## PRUNE MATERIALIZED VIEW statements
 
 A special statement is dedicated for pruning ghost rows from materialized views.

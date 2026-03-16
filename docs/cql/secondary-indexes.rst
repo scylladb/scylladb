@@ -252,8 +252,9 @@ The following options are supported for vector indexes. All of them are optional
 +------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
 | ``oversampling``             | A multiplier for the candidate set size during the search phase. For example, if a query asks for 10     | ``1.0``       |
 |                              | similar vectors (``LIMIT 10``) and ``oversampling`` is 2.0, the search will initially retrieve 20        |               |
-|                              | candidates. This can improve accuracy at the cost of latency. Supported values are                       |               |
-|                              | floating-point numbers between 1.0 (no oversampling) and 100.0.                                          |               |
+|                              | candidates. This can improve accuracy at the cost of latency. This index-level option can be overridden  |               |
+|                              | per-request using the ``USING OVERSAMPLING`` clause in :ref:`vector queries <vector-queries>`.           |               |
+|                              | Supported values are floating-point numbers between 1.0 (no oversampling) and 100.0.                     |               |
 +------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
 | ``rescoring``                | Flag enabling recalculation of similarity scores with full precision and re-ranking of the candidate set.| ``false``     |
 |                              | Valid only for quantization below ``f32``. Supported values are:                                         |               |

@@ -14,7 +14,7 @@ Querying data from data is done using a ``SELECT`` statement:
                    : [ WHERE `where_clause` ]
                    : [ GROUP BY `group_by_clause` ]
                    : [ ORDER BY `ordering_clause` ]
-                   : [ ORDER BY `vector_column_name` ANN OF `vector` LIMIT `integer` ]
+                   : [ ORDER BY `vector_column_name` ANN OF `vector` LIMIT `integer` [ USING OVERSAMPLING `float` ] ]
                    : [ PER PARTITION LIMIT (`integer` | `bind_marker`) ]
                    : [ LIMIT (`integer` | `bind_marker`) ]
                    : [ ALLOW FILTERING ]
@@ -260,10 +260,11 @@ When using vector columns, the syntax is as follows:
 
 .. code-block::
 
-   order_by_vector: ORDER BY `vector_column_name` ANN OF `vector` LIMIT `integer`
+   order_by_vector: ORDER BY `vector_column_name` ANN OF `vector` LIMIT `integer` [ USING OVERSAMPLING `float` ]
 
 Where ``vector_column_name`` is the name of the vector column,
-``vector`` is the query :ref:`vector <vectors>`, and ``LIMIT`` is a limit on the number of results to return.
+``vector`` is the query :ref:`vector <vectors>`, ``LIMIT`` is a limit on the number of results to return,
+and ``USING OVERSAMPLING`` is an optional clause to override the index-level :ref:`oversampling factor <oversampling>`.
 Vector queries can only be performed on a vector column that has a :ref:`vector index <create-vector-index-statement>` created.
 
 The ``ANN OF`` clause orders the results by their distance to the provided query vector,
@@ -304,6 +305,38 @@ For example::
 The supported operations are equal relations (``=`` and ``IN``) with restrictions as in regular ``WHERE`` clauses. See :ref:`WHERE <where-clause>`.
 
 Other filtering scenarios are currently not supported.
+
+.. _oversampling:
+
+Oversampling
+````````````
+
+The ``USING OVERSAMPLING`` clause allows specifying a per-request oversampling factor that overrides 
+the index-level ``oversampling`` option specified when :ref:`creating the vector index <create-vector-index-statement>`.
+
+Oversampling is a multiplier that controls how many candidate vectors are initially retrieved from the 
+vector index before filtering to the final result set. For example, if a query asks for 10 results 
+(``LIMIT 10``) with an oversampling factor of 2.0, the system retrieves 20 candidates from the vector 
+index, then filters and rescores (if enabled) to return the top 10 results. Higher oversampling values 
+can improve query accuracy, particularly when using quantized vectors with rescoring enabled, at the 
+cost of increased latency.
+
+Supported values are floating-point numbers between 1.0 and 100.0, inclusive. The value 1.0 means no 
+oversampling (retrieve exactly ``LIMIT`` candidates).
+
+For example::
+
+    SELECT image_id FROM ImageEmbeddings
+      ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 10
+      USING OVERSAMPLING 2.0;
+
+The oversampling factor can also be specified using a bind marker for prepared statements::
+
+    SELECT image_id FROM ImageEmbeddings
+      ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 10
+      USING OVERSAMPLING ?;
+
+Oversampling is a ScyllaDB-specific feature and not part of Apache Cassandra CQL.
 
 .. note::
 

@@ -406,7 +406,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
-      ( usingTimeoutServiceLevelClause[attrs] )?
+      ( usingSelectClause[attrs] )?
       {
           auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
           $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
@@ -567,13 +567,14 @@ usingTimestampClause[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_USING K_TIMESTAMP ts=intValue { attrs->timestamp = std::move(ts); }
     ;
 
-usingTimeoutServiceLevelClause[std::unique_ptr<cql3::attributes::raw>& attrs]
-    : K_USING usingTimeoutServiceLevelClauseObjective[attrs] ( K_AND usingTimeoutServiceLevelClauseObjective[attrs] )*
+usingSelectClause[std::unique_ptr<cql3::attributes::raw>& attrs]
+    : K_USING usingSelectClauseObjective[attrs] ( K_AND usingSelectClauseObjective[attrs] )*
     ;
 
-usingTimeoutServiceLevelClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
+usingSelectClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_TIMEOUT to=term { attrs->timeout = std::move(to); }
     | serviceLevel sl_name=serviceLevelOrRoleName { attrs->service_level = std::move(sl_name); }
+    | K_OVERSAMPLING ovs=term { attrs->oversampling = std::move(ovs); }
     ;
 
 usingTimeoutConcurrencyClause[std::unique_ptr<cql3::attributes::raw>& attrs]
@@ -2196,6 +2197,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_EXECUTE
         | K_MUTATION_FRAGMENTS
         | K_EFFECTIVE
+        | K_OVERSAMPLING
         ) { $str = $k.text; }
     ;
 
@@ -2408,6 +2410,7 @@ K_LIKE:        L I K E;
 K_TIMEOUT:     T I M E O U T;
 K_PRUNE:       P R U N E;
 K_CONCURRENCY: C O N C U R R E N C Y;
+K_OVERSAMPLING: O V E R S A M P L I N G;
 
 K_EXECUTE:     E X E C U T E;
 
