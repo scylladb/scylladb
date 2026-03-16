@@ -1053,7 +1053,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /**
     * @Group Advanced automatic backup setting
     */
-    , auto_snapshot(this, "auto_snapshot", value_status::Used, true,
+    , auto_snapshot(this, "auto_snapshot", liveness::LiveUpdate, value_status::Used, true,
         "Enable or disable whether a snapshot is taken of the data before keyspace truncation or dropping of tables. To prevent data loss, using the default setting is strongly advised. If you set to false, you will lose data on truncation or drop.")
     /**
     * @Group Key caches and global row properties
