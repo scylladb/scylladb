@@ -781,7 +781,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_paging_warnin
                 auto msg = co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 100;", std::move(qo));
                 auto warns = msg->warnings();
                 BOOST_REQUIRE_EQUAL(warns.size(), 1);
-                BOOST_CHECK(warns[0] == "Paging is not supported for Vector Search queries. The entire result set has been returned.");
+                BOOST_CHECK_EQUAL(warns[0], "Paging is not supported for Vector Search queries. The entire result set has been returned.");
             },
             cfg)
             .finally([&s1] {

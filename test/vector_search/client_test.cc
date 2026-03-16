@@ -113,7 +113,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_server_returned_server_erro
 
     BOOST_CHECK(client.is_up());
     BOOST_CHECK(res);
-    BOOST_CHECK(res->status == seastar::http::reply::status_type::internal_server_error);
+    BOOST_CHECK_EQUAL(res->status, seastar::http::reply::status_type::internal_server_error);
 
     co_await client.close();
     co_await server->stop();
@@ -130,7 +130,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_server_returned_service_una
 
     BOOST_CHECK(client.is_up());
     BOOST_CHECK(res);
-    BOOST_CHECK(res->status == seastar::http::reply::status_type::service_unavailable);
+    BOOST_CHECK_EQUAL(res->status, seastar::http::reply::status_type::service_unavailable);
 
     co_await client.close();
     co_await server->stop();
