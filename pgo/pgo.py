@@ -541,18 +541,23 @@ async def quiesce_cluster(addrs: list[str]) -> None:
         await asyncio.sleep(10)
 
 @contextlib.asynccontextmanager
-async def with_cluster(executable: PathLike, workdir: PathLike, cpusets: Optional[list[str]] = None) -> AsyncIterator[tuple[list[str], list[Process]]]:
+async def with_cluster(executable: PathLike, workdir: PathLike, cpusets: Optional[list[str]] = None, node_opts: list[str] = []) -> AsyncIterator[tuple[list[str], list[Process]]]:
     """Provides a Scylla cluster.
     Doesn't monitor the state of the cluster in any way, just starts the cluster as
     the context manager enters, waits for each CQL port to open, yields the cluster's
     control info and stops the cluster as the context manager exits.
+
+    `node_opts` are extra command line options for the nodes. A workload which needs the
+    cluster configured in a particular way passes them here rather than having them added
+    to every cluster the training starts. The same options have to be passed when the
+    dataset of that workload is populated and when it is trained on.
     """
     meta = cluster_metadata(workdir)
     cluster_name = meta["name"]
     subnet = meta["subnet"]
     addrs = [f"{subnet}.{i}" for i in range(1,255)][:3]
     cpusets = cpusets or NODE_CPUSETS.get()
-    extra_opts = await get_bolt_opts(executable)
+    extra_opts = await get_bolt_opts(executable) + list(node_opts)
     training_logger.debug(f"BOLT opts for {executable} are {extra_opts}")
     training_logger.info(f"Starting a cluster of {executable} in {workdir}")
     procs = await start_cluster(addrs=addrs, executable=executable, workdir=workdir, cpusets=cpusets, cluster_name=cluster_name, extra_opts=extra_opts)
@@ -614,10 +619,10 @@ def kw(**kwargs):
 # But this facility isn't currently used.
 
 @contextlib.asynccontextmanager
-async def with_cs_populate(executable: PathLike, workdir: PathLike) -> AsyncIterator[str]:
+async def with_cs_populate(executable: PathLike, workdir: PathLike, node_opts: list[str] = []) -> AsyncIterator[str]:
     """Provides a Scylla cluster, creates the cassandra superuser, and waits
     for compactions to end before stopping it."""
-    async with with_cluster(executable=executable, workdir=workdir) as (addrs, procs):
+    async with with_cluster(executable=executable, workdir=workdir, node_opts=node_opts) as (addrs, procs):
         await setup_cassandra_user(workdir, addrs[0])
         yield addrs[0]
         async with asyncio.timeout(3600):
@@ -625,9 +630,9 @@ async def with_cs_populate(executable: PathLike, workdir: PathLike) -> AsyncIter
             await quiesce_cluster(addrs=addrs)
 
 @contextlib.asynccontextmanager
-async def with_cs_train(executable: PathLike, workdir: PathLike) -> AsyncIterator[str]:
+async def with_cs_train(executable: PathLike, workdir: PathLike, node_opts: list[str] = []) -> AsyncIterator[str]:
     """Provides a Scylla cluster and merges generated profile files after it's stopped."""
-    async with with_cluster(executable=executable, workdir=workdir) as (addrs, procs):
+    async with with_cluster(executable=executable, workdir=workdir, node_opts=node_opts) as (addrs, procs):
         yield addrs[0]
     await merge_profraw(workdir)
 
@@ -822,6 +827,75 @@ async def train_repair(executable: PathLike, workdir: PathLike) -> None:
 
 trainers["repair"] = ("repair_dataset", train_repair)
 populators["repair_dataset"] = populate_repair
+
+# LOGSTOR ==================================================
+#
+# Logstor is a log structured key-value engine. A write appends a record to the active
+# segment of its compaction group and repoints the primary index at it, a read either
+# finds the partition in the logstor cache or reads its record back out of a segment, and
+# compaction is what turns the dead records that the overwrites and the deletes leave
+# behind into free segments again.
+#
+# Which of those paths a run exercises, and how much each of them does, is decided by how
+# full the segment pool of a shard is, so the workload is sized against the pool rather
+# than in rows. Compaction does not start until the free segments fall under
+# logstor_compaction_trigger_threshold (5%) of the pool, and what it then pays per segment
+# it takes is the fraction of that segment which is still live - so a pool that is about
+# half live is the regime where compaction has to relocate real data instead of dropping
+# nearly empty segments. The dataset is populated to about that, and the training workload
+# then writes the free half of the pool several times over, so that compaction is running
+# for most of it.
+
+# The segment pool of one shard, and the rest of the logstor configuration of the training
+# cluster. Only the logstor cluster is started with these: every other workload runs
+# without the logstor feature and pays neither for the pool nor for formatting its files.
+LOGSTOR_DISK_SIZE_IN_MB = 256
+LOGSTOR_NODE_OPTS = [
+    "--experimental-features=logstor",
+    f"--logstor-disk-size-in-mb={LOGSTOR_DISK_SIZE_IN_MB}",
+]
+
+# Partitions of the dataset, which is what sizes it against the pool above. A row of
+# ./conf/logstor.yaml is ~1 KiB of values and measures ~1.9 KiB as a record, since a
+# record carries the description of the schema along with the frozen mutation. Every one
+# of the three RF=3 nodes holds the whole dataset, so the live bytes of the cluster come
+# to 3 * LOGSTOR_ROWS * 1.9 KiB against the 3 * 2 * LOGSTOR_DISK_SIZE_IN_MB of pool that
+# its six shards have between them - 0.83 GiB of 1.5 GiB, or 55%. The training mix deletes
+# one partition for every six it inserts, which settles that at ~6/7 of what was
+# populated, leaving the run at about half a pool.
+LOGSTOR_ROWS = 150000
+
+# Operations of the training workload. The dataset leaves ~45% of the pool free, which the
+# workload has to overwrite before compaction starts at all - a tenth of this run - and
+# what is left of it then runs against a pool that compaction is holding at ~92% in use.
+LOGSTOR_TRAIN_OPS = 2600000
+
+# The mix. Writes are weighted above reads because they also drive the compaction, the
+# separator and the segment allocation that no read touches. read-cache is not only a
+# cache hit: a write and a delete both evict the cached partition of the key they
+# overwrite, so a read-cache hits only when the last thing to touch its key was another
+# read-cache. At these weights that is 400 of the 1100 key-touching operations, and the
+# run measures a third of them hitting and the rest missing, reading the record out of
+# its segment and populating the cache with it. read-disk is BYPASS CACHE, which neither
+# looks in the cache nor populates it, and is the segment read path on its own. scan is
+# the range reader, which repair and tablet migration read through, and is weighted far
+# below the rest because one of them returns a hundred partitions.
+LOGSTOR_TRAIN_MIX = "ops(row-insert=600,read-cache=400,read-disk=200,row-delete=100,scan=1)"
+
+async def populate_logstor(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_populate(executable=executable, workdir=workdir, node_opts=LOGSTOR_NODE_OPTS) as server:
+        # Sequential seeds, so that the population covers the key range exactly once
+        # instead of leaving a third of it unwritten the way random seeds would.
+        await cs(cmd=["user", "profile=./conf/logstor.yaml", "ops(row-insert=1)"],
+                 n=LOGSTOR_ROWS, pop=f"seq=1..{LOGSTOR_ROWS}", cl="local_quorum", node=server)
+
+async def train_logstor(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_train(executable=executable, workdir=workdir, node_opts=LOGSTOR_NODE_OPTS) as server:
+        await cs(cmd=["user", "profile=./conf/logstor.yaml", LOGSTOR_TRAIN_MIX],
+                 n=LOGSTOR_TRAIN_OPS, pop=f"dist=UNIFORM(1..{LOGSTOR_ROWS})", cl="local_quorum", node=server)
+
+trainers["logstor"] = ("logstor_dataset", train_logstor)
+populators["logstor_dataset"] = populate_logstor
 
 ################################################################################
 # Training procedures

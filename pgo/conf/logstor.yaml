@@ -1,0 +1,87 @@
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+#
+# cassandra-stress profile for the logstor PGO training workload.
+#
+# A logstor table is a key-value table: it has no clustering columns, and a write
+# replaces the whole partition rather than updating cells of it. The operations below
+# are the paths a logstor training run has to exercise - a write, a read the logstor
+# cache can serve, a read that has to go to a segment, a partition delete, and a range
+# scan - plus the compaction that the writes and the deletes drive once the dead records
+# they leave behind fill the segment pool.
+#
+# The number of partitions is not set here. `population: seq()` maps the seed of an
+# operation to the key of its partition, so the seed range that pgo.py passes in -pop is
+# the key range the workload touches. See LOGSTOR_ROWS in pgo.py, which sizes it against
+# the segment pool.
+#
+
+keyspace: logstor_ks
+
+# Tablets are enabled explicitly: the compaction groups of a logstor table are the
+# tablets of that table, and a fixed initial count keeps the number of compaction groups
+# a shard writes into the same between runs.
+keyspace_definition: |
+
+  CREATE KEYSPACE IF NOT EXISTS logstor_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': true, 'initial': 16};
+
+table: users
+
+table_definition: |
+
+  CREATE TABLE IF NOT EXISTS users (
+    userid bigint,
+    initials int,
+    first_name text,
+    last_name text,
+    password text,
+    email text,
+    address text,
+    userdata blob,
+    PRIMARY KEY(userid)
+  ) WITH storage_engine = 'logstor';
+
+columnspec:
+  - name: userid
+    population: seq(1..1000000000)
+
+  - name: initials
+    size: fixed(2)
+
+  - name: first_name
+    size: fixed(5)
+
+  - name: last_name
+    size: fixed(5)
+
+  - name: password
+    size: fixed(80)
+
+  - name: email
+    size: uniform(16..50)
+
+  - name: address
+    size: uniform(16..50)
+
+  - name: userdata
+    size: fixed(840) # row size ~ 1k
+
+queries:
+  row-insert:
+    cql: insert into logstor_ks.users(userid, initials, first_name, last_name, password, email, address, userdata) values (?,?,?,?,?,?,?,?)
+    fields: samerow
+  read-cache:
+    cql: select * from logstor_ks.users where userid = ?
+    fields: samerow
+  read-disk:
+    cql: select * from logstor_ks.users where userid = ? BYPASS CACHE
+    fields: samerow
+  row-delete:
+    cql: delete from logstor_ks.users where userid = ?
+    fields: samerow
+  scan:
+    cql: select * from logstor_ks.users where token(userid) >= token(:userid) limit 100
+    fields: samerow
