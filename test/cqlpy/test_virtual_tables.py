@@ -7,38 +7,60 @@ import pytest
 from . import nodetool
 from . import util
 import json
+import glob
+import os
 
 from collections import defaultdict
 
 from test.pylib.skip_types import skip_env
 
-def verify_snapshots(cql, expected_snapshots: dict[str, set[str]]):
+def verify_snapshots(cql, expected_snapshots: dict[str, set[str]], scylla_data_dir):
     results = list(cql.execute(f"SELECT keyspace_name, table_name, snapshot_name, live, total FROM system.snapshots"))
     for res in results:
         if res.snapshot_name in expected_snapshots:
             t = f"{res.keyspace_name}.{res.table_name}"
             assert t in expected_snapshots[res.snapshot_name], f"Unexpected snapshot {t}: snapshot_name={res.snapshot_name}: expected_snapshots={expected_snapshots}"
             expected_snapshots[res.snapshot_name].remove(t)
+            verify_snapshot_dir(scylla_data_dir, res.keyspace_name, res.table_name, res.snapshot_name)
+
     for _, expected_tables in expected_snapshots.items():
         assert not expected_tables, f"Not all expected snapshots were listed: expected_snapshots={expected_snapshots}"
 
-def test_snapshots_table(scylla_only, cql, test_keyspace):
+def snapshot_dir_exists(scylla_data_dir, keyspace_name, table_name, snapshot_name) -> Tuple[str, bool]:
+    path = os.path.join(scylla_data_dir, keyspace_name, f"{table_name}-*")
+    table_dir = glob.glob(path)
+    assert len(table_dir) == 1, f"Expected single table directory for '{path}', got {table_dir}"
+    snapshot_dir = os.path.join(table_dir[0], "snapshots", snapshot_name)
+    return snapshot_dir, os.path.exists(snapshot_dir)
+
+def verify_snapshot_dir(scylla_data_dir, keyspace_name, table_name, snapshot_name, expected: bool = True):
+    snapshot_dir, exists = snapshot_dir_exists(scylla_data_dir, keyspace_name, table_name, snapshot_name)
+    if expected:
+        assert exists, f"Snapshots directory '{snapshot_dir}' does not exist"
+    else:
+        assert not exists, f"Snapshots directory '{snapshot_dir}' still exists"
+
+def test_snapshots_table(scylla_only, cql, test_keyspace, scylla_data_dir):
     test_tag = util.unique_name()
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
         nodetool.take_snapshot(cql, table, test_tag, False)
-        verify_snapshots(cql, {test_tag: {table}})
-    nodetool.del_snapshot(cql, test_tag)
+        verify_snapshots(cql, {test_tag: {table}}, scylla_data_dir)
+        nodetool.del_snapshot(cql, test_tag)
+        keyspace_name, table_name = table.split('.')
+        verify_snapshot_dir(scylla_data_dir, keyspace_name, table_name, test_tag, False)
 
-def test_snapshots_dropped_table(scylla_only, cql, test_keyspace):
+def test_snapshots_dropped_table(scylla_only, cql, test_keyspace, scylla_data_dir):
     test_tag = util.unique_name()
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
         nodetool.take_snapshot(cql, table, test_tag, False)
-    verify_snapshots(cql, {test_tag: {table}})
-    nodetool.del_snapshot(cql, test_tag)
+        verify_snapshots(cql, {test_tag: {table}}, scylla_data_dir)
+        nodetool.del_snapshot(cql, test_tag)
+        keyspace_name, table_name = table.split('.')
+        verify_snapshot_dir(scylla_data_dir, keyspace_name, table_name, test_tag, False)
 
-def test_snapshots_multiple_keyspaces(scylla_only, cql):
+def test_snapshots_multiple_keyspaces(scylla_only, cql, scylla_data_dir):
     expected_snapshots = defaultdict(set)
     ks_opts = "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
     test_tags = [util.unique_name(), util.unique_name(), util.unique_name()]
@@ -59,7 +81,7 @@ def test_snapshots_multiple_keyspaces(scylla_only, cql):
                     nodetool.take_snapshot(cql, table2, test_tags[2], False)
                     expected_snapshots[test_tags[2]].add(table2)
 
-                    verify_snapshots(cql, expected_snapshots)
+                    verify_snapshots(cql, expected_snapshots, scylla_data_dir)
     for t in test_tags:
         nodetool.del_snapshot(cql, t)
 
