@@ -1619,7 +1619,9 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
         utils::get_local_injector().inject("table_seal_active_memtable_try_flush", []() {
             throw std::system_error(ENOSPC, std::system_category(), "Injected error");
         });
-        co_return co_await this->try_flush_memtable_to_sstable(cg, old, std::move(write_permit));
+        co_await this->try_flush_memtable_to_sstable(cg, old, std::move(write_permit));
+        // signal a memtable was sealed
+        utils::get_local_injector().receive_message("table_seal_post_flush_waiters");
     });
 
     undo_stats.reset();
