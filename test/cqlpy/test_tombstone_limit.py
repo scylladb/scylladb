@@ -26,7 +26,7 @@ def all_tests_are_scylla_only(scylla_only):
 # Tests that need a single partition can co-locate their data in a single table.
 @pytest.fixture(scope="module")
 def table(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)', extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
         yield table
 
 
