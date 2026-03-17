@@ -92,7 +92,7 @@ Examples:
 # Audit all keyspaces for matching categories
 audit_keyspaces: "*"
 
-# Audit all keyspaces and also keep explicit table entries for readability
+# Audit all keyspaces (`audit_tables` is redundant here, but still legal)
 audit_keyspaces: "*"
 audit_tables: "ks1.tbl1,ks2.tbl2"
 ```
@@ -102,8 +102,9 @@ Semantics:
 - `audit_keyspaces: ""` keeps the existing meaning: no keyspace-wide auditing.
 - `audit_keyspaces: "*"` means every keyspace matches.
 - `audit_keyspaces: "*,ks1,ks2"` is accepted but equivalent to `*` alone.
-- the parser should silently normalize any list containing `*` into `audit_all_keyspaces = true` and an empty explicit keyspace set
-- only the exact token `*` is special; tokens such as `**` or `ks*` should be rejected as invalid configuration
+- the parser should normalize any list containing `*` into `audit_all_keyspaces = true` and an empty explicit keyspace set
+- when `*` is combined with explicit keyspaces, Scylla should log an informational message explaining that the explicit keyspaces are redundant and ignored
+- only the exact token `*` is special; tokens such as `**` or `ks*` should be rejected as invalid configuration, with an error that points users to `audit_keyspaces: "*"` as the valid form
 - If `*` is present, `audit_tables` becomes redundant but remains legal.
 
 ### 2. Add `audit_roles`
@@ -291,6 +292,9 @@ Because matching is done against the session's logged-in role name, `audit_roles
 Operators must list the concrete login roles they want to audit. This is a deliberate trade-off in the prototype to keep matching cheap
 and avoid role graph lookups on every audited request.
 
+Example: if `alice` inherits permissions from `admin_role`, configuring `audit_roles: "admin_role"` would not audit requests from
+`alice`; to audit those requests, `alice` itself must be listed.
+
 ### Audit table schema
 
 No schema change is needed. The audit table already includes `username`, which is sufficient for both storage and later analysis.
@@ -307,7 +311,8 @@ Add focused tests for:
 - specific `audit_roles`
 - `audit_keyspaces: "*"`
 - mixed `audit_keyspaces: "*,ks1"`
-- malformed comma-separated input and malformed wildcard tokens such as `**` or `ks*`
+- empty or whitespace-only keyspace lists such as `",,,"` or `"  "`
+- malformed comma-separated input and malformed wildcard tokens such as `**` or `ks*`, including verification of the resulting error messages
 
 ### Behavioral coverage
 
