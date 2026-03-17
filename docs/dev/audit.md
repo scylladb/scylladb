@@ -82,30 +82,28 @@ Observations:
 
 ## Proposed configuration
 
-### 1. Reuse `audit_keyspaces` for the all-keyspaces mode
+### 1. Add `audit_all_keyspaces`
 
-Reserve `*` inside `audit_keyspaces` as a wildcard meaning "all keyspaces".
+Introduce a new live-update boolean option:
 
 Examples:
 
 ```yaml
 # Audit all keyspaces for matching categories
-audit_keyspaces: "*"
+audit_all_keyspaces: true
 
-# Audit all keyspaces (`audit_tables` is redundant here, but still legal)
-audit_keyspaces: "*"
-audit_tables: "ks1.tbl1,ks2.tbl2"
+# Audit all keyspaces for selected roles
+audit_all_keyspaces: true
+audit_roles: "alice,bob"
 ```
 
 Semantics:
 
-- `audit_keyspaces: ""` keeps the existing meaning: no keyspace-wide auditing.
-- `audit_keyspaces: "*"` means every keyspace matches.
-- `audit_keyspaces: "*,ks1,ks2"` is accepted and normalized to the same result as `*` alone.
-- the parser should normalize any list containing `*` into `audit_all_keyspaces = true` and an empty explicit keyspace set
-- when `*` is combined with explicit keyspaces, Scylla should log an informational message explaining that the explicit keyspaces are redundant and ignored
-- only the exact token `*` is special; tokens such as `**` or `ks*` should be rejected as invalid configuration, with an error that clearly says to use `audit_keyspaces: "*"` for all-keyspaces auditing
-- If `*` is present, `audit_tables` becomes redundant but remains legal.
+- `audit_all_keyspaces: false` keeps the existing behavior.
+- `audit_all_keyspaces: true` makes every keyspace match.
+- `audit_keyspaces` keeps its existing meaning: an explicit list of keyspaces, or no keyspace-wide auditing when left empty.
+- A dedicated boolean is preferable to overloading `audit_keyspaces`, because it avoids changing the meaning of existing configurations.
+- This also keeps the behavior aligned with today's `audit_tables` handling, where leaving `audit_tables` empty does not introduce a new wildcard syntax.
 
 ### 2. Add `audit_roles`
 
@@ -120,7 +118,8 @@ Semantics:
 - empty `audit_roles` means **no role filtering**, preserving today's behavior
 - non-empty `audit_roles` means audit only requests whose effective logged username matches one of the configured roles
 - matching is byte-for-byte exact, using the same role name that is already written to the audit record's `username` column / syslog field
-- the prototype should compare against the post-authentication role name exactly as exposed by the session and audit log, with no additional case folding or role-graph expansion
+- the prototype should compare against the post-authentication role name from the session and audit log,
+  with no additional case folding or role-graph expansion
 
 Examples:
 
@@ -130,7 +129,7 @@ audit_keyspaces: "ks1"
 audit_roles: ""
 
 # Audit two roles across all keyspaces
-audit_keyspaces: "*"
+audit_all_keyspaces: true
 audit_roles: "alice,bob"
 
 # Audit a service role, but only for selected tables
@@ -156,7 +155,7 @@ category matches
 Where:
 
 - `role matches` is always true when `audit_roles` is empty
-- `audit_all_keyspaces` is true when `*` appears in `audit_keyspaces`
+- `audit_all_keyspaces` is true when the new boolean option is enabled
 
 For login auditing, the rule is simply:
 
@@ -170,21 +169,20 @@ AUTH category enabled && role matches(login username)
 
 Add a new config entry:
 
+- `db::config::audit_all_keyspaces`
 - `db::config::audit_roles`
 
 It should mirror the existing audit selectors:
 
-- type: `named_value<sstring>`
-- liveness: `LiveUpdate`
-- default: empty string
+- `audit_all_keyspaces`: type `named_value<bool>`, liveness `LiveUpdate`, default `false`
+- `audit_roles`: type `named_value<sstring>`, liveness `LiveUpdate`, default empty string
 
 Parsing changes:
 
 - keep `parse_audit_tables()` as-is
-- extend `parse_audit_keyspaces()` so it can detect `*`
+- keep `parse_audit_keyspaces()` semantics as-is
 - add `parse_audit_roles()` that returns a set of role names
 - normalize empty or whitespace-only keyspace lists to an empty configuration rather than treating them as real keyspace names
-- reject malformed wildcard tokens, because only the exact token `*` should trigger all-keyspaces mode
 
 To avoid re-parsing on every request, the `audit::audit` service should store:
 
@@ -194,8 +192,8 @@ std::set<sstring> _audited_keyspaces;
 std::set<sstring> _audited_roles;
 ```
 
-Using a dedicated boolean is preferable to storing `*` inside `_audited_keyspaces`, because it avoids ambiguity and keeps the
-hot-path check straightforward.
+Using a dedicated boolean keeps the hot-path check straightforward and avoids reinterpreting the existing
+`_audited_keyspaces` selector.
 
 Using `std::set` for the explicit selectors keeps the prototype aligned with the current implementation and minimizes code churn.
 If profiling later shows lookup cost matters here, the container choice can be revisited independently of the feature semantics.
@@ -241,7 +239,7 @@ the audit filter still matches `alice`. This keeps the behavior deterministic an
 
 ### Keyspace semantics
 
-`audit_keyspaces: "*"` should affect any statement whose `audit_info` carries a keyspace name.
+`audit_all_keyspaces: true` should affect any statement whose `audit_info` carries a keyspace name.
 
 Important consequences:
 
@@ -259,13 +257,13 @@ This design keeps existing behavior intact:
 - existing clusters that leave `audit_keyspaces` empty continue to audit no keyspaces
 - existing explicit keyspace/table lists keep their current meaning
 
-The only newly reserved value is `*` in `audit_keyspaces`.
+The feature is enabled only by a new explicit boolean, so existing `audit_keyspaces` values do not need to be reinterpreted.
 
 ## Operational considerations
 
 ### Performance and volume
 
-`audit_keyspaces: "*"` can significantly increase audit volume, especially with `QUERY` and `DML`.
+`audit_all_keyspaces: true` can significantly increase audit volume, especially with `QUERY` and `DML`.
 
 The intended mitigation is to combine it with:
 
@@ -285,6 +283,7 @@ That combination gives operators a simple and cheap filter model:
 Changing:
 
 - `audit_roles`
+- `audit_all_keyspaces`
 - `audit_keyspaces`
 - `audit_tables`
 - `audit_categories`
@@ -314,18 +313,17 @@ Add focused tests for:
 
 - empty `audit_roles`
 - specific `audit_roles`
-- `audit_keyspaces: "*"`
-- mixed `audit_keyspaces: "*,ks1"`
+- `audit_all_keyspaces: true`
 - empty or whitespace-only keyspace lists such as `",,,"` or `"  "`, which should normalize to an empty configuration and therefore audit no keyspaces
-- malformed comma-separated input and malformed wildcard tokens such as `**` or `ks*`, including verification of the resulting error messages
+- boolean config parsing for `audit_all_keyspaces`
 
 ### Behavioral coverage
 
 Extend the existing audit tests in `test/cluster/dtest/audit_test.py` with scenarios such as:
 
-1. `audit_keyspaces: "*"` audits statements in multiple keyspaces without listing them explicitly
+1. `audit_all_keyspaces: true` audits statements in multiple keyspaces without listing them explicitly
 2. `audit_roles: "alice"` logs requests from `alice` but not from `bob`
-3. `audit_keyspaces: "*"` + `audit_roles: "alice"` only logs `alice`'s traffic cluster-wide
+3. `audit_all_keyspaces: true` + `audit_roles: "alice"` only logs `alice`'s traffic cluster-wide
 4. login auditing respects `audit_roles`
 5. live-updating `audit_roles` changes behavior without restart
 
