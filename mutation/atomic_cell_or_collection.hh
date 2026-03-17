@@ -29,8 +29,8 @@ public:
     atomic_cell_or_collection(atomic_cell ac) : _data(std::move(ac._data)) {}
     atomic_cell_or_collection(const abstract_type& at, atomic_cell_view acv);
     static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
-    atomic_cell_view as_atomic_cell(const column_definition& cdef) const { return atomic_cell_view::from_bytes(*cdef.type, _data); }
-    atomic_cell_mutable_view as_mutable_atomic_cell(const column_definition& cdef) { return atomic_cell_mutable_view::from_bytes(*cdef.type, _data); }
+    atomic_cell_view as_atomic_cell(const column_definition& cdef) const { return atomic_cell_view::from_bytes(_data); }
+    atomic_cell_mutable_view as_mutable_atomic_cell(const column_definition& cdef) { return atomic_cell_mutable_view::from_bytes(_data); }
     atomic_cell_or_collection(collection_mutation cm) : _data(std::move(cm._data)) { }
     atomic_cell_or_collection copy(const abstract_type&) const;
     explicit operator bool() const {

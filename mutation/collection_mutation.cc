@@ -68,7 +68,7 @@ bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone 
         auto key_size = in.read_trivial<uint32_t>();
         in.read_fragmented(key_size); // Skip
         auto vsize = in.read_trivial<uint32_t>();
-        auto value = atomic_cell_view::from_bytes(type, in.read_fragmented(vsize));
+        auto value = atomic_cell_view::from_bytes(in.read_fragmented(vsize));
         if (value.is_live(tomb, now, false)) {
             return true;
         }
@@ -91,7 +91,7 @@ api::timestamp_type collection_mutation_view::last_update(const abstract_type& t
         const auto key_size = in.read_trivial<uint32_t>();
         in.read_fragmented(key_size); // Skip
         auto vsize = in.read_trivial<uint32_t>();
-        auto value = atomic_cell_view::from_bytes(type, in.read_fragmented(vsize));
+        auto value = atomic_cell_view::from_bytes(in.read_fragmented(vsize));
         max = std::max(value.timestamp(), max);
     }
 
@@ -503,22 +503,22 @@ deserialize_collection_mutation(const abstract_type& type, collection_mutation_i
     return visit(type, make_visitor(
     [&] (const collection_type_impl& ctype) {
         // value_comparator(), ugh
-        return deserialize_collection_mutation(in, [&ctype] (collection_mutation_input_stream& in) {
+        return deserialize_collection_mutation(in, [] (collection_mutation_input_stream& in) {
             // FIXME: we could probably avoid the need for size
             auto ksize = in.read_trivial<uint32_t>();
             auto key = in.read_linearized(ksize);
             auto vsize = in.read_trivial<uint32_t>();
-            auto value = atomic_cell_view::from_bytes(*ctype.value_comparator(), in.read_fragmented(vsize));
+            auto value = atomic_cell_view::from_bytes(in.read_fragmented(vsize));
             return std::make_pair(key, value);
         });
     },
     [&] (const user_type_impl& utype) {
-        return deserialize_collection_mutation(in, [&utype] (collection_mutation_input_stream& in) {
+        return deserialize_collection_mutation(in, [] (collection_mutation_input_stream& in) {
             // FIXME: we could probably avoid the need for size
             auto ksize = in.read_trivial<uint32_t>();
             auto key = in.read_linearized(ksize);
             auto vsize = in.read_trivial<uint32_t>();
-            auto value = atomic_cell_view::from_bytes(*utype.type(deserialize_field_index(key)), in.read_fragmented(vsize));
+            auto value = atomic_cell_view::from_bytes(in.read_fragmented(vsize));
             return std::make_pair(key, value);
         });
     },

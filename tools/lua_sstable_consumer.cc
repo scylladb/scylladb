@@ -629,7 +629,7 @@ struct counter_shards_value {
 int counter_shards_value_tostring_l(lua_State* l) {
     auto& csv = pop_userdata_as_ref<counter_shards_value>(l, 1);
     lua_pop(l, 1);
-    auto cv = counter_cell_view(atomic_cell_view::from_bytes(*csv.type, csv.data));
+    auto cv = counter_cell_view(atomic_cell_view::from_bytes(csv.data));
     lua::push_sstring(l, format("{}", cv.total_value()));
     return 1;
 }
@@ -638,7 +638,7 @@ int counter_shards_value_index_l(lua_State* l) {
     auto field = lua_tostring(l, 2);
     auto& csv = pop_userdata_as_ref<counter_shards_value>(l, 1);
     lua_pop(l, 2);
-    auto cv = counter_cell_view(atomic_cell_view::from_bytes(*csv.type, csv.data));
+    auto cv = counter_cell_view(atomic_cell_view::from_bytes(csv.data));
     if (strcmp(field, "value") == 0) {
         lua::push_data_value(l, data_value(cv.total_value()));
     } else if (strcmp(field, "shards") == 0) {

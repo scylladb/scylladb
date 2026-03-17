@@ -297,10 +297,10 @@ class atomic_cell_view final : public basic_atomic_cell_view<mutable_view::no> {
         : basic_atomic_cell_view<mutable_view::no>(view) {}
     friend class atomic_cell;
 public:
-    static atomic_cell_view from_bytes(const abstract_type& t, managed_bytes_view v) {
+    static atomic_cell_view from_bytes(managed_bytes_view v) {
         return atomic_cell_view(v);
     }
-    static atomic_cell_view from_bytes(const abstract_type& t, bytes_view v) {
+    static atomic_cell_view from_bytes(bytes_view v) {
         return atomic_cell_view(managed_bytes_view(v));
     }
 
@@ -325,7 +325,7 @@ class atomic_cell_mutable_view final : public basic_atomic_cell_view<mutable_vie
     atomic_cell_mutable_view(managed_bytes_mutable_view data)
         : basic_atomic_cell_view(data) {}
 public:
-    static atomic_cell_mutable_view from_bytes(const abstract_type& t, managed_bytes_mutable_view v) {
+    static atomic_cell_mutable_view from_bytes(managed_bytes_mutable_view v) {
         return atomic_cell_mutable_view(v);
     }
 
