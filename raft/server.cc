@@ -1109,6 +1109,18 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         // case.
         co_await _persistence->store_term_and_vote(batch.term_and_vote->first, batch.term_and_vote->second);
         _stats.store_term_and_vote++;
+
+        // When the term advances, any in-flight snapshot transfers
+        // belong to an outdated term: the progress tracker has been
+        // reset in become_leader() or we are now a follower.
+        // Abort them before we dispatch this batch's messages, which
+        // may start fresh transfers for the new term.
+        //
+        // A vote may also change independently of the term (e.g. a
+        // follower voting for a candidate at the same term), but in
+        // that case there are no in-flight transfers and the abort
+        // is a no-op.
+        abort_snapshot_transfers();
     }
 
     if (batch.snp) {
@@ -1218,8 +1230,6 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             // quickly) stop happening (we're outside the config after all).
             co_await _apply_entries.push_eventually(removed_from_config{});
         }
-        // request aborts of snapshot transfers
-        abort_snapshot_transfers();
         // abort all read barriers
         for (auto& r : _reads) {
             r.promise.set_value(not_a_leader{_fsm->current_leader()});
