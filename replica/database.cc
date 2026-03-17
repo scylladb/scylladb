@@ -24,6 +24,7 @@
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include "replica/streaming_reader_lifecycle_policy.hh"
 #include <memory>
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/try_future.hh>
