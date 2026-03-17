@@ -3108,6 +3108,11 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_start_tablet_res
 future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(group0_guard guard) {
     rtlogger.debug("Retrying failed rebuilds");
 
+    if (utils::get_local_injector().enter("maybe_retry_failed_rf_change_tablet_rebuilds_skip")) {
+        rtlogger.debug("Skipping retrying failed rebuilds due to error injection");
+        co_return false;
+    }
+
     auto tmptr = get_token_metadata_ptr();
     std::vector<canonical_mutation> updates;
     for (auto& ks_name : _db.get_tablets_keyspaces()) {
