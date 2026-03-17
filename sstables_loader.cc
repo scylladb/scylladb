@@ -206,18 +206,7 @@ private:
 
     using sst_classification_info = std::vector<std::vector<minimal_sst_info>>;
 
-    future<> attach_sstable(shard_id from_shard, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) const {
-        llog.debug("Adding downloaded SSTables to the table {} on shard {}, submitted from shard {}", _table.schema()->cf_name(), this_shard_id(), from_shard);
-        auto& db = _db.local();
-        auto& table = db.find_column_family(ks, cf);
-        auto& sst_manager = table.get_sstables_manager();
-        auto sst = sst_manager.make_sstable(
-            table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
-        sst->set_sstable_level(0);
-        auto units = co_await sst_manager.dir_semaphore().get_units(1);
-        co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
-        co_await table.add_sstable_and_update_cache(sst);
-    }
+    future<> attach_sstable(shard_id from_shard, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) const;
 
     future<>
     stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
@@ -300,6 +289,19 @@ host_id_vector_replica_set tablet_sstable_streamer::get_primary_endpoints(const 
         return filter(replica.host);
     });
     return to_replica_set(replicas);
+}
+
+future<> tablet_sstable_streamer::attach_sstable(shard_id from_shard, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) const {
+    llog.debug("Adding downloaded SSTables to the table {} on shard {}, submitted from shard {}", _table.schema()->cf_name(), this_shard_id(), from_shard);
+    auto& db = _db.local();
+    auto& table = db.find_column_family(ks, cf);
+    auto& sst_manager = table.get_sstables_manager();
+    auto sst = sst_manager.make_sstable(
+        table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
+    sst->set_sstable_level(0);
+    auto units = co_await sst_manager.dir_semaphore().get_units(1);
+    co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
+    co_await table.add_sstable_and_update_cache(sst);
 }
 
 future<> sstable_streamer::stream(shared_ptr<stream_progress> progress) {
