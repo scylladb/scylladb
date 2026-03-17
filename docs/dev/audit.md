@@ -78,6 +78,7 @@ Observations:
 - `DDL`, `DML`, and `QUERY` need a matching keyspace or table.
 - An empty `audit_keyspaces` means "audit no keyspaces", not "audit every keyspace".
 - There is no role-based filter; the authenticated user is recorded in the log but is not part of the decision.
+- The exact implementation to preserve is in `audit/audit.cc` (`should_log()`, `inspect()`, and `inspect_login()`).
 
 ## Proposed configuration
 
@@ -101,7 +102,8 @@ Semantics:
 - `audit_keyspaces: ""` keeps the existing meaning: no keyspace-wide auditing.
 - `audit_keyspaces: "*"` means every keyspace matches.
 - `audit_keyspaces: "*,ks1,ks2"` is accepted but equivalent to `*` alone.
-- the parser should normalize any list containing `*` into `audit_all_keyspaces = true` and an empty explicit keyspace set
+- the parser should silently normalize any list containing `*` into `audit_all_keyspaces = true` and an empty explicit keyspace set
+- only the exact token `*` is special; tokens such as `**` or `ks*` should be rejected as invalid configuration
 - If `*` is present, `audit_tables` becomes redundant but remains legal.
 
 ### 2. Add `audit_roles`
@@ -117,7 +119,7 @@ Semantics:
 - empty `audit_roles` means **no role filtering**, preserving today's behavior
 - non-empty `audit_roles` means audit only requests whose effective logged username matches one of the configured roles
 - matching is exact, using the same role name that is already written to the audit record's `username` column / syslog field
-- the prototype should treat the configured values as exact role-name matches after the same normalization already applied by authentication
+- the prototype should compare against the post-authentication role name exactly as exposed by the session and audit log, with no additional case folding or role-graph expansion
 
 Examples:
 
@@ -180,6 +182,7 @@ Parsing changes:
 - keep `parse_audit_tables()` as-is
 - extend `parse_audit_keyspaces()` so it can detect `*`
 - add `parse_audit_roles()` that returns a set of role names
+- reject malformed wildcard tokens, because only the exact token `*` should trigger all-keyspaces mode
 
 To avoid re-parsing on every request, the `audit::audit` service should store:
 
@@ -209,6 +212,7 @@ Instead:
 - change `should_log()` to take the effective username as an additional input
 - change `should_log_login()` to check the username against `audit_roles`
 - keep the storage helpers unchanged, because they already persist the username
+- update the existing internal call sites in `inspect()` and `inspect_login()` to pass the username through
 
 One possible interface shape is:
 
@@ -281,6 +285,12 @@ Changing:
 
 should update the in-memory selectors on all shards without restarting the node.
 
+### Prototype limitation
+
+Because matching is done against the session's logged-in role name, `audit_roles` cannot express "audit everyone who inherits role X".
+Operators must list the concrete login roles they want to audit. This is a deliberate trade-off in the prototype to keep matching cheap
+and avoid role graph lookups on every audited request.
+
 ### Audit table schema
 
 No schema change is needed. The audit table already includes `username`, which is sufficient for both storage and later analysis.
@@ -297,7 +307,7 @@ Add focused tests for:
 - specific `audit_roles`
 - `audit_keyspaces: "*"`
 - mixed `audit_keyspaces: "*,ks1"`
-- invalid parsing behavior if needed for malformed comma-separated input
+- malformed comma-separated input and malformed wildcard tokens such as `**` or `ks*`
 
 ### Behavioral coverage
 
