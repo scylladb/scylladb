@@ -13,7 +13,6 @@
 
 #include "bytes.hh"
 #include "schema/schema.hh"
-#include "serializer_impl.hh"
 #include "tombstone_gc_options.hh"
 
 class tombstone_gc_extension : public schema_extension {
@@ -33,12 +32,8 @@ public:
         throw std::logic_error("Cannot create tombstone_gc_extension info from string");
     }
 #pragma clang diagnostic pop
-    bytes serialize() const override {
-        return ser::serialize_to_buffer<bytes>(_tombstone_gc_options.to_map());
-    }
-    static std::map<seastar::sstring, seastar::sstring> deserialize(const bytes_view& buffer) {
-        return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<seastar::sstring, seastar::sstring>>());
-    }
+    bytes serialize() const override;
+    static std::map<seastar::sstring, seastar::sstring> deserialize(const bytes_view& buffer);
     const tombstone_gc_options& get_options() const {
         return _tombstone_gc_options;
     }

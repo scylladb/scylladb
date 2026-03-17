@@ -46,6 +46,7 @@
 #include "exceptions/exceptions.hh"
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
+#include "serializer_impl.hh"
 
 static logging::logger cfglogger("config");
 #include <seastar/util/file.hh>
@@ -1815,20 +1816,60 @@ db::config::config()
 db::config::~config()
 {}
 
+bytes cdc::cdc_extension::serialize() const {
+    return ser::serialize_to_buffer<bytes>(_cdc_options.to_map());
+}
+
+std::map<sstring, sstring> cdc::cdc_extension::deserialize(const bytes_view& buffer) {
+    return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<sstring, sstring>>());
+}
+
 void db::config::add_cdc_extension() {
     _extensions->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
+}
+
+bytes db::per_partition_rate_limit_extension::serialize() const {
+    return ser::serialize_to_buffer<bytes>(_options.to_map());
+}
+
+std::map<sstring, sstring> db::per_partition_rate_limit_extension::deserialize(const bytes_view& buffer) {
+    return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<sstring, sstring>>());
 }
 
 void db::config::add_per_partition_rate_limit_extension() {
     _extensions->add_schema_extension<db::per_partition_rate_limit_extension>(db::per_partition_rate_limit_extension::NAME);
 }
 
+bytes db::tags_extension::serialize() const {
+    return ser::serialize_to_buffer<bytes>(_tags);
+}
+
+std::map<sstring, sstring> db::tags_extension::deserialize(bytes_view buffer) {
+    return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<sstring, sstring>>());
+}
+
 void db::config::add_tags_extension() {
     _extensions->add_schema_extension<db::tags_extension>(db::tags_extension::NAME);
 }
 
+bytes tombstone_gc_extension::serialize() const {
+    return ser::serialize_to_buffer<bytes>(_tombstone_gc_options.to_map());
+}
+
+std::map<seastar::sstring, seastar::sstring> tombstone_gc_extension::deserialize(const bytes_view& buffer) {
+    return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<seastar::sstring, seastar::sstring>>());
+}
+
 void db::config::add_tombstone_gc_extension() {
     _extensions->add_schema_extension<tombstone_gc_extension>(tombstone_gc_extension::NAME);
+}
+
+bytes db::paxos_grace_seconds_extension::serialize() const {
+    return ser::serialize_to_buffer<bytes>(_paxos_gc_sec);
+}
+
+int32_t db::paxos_grace_seconds_extension::deserialize(const bytes_view& buffer) {
+    return ser::deserialize_from_buffer(buffer, std::type_identity<int32_t>());
 }
 
 void db::config::add_paxos_grace_seconds_extension() {

@@ -14,7 +14,6 @@
 #include "bytes_fwd.hh"
 #include "cdc/cdc_options.hh"
 #include "schema/schema.hh"
-#include "serializer_impl.hh"
 
 namespace cdc {
 
@@ -35,12 +34,8 @@ public:
         throw std::logic_error("Cannot create cdc info from string");
     }
 #pragma clang diagnostic pop
-    bytes serialize() const override {
-        return ser::serialize_to_buffer<bytes>(_cdc_options.to_map());
-    }
-    static std::map<sstring, sstring> deserialize(const bytes_view& buffer) {
-        return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<sstring, sstring>>());
-    }
+    bytes serialize() const override;
+    static std::map<sstring, sstring> deserialize(const bytes_view& buffer);
     const options& get_options() const {
         return _cdc_options;
     }
