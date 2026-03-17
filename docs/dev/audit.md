@@ -1,111 +1,320 @@
-# Introduction
+# Prototype design: auditing all keyspaces and per-role auditing
 
-Similar to the approach described in CASSANDRA-12151, we add the
-concept of an audit specification.  An audit has a target (syslog or a
-table) and a set of events/actions that it wants recorded.  We
-introduce new CQL syntax for Scylla users to describe and manipulate
-audit specifications.
+## Summary
 
-Prior art:
-- Microsoft SQL Server [audit
-  description](https://docs.microsoft.com/en-us/sql/relational-databases/security/auditing/sql-server-audit-database-engine?view=sql-server-ver15)
-- pgAudit [docs](https://github.com/pgaudit/pgaudit/blob/master/README.md)
-- MySQL audit_log docs in
-  [MySQL](https://dev.mysql.com/doc/refman/8.0/en/audit-log.html) and
-  [Azure](https://docs.microsoft.com/en-us/azure/mysql/concepts-audit-logs)
-- DynamoDB can [use CloudTrail](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/logging-using-cloudtrail.html) to log all events
+Extend the existing `scylla.yaml`-driven audit subsystem with two focused capabilities:
 
-# CQL extensions
+1. allow auditing **all keyspaces** without enumerating them one by one
+2. allow auditing only a configured set of **roles**
 
-## Create an audit
+The prototype should stay close to the current implementation in `audit/`:
 
-```cql
-CREATE AUDIT [IF NOT EXISTS] audit-name WITH TARGET { SYSLOG | table-name }
-[ AND TRIGGER KEYSPACE IN (ks1, ks2, ks3) ]
-[ AND TRIGGER TABLE IN (tbl1, tbl2, tbl3) ]
-[ AND TRIGGER ROLE IN (usr1, usr2, usr3) ]
-[ AND TRIGGER CATEGORY IN (cat1, cat2, cat3) ]
-;
+- keep the existing backends (`table`, `syslog`, or both)
+- keep the existing category / keyspace / table filters
+- preserve live updates for audit configuration
+- avoid any schema change to `audit.audit_log`
+
+This is intentionally a small extension of the current auditing model, not a redesign around new CQL statements such as `CREATE AUDIT`.
+
+## Motivation
+
+Today Scylla exposes three main audit selectors:
+
+- `audit_categories`
+- `audit_tables`
+- `audit_keyspaces`
+
+This leaves two operational gaps:
+
+1. **Auditing all keyspaces is cumbersome.**
+   Large installations may create keyspaces dynamically, or manage many tenant keyspaces. Requiring operators to keep
+   `audit_keyspaces` synchronized with the full keyspace list is error-prone and defeats the point of cluster-wide auditing.
+2. **Auditing is all-or-nothing with respect to users.**
+   Once a category/keyspace/table combination matches, any authenticated user generating that traffic is audited.
+   Operators want to narrow the scope to specific tenants, service accounts, or privileged roles.
+
+These two additions also work well together: "audit all keyspaces, but only for selected roles" is a practical way to reduce
+both audit volume and performance impact.
+
+## Goals
+
+- Add a way to express "all keyspaces" in the current configuration model.
+- Add a new role filter that limits auditing to selected roles.
+- Preserve backwards compatibility for existing configurations.
+- Keep the evaluation cheap on the request path.
+- Support live configuration updates, consistent with the existing audit options.
+
+## Non-goals
+
+- Introducing `CREATE AUDIT`, `ALTER AUDIT`, or other new CQL syntax.
+- Adding per-role audit destinations.
+- Adding different categories per role.
+- Expanding role matching through the full granted-role graph in the prototype.
+- Changing the on-disk audit table schema.
+
+## Current behavior
+
+At the moment, audit logging is controlled by:
+
+- `audit`
+- `audit_categories`
+- `audit_tables`
+- `audit_keyspaces`
+
+The current decision rule in `audit::should_log()` is effectively:
+
+```text
+category matches
+&& (
+    keyspace is listed in audit_keyspaces
+    || table is listed in audit_tables
+    || category in {AUTH, ADMIN, DCL}
+)
 ```
 
-From this point on, every database event that matches all present
-triggers will be recorded in the target.  When the target is a table,
-it behaves like the [current
-design](https://docs.scylladb.com/operating-scylla/security/auditing/#table-storage).
+Observations:
 
-The audit name must be different from all other audits, unless IF NOT
-EXISTS precedes it, in which case the existing audit must be identical
-to the new definition.  Case sensitivity and length limit are the same
-as for table names.
+- `AUTH`, `ADMIN`, and `DCL` are already global once their category is enabled.
+- `DDL`, `DML`, and `QUERY` need a matching keyspace or table.
+- An empty `audit_keyspaces` means "audit no keyspaces", not "audit every keyspace".
+- There is no role-based filter; the authenticated user is recorded in the log but is not part of the decision.
 
-A trigger kind (ie, `KEYSPACE`, `TABLE`, `ROLE`, or `CATEGORY`) can be
-specified at most once.
+## Proposed configuration
 
-## Show an audit
+### 1. Reuse `audit_keyspaces` for the all-keyspaces mode
 
-```cql
-DESCRIBE AUDIT [audit-name ...];
+Reserve `*` inside `audit_keyspaces` as a wildcard meaning "all keyspaces".
+
+Examples:
+
+```yaml
+# Audit all keyspaces for matching categories
+audit_keyspaces: "*"
+
+# Audit all keyspaces and also keep explicit table entries for readability
+audit_keyspaces: "*"
+audit_tables: "ks1.tbl1,ks2.tbl2"
 ```
 
-Prints definitions of all audits named herein.  If no names are
-provided, prints all audits.
+Semantics:
 
-## Delete an audit
+- `audit_keyspaces: ""` keeps the existing meaning: no keyspace-wide auditing.
+- `audit_keyspaces: "*"` means every keyspace matches.
+- `audit_keyspaces: "*,ks1,ks2"` is accepted but equivalent to `*` alone.
+- If `*` is present, `audit_tables` becomes redundant but remains legal.
 
-```cql
-DROP AUDIT audit-name;
+### 2. Add `audit_roles`
+
+Introduce a new live-update configuration option:
+
+```yaml
+audit_roles: "alice,bob,service_api"
 ```
 
-Stops logging events specified by this audit.  Doesn't impact the
-already logged events.  If the target is a table, it remains as it is.
+Semantics:
 
-## Alter an audit
+- empty `audit_roles` means **no role filtering**, preserving today's behavior
+- non-empty `audit_roles` means audit only requests whose effective logged username matches one of the configured roles
+- matching is exact, using the same role name that is already written to the audit record's `username` column / syslog field
 
-```cql
-ALTER AUDIT audit-name WITH {same syntax as CREATE}
+Examples:
+
+```yaml
+# Audit all roles in a single keyspace (current behavior, made explicit)
+audit_keyspaces: "ks1"
+audit_roles: ""
+
+# Audit two roles across all keyspaces
+audit_keyspaces: "*"
+audit_roles: "alice,bob"
+
+# Audit a service role, but only for selected tables
+audit_tables: "ks1.orders,ks1.payments"
+audit_roles: "billing_service"
 ```
 
-Any trigger provided will be updated (or newly created, if previously
-absent).  To drop a trigger, use `IN *`.
+## Decision rule after the change
 
-## Permissions
+After the prototype, the rule becomes:
 
-Only superusers can modify audits or turn them on and off.
+```text
+category matches
+&& role matches
+&& (
+    category in {AUTH, ADMIN, DCL}
+    || audit_all_keyspaces
+    || keyspace is listed in audit_keyspaces
+    || table is listed in audit_tables
+)
+```
 
-Only superusers can read tables that are audit targets; no user can
-modify them.  Only superusers can drop tables that are audit targets,
-after the audit itself is dropped.  If a superuser doesn't drop a
-target table, it remains in existence indefinitely.
+Where:
 
-# Implementation
+- `role matches` is always true when `audit_roles` is empty
+- `audit_all_keyspaces` is true when `*` appears in `audit_keyspaces`
 
-## Efficient trigger evaluation
+For login auditing, the rule is simply:
+
+```text
+AUTH category enabled && role matches(login username)
+```
+
+## Implementation details
+
+### Configuration parsing
+
+Add a new config entry:
+
+- `db::config::audit_roles`
+
+It should mirror the existing audit selectors:
+
+- type: `named_value<sstring>`
+- liveness: `LiveUpdate`
+- default: empty string
+
+Parsing changes:
+
+- keep `parse_audit_tables()` as-is
+- extend `parse_audit_keyspaces()` so it can detect `*`
+- add `parse_audit_roles()` that returns a set of role names
+
+To avoid re-parsing on every request, the audit service should store:
 
 ```c++
-namespace audit {
-
-/// Stores triggers from an AUDIT statement.
-class triggers {
-    // Use trie structures for speedy string lookup.
-    optional<trie> _ks_trigger, _tbl_trigger, _usr_trigger;
-
-    // A logical-AND filter.
-    optional<unsigned> _cat_trigger;
-
-public:
-    /// True iff every non-null trigger matches the corresponding ainf element.
-    bool should_audit(const audit_info& ainf);
-};
-
-} // namespace audit
+bool _audit_all_keyspaces;
+std::set<sstring> _audited_keyspaces;
+std::set<sstring> _audited_roles;
 ```
 
-To prevent modification of target tables, `audit::inspect()` will
-check the statement and throw if it is disallowed, similar to what
-`check_access()` currently does.
+Using a dedicated boolean is preferable to storing `*` inside `_audited_keyspaces`, because it avoids ambiguity and keeps the
+hot-path check straightforward.
 
-## Persisting audit definitions
+### Audit object changes
 
-Obviously, an audit definition must survive a server restart and stay
-consistent among all nodes in a cluster.  We'll accomplish both by
-storing audits in a system table.
+The current `audit_info` already carries:
+
+- category
+- keyspace
+- table
+- query text
+
+The username is available separately from `service::query_state` and is already passed to storage helpers when an entry is written.
+For the prototype there is no need to duplicate the username into `audit_info`.
+
+Instead:
+
+- change `should_log()` to take the effective username as an additional input
+- change `should_log_login()` to check the username against `audit_roles`
+- keep the storage helpers unchanged, because they already persist the username
+
+Conceptually:
+
+```c++
+bool should_log(std::string_view username, const audit_info* info) const;
+bool should_log_login(std::string_view username) const;
+```
+
+### Role semantics
+
+For the prototype, "role" means the role name already associated with the current client session:
+
+- successful authenticated sessions use the session's user name
+- failed login events use the login name from the authentication attempt
+
+This keeps the feature easy to explain and aligns the filter with what users already see in audit output.
+
+The prototype should **not** try to expand inherited roles. If a user logs in as `alice` and inherits permissions from another role,
+the audit filter still matches `alice`. This keeps the behavior deterministic and avoids expensive role graph lookups on the request path.
+
+### Keyspace semantics
+
+`audit_keyspaces: "*"` should affect any statement whose `audit_info` carries a keyspace name.
+
+Important consequences:
+
+- it makes `DDL` / `DML` / `QUERY` auditing effectively cluster-wide
+- it does not change the existing global handling of `AUTH`, `ADMIN`, and `DCL`
+- statements that naturally have no keyspace name continue to depend on their category-specific behavior
+
+No extra schema or metadata scan is required: the request already carries the keyspace information needed for the decision.
+
+## Backwards compatibility
+
+This design keeps existing behavior intact:
+
+- existing clusters that do not set `audit_roles` continue to audit all roles
+- existing clusters that leave `audit_keyspaces` empty continue to audit no keyspaces
+- existing explicit keyspace/table lists keep their current meaning
+
+The only newly reserved value is `*` in `audit_keyspaces`.
+
+## Operational considerations
+
+### Performance and volume
+
+`audit_keyspaces: "*"` can significantly increase audit volume, especially with `QUERY` and `DML`.
+
+The intended mitigation is to combine it with:
+
+- a narrow `audit_categories`
+- a narrow `audit_roles`
+
+That combination gives operators a simple and cheap filter model:
+
+- first by category
+- then by role
+- then by keyspace/table scope
+
+### Live updates
+
+`audit_roles` should follow the same live-update behavior as the current audit filters.
+
+Changing:
+
+- `audit_roles`
+- `audit_keyspaces`
+- `audit_tables`
+- `audit_categories`
+
+should update the in-memory selectors on all shards without restarting the node.
+
+### Audit table schema
+
+No schema change is needed. The audit table already includes `username`, which is sufficient for both storage and later analysis.
+
+## Testing plan
+
+The prototype should extend existing audit coverage rather than introduce a separate test framework.
+
+### Parser / unit coverage
+
+Add focused tests for:
+
+- empty `audit_roles`
+- specific `audit_roles`
+- `audit_keyspaces: "*"`
+- mixed `audit_keyspaces: "*,ks1"`
+- invalid parsing behavior if needed for malformed comma-separated input
+
+### Behavioral coverage
+
+Extend the existing audit tests in `test/cluster/dtest/audit_test.py` with scenarios such as:
+
+1. `audit_keyspaces: "*"` audits statements in multiple keyspaces without listing them explicitly
+2. `audit_roles: "alice"` logs requests from `alice` but not from `bob`
+3. `audit_keyspaces: "*"` + `audit_roles: "alice"` only logs `alice`'s traffic cluster-wide
+4. login auditing respects `audit_roles`
+5. live-updating `audit_roles` changes behavior without restart
+
+## Future evolution
+
+This prototype is deliberately small, but it fits a broader audit-spec design if we decide to revisit that later.
+
+In a future CQL-driven design, these two additions map naturally to triggers such as:
+
+- `TRIGGER KEYSPACE IN *`
+- `TRIGGER ROLE IN (...)`
+
+That means the prototype is not throwaway work: it improves the current operational model immediately while keeping a clean path
+toward richer audit objects in the future.
