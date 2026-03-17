@@ -153,6 +153,10 @@ public:
 
     future<tasks::task_id> restore_tablets(table_id, sstring keyspace, sstring table, sstring snap_name, sstring endpoint, sstring bucket, utils::chunked_vector<sstring> manifests);
 
+    replica::database& local_db() {
+        return _db.local();
+    }
+
     class download_task_impl;
     class tablet_restore_task_impl;
 };
