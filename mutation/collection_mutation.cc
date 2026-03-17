@@ -249,7 +249,7 @@ compact_and_expire_result collection_mutation_description::compact_and_expire(co
     }
     t.apply(base_tomb.regular());
     utils::chunked_vector<std::pair<bytes, atomic_cell>> survivors;
-    utils::chunked_vector<std::pair<bytes, atomic_cell>> losers;
+    collection_mutation_writer losers(purged_tomb);
     for (auto&& name_and_cell : cells) {
         atomic_cell& cell = name_and_cell.second;
         auto cannot_erase_cell = [&] {
@@ -266,15 +266,14 @@ compact_and_expire_result collection_mutation_description::compact_and_expire(co
                 survivors.emplace_back(std::make_pair(
                     std::move(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time())));
             } else if (collector) {
-                losers.emplace_back(std::pair(
-                        std::move(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time())));
+                losers.push_back(managed_bytes_view(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
             }
             res.dead_cells++;
         } else if (!cell.is_live()) {
             if (cannot_erase_cell()) {
                 survivors.emplace_back(std::move(name_and_cell));
             } else if (collector) {
-                losers.emplace_back(std::move(name_and_cell));
+                losers.push_back(managed_bytes_view(name_and_cell.first), std::move(name_and_cell.second));
             }
             res.dead_cells++;
         } else {
@@ -283,7 +282,7 @@ compact_and_expire_result collection_mutation_description::compact_and_expire(co
         }
     }
     if (collector) {
-        collector->collect(id, collection_mutation_description{purged_tomb, std::move(losers)});
+        collector->collect(id, std::move(losers).finish());
     }
     cells = std::move(survivors);
     return res;

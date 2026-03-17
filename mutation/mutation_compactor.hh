@@ -85,10 +85,10 @@ public:
     virtual void collect(column_id id, atomic_cell cell) override {
         _row.apply(_schema.column_at(_kind, id), std::move(cell));
     }
-    virtual void collect(column_id id, collection_mutation_description mut) override {
-        if (mut.tomb || !mut.cells.empty()) {
+    virtual void collect(column_id id, collection_mutation mut) override {
+        if (!collection_mutation_view(mut).empty()) {
             const auto& cdef = _schema.column_at(_kind, id);
-            _row.apply(cdef, mut.serialize());
+            _row.apply(cdef, std::move(mut));
         }
     }
     virtual void collect(row_marker marker) override {
