@@ -54,7 +54,28 @@ collection_mutation_view atomic_cell_or_collection::as_collection_mutation() con
     return collection_mutation_view{managed_bytes_view(_data)};
 }
 
-bool collection_mutation_view::is_empty() const {
+namespace {
+
+// Reads (and consumes) the tombstone prefix from `v`. Returns the tombstone,
+// which is empty if the has_tombstone flag was not set.
+tombstone read_collection_tombstone(managed_bytes_view& v) {
+    if (read_simple<uint8_t>(v)) {
+        auto timestamp = read_simple<api::timestamp_type>(v);
+        auto deletion_time = read_simple<gc_clock::duration::rep>(v);
+        return tombstone{timestamp, gc_clock::time_point(gc_clock::duration(deletion_time))};
+    }
+    return tombstone{};
+}
+
+// Reads (and consumes) the cell-count field from `v`, assuming the tombstone
+// prefix has already been consumed.
+uint32_t read_collection_size(managed_bytes_view& v) {
+    return read_simple<uint32_t>(v);
+}
+
+} // anonymous namespace
+
+bool collection_mutation_view::empty() const {
     auto in = collection_mutation_input_stream(data);
     auto has_tomb = in.read_trivial<uint8_t>();
     return !has_tomb && in.read_trivial<uint32_t>() == 0;
@@ -102,6 +123,42 @@ api::timestamp_type collection_mutation_view::last_update(const abstract_type& t
     }
 
     return max;
+}
+
+tombstone collection_mutation_view::tomb() const {
+    auto v = data;
+    return read_collection_tombstone(v);
+}
+
+uint32_t collection_mutation_view::size() const {
+    auto v = data;
+    read_collection_tombstone(v); // skip tombstone if present
+    return read_collection_size(v);
+}
+
+collection_mutation_view::iterator::iterator(managed_bytes_view data) {
+    read_collection_tombstone(data); // skip tombstone if present
+    _remaining_count = read_collection_size(data);
+    _remaining = data;
+    ++*this;
+}
+
+void collection_mutation_view::iterator::advance() {
+    auto key_size = read_simple<uint32_t>(_remaining);
+    auto key = _remaining.prefix(key_size);
+    _remaining.remove_prefix(key_size);
+    auto vsize = read_simple<uint32_t>(_remaining);
+    auto value = _remaining.prefix(vsize);
+    _remaining.remove_prefix(vsize);
+    _current = value_type{key, atomic_cell_view::from_bytes(value)};
+}
+
+collection_mutation_view::iterator collection_mutation_view::begin() const {
+    return iterator(data);
+}
+
+collection_mutation_view::iterator collection_mutation_view::end() const {
+    return iterator{};
 }
 
 auto fmt::formatter<collection_mutation_view::printer>::format(const collection_mutation_view::printer& cmvp, fmt::format_context& ctx) const

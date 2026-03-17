@@ -16,6 +16,8 @@
 #include "compaction/compaction_garbage_collector.hh"
 #include <iosfwd>
 #include <forward_list>
+#include <iterator>
+#include <optional>
 
 class abstract_type;
 class compaction_garbage_collector;
@@ -83,7 +85,7 @@ public:
     managed_bytes_view data;
 
     // Is this a noop mutation?
-    bool is_empty() const;
+    bool empty() const;
 
     // Is any of the stored cells live (not deleted nor expired) at the time point `tp`,
     // given the later of the tombstones `t` and the one stored in the mutation (if any)?
@@ -100,6 +102,66 @@ public:
         collection_mutation_input_stream stream(data);
         return f(deserialize_collection_mutation(type, stream));
     }
+
+    // Returns the collection-level tombstone, or an empty tombstone if none is present.
+    tombstone tomb() const;
+
+    // Returns the number of cells stored in the mutation.
+    uint32_t size() const;
+
+    // Forward iterator that deserializes cells on the fly.
+    // Each element is a (key, value) pair where key is a managed_bytes_view of the serialized
+    // cell key (path) and value is an atomic_cell_view of the serialized cell value.
+    // The iterator does not require type information to advance.
+    // The underlying collection_mutation_view must outlive the iterator.
+    class iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using iterator_concept = std::forward_iterator_tag;
+        using value_type = std::pair<managed_bytes_view, atomic_cell_view>;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const value_type*;
+        using reference = const value_type&;
+    private:
+        managed_bytes_view _remaining;
+        uint32_t _remaining_count = 0;
+        std::optional<value_type> _current;
+
+        void advance();
+        explicit iterator(managed_bytes_view data);
+    public:
+        // Default-constructs an end iterator.
+        iterator() = default;
+
+        reference operator*() const { return *_current; }
+        pointer operator->() const { return &*_current; }
+
+        iterator& operator++() {
+            if (_remaining_count) {
+                advance();
+                --_remaining_count;
+            } else {
+                _current.reset();
+            }
+            return *this;
+        }
+
+        iterator operator++(int) {
+            auto tmp = *this;
+            ++*this;
+            return tmp;
+        }
+
+        bool operator==(const iterator& o) const {
+            // End iterator has _remaining = 0 and _current = nullopt.
+            return _remaining_count == o._remaining_count && bool(_current) == bool(o._current);
+        }
+
+        friend class collection_mutation_view;
+    };
+
+    iterator begin() const;
+    iterator end() const;
 
     class printer {
         const abstract_type& _type;

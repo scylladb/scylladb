@@ -1782,7 +1782,7 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
         } else {
             auto diff = ::difference(*cdef.type,
                     c->cell.as_collection_mutation(), it->cell.as_collection_mutation());
-            if (!static_cast<collection_mutation_view>(diff).is_empty()) {
+            if (!static_cast<collection_mutation_view>(diff).empty()) {
                 r.append_cell(c.key(), std::move(diff));
             }
         }
