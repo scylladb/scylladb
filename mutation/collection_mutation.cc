@@ -467,12 +467,16 @@ collection_mutation collection_mutation_writer::finish() && {
 
 template <typename C>
 requires std::is_base_of_v<abstract_type, std::remove_reference_t<C>>
-static collection_mutation_view_description
-merge(collection_mutation_view_description a, collection_mutation_view_description b, C&& key_type) {
-    using element_type = std::pair<bytes_view, atomic_cell_view>;
+static collection_mutation
+merge(collection_mutation_view a, collection_mutation_view b, C&& key_type) {
+    using element_type = collection_mutation_view::iterator::value_type;
 
     auto compare = [&] (const element_type& e1, const element_type& e2) {
-        return key_type.less(e1.first, e2.first);
+        return e1.first.with_linearized([&] (bytes_view k1) {
+            return e2.first.with_linearized([&] (bytes_view k2) {
+                return key_type.less(k1, k2);
+            });
+        });
     };
 
     auto merge = [] (const element_type& e1, const element_type& e2) {
@@ -482,49 +486,47 @@ merge(collection_mutation_view_description a, collection_mutation_view_descripti
 
     // applied to a tombstone, returns a predicate checking whether a cell is killed by
     // the tombstone
-    auto cell_killed = [] (const std::optional<tombstone>& t) {
-        return [&t] (const element_type& e) {
+    auto filter_cells = [&] (const collection_mutation_view& v, tombstone t) {
+        return v | std::views::filter([t] (const element_type& e) {
             if (!t) {
-                return false;
+                return true;
             }
             // tombstone wins if timestamps equal here, unlike row tombstones
-            if (t->timestamp < e.second.timestamp()) {
-                return false;
+            if (t.timestamp < e.second.timestamp()) {
+                return true;
             }
-            return true;
+            return false;
             // FIXME: should we consider TTLs too?
-        };
+        });
     };
 
-    collection_mutation_view_description merged;
-    merged.cells.reserve(a.cells.size() + b.cells.size());
+    collection_mutation_writer merged(std::max(a.tomb(), b.tomb()));
 
-    combine(a.cells.begin(), std::remove_if(a.cells.begin(), a.cells.end(), cell_killed(b.tomb)),
-            b.cells.begin(), std::remove_if(b.cells.begin(), b.cells.end(), cell_killed(a.tomb)),
-            std::back_inserter(merged.cells),
+    auto a_filtered = filter_cells(a, b.tomb());
+    auto b_filtered = filter_cells(b, a.tomb());
+
+    combine(
+            a_filtered.begin(), a_filtered.end(),
+            b_filtered.begin(), b_filtered.end(),
+            std::back_inserter(merged),
             compare,
             merge);
-    merged.tomb = std::max(a.tomb, b.tomb);
 
-    return merged;
+    return std::move(merged).finish();
 }
 
 collection_mutation merge(const abstract_type& type, collection_mutation_view a, collection_mutation_view b) {
-    return a.with_deserialized(type, [&] (collection_mutation_view_description a_view) {
-        return b.with_deserialized(type, [&] (collection_mutation_view_description b_view) {
-            return visit(type, make_visitor(
-            [&] (const collection_type_impl& ctype) {
-                return merge(std::move(a_view), std::move(b_view), *ctype.name_comparator());
-            },
-            [&] (const user_type_impl& utype) {
-                return merge(std::move(a_view), std::move(b_view), *short_type);
-            },
-            [] (const abstract_type& o) -> collection_mutation_view_description {
-                throw std::runtime_error(format("collection_mutation merge: unknown type: {}", o.name()));
-            }
-            )).serialize();
-        });
-    });
+    return visit(type, make_visitor(
+        [&] (const collection_type_impl& ctype) {
+            return merge(std::move(a), std::move(b), *ctype.name_comparator());
+        },
+        [&] (const user_type_impl& utype) {
+            return merge(std::move(a), std::move(b), *short_type);
+        },
+        [] (const abstract_type& o) -> collection_mutation {
+            throw std::runtime_error(format("collection_mutation merge: unknown type: {}", o.name()));
+        }
+    ));
 }
 
 template <typename C>
