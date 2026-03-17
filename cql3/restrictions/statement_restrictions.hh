@@ -217,6 +217,9 @@ private:
 
 
     check_indexes _check_indexes = check_indexes::yes;
+    /// Columns that appear on the LHS of an EQ restriction (not IN).
+    /// For multi-column EQ like (ck1, ck2) = (1, 2), all columns in the tuple are included.
+    std::unordered_set<const column_definition*> _columns_with_eq;
     std::vector<const column_definition*> _column_defs_for_filtering;
     schema_ptr _view_schema;
     std::optional<secondary_index::index> _idx_opt;
@@ -317,10 +320,7 @@ public:
 
     bool has_token_restrictions() const;
 
-    // Checks whether the given column has an EQ restriction.
-    // EQ restriction is `col = ...` or `(col, col2) = ...`
-    // IN restriction is NOT an EQ restriction, this function will not look for IN restrictions.
-    // Uses column_defintion::operator== for comparison, columns with the same name but different schema will not be equal.
+    // Checks whether the given column has an EQ restriction (not IN).
     bool has_eq_restriction_on_column(const column_definition&) const;
 
     /**

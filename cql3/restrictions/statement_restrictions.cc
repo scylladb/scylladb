@@ -78,13 +78,6 @@ inline bool has_slice_or_needs_filtering(const expression& e) {
 /// True iff binary_operator involves a collection.
 extern bool is_on_collection(const binary_operator&);
 
-// Checks whether the given column has an EQ restriction in the expression.
-// EQ restriction is `col = ...` or `(col, col2) = ...`
-// IN restriction is NOT an EQ restriction, this function will not look for IN restrictions.
-// Uses column_defintion::operator== for comparison, columns with the same name but different schema will not be equal.
-bool has_eq_restriction_on_column(const column_definition& column, const expression& e);
-
-
 bool contains_multi_column_restriction(const expression&);
 
 bool has_only_eq_binops(const expression&);
@@ -771,54 +764,6 @@ bool is_on_collection(const binary_operator& b) {
     return false;
 }
 
-bool has_eq_restriction_on_column(const column_definition& column, const expression& e) {
-    std::function<bool(const expression&)> column_in_lhs = [&](const expression& e) -> bool {
-        return visit(overloaded_functor {
-            [&](const column_value& cv) {
-                // Use column_defintion::operator== for comparison,
-                // columns with the same name but different schema will not be equal.
-                return *cv.col == column;
-            },
-            [&](const tuple_constructor& tc) {
-                for (const expression& elem : tc.elements) {
-                    if (column_in_lhs(elem)) {
-                        return true;
-                    }
-                }
-
-                return false;
-            },
-            [&](const auto&) {return false;}
-        }, e);
-    };
-
-    // Look for binary operator describing eq relation with this column on lhs
-    const binary_operator* eq_restriction_search_res = find_binop(e, [&](const binary_operator& b) {
-        if (b.op != oper_t::EQ) {
-            return false;
-        }
-
-        if (!column_in_lhs(b.lhs)) {
-            return false;
-        }
-
-        // These conditions are not allowed to occur in the current code,
-        // but they might be allowed in the future.
-        // They are added now to avoid surprises later.
-        //
-        // These conditions detect cases like:
-        // WHERE column1 = column2
-        // WHERE column1 = row_number()
-        if (contains_column(column, b.rhs) || contains_nonpure_function(b.rhs)) {
-            return false;
-        }
-
-        return true;
-    });
-
-    return eq_restriction_search_res != nullptr;
-}
-
 bool is_empty_restriction(const expression& e) {
     bool contains_non_conjunction = recurse_until(e, [&](const expression& e) -> bool {
         return !is<conjunction>(e);
@@ -1093,6 +1038,16 @@ statement_restrictions::statement_restrictions(private_tag,
 
         if (!pred.is_not_null_single_column) {
             _where.push_back(pred.filter);
+        }
+        // Subscript EQ (e.g. m[1] = 'a') is not considered an EQ on the column
+        // itself, matching the behavior of the old expression-walking code which
+        // only recognized column_value and tuple_constructor in the LHS.
+        if (pred.equality && !pred.is_subscript) {
+            if (auto* sc = std::get_if<on_column>(&pred.on)) {
+                _columns_with_eq.insert(sc->column);
+            } else if (auto* mc = std::get_if<on_clustering_key_prefix>(&pred.on)) {
+                _columns_with_eq.insert(mc->columns.begin(), mc->columns.end());
+            }
         }
     }
     if (!_where.empty()) {
@@ -1441,8 +1396,7 @@ statement_restrictions::find_idx(const secondary_index::secondary_index_manager&
 }
 
 bool statement_restrictions::has_eq_restriction_on_column(const column_definition& column) const {
-    return std::ranges::any_of(_where,
-            std::bind_front(restrictions::has_eq_restriction_on_column, std::ref(column)));
+    return _columns_with_eq.contains(&column);
 }
 
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
