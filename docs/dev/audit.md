@@ -101,10 +101,10 @@ Semantics:
 
 - `audit_keyspaces: ""` keeps the existing meaning: no keyspace-wide auditing.
 - `audit_keyspaces: "*"` means every keyspace matches.
-- `audit_keyspaces: "*,ks1,ks2"` is accepted but equivalent to `*` alone.
+- `audit_keyspaces: "*,ks1,ks2"` is accepted and normalized to the same result as `*` alone.
 - the parser should normalize any list containing `*` into `audit_all_keyspaces = true` and an empty explicit keyspace set
 - when `*` is combined with explicit keyspaces, Scylla should log an informational message explaining that the explicit keyspaces are redundant and ignored
-- only the exact token `*` is special; tokens such as `**` or `ks*` should be rejected as invalid configuration, with an error that points users to `audit_keyspaces: "*"` as the valid form
+- only the exact token `*` is special; tokens such as `**` or `ks*` should be rejected as invalid configuration, with an error that clearly says to use `audit_keyspaces: "*"` for all-keyspaces auditing
 - If `*` is present, `audit_tables` becomes redundant but remains legal.
 
 ### 2. Add `audit_roles`
@@ -119,7 +119,7 @@ Semantics:
 
 - empty `audit_roles` means **no role filtering**, preserving today's behavior
 - non-empty `audit_roles` means audit only requests whose effective logged username matches one of the configured roles
-- matching is exact, using the same role name that is already written to the audit record's `username` column / syslog field
+- matching is byte-for-byte exact, using the same role name that is already written to the audit record's `username` column / syslog field
 - the prototype should compare against the post-authentication role name exactly as exposed by the session and audit log, with no additional case folding or role-graph expansion
 
 Examples:
@@ -183,6 +183,7 @@ Parsing changes:
 - keep `parse_audit_tables()` as-is
 - extend `parse_audit_keyspaces()` so it can detect `*`
 - add `parse_audit_roles()` that returns a set of role names
+- normalize empty or whitespace-only keyspace lists to an empty configuration rather than treating them as real keyspace names
 - reject malformed wildcard tokens, because only the exact token `*` should trigger all-keyspaces mode
 
 To avoid re-parsing on every request, the `audit::audit` service should store:
@@ -195,6 +196,9 @@ std::set<sstring> _audited_roles;
 
 Using a dedicated boolean is preferable to storing `*` inside `_audited_keyspaces`, because it avoids ambiguity and keeps the
 hot-path check straightforward.
+
+Using `std::set` for the explicit selectors keeps the prototype aligned with the current implementation and minimizes code churn.
+If profiling later shows lookup cost matters here, the container choice can be revisited independently of the feature semantics.
 
 ### Audit object changes
 
@@ -228,6 +232,7 @@ For the prototype, "role" means the role name already associated with the curren
 
 - successful authenticated sessions use the session's user name
 - failed login events use the login name from the authentication attempt
+- failed login events are still subject to `audit_roles`, matched against the attempted login name
 
 This keeps the feature easy to explain and aligns the filter with what users already see in audit output.
 
@@ -288,7 +293,7 @@ should update the in-memory selectors on all shards without restarting the node.
 
 ### Prototype limitation
 
-Because matching is done against the session's logged-in role name, `audit_roles` cannot express "audit everyone who inherits role X".
+Because matching is done against the authenticated session role name, `audit_roles` cannot express "audit everyone who inherits role X".
 Operators must list the concrete login roles they want to audit. This is a deliberate trade-off in the prototype to keep matching cheap
 and avoid role graph lookups on every audited request.
 
@@ -311,7 +316,7 @@ Add focused tests for:
 - specific `audit_roles`
 - `audit_keyspaces: "*"`
 - mixed `audit_keyspaces: "*,ks1"`
-- empty or whitespace-only keyspace lists such as `",,,"` or `"  "`
+- empty or whitespace-only keyspace lists such as `",,,"` or `"  "`, which should normalize to an empty configuration and therefore audit no keyspaces
 - malformed comma-separated input and malformed wildcard tokens such as `**` or `ks*`, including verification of the resulting error messages
 
 ### Behavioral coverage
