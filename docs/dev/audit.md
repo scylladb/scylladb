@@ -102,6 +102,8 @@ Semantics:
 - `audit_all_keyspaces: false` keeps the existing behavior.
 - `audit_all_keyspaces: true` makes every keyspace match.
 - `audit_keyspaces` keeps its existing meaning: an explicit list of keyspaces, or no keyspace-wide auditing when left empty.
+- `audit_all_keyspaces: true` and a non-empty `audit_keyspaces` must be rejected as invalid configuration,
+  because the two options express overlapping scope in different ways.
 - A dedicated boolean is preferable to overloading `audit_keyspaces`, because it avoids changing the meaning of existing configurations.
 - This also keeps the behavior aligned with today's `audit_tables` handling, where leaving `audit_tables` empty does not introduce a new wildcard syntax.
 
@@ -183,6 +185,8 @@ Parsing changes:
 - keep `parse_audit_keyspaces()` semantics as-is
 - add `parse_audit_roles()` that returns a set of role names
 - normalize empty or whitespace-only keyspace lists to an empty configuration rather than treating them as real keyspace names
+- add cross-field validation so `audit_all_keyspaces: true` cannot be combined with a non-empty
+  `audit_keyspaces`, both at startup and during live updates
 
 To avoid re-parsing on every request, the `audit::audit` service should store:
 
@@ -258,6 +262,7 @@ This design keeps existing behavior intact:
 - existing explicit keyspace/table lists keep their current meaning
 
 The feature is enabled only by a new explicit boolean, so existing `audit_keyspaces` values do not need to be reinterpreted.
+The only newly-invalid combination is enabling `audit_all_keyspaces` while also listing explicit keyspaces.
 
 ## Operational considerations
 
@@ -314,6 +319,7 @@ Add focused tests for:
 - empty `audit_roles`
 - specific `audit_roles`
 - `audit_all_keyspaces: true`
+- invalid mixed configuration: `audit_all_keyspaces: true` with non-empty `audit_keyspaces`
 - empty or whitespace-only keyspace lists such as `",,,"` or `"  "`, which should normalize to an empty configuration and therefore audit no keyspaces
 - boolean config parsing for `audit_all_keyspaces`
 
@@ -326,6 +332,7 @@ Extend the existing audit tests in `test/cluster/dtest/audit_test.py` with scena
 3. `audit_all_keyspaces: true` + `audit_roles: "alice"` only logs `alice`'s traffic cluster-wide
 4. login auditing respects `audit_roles`
 5. live-updating `audit_roles` changes behavior without restart
+6. setting `audit_all_keyspaces: true` together with explicit `audit_keyspaces` is rejected with a clear error
 
 ## Future evolution
 
