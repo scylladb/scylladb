@@ -101,6 +101,7 @@ Semantics:
 - `audit_keyspaces: ""` keeps the existing meaning: no keyspace-wide auditing.
 - `audit_keyspaces: "*"` means every keyspace matches.
 - `audit_keyspaces: "*,ks1,ks2"` is accepted but equivalent to `*` alone.
+- the parser should normalize any list containing `*` into `audit_all_keyspaces = true` and an empty explicit keyspace set
 - If `*` is present, `audit_tables` becomes redundant but remains legal.
 
 ### 2. Add `audit_roles`
@@ -116,6 +117,7 @@ Semantics:
 - empty `audit_roles` means **no role filtering**, preserving today's behavior
 - non-empty `audit_roles` means audit only requests whose effective logged username matches one of the configured roles
 - matching is exact, using the same role name that is already written to the audit record's `username` column / syslog field
+- the prototype should treat the configured values as exact role-name matches after the same normalization already applied by authentication
 
 Examples:
 
@@ -179,7 +181,7 @@ Parsing changes:
 - extend `parse_audit_keyspaces()` so it can detect `*`
 - add `parse_audit_roles()` that returns a set of role names
 
-To avoid re-parsing on every request, the audit service should store:
+To avoid re-parsing on every request, the `audit::audit` service should store:
 
 ```c++
 bool _audit_all_keyspaces;
@@ -208,7 +210,7 @@ Instead:
 - change `should_log_login()` to check the username against `audit_roles`
 - keep the storage helpers unchanged, because they already persist the username
 
-Conceptually:
+One possible interface shape is:
 
 ```c++
 bool should_log(std::string_view username, const audit_info* info) const;
