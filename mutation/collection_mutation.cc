@@ -76,26 +76,14 @@ uint32_t read_collection_size(managed_bytes_view& v) {
 } // anonymous namespace
 
 bool collection_mutation_view::empty() const {
-    auto in = collection_mutation_input_stream(data);
-    auto has_tomb = in.read_trivial<uint8_t>();
-    return !has_tomb && in.read_trivial<uint32_t>() == 0;
+    auto v = data;
+    auto tomb = read_collection_tombstone(v);
+    return !tomb && read_collection_size(v) == 0;
 }
 
 bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone tomb, gc_clock::time_point now) const {
-    auto in = collection_mutation_input_stream(data);
-    auto has_tomb = in.read_trivial<uint8_t>();
-    if (has_tomb) {
-        auto ts = in.read_trivial<api::timestamp_type>();
-        auto ttl = in.read_trivial<gc_clock::duration::rep>();
-        tomb.apply(tombstone{ts, gc_clock::time_point(gc_clock::duration(ttl))});
-    }
-
-    auto nr = in.read_trivial<uint32_t>();
-    for (uint32_t i = 0; i != nr; ++i) {
-        auto key_size = in.read_trivial<uint32_t>();
-        in.read_fragmented(key_size); // Skip
-        auto vsize = in.read_trivial<uint32_t>();
-        auto value = atomic_cell_view::from_bytes(in.read_fragmented(vsize));
+    tomb.apply(this->tomb());
+    for (auto& [key, value] : *this) {
         if (value.is_live(tomb, now, false)) {
             return true;
         }
@@ -105,20 +93,9 @@ bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone 
 }
 
 api::timestamp_type collection_mutation_view::last_update(const abstract_type& type) const {
-    auto in = collection_mutation_input_stream(data);
-    api::timestamp_type max = api::missing_timestamp;
-    auto has_tomb = in.read_trivial<uint8_t>();
-    if (has_tomb) {
-        max = std::max(max, in.read_trivial<api::timestamp_type>());
-        (void)in.read_trivial<gc_clock::duration::rep>();
-    }
-
-    auto nr = in.read_trivial<uint32_t>();
-    for (uint32_t i = 0; i != nr; ++i) {
-        const auto key_size = in.read_trivial<uint32_t>();
-        in.read_fragmented(key_size); // Skip
-        auto vsize = in.read_trivial<uint32_t>();
-        auto value = atomic_cell_view::from_bytes(in.read_fragmented(vsize));
+    auto tomb = this->tomb();
+    api::timestamp_type max = tomb.timestamp;
+    for (auto& [key, value] : *this) {
         max = std::max(value.timestamp(), max);
     }
 
