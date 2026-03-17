@@ -27,7 +27,7 @@ def test_snapshots_table(scylla_only, cql, test_keyspace):
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
         nodetool.take_snapshot(cql, table, test_tag, False)
-        verify_snapshots(cql, {test_tag: [table]})
+        verify_snapshots(cql, {test_tag: {table}})
     nodetool.del_snapshot(cql, test_tag)
 
 def test_snapshots_dropped_table(scylla_only, cql, test_keyspace):
@@ -35,7 +35,7 @@ def test_snapshots_dropped_table(scylla_only, cql, test_keyspace):
     with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
         nodetool.take_snapshot(cql, table, test_tag, False)
-    verify_snapshots(cql, {test_tag: [table]})
+    verify_snapshots(cql, {test_tag: {table}})
     nodetool.del_snapshot(cql, test_tag)
 
 def test_snapshots_multiple_keyspaces(scylla_only, cql):
