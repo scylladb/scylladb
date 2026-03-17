@@ -33,6 +33,7 @@
 #include "db/view/view_consumer.hh"
 #include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
+#include "replica/streaming_reader_lifecycle_policy.hh"
 #include "keys/clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/cql_config.hh"
