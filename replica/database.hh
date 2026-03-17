@@ -2320,54 +2320,17 @@ class streaming_reader_lifecycle_policy
     gc_clock::time_point _compaction_time;
     std::vector<reader_context> _contexts;
 public:
-    streaming_reader_lifecycle_policy(sharded<replica::database>& db, table_id table_id, gc_clock::time_point compaction_time)
-        : _db(db)
-        , _table_id(table_id)
-        , _compaction_time(compaction_time)
-        , _contexts(this_smp_shard_count()) {
-    }
+    streaming_reader_lifecycle_policy(sharded<replica::database>& db, table_id table_id, gc_clock::time_point compaction_time);
     virtual mutation_reader create_reader(
         schema_ptr schema,
         reader_permit permit,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr,
-        mutation_reader::forwarding fwd_mr) override {
-        const auto shard = this_shard_id();
-        auto& cf = _db.local().find_column_family(schema);
-
-        _contexts[shard].range = make_foreign(make_lw_shared<const dht::partition_range>(range));
-        _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
-        _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
-
-        return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr, _compaction_time);
-    }
-    virtual const dht::partition_range* get_read_range() const override {
-        const auto shard = this_shard_id();
-        return _contexts[shard].range.get();
-    }
-    virtual void update_read_range(lw_shared_ptr<const dht::partition_range> range) override {
-        const auto shard = this_shard_id();
-        _contexts[shard].range = make_foreign(std::move(range));
-    }
-    virtual future<> destroy_reader(stopped_reader reader) noexcept override {
-        auto ctx = std::move(_contexts[this_shard_id()]);
-        auto reader_opt = ctx.semaphore->unregister_inactive_read(std::move(reader.handle));
-        if  (!reader_opt) {
-            return make_ready_future<>();
-        }
-        return reader_opt->close().finally([ctx = std::move(ctx)] {});
-    }
-    virtual reader_concurrency_semaphore& semaphore() override {
-        const auto shard = this_shard_id();
-        if (!_contexts[shard].semaphore) {
-            auto& cf = _db.local().find_column_family(_table_id);
-            _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
-        }
-        return *_contexts[shard].semaphore;
-    }
-    virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) override {
-        auto& cf = _db.local().find_column_family(_table_id);
-        return semaphore().obtain_permit(schema, description, cf.estimate_read_memory_cost(), timeout, std::move(trace_ptr));
-    }
+        mutation_reader::forwarding fwd_mr) override;
+    virtual const dht::partition_range* get_read_range() const override;
+    virtual void update_read_range(lw_shared_ptr<const dht::partition_range> range) override;
+    virtual future<> destroy_reader(stopped_reader reader) noexcept override;
+    virtual reader_concurrency_semaphore& semaphore() override;
+    virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) override;
 };
