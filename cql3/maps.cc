@@ -31,7 +31,7 @@ maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
         // Delete all cells first, then put new ones
         collection_mutation_description mut;
         mut.tomb = params.make_tombstone_just_before();
-        m.set_cell(row_key, column, mut.serialize(*column.type));
+        m.set_cell(row_key, column, mut.serialize());
     }
     do_put(m, row_key, params, value, column);
 }
@@ -58,7 +58,7 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
     collection_mutation_description update;
     update.cells.emplace_back(std::move(key).to_bytes(), std::move(avalue));
 
-    m.set_cell(prefix, column, update.serialize(*ctype));
+    m.set_cell(prefix, column, update.serialize());
 }
 
 void
@@ -83,7 +83,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
             mut.cells.emplace_back(to_bytes(e.first), params.make_cell(*ctype->get_values_type(), raw_value_view::make_value(e.second), atomic_cell::collection_member::yes));
         }
 
-        m.set_cell(prefix, column, mut.serialize(*ctype));
+        m.set_cell(prefix, column, mut.serialize());
     } else {
         // for frozen maps, we're overwriting the whole cell
         if (map_value.is_null()) {
@@ -104,7 +104,7 @@ maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix
     collection_mutation_description mut;
     mut.cells.emplace_back(std::move(key).to_bytes(), params.make_dead_cell());
 
-    m.set_cell(prefix, column, mut.serialize(*column.type));
+    m.set_cell(prefix, column, mut.serialize());
 }
 
 }

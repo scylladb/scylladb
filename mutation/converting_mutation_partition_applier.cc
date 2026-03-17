@@ -87,7 +87,7 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
     ));
 
     if (new_view.tomb || !new_view.cells.empty()) {
-        dst.apply(new_def, new_view.serialize(*new_def.type));
+        dst.apply(new_def, new_view.serialize());
     }
   });
 }

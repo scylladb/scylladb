@@ -26,7 +26,7 @@ sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
         // Delete all cells first, then add new ones
         collection_mutation_description mut;
         mut.tomb = params.make_tombstone_just_before();
-        m.set_cell(row_key, column, mut.serialize(*column.type));
+        m.set_cell(row_key, column, mut.serialize());
     }
     adder::do_add(m, row_key, params, value, column);
 }
@@ -63,7 +63,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
             mut.cells.emplace_back(to_bytes(*e), params.make_cell(*set_type.value_comparator(), bytes_view(), atomic_cell::collection_member::yes));
         }
 
-        m.set_cell(row_key, column, mut.serialize(set_type));
+        m.set_cell(row_key, column, mut.serialize());
     } else if (!value.is_null()) {
         // for frozen sets, we're overwriting the whole cell
         value.view().with_value([&] (const FragmentedView auto& v) {
@@ -93,7 +93,7 @@ sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, cons
         }
         mut.cells.push_back({to_bytes(*e), params.make_dead_cell()});
     }
-    m.set_cell(row_key, column, mut.serialize(*column.type));
+    m.set_cell(row_key, column, mut.serialize());
 }
 
 void sets::element_discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params)
@@ -105,7 +105,7 @@ void sets::element_discarder::execute(mutation& m, const clustering_key_prefix& 
     }
     collection_mutation_description mut;
     mut.cells.emplace_back(std::move(elt).to_bytes(), params.make_dead_cell());
-    m.set_cell(row_key, column, mut.serialize(*column.type));
+    m.set_cell(row_key, column, mut.serialize());
 }
 
 }

@@ -450,7 +450,7 @@ public:
             const column_definition& column_def = get_column_definition(column_id);
             if (!_cm.cells.empty() || (_cm.tomb && _cm.tomb.timestamp > column_def.dropped_at())) {
                 check_schema_mismatch(column_info, column_def);
-                _cells.push_back({column_def.id, _cm.serialize(*column_def.type)});
+                _cells.push_back({column_def.id, _cm.serialize()});
             }
         }
         _cm.tomb = {};

@@ -732,7 +732,7 @@ static collection_mutation make_empty(
             n.cells.emplace_back(c.first, make_empty(c.second));
         }
     });
-    return n.serialize(type);
+    return n.serialize();
 }
 
 // In some cases, we need to copy to a view table even columns which have not

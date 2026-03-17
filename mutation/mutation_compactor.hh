@@ -88,7 +88,7 @@ public:
     virtual void collect(column_id id, collection_mutation_description mut) override {
         if (mut.tomb || !mut.cells.empty()) {
             const auto& cdef = _schema.column_at(_kind, id);
-            _row.apply(cdef, mut.serialize(*cdef.type));
+            _row.apply(cdef, mut.serialize());
         }
     }
     virtual void collect(row_marker marker) override {

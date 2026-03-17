@@ -69,7 +69,7 @@ Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, co
         cm.tomb = tombstone(self().timestamp() - 1, gc_clock::now());
     }
 
-    self().row().apply(*cdef, cm.serialize(*cdef->type));
+    self().row().apply(*cdef, cm.serialize());
     return self();
 }
 
@@ -84,7 +84,7 @@ Builder& topology_mutation_builder_base<Builder>::del(const char* cell) {
     } else {
         collection_mutation_description cm;
         cm.tomb = tombstone{self().timestamp(), gc_clock::now()};
-        self().row().apply(*cdef, cm.serialize(*cdef->type));
+        self().row().apply(*cdef, cm.serialize());
     }
     return self();
 }

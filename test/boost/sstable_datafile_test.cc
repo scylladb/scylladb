@@ -141,16 +141,16 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         set_mut.cells.emplace_back(to_bytes("2"), make_atomic_cell(bytes_type, {}));
         set_mut.cells.emplace_back(to_bytes("3"), make_atomic_cell(bytes_type, {}));
 
-        m.set_clustered_cell(c_key, set_col, set_mut.serialize(*set_col.type));
+        m.set_clustered_cell(c_key, set_col, set_mut.serialize());
 
-        m.set_static_cell(static_set_col, set_mut.serialize(*static_set_col.type));
+        m.set_static_cell(static_set_col, set_mut.serialize());
 
         auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
         mutation m2(s, key2);
         collection_mutation_description set_mut_single;
         set_mut_single.cells.emplace_back(to_bytes("4"), make_atomic_cell(bytes_type, {}));
 
-        m2.set_clustered_cell(c_key, set_col, set_mut_single.serialize(*set_col.type));
+        m2.set_clustered_cell(c_key, set_col, set_mut_single.serialize());
 
         auto mt = make_memtable(s, {std::move(m), std::move(m2)}).get();
 

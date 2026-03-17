@@ -43,7 +43,7 @@ lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const u
         collection_mutation_view_description mut;
         mut.tomb = params.make_tombstone_just_before();
 
-        m.set_cell(prefix, column, mut.serialize(*column.type));
+        m.set_cell(prefix, column, mut.serialize());
     }
     do_append(value, m, prefix, column, params);
 }
@@ -94,7 +94,7 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
                 params.make_cell(*ltype->value_comparator(), value.view(), atomic_cell::collection_member::yes));
     }
 
-    m.set_cell(prefix, column, mut.serialize(*ltype));
+    m.set_cell(prefix, column, mut.serialize());
 }
 
 bool
@@ -127,7 +127,7 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
                     params.make_cell(*ltype->value_comparator(), value.view(), atomic_cell::collection_member::yes));
     }
 
-    m.set_cell(prefix, column, mut.serialize(*ltype));
+    m.set_cell(prefix, column, mut.serialize());
 }
 
 void
@@ -172,7 +172,7 @@ lists::do_append(const cql3::raw_value& list_value,
                 throw exceptions::invalid_request_exception("Too many list values per single CQL statement or batch");
             }
         }
-        m.set_cell(prefix, column, appended.serialize(*ltype));
+        m.set_cell(prefix, column, appended.serialize());
     } else {
         auto ltype = static_cast<const list_type_impl*>(column.type.get());
         // for frozen lists, we're overwriting the whole cell value
@@ -234,7 +234,7 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
             throw exceptions::invalid_request_exception("Too many list values per single CQL statement or batch");
         }
     }
-    m.set_cell(prefix, column, mut.serialize(*ltype));
+    m.set_cell(prefix, column, mut.serialize());
 }
 
 bool
@@ -290,7 +290,7 @@ lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, cons
             mnew.cells.emplace_back(std::move(eidx), params.make_dead_cell());
         }
     }
-    m.set_cell(prefix, column, mnew.serialize(*ltype));
+    m.set_cell(prefix, column, mnew.serialize());
 }
 
 bool
@@ -320,7 +320,7 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
     const data_value& eidx_dv = existing_list[idx].first;
     bytes eidx = eidx_dv.type()->decompose(eidx_dv);
     mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());
-    m.set_cell(prefix, column, mut.serialize(*column.type));
+    m.set_cell(prefix, column, mut.serialize());
 }
 
 }

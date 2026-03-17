@@ -2290,7 +2290,7 @@ public:
                     std::sort(m.cells.begin(), m.cells.end(), [] (auto&& c1, auto&& c2) {
                             return timeuuid_type->as_less_comparator()(c1.first, c2.first);
                     });
-                    return m.serialize(*ctype);
+                    return m.serialize();
                 };
                 auto get_dead_cell = [&] () -> atomic_cell_or_collection{
                     if (col.is_atomic() || col.is_counter()) {
@@ -2298,7 +2298,7 @@ public:
                     }
                     collection_mutation_description m;
                     m.tomb = tombstone(gen_timestamp(timestamp_level::collection_tombstone), new_expiry());
-                    return m.serialize(*col.type);
+                    return m.serialize();
 
                 };
                 // FIXME: generate expiring cells

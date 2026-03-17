@@ -33,10 +33,10 @@ bool collection_mutation_input_stream::empty() const {
     return _src.empty();
 }
 
-collection_mutation::collection_mutation(const abstract_type& type, collection_mutation_view v)
+collection_mutation::collection_mutation(collection_mutation_view v)
     : _data(v.data) {}
 
-collection_mutation::collection_mutation(const abstract_type& type, managed_bytes data)
+collection_mutation::collection_mutation(managed_bytes data)
     : _data(std::move(data)) {}
 
 collection_mutation::operator collection_mutation_view() const
@@ -241,7 +241,6 @@ concept CollectionMutationAdaptor = requires(const Element& e, managed_bytes_mut
 template <typename Adaptor, typename Iterator>
     requires CollectionMutationAdaptor<Adaptor, std::iter_value_t<Iterator>>
 static collection_mutation serialize_collection_mutation(
-        const abstract_type& type,
         const tombstone& tomb,
         std::ranges::subrange<Iterator> cells) {
     auto element_size = [] (size_t c, auto&& e) -> size_t {
@@ -273,7 +272,7 @@ static collection_mutation serialize_collection_mutation(
         writek(kv);
         writev(kv);
     }
-    return collection_mutation(type, std::move(ret));
+    return collection_mutation(std::move(ret));
 }
 
 namespace {
@@ -300,12 +299,12 @@ struct atomic_cell_adaptor {
 
 }
 
-collection_mutation collection_mutation_description::serialize(const abstract_type& type) const {
-    return serialize_collection_mutation<atomic_cell_adaptor>(type, tomb, std::ranges::subrange(cells.begin(), cells.end()));
+collection_mutation collection_mutation_description::serialize() const {
+    return serialize_collection_mutation<atomic_cell_adaptor>(tomb, std::ranges::subrange(cells.begin(), cells.end()));
 }
 
-collection_mutation collection_mutation_view_description::serialize(const abstract_type& type) const {
-    return serialize_collection_mutation<atomic_cell_adaptor>(type, tomb, std::ranges::subrange(cells.begin(), cells.end()));
+collection_mutation collection_mutation_view_description::serialize() const {
+    return serialize_collection_mutation<atomic_cell_adaptor>(tomb, std::ranges::subrange(cells.begin(), cells.end()));
 }
 
 namespace {
@@ -364,7 +363,7 @@ struct serialized_cell_adaptor {
 collection_mutation read_from_collection_cell_view(const abstract_type& type, const ser::collection_cell_view& collection) {
     auto tomb = collection.tomb();
     auto cells = collection.elements();
-    return serialize_collection_mutation<serialized_cell_adaptor>(type, tomb, std::ranges::subrange(cells.begin(), cells.end()));
+    return serialize_collection_mutation<serialized_cell_adaptor>(tomb, std::ranges::subrange(cells.begin(), cells.end()));
 }
 
 template <typename C>
@@ -424,7 +423,7 @@ collection_mutation merge(const abstract_type& type, collection_mutation_view a,
             [] (const abstract_type& o) -> collection_mutation_view_description {
                 throw std::runtime_error(format("collection_mutation merge: unknown type: {}", o.name()));
             }
-            )).serialize(type);
+            )).serialize();
         });
     });
 }
@@ -470,7 +469,7 @@ collection_mutation difference(const abstract_type& type, collection_mutation_vi
             [] (const abstract_type& o) -> collection_mutation_view_description {
                 throw std::runtime_error(format("collection_mutation difference: unknown type: {}", o.name()));
             }
-            )).serialize(type);
+            )).serialize();
         });
     });
 }

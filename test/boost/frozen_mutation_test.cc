@@ -245,7 +245,7 @@ SEASTAR_THREAD_TEST_CASE(test_freeze_unfreeze_with_large_collection_cells) {
         for (size_t i = 0; i < num_entries; ++i) {
             cmd.cells.emplace_back(int32_type->decompose(int32_t(i)), make_atomic_cell(atomic_cell::collection_member::yes));
         }
-        m.set_clustered_cell(ck, cdef_collection, atomic_cell_or_collection(cmd.serialize(*collection_type)));
+        m.set_clustered_cell(ck, cdef_collection, atomic_cell_or_collection(cmd.serialize()));
     }
 
     for (auto do_freeze_gently : {false, true}) {

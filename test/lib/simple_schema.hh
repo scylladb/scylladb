@@ -154,8 +154,7 @@ public:
             cmd.cells.emplace_back(k, atomic_cell::make_live(*bytes_type, t, v, atomic_cell::collection_member::yes));
         }
 
-        const auto map_type = get_collection_type();
-        auto serialized_map = cmd.serialize(*map_type);
+        auto serialized_map = cmd.serialize();
         const column_definition& c1_def = *_s->get_column_definition(to_bytes("c1"));
         m.set_clustered_cell(ck, c1_def, atomic_cell_or_collection(std::move(serialized_map)));
         return t;

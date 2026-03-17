@@ -290,7 +290,7 @@ timestamp_based_splitting_mutation_writer::split_collection(atomic_cell_or_colle
         }
 
         for (auto&& [bucket, bucket_mv] : mutations_by_bucket) {
-            pieces_by_bucket.emplace(bucket, bucket_mv.serialize(*cdef.type));
+            pieces_by_bucket.emplace(bucket, bucket_mv.serialize());
         }
     });
 

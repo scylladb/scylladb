@@ -44,7 +44,7 @@ struct collection_mutation_description {
         can_gc_fn&, gc_clock::time_point gc_before, compaction_garbage_collector* collector = nullptr);
 
     // Packs the data to a serialized blob.
-    collection_mutation serialize(const abstract_type&) const;
+    collection_mutation serialize() const;
 };
 
 // Similar to collection_mutation_description, except that it doesn't store the cells' data, only observes it.
@@ -57,7 +57,7 @@ struct collection_mutation_view_description {
     collection_mutation_description materialize(const abstract_type&) const;
 
     // Packs the data to a serialized blob.
-    collection_mutation serialize(const abstract_type&) const;
+    collection_mutation serialize() const;
 };
 
 class collection_mutation_input_stream {
@@ -125,8 +125,8 @@ public:
     managed_bytes _data;
 
     collection_mutation() {}
-    collection_mutation(const abstract_type&, collection_mutation_view);
-    collection_mutation(const abstract_type&, managed_bytes);
+    collection_mutation(collection_mutation_view);
+    collection_mutation(managed_bytes);
     operator collection_mutation_view() const;
 };
 

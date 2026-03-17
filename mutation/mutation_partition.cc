@@ -1664,7 +1664,7 @@ compact_and_expire_result row::compact_and_expire(
                 if (m.cells.empty() && m.tomb <= tomb.tomb()) {
                     erase = true;
                 } else {
-                    c = m.serialize(*def.type);
+                    c = m.serialize();
                 }
             });
         }

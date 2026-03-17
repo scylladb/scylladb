@@ -252,7 +252,7 @@ private:
             if (!_cdef) {
                 return;
             }
-            auto ac = atomic_cell_or_collection::from_collection_mutation(cm.serialize(*_cdef->type));
+            auto ac = atomic_cell_or_collection::from_collection_mutation(cm.serialize());
             if (_cdef->is_static()) {
                 mf.mutate_as_static_row(s, [&] (static_row& sr) mutable {
                     sr.set_cell(*_cdef, std::move(ac));

@@ -56,7 +56,7 @@ void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefi
         collection_mutation_description coll_m;
         coll_m.tomb = params.make_tombstone();
 
-        m.set_cell(prefix, column, coll_m.serialize(*column.type));
+        m.set_cell(prefix, column, coll_m.serialize());
     } else {
         m.set_cell(prefix, column, params.make_dead_cell());
     }

@@ -742,7 +742,7 @@ struct collection_with_type {
     collection_mutation data;
     data_type type;
 
-    collection_with_type(collection_mutation_view data_view, data_type type) : data(*type, data_view), type(std::move(type)) { }
+    collection_with_type(collection_mutation_view data_view, data_type type) : data(data_view), type(std::move(type)) { }
 };
 
 int collection_index_l(lua_State* l) {

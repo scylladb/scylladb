@@ -639,7 +639,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             for (auto& nonatomic_update : sr_update.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
-                m.set_static_cell(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
+                m.set_static_cell(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize());
             }
             processor.process_change(m);
         }
@@ -654,7 +654,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             for (auto& nonatomic_update : cr_insert.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
-                row.cells().apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
+                row.cells().apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize());
             }
             row.apply(cr_insert.marker);
 
@@ -671,7 +671,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             for (auto& nonatomic_update : cr_update.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
-                row.apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
+                row.apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize());
             }
 
             processor.process_change(m);
