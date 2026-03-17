@@ -60,3 +60,5 @@ get_sstables_for_tablet(Range&& ranges, const dht::token_range& token_range, aut
     }
     co_return std::make_tuple(std::move(fully_contained), std::move(partially_contained));
 }
+
+future<> attach_sstable(shard_id from_shard, replica::database& db, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info, logging::logger& logger);

@@ -13,7 +13,9 @@
 #include <seastar/core/fstream.hh>
 #include "replica/database.hh"
 #include "sstables/shared_sstable.hh"
+#include "sstables/sstable_directory.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 
 future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger) {
     constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
@@ -105,4 +107,17 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
         }
     }
     throw std::logic_error("SSTable must have at least one component");
+}
+
+future<>
+attach_sstable(shard_id from_shard, replica::database& db, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info, logging::logger& logger) {
+    logger.debug("Adding downloaded SSTables to the table {} on shard {}, submitted from shard {}", cf, this_shard_id(), from_shard);
+    auto& table = db.find_column_family(ks, cf);
+    auto& sst_manager = table.get_sstables_manager();
+    auto sst = sst_manager.make_sstable(
+        table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
+    sst->set_sstable_level(0);
+    auto units = co_await sst_manager.dir_semaphore().get_units(1);
+    co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
+    co_await table.add_sstable_and_update_cache(sst);
 }

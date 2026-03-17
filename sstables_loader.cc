@@ -206,8 +206,6 @@ private:
 
     using sst_classification_info = std::vector<std::vector<minimal_sst_info>>;
 
-    static future<> attach_sstable(shard_id from_shard, replica::database& db, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info);
-
     future<>
     stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
         if (_stream_scope != stream_scope::node) {
@@ -220,7 +218,7 @@ private:
             [this, &downloaded_ssts, from = this_shard_id(), ks = _table.schema()->ks_name(), cf = _table.schema()->cf_name()] -> future<> {
                 auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
                 for (const auto& min_info : shard_ssts) {
-                    co_await attach_sstable(from, _db.local(), ks, cf, min_info);
+                    co_await attach_sstable(from, _db.local(), ks, cf, min_info, llog);
                 }
             });
         if (progress) {
@@ -289,18 +287,6 @@ host_id_vector_replica_set tablet_sstable_streamer::get_primary_endpoints(const 
         return filter(replica.host);
     });
     return to_replica_set(replicas);
-}
-
-future<> tablet_sstable_streamer::attach_sstable(shard_id from_shard, replica::database& db, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) {
-    llog.debug("Adding downloaded SSTables to the table {} on shard {}, submitted from shard {}", cf, this_shard_id(), from_shard);
-    auto& table = db.find_column_family(ks, cf);
-    auto& sst_manager = table.get_sstables_manager();
-    auto sst = sst_manager.make_sstable(
-        table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
-    sst->set_sstable_level(0);
-    auto units = co_await sst_manager.dir_semaphore().get_units(1);
-    co_await sst->load(table.get_effective_replication_map()->get_sharder(*table.schema()));
-    co_await table.add_sstable_and_update_cache(sst);
 }
 
 future<> sstable_streamer::stream(shared_ptr<stream_progress> progress) {
