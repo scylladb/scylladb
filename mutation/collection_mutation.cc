@@ -531,48 +531,53 @@ collection_mutation merge(const abstract_type& type, collection_mutation_view a,
 
 template <typename C>
 requires std::is_base_of_v<abstract_type, std::remove_reference_t<C>>
-static collection_mutation_view_description
-difference(collection_mutation_view_description a, collection_mutation_view_description b, C&& key_type)
+static collection_mutation
+difference(collection_mutation_view a, collection_mutation_view b, C&& key_type)
 {
-    collection_mutation_view_description diff;
-    diff.cells.reserve(std::max(a.cells.size(), b.cells.size()));
+    using element_type = collection_mutation_view::iterator::value_type;
 
-    auto it = b.cells.begin();
-    for (auto&& c : a.cells) {
-        while (it != b.cells.end() && key_type.less(it->first, c.first)) {
+    tombstone diff_tomb;
+    if (a.tomb() > b.tomb()) {
+        diff_tomb = a.tomb();
+    }
+    collection_mutation_writer diff(diff_tomb);
+
+    auto less = [&] (const element_type& e1, const element_type& e2) {
+        return e1.first.with_linearized([&] (bytes_view k1) {
+            return e2.first.with_linearized([&] (bytes_view k2) {
+                return key_type.less(k1, k2);
+            });
+        });
+    };
+
+    auto it = b.begin();
+    for (auto&& c : a) {
+        while (it != b.end() && less(*it, c)) {
             ++it;
         }
-        if (it == b.cells.end() || !key_type.equal(it->first, c.first)
+        if (it == b.end() || !key_type.equal(it->first, c.first)
             || compare_atomic_cell_for_merge(c.second, it->second) > 0) {
 
-            auto cell = std::make_pair(c.first, c.second);
-            diff.cells.emplace_back(std::move(cell));
+            diff.push_back(c.first, c.second);
         }
     }
-    if (a.tomb > b.tomb) {
-        diff.tomb = a.tomb;
-    }
 
-    return diff;
+    return std::move(diff).finish();
 }
 
 collection_mutation difference(const abstract_type& type, collection_mutation_view a, collection_mutation_view b)
 {
-    return a.with_deserialized(type, [&] (collection_mutation_view_description a_view) {
-        return b.with_deserialized(type, [&] (collection_mutation_view_description b_view) {
-            return visit(type, make_visitor(
-            [&] (const collection_type_impl& ctype) {
-                return difference(std::move(a_view), std::move(b_view), *ctype.name_comparator());
-            },
-            [&] (const user_type_impl& utype) {
-                return difference(std::move(a_view), std::move(b_view), *short_type);
-            },
-            [] (const abstract_type& o) -> collection_mutation_view_description {
-                throw std::runtime_error(format("collection_mutation difference: unknown type: {}", o.name()));
-            }
-            )).serialize();
-        });
-    });
+    return visit(type, make_visitor(
+        [&] (const collection_type_impl& ctype) {
+            return difference(std::move(a), std::move(b), *ctype.name_comparator());
+        },
+        [&] (const user_type_impl& utype) {
+            return difference(std::move(a), std::move(b), *short_type);
+        },
+        [] (const abstract_type& o) -> collection_mutation {
+            throw std::runtime_error(format("collection_mutation difference: unknown type: {}", o.name()));
+        }
+    ));
 }
 
 template <typename F>
