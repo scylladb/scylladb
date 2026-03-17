@@ -49,7 +49,7 @@ fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
 mkdir -p $BUILDDIR/
 RPMBUILD=$(readlink -f $BUILDDIR)
-tar -C $BUILDDIR/ -xpf $RELOC_PKG scylla/SCYLLA-RELOCATABLE-FILE scylla/SCYLLA-RELEASE-FILE scylla/SCYLLA-VERSION-FILE scylla/SCYLLA-PRODUCT-FILE scylla/dist/redhat
+tar -C $BUILDDIR/ -xpf $RELOC_PKG scylla/SCYLLA-RELOCATABLE-FILE scylla/SCYLLA-RELEASE-FILE scylla/SCYLLA-VERSION-FILE scylla/SCYLLA-PRODUCT-FILE scylla/dist/redhat scylla/dist/common
 cd $BUILDDIR/scylla
 
 RELOC_PKG_BASENAME=$(basename $RELOC_PKG)

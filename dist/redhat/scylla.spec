@@ -12,6 +12,7 @@ Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
 Requires:       %{product}-kernel-conf = %{version}-%{release}
 Requires:       %{product}-node-exporter = %{version}-%{release}
+Requires:       %{product}-process-exporter = %{version}-%{release}
 Requires:       %{product}-cqlsh = %{version}-%{release}
 Provides:       scylla-enterprise = %{version}-%{release}
 Obsoletes:      scylla-enterprise < 2025.1.0
@@ -39,7 +40,7 @@ Obsoletes:      scylla-enterprise < 2025.1.0
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
 This package installs all required packages for ScyllaDB,  including
-%{product}-server, %{product}-node-exporter.
+%{product}-server, %{product}-node-exporter, %{product}-process-exporter.
 
 # this is needed to prevent python compilation error on CentOS (#2235)
 %if 0%{?rhel}
@@ -256,6 +257,35 @@ fi
 /opt/scylladb/node_exporter/licenses/LICENSE
 /opt/scylladb/node_exporter/licenses/NOTICE
 /etc/systemd/system/scylla-node-exporter.service.d/dependencies.conf
+
+%package process-exporter
+Group:          Applications/Databases
+Summary:        Prometheus exporter for process metrics
+License:        MIT
+URL:            https://github.com/ncabatoff/process-exporter
+
+%description process-exporter
+Prometheus exporter exposing process and thread metrics for processes matching a given name and/or regex.
+
+%post process-exporter
+if [ $1 -eq 1 ] ; then
+    /usr/bin/systemctl preset scylla-process-exporter.service ||:
+fi
+
+%preun process-exporter
+if [ $1 -eq 0 ] ; then
+    /usr/bin/systemctl --no-reload disable scylla-process-exporter.service ||:
+    /usr/bin/systemctl stop scylla-process-exporter.service ||:
+fi
+
+%postun process-exporter
+/usr/bin/systemctl daemon-reload ||:
+
+%files process-exporter
+%defattr(-,root,root)
+%{_unitdir}/scylla-process-exporter.service
+/opt/scylladb/dependencies/process-exporter
+/opt/scylladb/dependencies/process-exporter.yml
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>

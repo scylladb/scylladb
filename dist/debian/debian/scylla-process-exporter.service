@@ -1,0 +1,16 @@
+[Unit]
+Description=Prometheus exporter for process metrics
+
+[Service]
+Type=simple
+User=scylla
+Group=scylla
+ExecStart=/opt/scylladb/dependencies/process-exporter -config.path /opt/scylladb/dependencies/process-exporter.yml
+ExecReload=/bin/kill -HUP $MAINPID
+TimeoutStopSec=20
+SendSIGKILL=no
+Restart=always
+Slice=scylla-helper.slice
+
+[Install]
+WantedBy=multi-user.target

@@ -6,6 +6,7 @@ add_custom_command(
     scripts/create-relocatable-package.py
       --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
       --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
+      --process-exporter-dir ${CMAKE_BINARY_DIR}/process_exporter
       --debian-dir ${CMAKE_BINARY_DIR}/debian
       ${unstripped_dist_pkg}
   DEPENDS
@@ -13,6 +14,7 @@ add_custom_command(
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune
     ${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
+    ${CMAKE_BINARY_DIR}/process_exporter/process-exporter
     ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
@@ -81,6 +83,25 @@ add_custom_command(
       --strip-components=1)
 add_stripped(${CMAKE_BINARY_DIR}/node_exporter/node_exporter)
 
+execute_process(
+  COMMAND
+    ${CMAKE_SOURCE_DIR}/install-dependencies.sh --print-process-exporter-filename
+  OUTPUT_VARIABLE
+    process_exporter_filename
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+add_custom_command(
+  OUTPUT
+    ${CMAKE_BINARY_DIR}/process_exporter/process-exporter
+  COMMAND
+    ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/process_exporter
+  COMMAND
+    ${TAR_COMMAND}
+      -C ${CMAKE_BINARY_DIR}/process_exporter
+      -xpf ${process_exporter_filename}
+      --no-same-owner
+      --strip-components=1)
+add_stripped(${CMAKE_BINARY_DIR}/process_exporter/process-exporter)
+
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/debian
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/debian/debian_files_gen.py
@@ -98,6 +119,7 @@ add_custom_command(
       --stripped
       --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
       --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
+      --process-exporter-dir ${CMAKE_BINARY_DIR}/process_exporter
       --debian-dir ${CMAKE_BINARY_DIR}/debian
       ${stripped_dist_pkg}
   DEPENDS
@@ -105,6 +127,7 @@ add_custom_command(
     ${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf.stripped
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune.stripped
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter.stripped
+    ${CMAKE_BINARY_DIR}/process_exporter/process-exporter.stripped
     ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-tar

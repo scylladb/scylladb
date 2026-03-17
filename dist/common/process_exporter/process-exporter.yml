@@ -1,0 +1,5 @@
+process_names:
+  - name: "scylla"
+    cmdline:
+      # Match the main Scylla binary in common installs (system packages or tarballs)
+      - '(?:^|/)(scylla|scylla\.bin)(?:\s|$)'

@@ -125,6 +125,8 @@ ap.add_argument('--build-dir', default='build/release',
                 help='Build dir ("build/debug" or "build/release") to use')
 ap.add_argument('--node-exporter-dir', default='build/node_exporter',
                 help='the directory where node_exporter is located')
+ap.add_argument('--process-exporter-dir', default='build/process_exporter',
+                help='the directory where process_exporter is located')
 ap.add_argument('--debian-dir', default='build/debian/debian',
                 help='the directory where debian packaging is located')
 ap.add_argument('--stripped', action='store_true',
@@ -246,6 +248,12 @@ else:
     ar.reloc_add(f'{node_exporter_dir}/node_exporter', arcname='node_exporter/node_exporter')
 ar.reloc_add(f'{node_exporter_dir}/LICENSE', arcname='node_exporter/LICENSE')
 ar.reloc_add(f'{node_exporter_dir}/NOTICE', arcname='node_exporter/NOTICE')
+process_exporter_dir = args.process_exporter_dir
+if args.stripped:
+    ar.reloc_add(f'{process_exporter_dir}/process-exporter.stripped', arcname='dependencies/process-exporter')
+else:
+    ar.reloc_add(f'{process_exporter_dir}/process-exporter', arcname='dependencies/process-exporter')
+ar.reloc_add('dist/common/process_exporter/process-exporter.yml', arcname='dependencies/process-exporter.yml')
 ar.reloc_add('ubsan-suppressions.supp')
 ar.reloc_add('fix_system_distributed_tables.py')
 
