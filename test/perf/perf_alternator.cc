@@ -10,6 +10,7 @@
 #include <memory>
 #include <signal.h>
 #include <seastar/core/future.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/http/client.hh>
@@ -76,6 +77,23 @@ static future<> make_request(http::experimental::client& cli, sstring operation,
             });
         });
     });
+}
+
+static void wait_for_alternator(const test_config& c) {
+    for (int attempt = 0; attempt < 3000; ++attempt) {
+        try {
+            auto cli = get_client(c);
+            auto close = defer([&] { cli.close().get(); });
+            make_request(cli, "ListTables", "{}").get();
+            return;
+        } catch (...) {
+        }
+        seastar::sleep(std::chrono::milliseconds(100)).get();
+        if (attempt >= 100 && attempt % 10 == 0) {
+            std::cout << fmt::format("Retrying connect to alternator port (attempt {})", attempt + 1) << std::endl;
+        }
+    }
+    throw std::runtime_error("Timed out waiting for alternator port to become ready");
 }
 
 static void delete_alternator_table(http::experimental::client& cli) {
@@ -372,6 +390,8 @@ auto make_client_pool(const test_config& c) {
 
 void workload_main(const test_config& c) {
     std::cout << "Running test with config: " << c << std::endl;
+
+    wait_for_alternator(c);
 
     auto cli = get_client(c);
     auto finally = defer([&] {
