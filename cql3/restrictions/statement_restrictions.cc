@@ -71,10 +71,6 @@ inline auto find_needs_filtering(const expression& e) {
     return find_binop(e, [] (const binary_operator& bo) { return needs_filtering(bo.op); });
 }
 
-inline bool is_multi_column(const binary_operator& op) {
-    return expr::is<tuple_constructor>(op.lhs);
-}
-
 inline bool has_slice_or_needs_filtering(const expression& e) {
     return find_binop(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
 }
@@ -2417,16 +2413,15 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
         return {query::clustering_range::make_open_ended_both_sides()};
       };
     }
-    if (find_binop(_clustering_prefix_restrictions[0].filter, is_multi_column)) { // FIXME: adjust for solve_for
+    if (_clustering_prefix_restrictions[0].is_multi_column) {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
-        for (auto& r : _clustering_prefix_restrictions | std::views::transform(&predicate::filter)) { // TODO: move to constructor, do only once.
-            using namespace expr;
-            const auto& binop = expr::as<binary_operator>(r);
-            if (is_clustering_order(binop)) {
+        for (auto& pred : _clustering_prefix_restrictions) {
+            if (pred.order == expr::comparison_order::clustering) {
                 return build_range_from_raw_bounds_fn(_clustering_prefix_restrictions, *_schema);
             }
-            for (auto& element : expr::as<tuple_constructor>(binop.lhs).elements) {
-                auto& cv = expr::as<column_value>(element);
+            auto& lhs = expr::as<expr::tuple_constructor>(expr::as<expr::binary_operator>(pred.filter).lhs);
+            for (auto& element : lhs.elements) {
+                auto& cv = expr::as<expr::column_value>(element);
                 if (cv.col->type->is_reversed()) {
                     all_natural = false;
                 } else {
@@ -2674,7 +2669,7 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema,
 
 void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema) {
     for (const auto& e : _clustering_prefix_restrictions) {
-        if (find_binop(_clustering_prefix_restrictions[0].filter, is_multi_column)) {
+        if (_clustering_prefix_restrictions[0].is_multi_column) {
             // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
             break;
         }
