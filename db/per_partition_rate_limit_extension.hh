@@ -14,7 +14,6 @@
 #include "bytes_fwd.hh"
 #include "db/per_partition_rate_limit_options.hh"
 #include "schema/schema_extension.hh"
-#include "serializer.hh"
 
 namespace db {
 
@@ -36,12 +35,8 @@ public:
         throw std::logic_error("Cannot create per partition rate limit info from string");
     }
 
-    bytes serialize() const override {
-        return ser::serialize_to_buffer<bytes>(_options.to_map());
-    }
-    static std::map<sstring, sstring> deserialize(const bytes_view& buffer) {
-        return ser::deserialize_from_buffer(buffer, std::type_identity<std::map<sstring, sstring>>());
-    }
+    bytes serialize() const override;
+    static std::map<sstring, sstring> deserialize(const bytes_view& buffer);
     const per_partition_rate_limit_options& get_options() const {
         return _options;
     }
