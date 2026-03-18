@@ -273,7 +273,7 @@ private:
     void abort_snapshot_transfers();
 
     // Send snapshot in the background and notify FSM about the result.
-    void send_snapshot(server_id id, install_snapshot&& snp);
+    void send_snapshot(server_id dst, install_snapshot&& snp);
 
     future<> _applier_status = make_ready_future<>();
     future<> _io_status = make_ready_future<>();
