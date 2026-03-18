@@ -40,6 +40,7 @@
 #include "sstables/object_storage_client.hh"
 #include "utils/rjson.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "table_helper.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -1206,6 +1207,19 @@ protected:
     virtual future<> run() override {
         auto& loader = _loader.local();
         co_await loader._ss.local().restore_tablets(_tid, _snap_name, _endpoint, _bucket);
+
+        // Get table schema from snapshot_cql_tables table and
+        // call alter_table_with_tablet_hints to restore the table schema to its original form
+        auto current_schema = loader.local_db().find_schema(_tid);
+
+        auto original_schema_str = co_await loader._sys_dist_ks.get_snapshot_cql_table_schema(_snap_name, current_schema->ks_name(), current_schema->cf_name());
+
+        auto original_schema = table_helper::parse_new_cf_statement(loader._qp, original_schema_str);
+
+        auto min_tablet_count = original_schema->tablet_options().min_tablet_count;
+        auto max_tablet_count = original_schema->tablet_options().max_tablet_count;
+        // Use the current_schema object and set the tablet hints on it that we got from the original schema
+        co_await loader._ss.local().alter_table_with_tablet_hints(current_schema, min_tablet_count, max_tablet_count, false);
 
         auto& db = loader._db.local();
         auto s = db.find_schema(_tid);
