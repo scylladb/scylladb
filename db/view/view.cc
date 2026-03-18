@@ -725,12 +725,11 @@ static atomic_cell make_empty(const atomic_cell_view& ac) {
 static collection_mutation make_empty(
         const collection_mutation_view& cm,
         const abstract_type& type) {
-    collection_mutation_description n;
-    n.tomb = cm.tomb();
+    collection_mutation_writer n(cm.tomb());
     for (auto&& [key, cell] : cm) {
-        n.cells.emplace_back(to_bytes(key), make_empty(cell));
+        n.push_back(key, make_empty(cell));
     }
-    return n.serialize();
+    return std::move(n).finish();
 }
 
 // In some cases, we need to copy to a view table even columns which have not

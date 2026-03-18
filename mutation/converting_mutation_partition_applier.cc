@@ -46,11 +46,8 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
         return;
     }
 
-    collection_mutation_description new_view;
     auto tomb = cell.tomb();
-    if (tomb.timestamp > new_def.dropped_at()) {
-        new_view.tomb = tomb;
-    }
+    collection_mutation_writer new_view(tomb.timestamp > new_def.dropped_at() ? tomb : tombstone{});
 
     visit(old_type, make_visitor(
         [&] (const collection_type_impl& old_ctype) {
@@ -62,7 +59,7 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
 
             for (auto& [key, c] : cell) {
                 if (c.timestamp() > new_def.dropped_at()) {
-                    new_view.cells.emplace_back(to_bytes(key), upgrade_cell(
+                    new_view.push_back(key, upgrade_cell(
                             new_value_type, old_value_type, c, atomic_cell::collection_member::yes));
                 }
             }
@@ -76,7 +73,7 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
                     auto idx = deserialize_field_index(key);
                     SCYLLA_ASSERT(idx < new_utype.size() && idx < old_utype.size());
 
-                    new_view.cells.emplace_back(to_bytes(key), upgrade_cell(
+                    new_view.push_back(key, upgrade_cell(
                             *new_utype.type(idx), *old_utype.type(idx), c, atomic_cell::collection_member::yes));
                 }
             }
@@ -86,8 +83,8 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
         }
     ));
 
-    if (new_view.tomb || !new_view.cells.empty()) {
-        dst.apply(new_def, new_view.serialize());
+    if (!new_view.empty()) {
+        dst.apply(new_def, std::move(new_view).finish());
     }
 }
 

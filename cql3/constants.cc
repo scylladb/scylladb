@@ -53,10 +53,7 @@ constants::subtracter::execute(mutation& m, const clustering_key_prefix& prefix,
 
 void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     if (column.type->is_multi_cell()) {
-        collection_mutation_description coll_m;
-        coll_m.tomb = params.make_tombstone();
-
-        m.set_cell(prefix, column, coll_m.serialize());
+        m.set_cell(prefix, column, collection_mutation_writer(params.make_tombstone()).finish());
     } else {
         m.set_cell(prefix, column, params.make_dead_cell());
     }

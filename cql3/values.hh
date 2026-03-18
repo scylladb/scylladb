@@ -231,6 +231,15 @@ public:
     explicit operator bool() const {
         return is_value();
     }
+    managed_bytes_view to_managed_bytes_view() const {
+        return std::visit(overloaded_functor{
+            [](const bytes& bytes_val) -> managed_bytes_view { return managed_bytes_view(bytes_val); },
+            [](const managed_bytes& managed_bytes_val) -> managed_bytes_view { return managed_bytes_val; },
+            [](const null_value&) -> managed_bytes_view {
+                throw std::runtime_error("to_bytes() called on raw value that is null");
+            },
+        }, _data);
+    }
     bytes to_bytes() && {
         return std::visit(overloaded_functor{
             [](bytes&& bytes_val) { return std::move(bytes_val); },

@@ -59,17 +59,17 @@ Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, co
         cset.insert(vtype->decompose(data_value(v)));
     }
 
-    collection_mutation_description cm;
-    cm.cells.reserve(cset.size());
-    for (const bytes& raw : cset) {
-        cm.cells.emplace_back(raw, atomic_cell::make_live(*bytes_type, self().timestamp(), bytes_view(), self().ttl()));
-    }
-
+    tombstone tomb;
     if (apply_mode == collection_apply_mode::overwrite) {
-        cm.tomb = tombstone(self().timestamp() - 1, gc_clock::now());
+        tomb = tombstone(self().timestamp() - 1, gc_clock::now());
     }
 
-    self().row().apply(*cdef, cm.serialize());
+    collection_mutation_writer cm(tomb);
+    for (const bytes& raw : cset) {
+        cm.push_back(bytes_view(raw), atomic_cell::make_live(*bytes_type, self().timestamp(), bytes_view(), self().ttl()));
+    }
+
+    self().row().apply(*cdef, std::move(cm).finish());
     return self();
 }
 
@@ -82,9 +82,7 @@ Builder& topology_mutation_builder_base<Builder>::del(const char* cell) {
     if (!cdef->type->is_multi_cell()) {
         self().row().apply(*cdef, atomic_cell::make_dead(self().timestamp(), gc_clock::now()));
     } else {
-        collection_mutation_description cm;
-        cm.tomb = tombstone{self().timestamp(), gc_clock::now()};
-        self().row().apply(*cdef, cm.serialize());
+        self().row().apply(*cdef, collection_mutation_writer(tombstone{self().timestamp(), gc_clock::now()}).finish());
     }
     return self();
 }

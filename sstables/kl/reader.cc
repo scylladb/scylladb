@@ -233,7 +233,8 @@ private:
     class collection_mutation {
         const column_definition *_cdef;
     public:
-        collection_mutation_description cm;
+        tombstone tomb;
+        utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
 
         // We need to get a copy of the prefix here, because the outer object may be short lived.
         collection_mutation(const column_definition *cdef)
@@ -252,7 +253,11 @@ private:
             if (!_cdef) {
                 return;
             }
-            auto ac = atomic_cell_or_collection::from_collection_mutation(cm.serialize());
+            collection_mutation_writer writer(tomb);
+            for (const auto& [k, v] : cells) {
+                writer.push_back(bytes_view(k), atomic_cell_view(v));
+            }
+            auto ac = atomic_cell_or_collection::from_collection_mutation(std::move(writer).finish());
             if (_cdef->is_static()) {
                 mf.mutate_as_static_row(s, [&] (static_row& sr) mutable {
                     sr.set_cell(*_cdef, std::move(ac));
@@ -308,11 +313,11 @@ private:
     }
 
     void update_pending_collection(const column_definition *cdef, bytes&& col, atomic_cell&& ac) {
-        pending_collection(cdef).cm.cells.emplace_back(std::move(col), std::move(ac));
+        pending_collection(cdef).cells.emplace_back(std::move(col), std::move(ac));
     }
 
     void update_pending_collection(const column_definition *cdef, tombstone&& t) {
-        pending_collection(cdef).cm.tomb = std::move(t);
+        pending_collection(cdef).tomb = std::move(t);
     }
 
     void flush_pending_collection(const schema& s) {

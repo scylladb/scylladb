@@ -24,9 +24,7 @@ void
 sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, const cql3::raw_value& value) {
     if (column.type->is_multi_cell()) {
         // Delete all cells first, then add new ones
-        collection_mutation_description mut;
-        mut.tomb = params.make_tombstone_just_before();
-        m.set_cell(row_key, column, mut.serialize());
+        m.set_cell(row_key, column, collection_mutation_writer(params.make_tombstone_just_before()).finish());
     }
     adder::do_add(m, row_key, params, value, column);
 }
@@ -53,17 +51,16 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
             return;
         }
 
-        // FIXME: collection_mutation_view_description? not compatible with params.make_cell().
-        collection_mutation_description mut;
+        collection_mutation_writer mut(tombstone{});
 
         for (auto&& e : set_elements) {
             if (!e) {
                 throw exceptions::invalid_request_exception("Invalid NULL value in set");
             }
-            mut.cells.emplace_back(to_bytes(*e), params.make_cell(*set_type.value_comparator(), bytes_view(), atomic_cell::collection_member::yes));
+            mut.push_back(managed_bytes_view(*e), params.make_cell(*set_type.value_comparator(), bytes_view(), atomic_cell::collection_member::yes));
         }
 
-        m.set_cell(row_key, column, mut.serialize());
+        m.set_cell(row_key, column, std::move(mut).finish());
     } else if (!value.is_null()) {
         // for frozen sets, we're overwriting the whole cell
         value.view().with_value([&] (const FragmentedView auto& v) {
@@ -84,16 +81,15 @@ sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, cons
         return;
     }
 
-    collection_mutation_description mut;
+    collection_mutation_writer mut(tombstone{});
     utils::chunked_vector<managed_bytes_opt> set_elements = expr::get_set_elements(svalue);
-    mut.cells.reserve(set_elements.size());
     for (auto&& e : set_elements) {
         if (!e) {
             throw exceptions::invalid_request_exception("Invalid NULL value in set");
         }
-        mut.cells.push_back({to_bytes(*e), params.make_dead_cell()});
+        mut.push_back(managed_bytes_view(*e), params.make_dead_cell());
     }
-    m.set_cell(row_key, column, mut.serialize());
+    m.set_cell(row_key, column, std::move(mut).finish());
 }
 
 void sets::element_discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params)
@@ -103,9 +99,9 @@ void sets::element_discarder::execute(mutation& m, const clustering_key_prefix& 
     if (elt.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null set element");
     }
-    collection_mutation_description mut;
-    mut.cells.emplace_back(std::move(elt).to_bytes(), params.make_dead_cell());
-    m.set_cell(row_key, column, mut.serialize());
+    collection_mutation_writer mut(tombstone{});
+    mut.push_back(elt.to_managed_bytes_view(), params.make_dead_cell());
+    m.set_cell(row_key, column, std::move(mut).finish());
 }
 
 }

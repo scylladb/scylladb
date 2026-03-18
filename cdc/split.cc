@@ -639,7 +639,13 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             for (auto& nonatomic_update : sr_update.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
-                m.set_static_cell(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize());
+                m.set_static_cell(cdef, [&]() {
+                    collection_mutation_writer w(nonatomic_update.t);
+                    for (auto& [k, v] : nonatomic_update.cells) {
+                        w.push_back(bytes_view(k), atomic_cell_view(v));
+                    }
+                    return std::move(w).finish();
+                }());
             }
             processor.process_change(m);
         }
@@ -654,7 +660,13 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             for (auto& nonatomic_update : cr_insert.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
-                row.cells().apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize());
+                row.cells().apply(cdef, [&]() {
+                    collection_mutation_writer w(nonatomic_update.t);
+                    for (auto& [k, v] : nonatomic_update.cells) {
+                        w.push_back(bytes_view(k), atomic_cell_view(v));
+                    }
+                    return std::move(w).finish();
+                }());
             }
             row.apply(cr_insert.marker);
 
@@ -671,7 +683,13 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             for (auto& nonatomic_update : cr_update.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
-                row.apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize());
+                row.apply(cdef, [&]() {
+                    collection_mutation_writer w(nonatomic_update.t);
+                    for (auto& [k, v] : nonatomic_update.cells) {
+                        w.push_back(bytes_view(k), atomic_cell_view(v));
+                    }
+                    return std::move(w).finish();
+                }());
             }
 
             processor.process_change(m);
