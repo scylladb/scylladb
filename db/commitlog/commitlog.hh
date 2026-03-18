@@ -79,6 +79,9 @@ public:
 private:
     ::shared_ptr<segment_manager> _segment_manager;
 public:
+    using group_id = uint32_t;
+    using opt_group_id = std::optional<group_id>;
+
     enum class sync_mode {
         PERIODIC, BATCH
     };
@@ -184,13 +187,24 @@ public:
     using serializer_func = std::function<void(output&)>;
 
     /**
+     * Creates a commitlog group.
+     */
+    group_id create_group();
+
+    /**
+     * Removes a commitlog group. All entries written must have been
+     * released (discard_completed_segments)
+     */
+    future<> remove_group(group_id);
+
+    /**
      * Add a "Mutation" to the commit log.
      *
      * Resolves with timed_out_error when timeout is reached.
      *
      * @param mutation_func a function that writes 'size' bytes to the log, representing the mutation.
      */
-    future<rp_handle> add(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, serializer_func mutation_func);
+    future<rp_handle> add(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, serializer_func mutation_func, opt_group_id = {});
 
     /**
      * Template version of add.
@@ -198,10 +212,10 @@ public:
      * @param mu an invocable op that generates the serialized data. (Of size bytes)
      */
     template<typename MutationOp>
-    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, MutationOp&& mu) {
+    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, db::timeout_clock::time_point timeout, force_sync sync, MutationOp&& mu, opt_group_id gid = {}) {
         return add(id, size, timeout, sync, [mu = std::forward<MutationOp>(mu)](output& out) {
             mu(out);
-        });
+        }, std::move(gid));
     }
 
     /**
@@ -209,8 +223,8 @@ public:
      * @param mu an invocable op that generates the serialized data. (Of size bytes)
      */
     template<typename MutationOp>
-    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, force_sync sync, MutationOp&& mu) {
-        return add_mutation(id, size, db::timeout_clock::time_point::max(), sync, std::forward<MutationOp>(mu));
+    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, force_sync sync, MutationOp&& mu, opt_group_id gid = {}) {
+        return add_mutation(id, size, db::timeout_clock::time_point::max(), sync, std::forward<MutationOp>(mu), std::move(gid));
     }
 
     /**
@@ -218,14 +232,14 @@ public:
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writer a writer responsible for writing the entry
      */
-    future<rp_handle> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer, db::timeout_clock::time_point timeout);
+    future<rp_handle> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer, db::timeout_clock::time_point timeout, opt_group_id = {});
 
     /**
      * Add N entries to the commit log as a single operation (in a single segment).
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writers a vector of writers responsible for writing respective entry
      */
-    future<utils::chunked_vector<rp_handle>> add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
+    future<utils::chunked_vector<rp_handle>> add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout, opt_group_id = {});
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
@@ -234,16 +248,16 @@ public:
      * @param cfId    the column family ID that was flushed
      * @param rp_set  the replay positions of the flush
      */
-    void discard_completed_segments(const cf_id_type&, const rp_set&);
+    void discard_completed_segments(const cf_id_type&, const rp_set&, opt_group_id = {});
 
-    void discard_completed_segments(const cf_id_type&);
+    void discard_completed_segments(const cf_id_type&, opt_group_id = {});
 
     /**
      * Forces active segment switch.
      * Called from API calls to help tests that need predictable
      * compaction behaviour.
     */
-    future<> force_new_active_segment() noexcept;
+    future<> force_new_active_segment(opt_group_id = {}) noexcept;
 
     /**
      * Waits for all segment deletes issued up until now to complete.
@@ -289,7 +303,7 @@ public:
     /**
      * Returns a vector of the segment names
      */
-    std::vector<sstring> get_active_segment_names() const;
+    std::vector<sstring> get_active_segment_names(opt_group_id = {}) const;
 
     /**
      * Returns a vector of segment paths which were
@@ -321,11 +335,11 @@ public:
      * Get number of inactive (finished), segments lingering
      * due to still being dirty
      */
-    uint64_t get_num_dirty_segments() const;
+    uint64_t get_num_dirty_segments(opt_group_id = {}) const;
     /**
      * Get number of active segments, i.e. still being allocated to
      */
-    uint64_t get_num_active_segments() const;
+    uint64_t get_num_active_segments(opt_group_id = {}) const;
 
     /**
      * Returns the largest amount of data that can be written in a single "mutation".

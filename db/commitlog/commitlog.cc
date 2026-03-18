@@ -342,10 +342,11 @@ public:
     };
 
     using group_ptr = shared_ptr<segment_group>;
-    using group_id = uint64_t;
-    using opt_group_id = std::optional<group_id>;
 
     static constexpr group_id default_group_id = 0;
+
+    group_id create_group();
+    future<> remove_group(group_id);
 
     template<typename T, typename R = typename T::result_type>
     requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
@@ -470,16 +471,16 @@ public:
     future<> shutdown_all_segments();
     future<> shutdown();
 
+    inline auto filter_groups(opt_group_id gid) const {
+        return _groups | std::views::filter([gid](auto& p) { return p.first == gid.value_or(p.first); });
+    }
+
     template<typename Func>
-    size_t accumulate_groups(Func f) const {
-        auto v = _groups | std::views::values;
+    size_t accumulate_groups(Func f, opt_group_id gid = {}) const {
+        auto v = filter_groups(gid) | std::views::values;
         return std::accumulate(v.begin(), v.end(), size_t{}, [&](size_t n, const group_ptr& g) {
             return n + f(g);
         });
-    }
-
-    inline auto filter_groups(opt_group_id gid) const {
-        return _groups | std::views::filter([gid](auto& p) { return p.first == gid.value_or(p.first); });
     }
 
     void create_counters(const sstring& metrics_category_name);
@@ -506,9 +507,9 @@ public:
         }
     }
 
-    std::vector<sstring> get_active_names() const;
-    uint64_t get_num_dirty_segments() const;
-    uint64_t get_num_active_segments() const;
+    std::vector<sstring> get_active_names(opt_group_id = {}) const;
+    uint64_t get_num_dirty_segments(opt_group_id = {}) const;
+    uint64_t get_num_active_segments(opt_group_id = {}) const;
 
     using buffer_type = fragmented_temporary_buffer;
 
@@ -1988,6 +1989,33 @@ void db::commitlog::segment_manager::update_configuration(const config& new_cfg)
     // maybe do more later on...   
 } 
 
+db::commitlog::group_id db::commitlog::segment_manager::create_group() {
+    auto new_id = group_id(_groups.size());
+    while (_groups.count(new_id)) {
+        ++new_id;
+    }
+    _groups.emplace(new_id, make_shared<segment_group>());
+    return new_id;
+}
+
+future<> db::commitlog::segment_manager::remove_group(group_id gid) {
+    if (!_groups.count(gid) || gid == default_group_id) {
+        throw std::invalid_argument("Invalid group: " + std::to_string(gid));
+    }
+    auto n = get_num_dirty_segments(gid);
+    if (n > 0) {
+        throw std::logic_error("Group " + std::to_string(gid) + " not clean");
+    }
+    auto g = _groups.at(gid);
+    if (!g->segments.empty()) {
+        auto s = g->segments.back();
+        if (s->is_still_allocating()) {
+            co_await s->close();
+        }
+    }
+    discard_unused_segments();
+    _groups.erase(gid);
+}
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
     return max_mutation_size + db::commitlog::segment::default_size;
@@ -3081,9 +3109,9 @@ void db::commitlog::segment_manager::on_timer() {
     arm();
 }
 
-std::vector<sstring> db::commitlog::segment_manager::get_active_names() const {
+std::vector<sstring> db::commitlog::segment_manager::get_active_names(opt_group_id gid) const {
     std::vector<sstring> res;
-    for (auto& g : _groups | std::views::values) {
+    for (auto& g : filter_groups(gid) | std::views::values) {
         for (auto i: g->segments) {
             if (!i->is_unused()) {
                 // Each shared is located in its own directory
@@ -3094,20 +3122,20 @@ std::vector<sstring> db::commitlog::segment_manager::get_active_names() const {
     return res;
 }
 
-uint64_t db::commitlog::segment_manager::get_num_dirty_segments() const {
+uint64_t db::commitlog::segment_manager::get_num_dirty_segments(opt_group_id gid) const {
     return accumulate_groups([](auto g) {
         return std::count_if(g->segments.begin(), g->segments.end(), [](sseg_ptr s) {
             return !s->is_still_allocating() && !s->is_clean();
         });
-    });
+    }, gid);
 }
 
-uint64_t db::commitlog::segment_manager::get_num_active_segments() const {
+uint64_t db::commitlog::segment_manager::get_num_active_segments(opt_group_id gid) const {
     return accumulate_groups([](auto g) {
         return std::count_if(g->segments.begin(), g->segments.end(), [](sseg_ptr s) {
             return s->is_still_allocating();
         });
-    });
+    }, gid);
 }
 
 temporary_buffer<char> db::commitlog::segment_manager::allocate_single_buffer(size_t s, size_t alignment) {
@@ -3131,7 +3159,7 @@ db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acqu
  * Add mutation.
  */
 future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
-        size_t size, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, serializer_func func) {
+        size_t size, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, serializer_func func, opt_group_id gid) {
     class serializer_func_entry_writer final : public entry_writer {
         cf_id_type _id;
         serializer_func _func;
@@ -3159,10 +3187,10 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
             return std::move(res);
         }
     };
-    return _segment_manager->allocate_when_possible(serializer_func_entry_writer(id, size, std::move(func), sync), timeout);
+    return _segment_manager->allocate_when_possible(serializer_func_entry_writer(id, size, std::move(func), sync), timeout, gid.value_or(segment_manager::default_group_id));
 }
 
-future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
+future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout, opt_group_id gid)
 {
     SCYLLA_ASSERT(id == cew.schema()->id());
 
@@ -3202,11 +3230,11 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
             return std::move(res);
         }
     };
-    return _segment_manager->allocate_when_possible(cl_entry_writer(cew), timeout);
+    return _segment_manager->allocate_when_possible(cl_entry_writer(cew), timeout, gid.value_or(segment_manager::default_group_id));
 }
 
 future<utils::chunked_vector<db::rp_handle>>
-db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
+db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout, opt_group_id gid) {
     class cl_entries_writer final : public entry_writer {
         utils::chunked_vector<commitlog_entry_writer> _writers;
         std::unordered_set<table_schema_version> _known;
@@ -3270,7 +3298,7 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_w
     };
 
     force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
-    return _segment_manager->allocate_when_possible(cl_entries_writer(sync, std::move(entry_writers)), timeout);
+    return _segment_manager->allocate_when_possible(cl_entries_writer(sync, std::move(entry_writers)), timeout, gid.value_or(segment_manager::default_group_id));
 }
 
 db::commitlog::commitlog(config cfg)
@@ -3292,6 +3320,18 @@ future<db::commitlog> db::commitlog::create_commitlog(config cfg) {
     commitlog c(std::move(cfg));
     co_await c._segment_manager->init();
     co_return c;
+}
+
+db::commitlog::group_id db::commitlog::create_group() {
+    return _segment_manager->create_group();
+}
+
+/**
+ * Removes a commitlog group. All entries written must have been
+ * released (discard_completed_segments)
+ */
+future<> db::commitlog::remove_group(group_id gid) {
+    return _segment_manager->remove_group(gid);
 }
 
 db::commitlog::flush_handler_anchor::flush_handler_anchor(flush_handler_anchor&& f)
@@ -3329,16 +3369,16 @@ void db::commitlog::remove_flush_handler(flush_handler_id id) {
     _segment_manager->remove_flush_handler(id);
 }
 
-void db::commitlog::discard_completed_segments(const cf_id_type& id, const rp_set& used) {
-    _segment_manager->discard_completed_segments(id, used);
+void db::commitlog::discard_completed_segments(const cf_id_type& id, const rp_set& used, opt_group_id gid) {
+    _segment_manager->discard_completed_segments(id, used, std::move(gid));
 }
 
-void db::commitlog::discard_completed_segments(const cf_id_type& id) {
-    _segment_manager->discard_completed_segments(id);
+void db::commitlog::discard_completed_segments(const cf_id_type& id, opt_group_id gid) {
+    _segment_manager->discard_completed_segments(id, std::move(gid));
 }
 
-future<> db::commitlog::force_new_active_segment() noexcept {
-    co_await _segment_manager->force_new_active_segment();
+future<> db::commitlog::force_new_active_segment(opt_group_id gid) noexcept {
+    co_await _segment_manager->force_new_active_segment(std::move(gid));
 }
 
 future<> db::commitlog::wait_for_pending_deletes() noexcept {
@@ -3950,8 +3990,8 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
     co_await w.read_file();
 }
 
-std::vector<sstring> db::commitlog::get_active_segment_names() const {
-    return _segment_manager->get_active_names();
+std::vector<sstring> db::commitlog::get_active_segment_names(opt_group_id gid) const {
+    return _segment_manager->get_active_names(std::move(gid));
 }
 
 uint64_t db::commitlog::disk_limit() const {
@@ -4005,12 +4045,12 @@ uint64_t db::commitlog::get_num_segments_destroyed() const {
     return _segment_manager->totals.segments_destroyed;
 }
 
-uint64_t db::commitlog::get_num_dirty_segments() const {
-    return _segment_manager->get_num_dirty_segments();
+uint64_t db::commitlog::get_num_dirty_segments(opt_group_id gid) const {
+    return _segment_manager->get_num_dirty_segments(gid);
 }
 
-uint64_t db::commitlog::get_num_active_segments() const {
-    return _segment_manager->get_num_active_segments();
+uint64_t db::commitlog::get_num_active_segments(opt_group_id gid) const {
+    return _segment_manager->get_num_active_segments(gid);
 }
 
 uint64_t db::commitlog::get_num_blocked_on_new_segment() const {
