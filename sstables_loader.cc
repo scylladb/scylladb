@@ -40,6 +40,7 @@
 #include "sstables/object_storage_client.hh"
 #include "utils/rjson.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "table_helper.hh"
 #include "replica/schema_describe_helper.hh"
 #include "replica/tablets.hh"
 
@@ -1148,7 +1149,7 @@ static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace,
         // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
         // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
         co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
-                                             toc_name, prefix, locator::host_id::create_null_id(), tablet_id, db::snapshot_state::remote, 
+                                             toc_name, prefix, locator::host_id::create_null_id(), tablet_id, db::snapshot_state::remote,
                                              repaired_at, data_size, index_size, cl);
     }
 
@@ -1221,6 +1222,21 @@ protected:
     virtual future<> run() override {
         auto& loader = _loader.local();
         co_await loader._ss.local().restore_tablets(_tid, _snap_name);
+
+        // Get table schema from snapshot_cql_tables table and
+        // call alter_table_with_tablet_hints to restore the table schema to its original form
+        auto current_schema = loader.local_db().find_schema(_tid);
+
+        db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
+        auto original_snapshot_table_entry = co_await sth.get_snapshot_tables(_snap_name, current_schema->ks_name(), current_schema->cf_name());
+        SCYLLA_ASSERT(original_snapshot_table_entry.size() == 1);
+
+        auto original_schema = table_helper::parse_new_cf_statement(loader._qp, original_snapshot_table_entry[0].table_schema);
+
+        auto min_tablet_count = original_schema->tablet_options().min_tablet_count;
+        auto max_tablet_count = original_schema->tablet_options().max_tablet_count;
+        // Use the current_schema object and set the tablet hints on it that we got from the original schema
+        co_await loader._ss.local().alter_table_with_tablet_hints(_tid, min_tablet_count, max_tablet_count, false);
     }
 };
 
