@@ -750,55 +750,54 @@ int collection_index_l(lua_State* l) {
     auto& ct = pop_userdata_as_ref<collection_with_type>(l, 1);
     auto type = ct.type;
     lua_pop(l, 2);
-    return collection_mutation_view(ct.data).with_deserialized(*type, [l, field, type] (const collection_mutation_view_description& mv) {
-        if (strcmp(field, "tombstone") == 0) {
-            if (!mv.tomb) {
-                return 0;
-            }
-            push_userdata<tombstone>(l, mv.tomb);
-            return 1;
-        } else if (strcmp(field, "type") == 0) {
-            lua_pushliteral(l, "collection");
-            return 1;
-        } else if (strcmp(field, "values") == 0) {
-            const auto size = mv.cells.size();
-            std::function<void(size_t, bytes_view)> push_key;
-            std::function<void(size_t, atomic_cell_view)> push_value;
-            if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
-                push_key = [l, t = t->name_comparator()] (size_t, bytes_view k) {
-                    push_userdata<data_value>(l, t->deserialize(k));
-                };
-                push_value = [l, t = t->value_comparator()] (size_t, atomic_cell_view v) {
-                    push_userdata<atomic_cell_with_type>(l, v, t);
-                };
-            } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
-                push_key = [l] (size_t, bytes_view) { lua_pushliteral(l, ""); };
-                push_value = [l, t] (size_t i, atomic_cell_view v) {
-                    push_userdata<atomic_cell_with_type>(l, v, t->type(i));
-                };
-            } else {
-                return 0;
-            }
-
-            lua_createtable(l, size, 0);
-
-            for (size_t i = 0; i < size; ++i) {
-                const auto& e = mv.cells[i];
-
-                lua_createtable(l, 0, 3);
-
-                push_key(i, e.first);
-                lua_setfield(l, -2, "key");
-
-                push_value(i, e.second);
-                lua_setfield(l, -2, "value");
-
-                lua_seti(l, -2, i + 1); // Lua arrays start from 1
-            }
-            return 1;
+    collection_mutation_view cmv = collection_mutation_view(ct.data);
+    if (strcmp(field, "tombstone") == 0) {
+        auto tomb = cmv.tomb();
+        if (!tomb) {
+            return 0;
         }
-        return 0;
-    });
+        push_userdata<tombstone>(l, tomb);
+        return 1;
+    } else if (strcmp(field, "type") == 0) {
+        lua_pushliteral(l, "collection");
+        return 1;
+    } else if (strcmp(field, "values") == 0) {
+        const auto size = cmv.size();
+        std::function<void(size_t, managed_bytes_view)> push_key;
+        std::function<void(size_t, atomic_cell_view)> push_value;
+        if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
+            push_key = [l, t = t->name_comparator()] (size_t, managed_bytes_view k) {
+                k.with_linearized([&](bytes_view bv) {
+                    push_userdata<data_value>(l, t->deserialize(bv));
+                });
+            };
+            push_value = [l, t = t->value_comparator()] (size_t, atomic_cell_view v) {
+                push_userdata<atomic_cell_with_type>(l, v, t);
+            };
+        } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
+            push_key = [l] (size_t, managed_bytes_view) { lua_pushliteral(l, ""); };
+            push_value = [l, t] (size_t i, atomic_cell_view v) {
+                push_userdata<atomic_cell_with_type>(l, v, t->type(i));
+            };
+        } else {
+            return 0;
+        }
+
+        lua_createtable(l, size, 0);
+
+        size_t i = 0;
+        for (const auto& e : cmv) {
+            lua_createtable(l, 0, 3);
+            push_key(i, e.first);
+            lua_setfield(l, -2, "key");
+            push_value(i, e.second);
+            lua_setfield(l, -2, "value");
+            lua_seti(l, -2, i + 1); // Lua arrays start from 1
+            ++i;
+        }
+        return 1;
+    }
+    return 0;
 }
 
 int push_cells(lua_State* l, const row& cells, column_kind kind) {

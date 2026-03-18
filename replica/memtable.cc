@@ -61,17 +61,16 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
         if (col.is_atomic()) {
             update(item.as_atomic_cell(col));
         } else {
-            item.as_collection_mutation().with_deserialized(*col.type, [&] (collection_mutation_view_description mview) {
+            auto cmv = item.as_collection_mutation();
             // Note: when some of the collection cells are dead and some are live
             // we need to encode a "live" deletion_time for the living ones.
             // It is not strictly required to update encoding_stats for the latter case
             // since { <int64_t>.min(), <int32_t>.max() } will not affect the encoding_stats
             // minimum values.  (See #4035)
-            update(mview.tomb);
-            for (auto& entry : mview.cells) {
+            update(cmv.tomb());
+            for (auto& entry : cmv) {
                 update(entry.second);
             }
-            });
         }
     });
 }
