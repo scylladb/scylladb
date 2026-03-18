@@ -88,7 +88,7 @@ namespace cdc {
 template <typename V>
 concept CollectionVisitor = requires(V v,
         const tombstone& t,
-        bytes_view key,
+        managed_bytes_view key,
         const atomic_cell_view& cell) {
 
     { v.collection_tombstone(t) }         -> std::same_as<void>;
@@ -99,8 +99,8 @@ concept CollectionVisitor = requires(V v,
 
 struct dummy_collection_visitor {
     void collection_tombstone(const tombstone&) {}
-    void live_collection_cell(bytes_view, const atomic_cell_view&) {}
-    void dead_collection_cell(bytes_view, const atomic_cell_view&) {}
+    void live_collection_cell(managed_bytes_view, const atomic_cell_view&) {}
+    void dead_collection_cell(managed_bytes_view, const atomic_cell_view&) {}
     bool finished() { return false; }
 };
 
@@ -170,31 +170,31 @@ void inspect_row_cells(const schema& s, column_kind ckind, const row& r, V& v) {
             return stop_iteration(v.finished());
         }
 
-        acoc.as_collection_mutation().with_deserialized(*cdef.type, [&v, &cdef] (collection_mutation_view_description view) {
-            v.collection_column(cdef, [&view] (CollectionVisitor auto& cv) {
+        auto cmv = acoc.as_collection_mutation();
+        auto tomb = cmv.tomb();
+        v.collection_column(cdef, [&cmv, &tomb] (CollectionVisitor auto& cv) {
+            if (cv.finished()) {
+                return;
+            }
+
+            if (tomb) {
+                cv.collection_tombstone(tomb);
                 if (cv.finished()) {
                     return;
                 }
+            }
 
-                if (view.tomb) {
-                    cv.collection_tombstone(view.tomb);
-                    if (cv.finished()) {
-                        return;
-                    }
+            for (auto& [key, cell] : cmv) {
+                if (cell.is_live()) {
+                    cv.live_collection_cell(key, cell);
+                } else {
+                    cv.dead_collection_cell(key, cell);
                 }
 
-                for (auto& [key, cell]: view.cells) {
-                    if (cell.is_live()) {
-                        cv.live_collection_cell(key, cell);
-                    } else {
-                        cv.dead_collection_cell(key, cell);
-                    }
-
-                    if (cv.finished()) {
-                        return;
-                    }
+                if (cv.finished()) {
+                    return;
                 }
-            });
+            }
         });
 
         return stop_iteration(v.finished());
