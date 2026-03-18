@@ -57,12 +57,11 @@ To enable shared dictionaries:
     internode_compression_enable_advanced: true
     rpc_dict_training_when: when_leader
 
-.. warning:: Enabling shared dictionary training might leak unencrypted data to disk.
+.. note::
 
-             Trained dictionaries contain randomly chosen samples of data transferred between
-             nodes. The data samples are persisted in the Raft log, which is not encrypted.
-             As a result, some data from otherwise encrypted tables might be stored on disk
-             unencrypted.
+   Some dictionary training data may be encrypted using storage-level encryption
+   (if enabled) instead of database-level encryption, meaning protection is
+   applied at the storage layer rather than within the database itself.
 
 
 Reference
