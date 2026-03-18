@@ -162,19 +162,18 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
             BOOST_REQUIRE(r->size() == 1);
             auto cell = r->find_cell(set_col.id);
             BOOST_REQUIRE(cell);
-            return cell->as_collection_mutation().with_deserialized(*set_col.type, [&] (collection_mutation_view_description m) {
-                return m.materialize(*set_col.type);
-            });
+            return cell->as_collection_mutation();
         };
 
         auto sstp = verify_mutation(env, env.make_sstable(s), mt, "key1", [&] (mutation_opt& mutation) {
-            auto verify_set = [&tomb] (const collection_mutation_description& m) {
-                BOOST_REQUIRE(bool(m.tomb) == true);
-                BOOST_REQUIRE(m.tomb == tomb);
-                BOOST_REQUIRE(m.cells.size() == 3);
-                BOOST_REQUIRE(m.cells[0].first == to_bytes("1"));
-                BOOST_REQUIRE(m.cells[1].first == to_bytes("2"));
-                BOOST_REQUIRE(m.cells[2].first == to_bytes("3"));
+            auto verify_set = [&tomb] (const collection_mutation_view m) {
+                BOOST_REQUIRE(bool(m.tomb()) == true);
+                BOOST_REQUIRE(m.tomb() == tomb);
+                BOOST_REQUIRE(m.size() == 3);
+                auto it = m.begin();
+                BOOST_REQUIRE(to_bytes(it->first) == to_bytes("1")); ++it;
+                BOOST_REQUIRE(to_bytes(it->first) == to_bytes("2")); ++it;
+                BOOST_REQUIRE(to_bytes(it->first) == to_bytes("3"));
             };
 
             auto& mp = mutation->partition();
@@ -183,9 +182,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
             BOOST_REQUIRE(scol);
 
             // The static set
-            scol->as_collection_mutation().with_deserialized(*static_set_col.type, [&] (collection_mutation_view_description mut) {
-                verify_set(mut.materialize(*static_set_col.type));
-            });
+            verify_set(scol->as_collection_mutation());
 
             // The clustered set
             auto m = verifier(mutation);
@@ -194,9 +191,9 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 
         verify_mutation(env, sstp, "key2", [&] (mutation_opt& mutation) {
             auto m = verifier(mutation);
-            BOOST_REQUIRE(!m.tomb);
-            BOOST_REQUIRE(m.cells.size() == 1);
-            BOOST_REQUIRE(m.cells[0].first == to_bytes("4"));
+            BOOST_REQUIRE(!m.tomb());
+            BOOST_REQUIRE(m.size() == 1);
+            BOOST_REQUIRE(to_bytes(m.begin()->first) == to_bytes("4"));
         }).get();
     });
 }

@@ -302,10 +302,14 @@ match_collection(const row& row, const schema& s, bytes col, const tombstone& t)
 
     BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
     auto c = row.cell_at(cdef->id).as_collection_mutation();
-    return c.with_deserialized(*cdef->type, [&] (collection_mutation_view_description mut) {
-        BOOST_REQUIRE(mut.tomb == t);
-        return mut.materialize(*cdef->type);
-    });
+    BOOST_REQUIRE(c.tomb() == t);
+    collection_mutation_description result;
+    result.tomb = c.tomb();
+    auto& vtype = *dynamic_cast<const collection_type_impl&>(*cdef->type).value_comparator();
+    for (auto [key, cell] : c) {
+        result.cells.emplace_back(to_bytes(key), atomic_cell(vtype, cell));
+    }
+    return result;
 }
 
 template <status Status>

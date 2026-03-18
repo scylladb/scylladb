@@ -2899,58 +2899,52 @@ SEASTAR_TEST_CASE(test_uncompressed_collections_read) {
                                                          const atomic_cell_or_collection* cell) {
             BOOST_REQUIRE(def.is_multi_cell());
             int idx = 0;
-            cell->as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
-                for (auto&& entry : m_view.cells) {
-                    auto cmp = compare_unsigned(int32_type->decompose(int32_t(val[idx])), entry.first);
-                    if (cmp != 0) {
-                        BOOST_FAIL(format("Expected row with column {} having value {}, but it has value {}",
-                                          def.id,
-                                          int32_type->decompose(int32_t(val[idx])),
-                                          to_hex(entry.first)));
-                    }
-                    ++idx;
+            for (const auto& entry : cell->as_collection_mutation()) {
+                auto cmp = compare_unsigned(int32_type->decompose(int32_t(val[idx])), to_bytes(entry.first));
+                if (cmp != 0) {
+                    BOOST_FAIL(format("Expected row with column {} having value {}, but it has value {}",
+                                      def.id,
+                                      int32_type->decompose(int32_t(val[idx])),
+                                      to_hex(to_bytes(entry.first))));
                 }
-            });
+                ++idx;
+            }
         });
 
         assertions.push_back([val = std::move(list_val)] (const column_definition& def,
                                                           const atomic_cell_or_collection* cell) {
             BOOST_REQUIRE(def.is_multi_cell());
             int idx = 0;
-            cell->as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
-                for (auto&& entry : m_view.cells) {
-                    auto cmp = compare_unsigned(utf8_type->decompose(val[idx]), entry.second.value().linearize());
-                    if (cmp != 0) {
-                        BOOST_FAIL(format("Expected row with column {} having value {}, but it has value {}",
-                                          def.id,
-                                          utf8_type->decompose(val[idx]),
-                                          entry.second.value().linearize()));
-                    }
-                    ++idx;
+            for (const auto& entry : cell->as_collection_mutation()) {
+                auto cmp = compare_unsigned(utf8_type->decompose(val[idx]), entry.second.value().linearize());
+                if (cmp != 0) {
+                    BOOST_FAIL(format("Expected row with column {} having value {}, but it has value {}",
+                                      def.id,
+                                      utf8_type->decompose(val[idx]),
+                                      entry.second.value().linearize()));
                 }
-            });
+                ++idx;
+            }
         });
 
         assertions.push_back([val = std::move(map_val)] (const column_definition& def,
                                                          const atomic_cell_or_collection* cell) {
             BOOST_REQUIRE(def.is_multi_cell());
             int idx = 0;
-            cell->as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
-                for (auto&& entry : m_view.cells) {
-                    auto cmp1 = compare_unsigned(int32_type->decompose(int32_t(val[idx].first)), entry.first);
-                    auto cmp2 = compare_unsigned(utf8_type->decompose(val[idx].second), entry.second.value().linearize());
-                    if (cmp1 != 0 || cmp2 != 0) {
-                        BOOST_FAIL(
-                            format("Expected row with column {} having value ({}, {}), but it has value ({}, {})",
-                                   def.id,
-                                   int32_type->decompose(int32_t(val[idx].first)),
-                                   utf8_type->decompose(val[idx].second),
-                                   to_hex(entry.first),
-                                   entry.second.value().linearize()));
-                    }
-                    ++idx;
+            for (const auto& entry : cell->as_collection_mutation()) {
+                auto cmp1 = compare_unsigned(int32_type->decompose(int32_t(val[idx].first)), to_bytes(entry.first));
+                auto cmp2 = compare_unsigned(utf8_type->decompose(val[idx].second), entry.second.value().linearize());
+                if (cmp1 != 0 || cmp2 != 0) {
+                    BOOST_FAIL(
+                        format("Expected row with column {} having value ({}, {}), but it has value ({}, {})",
+                               def.id,
+                               int32_type->decompose(int32_t(val[idx].first)),
+                               utf8_type->decompose(val[idx].second),
+                               to_hex(to_bytes(entry.first)),
+                               entry.second.value().linearize()));
                 }
-            });
+                ++idx;
+            }
         });
 
         return assertions;

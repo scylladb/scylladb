@@ -229,11 +229,9 @@ private:
         if (cdef.is_atomic()) {
             check_timestamp(cell.as_atomic_cell(cdef).timestamp());
         } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
-            cell.as_collection_mutation().with_deserialized(*cdef.type, [this] (collection_mutation_view_description mv) {
-                for (const auto& c: mv.cells) {
-                    check_timestamp(c.second.timestamp());
-                }
-            });
+            for (const auto& [key, c] : cell.as_collection_mutation()) {
+                check_timestamp(c.timestamp());
+            }
         } else {
             BOOST_FAIL(fmt::format("Failed to verify column bucket id: column {} is of unknown type {}", cdef.name_as_text(), cdef.type->name()));
         }

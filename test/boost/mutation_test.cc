@@ -396,9 +396,7 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
-        i->as_collection_mutation().with_deserialized(*my_map_type, [] (collection_mutation_view_description muts) {
-            BOOST_REQUIRE(muts.cells.size() == 3);
-        });
+        BOOST_REQUIRE(i->as_collection_mutation().size() == 3);
         // FIXME: more strict tests
     });
 }
@@ -437,9 +435,7 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
-        i->as_collection_mutation().with_deserialized(*my_set_type, [] (collection_mutation_view_description muts) {
-            BOOST_REQUIRE(muts.cells.size() == 3);
-        });
+        BOOST_REQUIRE(i->as_collection_mutation().size() == 3);
         // FIXME: more strict tests
     });
 }
@@ -479,9 +475,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         lazy_row& r = p.static_row();
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
-        i->as_collection_mutation().with_deserialized(*my_list_type, [] (collection_mutation_view_description muts) {
-            BOOST_REQUIRE(muts.cells.size() == 4);
-        });
+        BOOST_REQUIRE(i->as_collection_mutation().size() == 4);
         // FIXME: more strict tests
     });
 }
@@ -527,31 +521,25 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
     lazy_row& r = p.static_row();
     auto i = r.find_cell(column.id);
     BOOST_REQUIRE(i);
-    i->as_collection_mutation().with_deserialized(*ut, [&] (collection_mutation_view_description m) {
-        // one cell for each field that has been set. mut3 and mut1 should have been merged
-        BOOST_REQUIRE(m.cells.size() == 3);
-        BOOST_REQUIRE(std::all_of(m.cells.begin(), m.cells.end(), [] (const auto& c) { return c.second.is_live(); }));
+    auto cmv = i->as_collection_mutation();
+    // one cell for each field that has been set. mut3 and mut1 should have been merged
+    BOOST_REQUIRE(cmv.size() == 3);
+    BOOST_REQUIRE(std::all_of(cmv.begin(), cmv.end(), [] (const auto& c) { return c.second.is_live(); }));
 
-        auto cells_equal = [] (const auto& c1, const auto& c2) {
-            return c1.first == c2.first && c1.second.value().linearize() == c2.second.value().linearize();
-        };
+    auto cells_equal = [] (const auto& c1, const auto& c2) {
+        return c1.first == c2.first && c1.second.value().linearize() == c2.second.value().linearize();
+    };
 
-        auto cell_a = std::make_pair(serialize_field_index(0), make_collection_member(int32_type, 0));
-        BOOST_REQUIRE(cells_equal(m.cells[0], std::pair<bytes_view, atomic_cell_view>(cell_a.first, cell_a.second)));
+    auto cell_a = std::make_pair(serialize_field_index(0), make_collection_member(int32_type, 0));
+    auto cell_c = std::make_pair(serialize_field_index(2), make_collection_member(long_type, int64_t(3)));
+    auto cell_d = std::make_pair(serialize_field_index(3), make_collection_member(utf8_type, "text"));
 
-        auto cell_c = std::make_pair(serialize_field_index(2), make_collection_member(long_type, int64_t(3)));
-        BOOST_REQUIRE(cells_equal(m.cells[1], std::pair<bytes_view, atomic_cell_view>(cell_c.first, cell_c.second)));
-
-        auto cell_d = std::make_pair(serialize_field_index(3), make_collection_member(utf8_type, "text"));
-        BOOST_REQUIRE(cells_equal(m.cells[2], std::pair<bytes_view, atomic_cell_view>(cell_d.first, cell_d.second)));
-
-        auto mm = m.materialize(*ut);
-        BOOST_REQUIRE(mm.cells.size() == 3);
-
-        BOOST_REQUIRE(cells_equal(mm.cells[0], cell_a));
-        BOOST_REQUIRE(cells_equal(mm.cells[1], cell_c));
-        BOOST_REQUIRE(cells_equal(mm.cells[2], cell_d));
-    });
+    auto it = cmv.begin();
+    BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(cell_a.first, cell_a.second)));
+    ++it;
+    BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(cell_c.first, cell_c.second)));
+    ++it;
+    BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(cell_d.first, cell_d.second)));
 }
 
 // Verify that serializing and unserializing a large collection doesn't
@@ -1449,10 +1437,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(m2_1.find_row(*s, ckey2));
         BOOST_REQUIRE(m2_1.find_row(*s, ckey2)->find_cell(2));
         auto cmv = m2_1.find_row(*s, ckey2)->find_cell(2)->as_collection_mutation();
-        cmv.with_deserialized(*my_set_type, [] (collection_mutation_view_description cm) {
-            BOOST_REQUIRE(cm.cells.size() == 1);
-            BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(3));
-        });
+        BOOST_REQUIRE(cmv.size() == 1);
+        BOOST_REQUIRE(cmv.begin()->first == managed_bytes_view(int32_type->decompose(3)));
 
         mutation m12_1(s, partition_key::from_single_value(*s, "key1"));
         m12_1.apply(m1);
@@ -1467,10 +1453,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(!m1_2.find_row(*s, ckey2)->find_cell(0));
         BOOST_REQUIRE(!m1_2.find_row(*s, ckey2)->find_cell(1));
         cmv = m1_2.find_row(*s, ckey2)->find_cell(2)->as_collection_mutation();
-        cmv.with_deserialized(*my_set_type, [] (collection_mutation_view_description cm) {
-            BOOST_REQUIRE(cm.cells.size() == 1);
-            BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(2));
-        });
+        BOOST_REQUIRE(cmv.size() == 1);
+        BOOST_REQUIRE(cmv.begin()->first == managed_bytes_view(int32_type->decompose(2)));
 
         mutation m12_2(s, partition_key::from_single_value(*s, "key1"));
         m12_2.apply(m2);
@@ -2917,19 +2901,16 @@ private:
             }
             BOOST_REQUIRE_EQUAL(is_cell_purgeable(cell), OnlyPurged);
         } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
-            auto cell = cell_or_collection.as_collection_mutation();
-            cell.with_deserialized(*cdef.type, [&] (collection_mutation_view_description m_view) {
-                BOOST_REQUIRE(m_view.tomb.timestamp == api::missing_timestamp || m_view.tomb.timestamp > tomb.tomb().timestamp ||
-                        is_tombstone_purgeable(m_view.tomb) == OnlyPurged);
-                auto t = m_view.tomb;
-                t.apply(tomb.tomb());
-                for (const auto& [key, cell] : m_view.cells) {
-                    if constexpr (OnlyPurged) {
-                        BOOST_REQUIRE(!cell.is_covered_by(t, false));
-                    }
-                    BOOST_REQUIRE_EQUAL(is_cell_purgeable(cell), OnlyPurged);
+            auto m_view = cell_or_collection.as_collection_mutation();
+            auto t = m_view.tomb();
+            BOOST_REQUIRE(t.timestamp == api::missing_timestamp || t.timestamp > tomb.tomb().timestamp || is_tombstone_purgeable(t) == OnlyPurged);
+            t.apply(tomb.tomb());
+            for (const auto& [key, cell] : m_view) {
+                if constexpr (OnlyPurged) {
+                    BOOST_REQUIRE(!cell.is_covered_by(t, false));
                 }
-            });
+                BOOST_REQUIRE_EQUAL(is_cell_purgeable(cell), OnlyPurged);
+            }
         } else {
             throw std::runtime_error(fmt::format("Cannot check cell {} of unknown type {}", cdef.name_as_text(), cdef.type->name()));
         }
