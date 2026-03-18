@@ -241,11 +241,12 @@ SEASTAR_THREAD_TEST_CASE(test_freeze_unfreeze_with_large_collection_cells) {
 
         m.set_clustered_cell(ck, cdef_atomic, atomic_cell_or_collection(make_atomic_cell(atomic_cell::collection_member::no)));
 
-        collection_mutation_description cmd;
+        collection_mutation_writer w({});
         for (size_t i = 0; i < num_entries; ++i) {
-            cmd.cells.emplace_back(int32_type->decompose(int32_t(i)), make_atomic_cell(atomic_cell::collection_member::yes));
+            auto k = int32_type->decompose(int32_t(i));
+            w.push_back(bytes_view(k), make_atomic_cell(atomic_cell::collection_member::yes));
         }
-        m.set_clustered_cell(ck, cdef_collection, atomic_cell_or_collection(cmd.serialize()));
+        m.set_clustered_cell(ck, cdef_collection, atomic_cell_or_collection(std::move(w).finish()));
     }
 
     for (auto do_freeze_gently : {false, true}) {

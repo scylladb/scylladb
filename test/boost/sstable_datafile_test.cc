@@ -135,22 +135,22 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         mutation m(s, key);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
-        collection_mutation_description set_mut;
-        set_mut.tomb = tomb;
-        set_mut.cells.emplace_back(to_bytes("1"), make_atomic_cell(bytes_type, {}));
-        set_mut.cells.emplace_back(to_bytes("2"), make_atomic_cell(bytes_type, {}));
-        set_mut.cells.emplace_back(to_bytes("3"), make_atomic_cell(bytes_type, {}));
+        collection_mutation_writer set_mut_writer(tomb);
+        set_mut_writer.push_back(bytes_view(to_bytes("1")), make_atomic_cell(bytes_type, {}));
+        set_mut_writer.push_back(bytes_view(to_bytes("2")), make_atomic_cell(bytes_type, {}));
+        set_mut_writer.push_back(bytes_view(to_bytes("3")), make_atomic_cell(bytes_type, {}));
+        auto set_mut = std::move(set_mut_writer).finish();
 
-        m.set_clustered_cell(c_key, set_col, set_mut.serialize());
+        m.set_clustered_cell(c_key, set_col, set_mut);
 
-        m.set_static_cell(static_set_col, set_mut.serialize());
+        m.set_static_cell(static_set_col, set_mut);
 
         auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
         mutation m2(s, key2);
-        collection_mutation_description set_mut_single;
-        set_mut_single.cells.emplace_back(to_bytes("4"), make_atomic_cell(bytes_type, {}));
+        collection_mutation_writer set_mut_single_writer({});
+        set_mut_single_writer.push_back(bytes_view(to_bytes("4")), make_atomic_cell(bytes_type, {}));
 
-        m2.set_clustered_cell(c_key, set_col, set_mut_single.serialize());
+        m2.set_clustered_cell(c_key, set_col, std::move(set_mut_single_writer).finish());
 
         auto mt = make_memtable(s, {std::move(m), std::move(m2)}).get();
 

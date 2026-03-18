@@ -154,8 +154,8 @@ SEASTAR_TEST_CASE(complex_sst1_k1) {
         match_absent(row1.cells(), *s, "reg_map");
         match_absent(row1.cells(), *s, "reg_fset");
         auto reg_set = match_collection(row1.cells(), *s, "reg_set", tombstone(deletion_time{1431451390, 1431451390209521l}));
-        match_collection_element<status::live>(reg_set.cells[0], to_bytes("1"), bytes_opt{});
-        match_collection_element<status::live>(reg_set.cells[1], to_bytes("2"), bytes_opt{});
+        match_collection_element<status::live>(reg_set[0], to_bytes("1"), bytes_opt{});
+        match_collection_element<status::live>(reg_set[1], to_bytes("2"), bytes_opt{});
 
         auto row2 = clustered_row(mutation, *s, {"cl1.2", "cl2.2"});
         match_live_cell(row2.cells(), *s, "reg", data_value(to_bytes("v2")));
@@ -163,8 +163,8 @@ SEASTAR_TEST_CASE(complex_sst1_k1) {
         match_absent(row2.cells(), *s, "reg_map");
         match_absent(row2.cells(), *s, "reg_fset");
         auto reg_list = match_collection(row2.cells(), *s, "reg_list", tombstone(deletion_time{1431451390, 1431451390213471l}));
-        match_collection_element<status::live>(reg_list.cells[0], bytes_opt{}, to_bytes("2"));
-        match_collection_element<status::live>(reg_list.cells[1], bytes_opt{}, to_bytes("1"));
+        match_collection_element<status::live>(reg_list[0], bytes_opt{}, to_bytes("2"));
+        match_collection_element<status::live>(reg_list[1], bytes_opt{}, to_bytes("1"));
     });
 }
 
@@ -176,10 +176,10 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
         auto& sr = mutation.partition().static_row().get();
         match_live_cell(sr, *s, "static_obj", data_value(to_bytes("static_value")));
         auto static_set = match_collection(sr, *s, "static_collection", tombstone(deletion_time{1431451390, 1431451390225257l}));
-        match_collection_element<status::live>(static_set.cells[0], to_bytes("1"), bytes_opt{});
-        match_collection_element<status::live>(static_set.cells[1], to_bytes("2"), bytes_opt{});
-        match_collection_element<status::live>(static_set.cells[2], to_bytes("3"), bytes_opt{});
-        match_collection_element<status::live>(static_set.cells[3], to_bytes("4"), bytes_opt{});
+        match_collection_element<status::live>(static_set[0], to_bytes("1"), bytes_opt{});
+        match_collection_element<status::live>(static_set[1], to_bytes("2"), bytes_opt{});
+        match_collection_element<status::live>(static_set[2], to_bytes("3"), bytes_opt{});
+        match_collection_element<status::live>(static_set[3], to_bytes("4"), bytes_opt{});
 
         auto row1 = clustered_row(mutation, *s, {"kcl1.1", "kcl2.1"});
         match_live_cell(row1.cells(), *s, "reg", data_value(to_bytes("v3")));
@@ -187,8 +187,8 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
         match_absent(row1.cells(), *s, "reg_set");
         match_absent(row1.cells(), *s, "reg_fset");
         auto reg_map = match_collection(row1.cells(), *s, "reg_map", tombstone(deletion_time{1431451390, 1431451390217436l}));
-        match_collection_element<status::live>(reg_map.cells[0], to_bytes("3"), to_bytes("1"));
-        match_collection_element<status::live>(reg_map.cells[1], to_bytes("4"), to_bytes("2"));
+        match_collection_element<status::live>(reg_map[0], to_bytes("3"), to_bytes("1"));
+        match_collection_element<status::live>(reg_map[1], to_bytes("4"), to_bytes("2"));
 
         auto row2 = clustered_row(mutation, *s, {"kcl1.2", "kcl2.2"});
         match_live_cell(row2.cells(), *s, "reg", data_value(to_bytes("v4")));
@@ -212,7 +212,7 @@ SEASTAR_TEST_CASE(complex_sst2_k1) {
 
         auto row = clustered_row(mutation, *s, {"cl1.2", "cl2.2"});
         auto reg_list = match_collection(row.cells(), *s, "reg_list", tombstone(deletion_time{0, api::missing_timestamp}));
-        match_collection_element<status::dead>(reg_list.cells[0], bytes_opt{}, bytes_opt{});
+        match_collection_element<status::dead>(reg_list[0], bytes_opt{}, bytes_opt{});
     });
 }
 
@@ -224,7 +224,7 @@ SEASTAR_TEST_CASE(complex_sst2_k2) {
         auto& sr = mutation.partition().static_row().get();
         match_dead_cell(sr, *s, "static_obj");
         auto static_set = match_collection(sr, *s, "static_collection", tombstone(deletion_time{0, api::missing_timestamp}));
-        match_collection_element<status::dead>(static_set.cells[0], to_bytes("1"), bytes_opt{});
+        match_collection_element<status::dead>(static_set[0], to_bytes("1"), bytes_opt{});
 
         auto row1 = clustered_row(mutation, *s, {"kcl1.1", "kcl2.1"});
         // map dead
@@ -270,10 +270,10 @@ SEASTAR_TEST_CASE(complex_sst3_k1) {
         auto row = clustered_row(mutation, *s, {"cl1.2", "cl2.2"});
 
         auto reg_set = match_collection(row.cells(), *s, "reg_set", tombstone(deletion_time{0, api::missing_timestamp}));
-        match_collection_element<status::live>(reg_set.cells[0], to_bytes("6"), bytes_opt{});
+        match_collection_element<status::live>(reg_set[0], to_bytes("6"), bytes_opt{});
 
         auto reg_list = match_collection(row.cells(), *s, "reg_list", tombstone(deletion_time{0, api::missing_timestamp}));
-        match_collection_element<status::live>(reg_list.cells[0], bytes_opt{}, to_bytes("6"));
+        match_collection_element<status::live>(reg_list[0], bytes_opt{}, to_bytes("6"));
 
         match_absent(row.cells(), *s, "static_obj");
         match_absent(row.cells(), *s, "reg_map");
@@ -292,7 +292,7 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
 
         auto row = clustered_row(mutation, *s, {"kcl1.1", "kcl2.1"});
         auto reg_map = match_collection(row.cells(), *s, "reg_map", tombstone(deletion_time{0, api::missing_timestamp}));
-        match_collection_element<status::live>(reg_map.cells[0], to_bytes("6"), to_bytes("1"));
+        match_collection_element<status::live>(reg_map[0], to_bytes("6"), to_bytes("1"));
         match_absent(row.cells(), *s, "reg_list");
         match_absent(row.cells(), *s, "reg_set");
         match_absent(row.cells(), *s, "reg");
@@ -464,7 +464,7 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
             } else if (key_equal("127.0.0.3")) {
                 auto& row = mut->partition().clustered_row(*s, clustering_key::make_empty());
                 auto tokens = match_collection(row.cells(), *s, "tokens", tombstone(deletion_time{0x55E5F2D5, 0x051EB3FC99715Dl }));
-                match_collection_element<status::live>(tokens.cells[0], to_bytes("-8180144272884242102"), bytes_opt{});
+                match_collection_element<status::live>(tokens[0], to_bytes("-8180144272884242102"), bytes_opt{});
             } else {
                 BOOST_REQUIRE(key_equal("127.0.0.2"));
                 auto t = mut->partition().partition_tombstone();

@@ -3609,12 +3609,12 @@ SEASTAR_TEST_CASE(test_write_collection_wide_update) {
     mutation mut{s, key};
 
     mut.partition().apply_insert(*s, clustering_key::make_empty(), write_timestamp);
-    collection_mutation_description set_values;
-    set_values.tomb = tombstone {write_timestamp - 1, tp};
-    set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
-    set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
-
-    mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_values.serialize());
+    {
+        collection_mutation_writer w(tombstone{write_timestamp - 1, tp});
+        w.push_back(bytes_view(int32_type->decompose(2)), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+        w.push_back(bytes_view(int32_type->decompose(3)), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+        mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), std::move(w).finish());
+    }
 
     write_mut_and_validate(env, s, table_name, mut);
   });
@@ -3635,11 +3635,11 @@ SEASTAR_TEST_CASE(test_write_collection_incremental_update) {
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
 
-    collection_mutation_description set_values;
-    set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
-
-    mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_values.serialize());
-
+    {
+        collection_mutation_writer w({});
+        w.push_back(bytes_view(int32_type->decompose(2)), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+        mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), std::move(w).finish());
+    }
     write_mut_and_validate(env, s, table_name, mut);
   });
 }
@@ -4927,11 +4927,12 @@ SEASTAR_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "rc1", data_value{2}, write_timestamp);
 
-    collection_mutation_description set_values;
-    set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
-    set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
-    set_values.cells.emplace_back(int32_type->decompose(4), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
-    mut.set_clustered_cell(ckey, *s->get_column_definition("rc4"), set_values.serialize());
+    {
+        collection_mutation_writer w(tombstone{write_timestamp - 1, write_time_point});
+        w.push_back(bytes_view(int32_type->decompose(3)), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+        w.push_back(bytes_view(int32_type->decompose(4)), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+        mut.set_clustered_cell(ckey, *s->get_column_definition("rc4"), std::move(w).finish());
+    }
 
     mut.set_cell(ckey, "rc5", data_value{5}, write_timestamp);
 
@@ -4966,11 +4967,12 @@ SEASTAR_TEST_CASE(test_write_static_interleaved_atomic_and_collection_columns) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_static_cell("st1", data_value{2}, write_timestamp);
 
-    collection_mutation_description set_values;
-    set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
-    set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
-    set_values.cells.emplace_back(int32_type->decompose(4), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
-    mut.set_static_cell(*s->get_column_definition("st4"), set_values.serialize());
+    {
+        collection_mutation_writer w(tombstone{write_timestamp - 1, write_time_point});
+        w.push_back(bytes_view(int32_type->decompose(3)), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+        w.push_back(bytes_view(int32_type->decompose(4)), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+        mut.set_static_cell(*s->get_column_definition("st4"), std::move(w).finish());
+    }
 
     mut.set_static_cell("st5", data_value{5}, write_timestamp);
 
@@ -5785,10 +5787,10 @@ SEASTAR_TEST_CASE(test_legacy_udt_in_collection_table) {
 
     // m[0] = {a: 0, b: 0}
     {
-        collection_mutation_description desc;
-        desc.cells.emplace_back(int32_type->decompose(0),
+        collection_mutation_writer w({});
+        w.push_back(bytes_view(int32_type->decompose(0)),
             atomic_cell::make_live(*ut, write_timestamp, ut->decompose(ut_val), atomic_cell::collection_member::yes));
-        mut.set_clustered_cell(ckey, *m_cdef, desc.serialize());
+        mut.set_clustered_cell(ckey, *m_cdef, std::move(w).finish());
     }
 
     // fm = {0: {a: 0, b: 0}}
@@ -5796,10 +5798,10 @@ SEASTAR_TEST_CASE(test_legacy_udt_in_collection_table) {
 
     // mm[0] = {0: {a: 0, b: 0}},
     {
-        collection_mutation_description desc;
-        desc.cells.emplace_back(int32_type->decompose(0),
+        collection_mutation_writer w({});
+        w.push_back(bytes_view(int32_type->decompose(0)),
             atomic_cell::make_live(*fm_type, write_timestamp, fm_type->decompose(fm_val), atomic_cell::collection_member::yes));
-        mut.set_clustered_cell(ckey, *mm_cdef, desc.serialize());
+        mut.set_clustered_cell(ckey, *mm_cdef, std::move(w).finish());
     }
 
     // fmm = {0: {0: {a: 0, b: 0}}},
@@ -5807,10 +5809,10 @@ SEASTAR_TEST_CASE(test_legacy_udt_in_collection_table) {
 
     // s = s + {{a: 0, b: 0}},
     {
-        collection_mutation_description desc;
-        desc.cells.emplace_back(ut->decompose(ut_val),
+        collection_mutation_writer w({});
+        w.push_back(bytes_view(ut->decompose(ut_val)),
             atomic_cell::make_live(*bytes_type, write_timestamp, bytes{}, atomic_cell::collection_member::yes));
-        mut.set_clustered_cell(ckey, *s_cdef, desc.serialize());
+        mut.set_clustered_cell(ckey, *s_cdef, std::move(w).finish());
     }
 
     // fs = {{a: 0, b: 0}},
@@ -5818,10 +5820,10 @@ SEASTAR_TEST_CASE(test_legacy_udt_in_collection_table) {
 
     // l[scylla_timeuuid_list_index(7fb27e80-7b12-11ea-9fad-f4d108a9e4a3)] = {a: 0, b: 0},
     {
-        collection_mutation_description desc;
-        desc.cells.emplace_back(timeuuid_type->decompose(utils::UUID("7fb27e80-7b12-11ea-9fad-f4d108a9e4a3")),
+        collection_mutation_writer w({});
+        w.push_back(bytes_view(timeuuid_type->decompose(utils::UUID("7fb27e80-7b12-11ea-9fad-f4d108a9e4a3"))),
             atomic_cell::make_live(*ut, write_timestamp, ut->decompose(ut_val), atomic_cell::collection_member::yes));
-        mut.set_clustered_cell(ckey, *l_cdef, desc.serialize());
+        mut.set_clustered_cell(ckey, *l_cdef, std::move(w).finish());
     }
 
     // fl = [{a: 0, b: 0}]
