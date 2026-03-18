@@ -46,10 +46,10 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
         return;
     }
 
-  cell.with_deserialized(old_type, [&] (collection_mutation_view_description old_view) {
     collection_mutation_description new_view;
-    if (old_view.tomb.timestamp > new_def.dropped_at()) {
-        new_view.tomb = old_view.tomb;
+    auto tomb = cell.tomb();
+    if (tomb.timestamp > new_def.dropped_at()) {
+        new_view.tomb = tomb;
     }
 
     visit(old_type, make_visitor(
@@ -60,10 +60,10 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
             auto& new_value_type = *new_ctype.value_comparator();
             auto& old_value_type = *old_ctype.value_comparator();
 
-            for (auto& c : old_view.cells) {
-                if (c.second.timestamp() > new_def.dropped_at()) {
-                    new_view.cells.emplace_back(c.first, upgrade_cell(
-                            new_value_type, old_value_type, c.second, atomic_cell::collection_member::yes));
+            for (auto& [key, c] : cell) {
+                if (c.timestamp() > new_def.dropped_at()) {
+                    new_view.cells.emplace_back(to_bytes(key), upgrade_cell(
+                            new_value_type, old_value_type, c, atomic_cell::collection_member::yes));
                 }
             }
         },
@@ -71,13 +71,13 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
             SCYLLA_ASSERT(new_def.type->is_user_type()); // because is_compatible
             auto& new_utype = static_cast<const user_type_impl&>(*new_def.type);
 
-            for (auto& c : old_view.cells) {
-                if (c.second.timestamp() > new_def.dropped_at()) {
-                    auto idx = deserialize_field_index(c.first);
+            for (auto& [key, c] : cell) {
+                if (c.timestamp() > new_def.dropped_at()) {
+                    auto idx = deserialize_field_index(key);
                     SCYLLA_ASSERT(idx < new_utype.size() && idx < old_utype.size());
 
-                    new_view.cells.emplace_back(c.first, upgrade_cell(
-                            *new_utype.type(idx), *old_utype.type(idx), c.second, atomic_cell::collection_member::yes));
+                    new_view.cells.emplace_back(to_bytes(key), upgrade_cell(
+                            *new_utype.type(idx), *old_utype.type(idx), c, atomic_cell::collection_member::yes));
                 }
             }
         },
@@ -89,7 +89,6 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
     if (new_view.tomb || !new_view.cells.empty()) {
         dst.apply(new_def, new_view.serialize());
     }
-  });
 }
 
 converting_mutation_partition_applier::converting_mutation_partition_applier(

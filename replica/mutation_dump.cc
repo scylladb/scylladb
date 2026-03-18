@@ -302,9 +302,7 @@ private:
                     writer.writer().Null();
                 }
             } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
-                cell.as_collection_mutation().with_deserialized(*cdef.type, [&] (collection_mutation_view_description mv) {
-                    writer.write_collection_value(mv, cdef.type);
-                });
+                writer.write_collection_value(cell.as_collection_mutation(), cdef.type);
             } else {
                 writer.writer().Null();
             }
