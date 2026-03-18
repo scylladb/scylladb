@@ -384,7 +384,7 @@ public:
     future<> query_internal(
             const sstring& query_string,
             db::consistency_level cl,
-            const data_value_list& values,
+            const query_data_params& values,
             int32_t page_size,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
             std::optional<service::query_state> qs = std::nullopt);
@@ -418,13 +418,13 @@ public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
-            const data_value_list&,
+            const query_data_params&,
             cache_internal cache);
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
             service::query_state& query_state,
-            const data_value_list& values,
+            const query_data_params& values,
             cache_internal cache);
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
@@ -440,7 +440,7 @@ public:
         return execute_internal(query_string, cl, query_state, {}, cache);
     }
     future<::shared_ptr<untyped_result_set>>
-    execute_internal(const sstring& query_string, const data_value_list& values, cache_internal cache) {
+    execute_internal(const sstring& query_string, const query_data_params& values, cache_internal cache) {
         return execute_internal(query_string, db::consistency_level::ONE, values, cache);
     }
     future<::shared_ptr<untyped_result_set>>
@@ -463,7 +463,7 @@ public:
             statements::prepared_statement::checked_weak_ptr p,
             db::consistency_level,
             service::query_state& query_state,
-            const data_value_list& values = { });
+            const query_data_params& values = { });
 
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute_with_params(
             service::query_state& query_state,
@@ -546,7 +546,7 @@ public:
 
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,
-            const std::vector<data_value_or_unset>& values,
+            const query_data_params& values,
             db::consistency_level,
             int32_t page_size = -1,
             service::node_local_only node_local_only = service::node_local_only::no) const;
@@ -581,7 +581,7 @@ private:
     internal_query_state create_paged_state(
             const sstring& query_string,
             db::consistency_level,
-            const data_value_list& values,
+            const query_data_params& values,
             int32_t page_size,
             std::optional<service::query_state> qs = std::nullopt);
 
