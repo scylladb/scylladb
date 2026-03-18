@@ -61,12 +61,14 @@ PYTEST_RUNNER_DIRECTORIES = [
     TEST_DIR / 'raft',
     TEST_DIR / 'unit',
     TEST_DIR / 'vector_search',
-    TEST_DIR / 'vector_search_validator',
     TEST_DIR / 'alternator',
     TEST_DIR / 'broadcast_tables',
     TEST_DIR / 'cql',
     TEST_DIR / 'cqlpy',
     TEST_DIR / 'rest_api',
+    TEST_DIR / 'nodetool',
+    TEST_DIR / 'scylla_gdb',
+    TEST_DIR / 'cluster',
 ]
 
 launch_time = time.monotonic()
@@ -251,6 +253,12 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--pytest-arg", action='store', type=str,
                         default=None, dest="pytest_arg",
                         help="Additional command line arguments to pass to pytest, for example ./test.py --pytest-arg=\"-v -x\"")
+    parser.add_argument('--exe-path', default=False,
+                     dest="exe_path", action="store",
+                     help="Path to the executable to run. Not working with `mode`")
+    parser.add_argument('--exe-url', default=False,
+                     dest="exe_url", action="store",
+                     help="URL to download the relocatable executable. Not working with `mode`")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--extra-scylla-cmdline-options', action="store", default="", type=str,
                                            help="Passing extra scylla cmdline options for all tests. Options should be space separated:"
@@ -322,16 +330,17 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
     files_to_run = []
-    for name in options.name:
-        file_name = name
-        if '::' in name:
-            file_name, _ = name.split('::', maxsplit=1)
-        if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
-            files_to_run.append(name)
-    if not options.name:
-        files_to_run = [str(directory) for directory in PYTEST_RUNNER_DIRECTORIES]
+    if options.name:
+        for name in options.name:
+            file_name = name
+            if '::' in name:
+                file_name, _ = name.split('::', maxsplit=1)
+            if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
+                files_to_run.append(name)
+    else:
+        files_to_run = [ TOP_SRC_DIR / 'test/']
     if not files_to_run:
-        logging.info(f'No boost found. Skipping pytest execution for boost tests.')
+        logging.info('Skipping pytest execution because no tests were selected for pytest.')
         return 0, []
     args = [
         '--color=yes',
@@ -341,12 +350,16 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.list_tests:
         args.extend(['--collect-only', '--quiet', '--no-header'])
     else:
+        threads = int(options.jobs)
+        # debug mode is very CPU and memory hungry, so we need to lower the number of threads to be able to finish tests
+        if 'debug' in options.modes:
+            threads = int(threads * 0.5)
         args.extend([
             "--log-level=DEBUG",  # Capture logs
             f'--junit-xml={junit_output_file}',
             "-rf",
             '--test-py-init',
-            f'-n{int(options.jobs)}',
+            f'-n{threads}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
@@ -447,7 +460,10 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     failed = 0
     deadline = time.perf_counter() + options.session_timeout
     try:
-        result = run_pytest(options)
+        # Run pytest in an executor to avoid blocking the event loop
+        # This allows resource monitoring to run concurrently
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, run_pytest, options)
         total_tests += result[0]
         failed_tests.extend(result[1])
         console.print_start_blurb()

@@ -71,14 +71,6 @@ std::optional<locator::endpoint_dc_rack> endpoint_state::get_dc_rack() const {
     return std::nullopt;
 }
 
-std::unordered_set<dht::token> endpoint_state::get_tokens() const {
-    std::unordered_set<dht::token> ret;
-    if (auto app_state = get_application_state_ptr(application_state::TOKENS)) {
-        ret = versioned_value::tokens_from_string(app_state->value());
-    }
-    return ret;
-}
-
 future<> i_endpoint_state_change_subscriber::on_application_state_change(inet_address endpoint,
         locator::host_id id,
         const gms::application_state_map& states, application_state app_state, permit_id pid,

@@ -20,6 +20,8 @@ namespace db {
 
 namespace service {
 
+extern logging::logger rtlogger;
+
 topology_mutation_builder::topology_mutation_builder(api::timestamp_type ts) :
         _s(db::system_keyspace::topology()),
         _m(_s, partition_key::from_singular(*_s, db::system_keyspace::TOPOLOGY)),
@@ -35,7 +37,9 @@ topology_node_mutation_builder::topology_node_mutation_builder(topology_mutation
 template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::apply_atomic(const char* cell, const data_value& value) {
     const column_definition* cdef = self().schema().get_column_definition(cell);
-    SCYLLA_ASSERT(cdef);
+    if (!cdef) {
+        on_internal_error(rtlogger, format("column {} not found in the topology table", cell));
+    }
     self().row().apply(*cdef, atomic_cell::make_live(*cdef->type, self().timestamp(), cdef->type->decompose(value), self().ttl()));
     return self();
 }
@@ -45,7 +49,9 @@ template<std::ranges::range C>
 requires std::convertible_to<std::ranges::range_value_t<C>, data_value>
 Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, collection_apply_mode apply_mode, const C& c) {
     const column_definition* cdef = self().schema().get_column_definition(cell);
-    SCYLLA_ASSERT(cdef);
+    if (!cdef) {
+        on_internal_error(rtlogger, format("column {} not found in the topology table", cell));
+    }
     auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
 
     std::set<bytes, serialized_compare> cset(vtype->as_less_comparator());
@@ -70,7 +76,9 @@ Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, co
 template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::del(const char* cell) {
     auto cdef = self().schema().get_column_definition(cell);
-    SCYLLA_ASSERT(cdef);
+    if (!cdef) {
+        on_internal_error(rtlogger, format("column {} not found in the topology table", cell));
+    }
     if (!cdef->type->is_multi_cell()) {
         self().row().apply(*cdef, atomic_cell::make_dead(self().timestamp(), gc_clock::now()));
     } else {
@@ -213,7 +221,7 @@ topology_mutation_builder& topology_mutation_builder::set_new_cdc_generation_dat
     return apply_atomic("new_cdc_generation_data_uuid", value);
 }
 
-topology_mutation_builder& topology_mutation_builder::set_committed_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
+topology_mutation_builder& topology_mutation_builder::set_committed_cdc_generations(const std::vector<cdc::generation_id>& values) {
     auto dv = values | std::views::transform([&] (const auto& v) {
         return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
     });
@@ -229,7 +237,7 @@ topology_mutation_builder& topology_mutation_builder::set_new_keyspace_rf_change
     return *this;
 }
 
-topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values) {
+topology_mutation_builder& topology_mutation_builder::set_unpublished_cdc_generations(const std::vector<cdc::generation_id>& values) {
     auto dv = values | std::views::transform([&] (const auto& v) {
         return make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({v.ts, timeuuid_native_type{v.id}}));
     });
@@ -270,15 +278,15 @@ topology_mutation_builder& topology_mutation_builder::resume_rf_change_request(c
     }
 }
 
-topology_mutation_builder& topology_mutation_builder::set_upgrade_state(topology::upgrade_state_type value) {
-    return apply_atomic("upgrade_state", ::format("{}", value));
+topology_mutation_builder& topology_mutation_builder::set_upgrade_state_done() {
+    return apply_atomic("upgrade_state", "done");
 }
 
 topology_mutation_builder& topology_mutation_builder::add_enabled_features(const std::set<sstring>& features) {
     return apply_set("enabled_features", collection_apply_mode::update, features | std::views::transform([] (const auto& f) { return sstring(f); }));
 }
 
-topology_mutation_builder& topology_mutation_builder::add_new_committed_cdc_generation(const cdc::generation_id_v2& value) {
+topology_mutation_builder& topology_mutation_builder::add_new_committed_cdc_generation(const cdc::generation_id& value) {
     auto dv = make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({value.ts, timeuuid_native_type{value.id}}));
     apply_set("committed_cdc_generations", collection_apply_mode::update, std::vector<data_value>{dv});
     apply_set("unpublished_cdc_generations", collection_apply_mode::update, std::vector<data_value>{std::move(dv)});
@@ -350,6 +358,16 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
 
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_truncate_table_data(const table_id& table_id) {
     apply_atomic("truncate_table_id", table_id.uuid());
+    return *this;
+}
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_snapshot_tables_data(const std::unordered_set<table_id>& table_ids, const sstring& tag, bool skip_flush) {
+    auto uuids = table_ids | std::views::transform(std::mem_fn(&table_id::uuid));
+    apply_atomic("snapshot_table_ids", 
+                 make_set_value(schema().get_column_definition("snapshot_table_ids")->type,
+                                set_type_impl::native_type(uuids.begin(), uuids.end())));
+    apply_atomic("snapshot_tag", tag);
+    apply_atomic("snapshot_skip_flush", skip_flush);
     return *this;
 }
 

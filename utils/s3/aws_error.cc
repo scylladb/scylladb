@@ -13,12 +13,14 @@
 #endif
 
 #include "aws_error.hh"
+#include "utils/exceptions.hh"
 #include <seastar/util/log.hh>
 #include <seastar/http/exception.hh>
-#include <gnutls/gnutls.h>
 #include <memory>
 
 namespace aws {
+
+using namespace utils::http;
 
 aws_error::aws_error(aws_error_type error_type, retryable is_retryable) : _type(error_type), _is_retryable(is_retryable) {
 }
@@ -130,64 +132,32 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
 }
 
 aws_error aws_error::from_system_error(const std::system_error& system_error) {
-    switch (system_error.code().value()) {
-    case static_cast<int>(std::errc::interrupted):
-    case static_cast<int>(std::errc::resource_unavailable_try_again):
-    case static_cast<int>(std::errc::timed_out):
-    case static_cast<int>(std::errc::connection_aborted):
-    case static_cast<int>(std::errc::connection_reset):
-    case static_cast<int>(std::errc::connection_refused):
-    case static_cast<int>(std::errc::broken_pipe):
-    case static_cast<int>(std::errc::network_unreachable):
-    case static_cast<int>(std::errc::host_unreachable):
-    case static_cast<int>(std::errc::network_down):
-    case static_cast<int>(std::errc::network_reset):
-    case static_cast<int>(std::errc::no_buffer_space):
-    // GNU TLS section. Since we pack gnutls error codes in std::system_error and rethrow it as std::nested_exception we have to handle them here.
-    case GNUTLS_E_PREMATURE_TERMINATION:
-    case GNUTLS_E_AGAIN:
-    case GNUTLS_E_INTERRUPTED:
-    case GNUTLS_E_PUSH_ERROR:
-    case GNUTLS_E_PULL_ERROR:
-    case GNUTLS_E_TIMEDOUT:
-    case GNUTLS_E_SESSION_EOF:
-    case GNUTLS_E_BAD_COOKIE: // as per RFC6347 section-4.2.1 client should retry
-        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::yes};
-    default:
-        return {aws_error_type::UNKNOWN,
-                format("Non-retryable system error occurred. Message: {}, code: {}", system_error.code().message(), system_error.code().value()),
-                retryable::no};
+    auto is_retryable = utils::http::from_system_error(system_error);
+    if (is_retryable == retryable::yes) {
+        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), is_retryable};
     }
+
+    return {aws_error_type::UNKNOWN,
+            format("Non-retryable system error occurred. Message: {}, code: {}", system_error.code().message(), system_error.code().value()),
+            is_retryable};
 }
 
 aws_error aws_error::from_exception_ptr(std::exception_ptr exception) {
-    std::string original_message;
-    while (exception) {
-        try {
-            std::rethrow_exception(exception);
-        } catch (const aws_exception& ex) {
-            return ex.error();
-        } catch (const seastar::httpd::unexpected_status_error& ex) {
-            return from_http_code(ex.status());
-        } catch (const std::system_error& ex) {
-            return from_system_error(ex);
-        } catch (const std::exception& ex) {
-            if (original_message.empty()) {
-                original_message = ex.what();
+    return dispatch_exception<aws_error>(
+        std::move(exception),
+        [](std::exception_ptr eptr, std::string&& original_message) {
+            if (!original_message.empty()) {
+                return aws_error{aws_error_type::UNKNOWN, std::move(original_message), retryable::no};
             }
-
-            try {
-                std::rethrow_if_nested(ex);
-            } catch (...) {
-                exception = std::current_exception();
-                continue;
+            if (!eptr) {
+                return aws_error{aws_error_type::UNKNOWN, "No exception was provided to `aws_error::from_exception_ptr` function call", retryable::no};
             }
-            return aws_error{aws_error_type::UNKNOWN, std::move(original_message), retryable::no};
-        } catch (...) {
-            return aws_error{aws_error_type::UNKNOWN, seastar::format("No error message was provided, exception content: {}", std::current_exception()), retryable::no};
-        }
-    }
-    return aws_error{aws_error_type::UNKNOWN, "No exception was provided to `aws_error::from_exception_ptr` function call", retryable::no};
+            return aws_error{
+                aws_error_type::UNKNOWN, seastar::format("No error message was provided, exception content: {}", eptr), retryable::no};
+        },
+        [](const aws_exception& ex) { return ex.error(); },
+        [](const seastar::httpd::unexpected_status_error& ex) { return from_http_code(ex.status()); },
+        [](const std::system_error& ex) { return from_system_error(ex); });
 }
 
 const aws_errors& aws_error::get_errors() {

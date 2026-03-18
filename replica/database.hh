@@ -466,9 +466,7 @@ public:
         replica::cf_stats* cf_stats = nullptr;
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
-        seastar::scheduling_group compaction_scheduling_group;
         seastar::scheduling_group memory_compaction_scheduling_group;
-        seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
         bool enable_node_aggregated_table_metrics = true;
@@ -597,6 +595,7 @@ private:
 
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
+    sstables::shared_sstable make_sstable(sstables::sstable_state state, sstables::sstable_version_types version);
 
 public:
     void on_flush_timer();
@@ -973,6 +972,8 @@ public:
     [[gnu::always_inline]] bool uses_tablets() const;
     int64_t calculate_tablet_count() const;
 private:
+    void update_tombstone_gc_rf_one();
+
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
     future<> stop_compaction_groups(storage_group& sg);
     future<> flush_compaction_groups(storage_group& sg);
@@ -1129,9 +1130,7 @@ public:
         return _stats;
     }
 
-    // The tablet filter is used to not double account migrating tablets, so it's important that
-    // only one of pending or leaving replica is accounted based on current migration stage.
-    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const;
+    locator::combined_load_stats table_load_stats() const;
 
     const db::view::stats& get_view_stats() const {
         return _view_stats;
@@ -1358,6 +1357,8 @@ public:
     // If leave_unsealead is set, all the destination sstables will be left unsealed.
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed);
 
+    tombstone_gc_state get_tombstone_gc_state() const;
+
     friend class compaction_group;
     friend class compaction::compaction_task_impl;
 
@@ -1368,8 +1369,6 @@ public:
     future<compaction_reenablers_and_lock_holders> get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
             const service::frozen_topology_guard& guard, dht::token_range range);
     future<uint64_t> estimated_partitions_in_range(dht::token_range tr) const;
-private:
-    future<std::vector<compaction::compaction_group_view*>> get_compaction_group_views_for_repair(dht::token_range range);
 };
 
 lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);
@@ -1405,9 +1404,7 @@ public:
         replica::cf_stats* cf_stats = nullptr;
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
-        seastar::scheduling_group compaction_scheduling_group;
         seastar::scheduling_group memory_compaction_scheduling_group;
-        seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
         size_t view_update_memory_semaphore_limit;
@@ -1617,7 +1614,6 @@ private:
     dirty_memory_manager _dirty_memory_manager;
 
     database_config _dbcfg;
-    backlog_controller::scheduling_group _flush_sg;
     flush_controller _memtable_controller;
     drain_progress _drain_progress {};
 
@@ -1795,8 +1791,6 @@ public:
     replica::cf_stats* cf_stats() {
         return &_cf_stats;
     }
-
-    seastar::scheduling_group get_streaming_scheduling_group() const { return _dbcfg.streaming_scheduling_group; }
 
     seastar::scheduling_group get_gossip_scheduling_group() const { return _dbcfg.gossip_scheduling_group; }
 

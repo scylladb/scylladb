@@ -255,14 +255,20 @@ async def test_tablets_api_consistency(manager: ManagerClient, endpoint):
     await manager.disable_tablet_balancing()
     hosts = { await manager.get_host_id(s.server_id): s.ip_addr for s in servers }
     cql = manager.get_cql()
+    expected_tablet_count = 4
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH TABLETS = {{'min_tablet_count': 4}};")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH TABLETS = {{'min_tablet_count': {expected_tablet_count}, 'max_tablet_count': {expected_tablet_count}}};")
+
 
         def columnar(lst):
             return f"\n    {'\n    '.join([f'{x}' for x in lst])}"
 
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, "test")
         logger.info(f'system.tablets: {columnar(replicas)}')
+        # replicas contains a list of objects, one per tablet, so in the end len(replicas) returns the current number of tablets.
+        # with load balancing disabled and min_tablet_count being equal to max_tablet_count, 
+        # we expect the same number of tablets as the min/max_tablet_count value 
+        assert len(replicas) == expected_tablet_count, f"Expected {expected_tablet_count} tablets, got {len(replicas)}"
 
         if endpoint == 'describe_ring':
             ring_info = await manager.api.describe_ring(servers[0].ip_addr, ks, "test")
@@ -831,27 +837,6 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, wi
     async with new_test_keyspace(manager, f"WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}} AND TABLETS = {{'enabled': false}}") as ks:
         res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'").one()
         assert res is None
-
-@pytest.mark.asyncio
-async def test_tablets_and_gossip_topology_changes_are_incompatible(manager: ManagerClient):
-    cfg = {"tablets_mode_for_new_keyspaces": "enabled", "force_gossip_topology_changes": True}
-    with pytest.raises(Exception, match="Failed to add server"):
-        await manager.server_add(config=cfg)
-
-@pytest.mark.asyncio
-async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerClient):
-    cfg = {"tablets_mode_for_new_keyspaces": "disabled", "force_gossip_topology_changes": True}
-    await manager.server_add(config=cfg)
-    cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks_name:
-        res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks_name}'").one()
-        logger.info(res)
-
-    for enabled in ["false", "true"]:
-        expected = r"Error from server: code=2000 \[Syntax error in CQL query\] message=\"line 1:126 no viable alternative at input 'tablets'\""
-        with pytest.raises(SyntaxException, match=expected):
-            ks_name = unique_name()
-            await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets {{'enabled': {enabled}}};")
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')

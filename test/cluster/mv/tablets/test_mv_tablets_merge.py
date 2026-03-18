@@ -33,10 +33,10 @@ async def test_mv_merge_allowed(manager):
                     if current_tablet_count == expected_tablet_count:
                         return True
                 
-                assert tablet_count_is(table, 2)
+                assert await tablet_count_is(table, 2)
                 await cql.run_async(f"ALTER TABLE {table} WITH tablets = {{'min_tablet_count': 1}}")
                 await wait_for(lambda: tablet_count_is(table, 1), time.time() + 60)
 
-                assert tablet_count_is(mv, 2)
+                assert await tablet_count_is(mv, 2)
                 await cql.run_async(f"ALTER MATERIALIZED VIEW {mv} WITH tablets = {{'min_tablet_count': 1}}")
                 await wait_for(lambda: tablet_count_is(mv, 1), time.time() + 60)

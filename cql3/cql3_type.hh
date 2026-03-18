@@ -39,6 +39,9 @@ public:
     data_type get_type() const { return _type; }
     const sstring& to_string() const { return _type->cql3_type_name(); }
 
+    // This limitation is acquired from the maximum number of dimensions in OpenSearch.
+    static constexpr vector_dimension_t MAX_VECTOR_DIMENSION = 16000;
+
     // For UserTypes, we need to know the current keyspace to resolve the
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
     class raw {
@@ -64,7 +67,7 @@ public:
         static shared_ptr<raw> list(shared_ptr<raw> t);
         static shared_ptr<raw> set(shared_ptr<raw> t);
         static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
-        static shared_ptr<raw> vector(shared_ptr<raw> t, size_t dimension);
+        static shared_ptr<raw> vector(shared_ptr<raw> t, vector_dimension_t dimension);
         static shared_ptr<raw> frozen(shared_ptr<raw> t);
         friend sstring format_as(const raw& r) {
             return r.to_string();

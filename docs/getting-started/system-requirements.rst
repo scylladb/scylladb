@@ -8,7 +8,7 @@ Supported Platforms
 ===================
 ScyllaDB runs on 64-bit Linux. The x86_64 and AArch64 architectures are supported (AArch64 support includes AWS EC2 Graviton).
 
-See :doc:`OS Support by Platform and Version </getting-started/os-support>` for information about 
+See `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_ for information about 
 supported operating systems, distros, and versions.
 
 See :doc:`Cloud Instance Recommendations for AWS, GCP, and Azure </getting-started/cloud-instance-recommendations>` for information

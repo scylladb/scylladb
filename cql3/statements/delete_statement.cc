@@ -103,7 +103,7 @@ delete_statement::delete_statement(cf_name name,
     , _deletions(std::move(deletions))
     , _where_clause(std::move(where_clause))
 {
-    SCYLLA_ASSERT(!_attrs->time_to_live.has_value());
+    throwing_assert(!_attrs->time_to_live.has_value());
 }
 
 }

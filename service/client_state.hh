@@ -33,6 +33,24 @@ class database;
 
 namespace service {
 
+class client_state;
+struct forwarded_client_state {
+    sstring keyspace;
+    std::optional<sstring> username;
+    timeout_config timeout_config;
+    uint64_t protocol_extensions_mask;
+    gms::inet_address remote_address;
+    uint16_t remote_port;
+
+    forwarded_client_state(sstring keyspace,
+                           std::optional<sstring> username,
+                           ::timeout_config timeout_config,
+                           uint64_t protocol_extensions_mask,
+                           gms::inet_address remote_address,
+                           uint16_t remote_port);
+    forwarded_client_state(const client_state& cs);
+};
+
 /**
  * State related to a client connection.
  */
@@ -70,6 +88,7 @@ private:
             , _user(cs->_user)
             , _auth_state(cs->_auth_state)
             , _is_internal(cs->_is_internal)
+            , _bypass_auth_checks(cs->_bypass_auth_checks)
             , _remote_address(cs->_remote_address)
             , _auth_service(auth_service ? &auth_service->local() : nullptr)
             , _sl_controller(sl_controller ? &sl_controller->local() : nullptr)
@@ -112,6 +131,11 @@ private:
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
     bool _is_internal;
+
+    // bypass_auth_checks is used to skip authorization checks.
+    // This is used by the maintenance socket to allow privileged access without
+    // going through normal auth, while still treating queries as external.
+    bool _bypass_auth_checks;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     static thread_local api::timestamp_type _last_timestamp_micros;
@@ -186,8 +210,10 @@ public:
                  auth::service& auth_service,
                  qos::service_level_controller* sl_controller,
                  timeout_config timeout_config,
-                 const socket_address& remote_address = socket_address())
+                 const socket_address& remote_address = socket_address(),
+                 bool bypass_auth_checks = false)
             : _is_internal(false)
+            , _bypass_auth_checks(bypass_auth_checks)
             , _remote_address(remote_address)
             , _auth_service(&auth_service)
             , _sl_controller(sl_controller)
@@ -224,6 +250,7 @@ public:
     client_state(internal_tag, const timeout_config& config)
             : _keyspace("system")
             , _is_internal(true)
+            , _bypass_auth_checks(true)
             , _default_timeout_config(config)
             , _timeout_config(config)
     {}
@@ -232,8 +259,26 @@ public:
         : _user(auth::authenticated_user(username))
         , _auth_state(auth_state::READY)
         , _is_internal(true)
+        , _bypass_auth_checks(true)
         , _auth_service(&auth_service)
         , _sl_controller(&sl_controller)
+    {}
+
+    client_state(auth::service& auth_service,
+                 qos::service_level_controller* sl_controller,
+                 forwarded_client_state&& forwarded_state)
+            : _keyspace(std::move(forwarded_state.keyspace))
+            , _user(forwarded_state.username ? auth::authenticated_user(*forwarded_state.username) : auth::authenticated_user{})
+            , _auth_state(auth_state::READY)
+            , _is_internal(false)
+            , _bypass_auth_checks(false)
+            , _remote_address(socket_address(forwarded_state.remote_address, forwarded_state.remote_port))
+            , _auth_service(&auth_service)
+            , _sl_controller(sl_controller)
+            , _default_timeout_config(forwarded_state.timeout_config)
+            , _timeout_config(std::move(forwarded_state.timeout_config))
+            , _enabled_protocol_extensions(cql_transport::cql_protocol_extension_enum_set::from_mask(
+                    forwarded_state.protocol_extensions_mask))
     {}
 
     client_state(const client_state&) = delete;
@@ -359,8 +404,6 @@ public:
     future<> has_keyspace_access(const sstring&, auth::permission) const;
     future<> has_column_family_access(const sstring&, const sstring&, auth::permission,
                                       auth::command_desc::type = auth::command_desc::type::OTHER, std::optional<bool> is_vector_indexed = std::nullopt) const;
-    future<> has_schema_access(const schema& s, auth::permission p) const;
-    future<> has_schema_access(const sstring&, const sstring&, auth::permission p) const;
 
     future<> has_functions_access(auth::permission p) const;
     future<> has_functions_access(const sstring& ks, auth::permission p) const;
@@ -374,7 +417,7 @@ private:
 public:
     template<typename Cmd = auth::command_desc> future<bool> check_has_permission(Cmd) const;
     template<typename Cmd = auth::command_desc> future<> ensure_has_permission(Cmd) const;
-    future<> maybe_update_per_service_level_params();
+    void maybe_update_per_service_level_params();
     void update_per_service_level_params(qos::service_level_options& slo);
 
     /**
@@ -384,6 +427,10 @@ public:
 
     void validate_login() const;
     void ensure_not_anonymous() const; // unauthorized_exception on error
+
+    /// Returns true if the user has superuser privileges.
+    /// Internal clients are always considered superusers.
+    future<bool> has_superuser() const;
 
 #if 0
     public void ensureIsSuper(String message) throws UnauthorizedException
@@ -440,6 +487,10 @@ public:
 
     bool is_protocol_extension_set(cql_transport::cql_protocol_extension ext) const {
         return _enabled_protocol_extensions.contains(ext);
+    }
+
+    cql_transport::cql_protocol_extension_enum_set get_protocol_extensions() const {
+        return _enabled_protocol_extensions;
     }
 
     void set_protocol_extensions(cql_transport::cql_protocol_extension_enum_set exts) {

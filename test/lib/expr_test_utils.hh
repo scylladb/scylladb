@@ -116,7 +116,7 @@ collection_constructor make_map_constructor(const std::vector<std::pair<expressi
                                             data_type key_type,
                                             data_type element_type);
 tuple_constructor make_tuple_constructor(std::vector<expression> elements, std::vector<data_type> element_types);
-collection_constructor make_vector_constructor(std::vector<expression> elements, data_type elements_type, size_t dimension);
+collection_constructor make_vector_constructor(std::vector<expression> elements, data_type elements_type, vector_dimension_t dimension);
 usertype_constructor make_usertype_constructor(std::vector<std::pair<std::string_view, constant>> field_values);
 
 ::lw_shared_ptr<column_specification> make_receiver(data_type receiver_type, sstring name = "receiver_name");

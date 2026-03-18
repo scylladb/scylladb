@@ -30,7 +30,9 @@ ALL_MODES = {
     "sanitize": "Sanitize",
     "coverage": "Coverage",
 }
+
 DEBUG_MODES = {"debug", "sanitize"}
+MODES_TIMEOUT_FACTOR = {"release": 1, "sanitize": 3, "debug": 3, "dev": 2, "coverage": 1}
 
 HOST_ID = os.environ.get("SCYLLA_TEST_HOST_ID")
 if HOST_ID is None:

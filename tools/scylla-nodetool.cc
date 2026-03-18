@@ -690,6 +690,9 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
                         // will repair also their colocated tables.
                         continue;
                     }
+                    if (tables.empty() && std::string(ex.what()).contains("Can't find a column family")) {
+                        continue;
+                    }
                     log("ERROR: Repair request for keyspace={} table={} failed with {}", keyspace, table, ex);
                     exit_code = EXIT_FAILURE;
                 }
@@ -1890,6 +1893,9 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     if (not sstables_as_params and not sstables_as_file_list) {
       throw std::invalid_argument("missing both argument: sstables and --sstables-file-list (at least one is required)");
     }
+    if (vm.contains("primary-replica-only")) {
+        params["primary_replica_only"] = "true";
+    }
     if (vm.contains("scope")) {
         if (vm.contains("primary-replica-only") && vm["scope"].as<sstring>() == "node") {
             throw std::invalid_argument("Cannot set both primary_replica_only and scope=node");
@@ -2386,6 +2392,49 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
             kn_msg,
             params["tag"],
             params["sf"]);
+    fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
+}
+
+void cluster_snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::unordered_map<sstring, sstring> params;
+
+    sstring kn_msg;
+
+    std::vector<sstring> kt_list;
+
+    if (vm.contains("keyspaces")) {
+        kt_list = vm["keyspaces"].as<std::vector<sstring>>();
+    }
+    if (kt_list.size() != 1 && vm.contains("table")) {
+        throw std::invalid_argument("when specifying the table for the snapshot, you must specify one and only one keyspace");
+    }
+
+    if (kt_list.empty()) {
+        kn_msg = "all keyspaces";
+    } else {
+        params["keyspace"] = fmt::to_string(fmt::join(kt_list.begin(), kt_list.end(), ","));
+        if (vm.contains("table")) {
+            params["table"] = vm["table"].as<sstring>();
+        }
+    }
+
+    if (vm.contains("tag")) {
+        params["tag"] = vm["tag"].as<sstring>();
+    } else {
+        params["tag"] = fmt::to_string(db_clock::now().time_since_epoch().count());
+    }
+
+    client.post("/storage_service/tablets/snapshots", params);
+
+    if (kn_msg.empty()) {
+        kn_msg = params["keyspace"];
+    }
+
+    fmt::print(std::cout, "Requested cluster snapshot(s) for [{}] with snapshot name [{}] and options {{skipFlush={}}}\n",
+            kn_msg,
+            params["tag"],
+            params["skip_flush"]
+        );
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
 }
 
@@ -3885,6 +3934,20 @@ For more information, see: {}
                         {
                         },
                     },
+                    {
+                        "snapshot",
+                        "Take a cluster-wide snapshot of specified keyspaces or a snapshot of the specified table(s)",
+fmt::format(R"(
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/snapshot.html")),
+                        {
+                            typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
+                            typed_option<sstring>("tag,t", "The name of the snapshot"),
+                        },
+                        {
+                            typed_option<std::vector<sstring>>("keyspaces", "The keyspaces to snapshot", -1),
+                        },
+                    },
                 }
             },
             {
@@ -3894,6 +3957,9 @@ For more information, see: {}
                     },
                     {
                         "cleanup", { cluster_cleanup_operation }
+                    },
+                    {
+                        "snapshot", { cluster_snapshot_operation }
                     }
                 }
             }

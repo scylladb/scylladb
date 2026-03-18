@@ -93,7 +93,7 @@ void do_with_parser_impl(const std::string_view& cql, dialect d, noncopyable_fun
     };
     ucontext_t uc;
     auto r = getcontext(&uc);
-    SCYLLA_ASSERT(r == 0);
+    throwing_assert(r == 0);
     if (stack.get() <= (char*)&uc && (char*)&uc < stack.get() + stack_size) {
         // We are already running on the large stack, so just call the
         // parser directly.

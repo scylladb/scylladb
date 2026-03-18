@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/seastar.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -23,7 +24,6 @@
 #include "replica/data_dictionary_impl.hh"
 #include "replica/compaction_group.hh"
 #include "replica/query_state.hh"
-#include "seastar/core/shard_id.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
@@ -257,7 +257,7 @@ table::make_mutation_reader(schema_ptr s,
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     if (cache_enabled() && !bypass_cache) {
-        if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, &_compaction_manager.get_tombstone_gc_state(),
+        if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, get_tombstone_gc_state(),
                     get_max_purgeable_fn_for_cache_underlying_reader(), std::move(trace_state), fwd, fwd_mr)) {
             readers.emplace_back(std::move(*reader_opt));
         }
@@ -286,7 +286,7 @@ sstables::shared_sstable table::make_streaming_staging_sstable() {
     return newtab;
 }
 
-static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, const compaction::compaction_manager& cm,
+static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, tombstone_gc_state gc_state,
         gc_clock::time_point compaction_time, bool compaction_enabled, bool compaction_can_gc) {
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_enabled", fmt::to_string(compaction_enabled));
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_can_gc", fmt::to_string(compaction_can_gc));
@@ -297,7 +297,7 @@ static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, c
             std::move(underlying),
             compaction_time,
             compaction_can_gc ? can_always_purge : can_never_purge,
-            cm.get_tombstone_gc_state(),
+            gc_state,
             streamed_mutation::forwarding::no);
 }
 
@@ -320,7 +320,7 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
 
     return maybe_compact_for_streaming(
             make_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no),
-            get_compaction_manager(),
+            get_tombstone_gc_state(),
             compaction_time,
             _config.enable_compacting_data_for_streaming_and_repair(),
             _config.enable_tombstone_gc_for_streaming_and_repair());
@@ -339,7 +339,7 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
         std::move(trace_state), fwd, fwd_mr, sstables::default_sstable_predicate(), sstables::integrity_check::yes));
     return maybe_compact_for_streaming(
             make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr),
-            get_compaction_manager(),
+            get_tombstone_gc_state(),
             compaction_time,
             _config.enable_compacting_data_for_streaming_and_repair(),
             _config.enable_tombstone_gc_for_streaming_and_repair());
@@ -354,7 +354,7 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
     return maybe_compact_for_streaming(
             sstables->make_range_sstable_reader(std::move(schema), std::move(permit), range, slice,
                     std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), sstables::integrity_check::yes),
-            get_compaction_manager(),
+            get_tombstone_gc_state(),
             compaction_time,
             _config.enable_compacting_data_for_streaming_and_repair(),
             _config.enable_tombstone_gc_for_streaming_and_repair());
@@ -484,7 +484,12 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
 
 sstables::shared_sstable table::make_sstable(sstables::sstable_state state) {
     auto& sstm = get_sstables_manager();
-    return sstm.make_sstable(_schema, *_storage_opts, calculate_generation_for_new_table(), state, sstm.get_preferred_sstable_version(), sstables::sstable::format_types::big);
+    return make_sstable(state, sstm.get_preferred_sstable_version());
+}
+
+sstables::shared_sstable table::make_sstable(sstables::sstable_state state, sstables::sstable_version_types version) {
+    auto& sstm = get_sstables_manager();
+    return sstm.make_sstable(_schema, *_storage_opts, calculate_generation_for_new_table(), state, version, sstables::sstable::format_types::big);
 }
 
 sstables::shared_sstable table::make_sstable() {
@@ -734,7 +739,7 @@ public:
         return *_single_sg;
     }
 
-    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)>) const override {
+    locator::combined_load_stats table_load_stats() const override {
         return locator::combined_load_stats{
             .table_ls = locator::table_load_stats{
                             .size_in_bytes = _single_sg->live_disk_space_used(),
@@ -750,6 +755,7 @@ public:
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::vector<sstables::shared_sstable>{sst});
     }
     dht::token_range get_token_range_after_split(const dht::token&) const noexcept override { return dht::token_range(); }
+    future<> wait_for_background_tablet_resize_work() override { return make_ready_future<>(); }
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
         return get_compaction_group().make_sstable_set();
@@ -768,6 +774,13 @@ class tablet_storage_group_manager final : public storage_group_manager {
     locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
     future<> _merge_completion_fiber;
     condition_variable _merge_completion_event;
+    // Ensures that processes such as incremental repair will wait for pending work from
+    // merge fiber before proceeding. This guarantees stability on the compaction groups.
+    // NOTE: it's important that we don't await on the barrier with any compaction group
+    // gate held, since merge fiber will stop groups that in turn await on gate,
+    // potentially causing an ABBA deadlock.
+    utils::phased_barrier _merge_fiber_barrier;
+    std::optional<utils::phased_barrier::operation> _pending_merge_fiber_work;
     // Holds compaction reenabler which disables compaction temporarily during tablet merge
     std::vector<compaction::compaction_reenabler> _compaction_reenablers_for_merging;
 private:
@@ -856,6 +869,7 @@ public:
         , _my_host_id(erm.get_token_metadata().get_my_id())
         , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map(schema()->id()))
         , _merge_completion_fiber(merge_completion_fiber())
+        , _merge_fiber_barrier(format("[table {}.{}] merge_fiber_barrier", _t.schema()->ks_name(), _t.schema()->cf_name()))
     {
         storage_group_map ret;
 
@@ -900,13 +914,17 @@ public:
         return storage_group_for_id(storage_group_of(token).first);
     }
 
-    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const override;
+    locator::combined_load_stats table_load_stats() const override;
     bool all_storage_groups_split() override;
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
     future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override;
     dht::token_range get_token_range_after_split(const dht::token& token) const noexcept override {
         return tablet_map().get_token_range_after_split(token);
+    }
+    future<> wait_for_background_tablet_resize_work() override {
+        co_await _merge_fiber_barrier.advance_and_await();
+        co_return;
     }
 
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
@@ -1250,9 +1268,23 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
     auto [first_id, first_range_side] = storage_group_of(sst->get_first_decorated_key().token());
     auto [last_id, last_range_side] = storage_group_of(sst->get_last_decorated_key().token());
 
+    auto sstable_desc = [] (const sstables::shared_sstable& sst) {
+        auto& identifier_opt = sst->sstable_identifier();
+        auto& originating_host_id_opt = sst->get_stats_metadata().originating_host_id;
+        return format("{} (originated from {} with id {} on host {})",
+                      sst->get_filename(), sst->get_origin(),
+                      identifier_opt ? identifier_opt->to_sstring() : "unknown",
+                      originating_host_id_opt ? originating_host_id_opt->to_sstring() : "unknown");
+    };
+    auto tablet_desc = [this] (locator::tablet_id id) {
+        return format("{} (replica set: {})", id, tablet_map().get_tablet_info(id).replicas);
+    };
+
     if (first_id != last_id) {
         on_internal_error(tlogger, format("Unable to load SSTable {} that belongs to tablets {} and {}",
-                                          sst->get_filename(), first_id, last_id));
+                                          sstable_desc(sst),
+                                          tablet_desc(locator::tablet_id(first_id)),
+                                          tablet_desc(locator::tablet_id(last_id))));
     }
 
     try {
@@ -1264,7 +1296,10 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
 
         return *sg.select_compaction_group(first_range_side);
     } catch (std::out_of_range& e) {
-        on_internal_error(tlogger, format("Unable to load SSTable {} : {}", sst->get_filename(), e.what()));
+        on_internal_error(tlogger, format("Unable to load SSTable {} of tablet {}, due to {}",
+                                          sstable_desc(sst),
+                                          tablet_desc(locator::tablet_id(first_id)),
+                                          e.what()));
     }
 }
 
@@ -1430,6 +1465,7 @@ table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
                                         sstables::offstrategy offstrategy) {
     std::vector<sstables::shared_sstable> ret, ssts;
     std::exception_ptr ex;
+    log_level failure_log_level = log_level::error;
     try {
         bool trigger_compaction = offstrategy == sstables::offstrategy::no;
         auto& cg = compaction_group_for_sstable(new_sst);
@@ -1451,6 +1487,9 @@ table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
             co_await do_add_sstable_and_update_cache(cg, sst, offstrategy, trigger_compaction);
             sst = nullptr;
         }
+    } catch (compaction::compaction_stopped_exception&) {
+        failure_log_level = log_level::warn;
+        ex = std::current_exception();
     } catch (...) {
         ex = std::current_exception();
     }
@@ -1458,13 +1497,13 @@ table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
     if (ex) {
         // on failed split, input sstable is unlinked here.
         if (new_sst) {
-            tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", new_sst->get_filename(), new_sst->get_origin(), ex);
+            tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", new_sst->get_filename(), new_sst->get_origin(), ex);
             co_await new_sst->unlink();
         }
         // on failure after successful split, sstables not attached yet will be unlinked
-        co_await coroutine::parallel_for_each(ssts, [&ex] (sstables::shared_sstable sst) -> future<> {
+        co_await coroutine::parallel_for_each(ssts, [&ex, failure_log_level] (sstables::shared_sstable sst) -> future<> {
             if (sst) {
-                tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
+                tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
                 co_await sst->unlink();
             }
         });
@@ -1478,6 +1517,7 @@ table::add_new_sstables_and_update_cache(std::vector<sstables::shared_sstable> n
                                          std::function<future<>(sstables::shared_sstable)> on_add) {
     std::exception_ptr ex;
     std::vector<sstables::shared_sstable> ret;
+    log_level failure_log_level = log_level::error;
 
     // We rely on add_new_sstable_and_update_cache() to unlink the sstable fed into it,
     // so the exception handling below will only have to unlink sstables not processed yet.
@@ -1487,14 +1527,17 @@ table::add_new_sstables_and_update_cache(std::vector<sstables::shared_sstable> n
             std::ranges::move(ssts, std::back_inserter(ret));
 
         }
+    } catch (compaction::compaction_stopped_exception&) {
+        failure_log_level = log_level::warn;
+        ex = std::current_exception();
     } catch (...) {
         ex = std::current_exception();
     }
 
     if (ex) {
-        co_await coroutine::parallel_for_each(new_ssts, [&ex] (sstables::shared_sstable sst) -> future<> {
+        co_await coroutine::parallel_for_each(new_ssts, [&ex, failure_log_level] (sstables::shared_sstable sst) -> future<> {
             if (sst) {
-                tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
+                tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
                 co_await sst->unlink();
             }
         });
@@ -1730,7 +1773,9 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
         utils::get_local_injector().inject("table_seal_active_memtable_try_flush", []() {
             throw std::system_error(ENOSPC, std::system_category(), "Injected error");
         });
-        co_return co_await this->try_flush_memtable_to_sstable(cg, old, std::move(write_permit));
+        co_await this->try_flush_memtable_to_sstable(cg, old, std::move(write_permit));
+        // signal a memtable was sealed
+        utils::get_local_injector().receive_message("table_seal_post_flush_waiters");
     });
 
     undo_stats.reset();
@@ -1746,100 +1791,97 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
 }
 
 future<>
-table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
+table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit_) {
     co_await utils::get_local_injector().inject("flush_memtable_to_sstable_wait", utils::wait_for_message(60s));
 
-    auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit)), &cg] () mutable -> future<> {
-        // Note that due to our sharded architecture, it is possible that
-        // in the face of a value change some shards will backup sstables
-        // while others won't.
-        //
-        // This is, in theory, possible to mitigate through a rwlock.
-        // However, this doesn't differ from the situation where all tables
-        // are coming from a single shard and the toggle happens in the
-        // middle of them.
-        //
-        // The code as is guarantees that we'll never partially backup a
-        // single sstable, so that is enough of a guarantee.
+    auto permit = make_lw_shared(std::move(permit_));
+    co_await coroutine::switch_to(_config.memtable_scheduling_group);
+    // Note that due to our sharded architecture, it is possible that
+    // in the face of a value change some shards will backup sstables
+    // while others won't.
+    //
+    // This is, in theory, possible to mitigate through a rwlock.
+    // However, this doesn't differ from the situation where all tables
+    // are coming from a single shard and the toggle happens in the
+    // middle of them.
+    //
+    // The code as is guarantees that we'll never partially backup a
+    // single sstable, so that is enough of a guarantee.
 
-        auto newtabs = std::vector<sstables::shared_sstable>();
-        auto metadata = mutation_source_metadata{};
-        metadata.min_timestamp = old->get_min_timestamp();
-        metadata.max_timestamp = old->get_max_timestamp();
-        auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count(), _schema);
+    auto newtabs = std::vector<sstables::shared_sstable>();
+    auto metadata = mutation_source_metadata{};
+    metadata.min_timestamp = old->get_min_timestamp();
+    metadata.max_timestamp = old->get_max_timestamp();
+    auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count(), _schema);
 
-        if (!cg.async_gate().is_closed()) {
-            co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.view_for_unrepaired_data());
-        }
+    if (!cg.async_gate().is_closed()) {
+        co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.view_for_unrepaired_data());
+    }
 
-        auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
-          std::exception_ptr ex;
-          try {
-            sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
-            cfg.backup = incremental_backups_enabled();
+    auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
+      std::exception_ptr ex;
+      try {
+        sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
+        cfg.backup = incremental_backups_enabled();
 
-            auto newtab = make_sstable();
-            newtabs.push_back(newtab);
-            tlogger.debug("Flushing to {}", newtab->get_filename());
+        auto newtab = make_sstable();
+        newtabs.push_back(newtab);
+        tlogger.debug("Flushing to {}", newtab->get_filename());
 
-            auto monitor = database_sstable_write_monitor(permit, newtab, cg,
-                old->get_max_timestamp());
+        auto monitor = database_sstable_write_monitor(permit, newtab, cg,
+            old->get_max_timestamp());
 
-            co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg);
-          } catch (...) {
-            ex = std::current_exception();
-          }
-          co_await reader.close();
-          co_await coroutine::return_exception_ptr(std::move(ex));
+        co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg);
+      } catch (...) {
+        ex = std::current_exception();
+      }
+      co_await reader.close();
+      co_await coroutine::return_exception_ptr(std::move(ex));
+    });
+
+    auto f = consumer(old->make_flush_reader(
+        old->schema(),
+        compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {})));
+
+    // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
+    // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
+    // priority inversion.
+    co_await coroutine::switch_to(default_scheduling_group());
+    try {
+        co_await std::move(f);
+        co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
+            co_await newtab->open_data();
+            tlogger.debug("Flushing to {} done", newtab->get_filename());
         });
 
-        auto f = consumer(old->make_flush_reader(
-            old->schema(),
-            compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {})));
+        co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
+            return update_cache(cg, old, newtabs);
+        });
 
-        // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
-        // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
-        // priority inversion.
-        auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f), &cg] () mutable -> future<> {
-            try {
-                co_await std::move(f);
-                co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
-                    co_await newtab->open_data();
-                    tlogger.debug("Flushing to {} done", newtab->get_filename());
-                });
-
-                co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
-                    return update_cache(cg, old, newtabs);
-                });
-
-                co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
-                    const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
-                    if (this_table_name == handler.get("table_name")) {
-                        tlogger.info("error injection handler replica_post_flush_after_update_cache: suspending flush for table {}", this_table_name);
-                        handler.set("suspended", true);
-                        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-                        tlogger.info("error injection handler replica_post_flush_after_update_cache: resuming flush for table {}", this_table_name);
-                    }
-                });
-
-                cg.memtables()->erase(old);
-                tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
-                co_return;
-            } catch (const std::exception& e) {
-                for (auto& newtab : newtabs) {
-                    newtab->mark_for_deletion();
-                    tlogger.error("failed to write sstable {}: {}", newtab->get_filename(), e);
-                }
-                _config.cf_stats->failed_memtables_flushes_count++;
-                // If we failed this write we will try the write again and that will create a new flush reader
-                // that will decrease dirty memory again. So we need to reset the accounting.
-                old->revert_flushed_memory();
-                throw;
+        co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
+            const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
+            if (this_table_name == handler.get("table_name")) {
+                tlogger.info("error injection handler replica_post_flush_after_update_cache: suspending flush for table {}", this_table_name);
+                handler.set("suspended", true);
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                tlogger.info("error injection handler replica_post_flush_after_update_cache: resuming flush for table {}", this_table_name);
             }
-        };
-        co_return co_await with_scheduling_group(default_scheduling_group(), std::ref(post_flush));
-    };
-    co_return co_await with_scheduling_group(_config.memtable_scheduling_group, std::ref(try_flush));
+        });
+
+        cg.memtables()->erase(old);
+        tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
+        co_return;
+    } catch (const std::exception& e) {
+        for (auto& newtab : newtabs) {
+            newtab->mark_for_deletion();
+            tlogger.error("failed to write sstable {}: {}", newtab->get_filename(), e);
+        }
+        _config.cf_stats->failed_memtables_flushes_count++;
+        // If we failed this write we will try the write again and that will create a new flush reader
+        // that will decrease dirty memory again. So we need to reset the accounting.
+        old->revert_flushed_memory();
+        throw;
+    }
 }
 
 void
@@ -2100,53 +2142,63 @@ std::vector<sstables::shared_sstable> compaction_group::all_sstables() const {
 
 future<>
 compaction_group::update_repaired_at_for_merge() {
-    auto sstables = all_sstables();
     auto sstables_repaired_at = get_sstables_repaired_at();
-    co_await seastar::async([&] {
-        for (auto& sst : sstables) {
-            thread::maybe_yield();
-            auto& stats = sst->get_stats_metadata();
-            if (stats.repaired_at > sstables_repaired_at) {
-                auto neww = 0;
-                auto old = sst->update_repaired_at(neww);
-                tlogger.info("Finished repaired_at update for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
-                        sst->get_filename(), old, neww, sstables_repaired_at, group_id(), token_range());
-            } else {
-                auto old = stats.repaired_at;
-                tlogger.debug("Skipped repaired_at update for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
-                        sst->get_filename(), old, old, sstables_repaired_at, group_id(), token_range());
-            }
-        }
-    });
-}
+    constexpr int64_t new_repaired_at = 0;
 
-future<std::vector<compaction::compaction_group_view*>> table::get_compaction_group_views_for_repair(dht::token_range range) {
-    std::vector<compaction::compaction_group_view*> ret;
-    auto sgs = storage_groups_for_token_range(range);
-    for (auto& sg : sgs) {
-        co_await coroutine::maybe_yield();
-        sg->for_each_compaction_group([&ret] (const compaction_group_ptr& cg) {
-            ret.push_back(&cg->view_for_unrepaired_data());
-        });
+    auto modifier = [] (sstables::sstable& new_sst) {
+        new_sst.update_repaired_at(new_repaired_at);
+    };
+
+    std::unordered_map<compaction::compaction_group_view*, std::vector<sstables::shared_sstable>> sstables_by_view;
+    for (auto& sst : all_sstables()) {
+        auto& stats = sst->get_stats_metadata();
+        if (stats.repaired_at > sstables_repaired_at) {
+            auto& view = view_for_sstable(sst);
+            sstables_by_view[&view].push_back(sst);
+        } else {
+            tlogger.debug("Skipped repaired_at update for tablet merge sstable={} repaired_at={} sstables_repaired_at={} group_id={} range={}",
+                    sst->get_filename(), stats.repaired_at, sstables_repaired_at, group_id(), token_range());
+        }
     }
-    co_return ret;
+
+    auto& cm = get_compaction_manager();
+    for (auto& [view, ssts] : sstables_by_view) {
+        for (auto& sst : ssts) {
+            tlogger.info("Updating repaired_at for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
+                    sst->get_filename(), sst->get_stats_metadata().repaired_at, new_repaired_at, sstables_repaired_at, group_id(), token_range());
+        }
+        co_await cm.perform_component_rewrite(*view, tasks::task_info{}, std::move(ssts),
+                sstables::component_type::Statistics, modifier);
+    }
+    tlogger.info("Completed updating repaired_at={} for tablet merge in compaction group_id={} range={}",
+            new_repaired_at, group_id(), token_range());
 }
 
 future<compaction_reenablers_and_lock_holders> table::get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
         const service::frozen_topology_guard& guard, dht::token_range range) {
     auto ret = compaction_reenablers_and_lock_holders();
-    auto views = co_await get_compaction_group_views_for_repair(range);
-    for (auto view : views) {
-        auto cre = co_await db.get_compaction_manager().await_and_disable_compaction(*view);
+    // Waits for background tablet resize work like merge that might destroy compaction groups,
+    // providing stability. Essentially, serializes tablet merge completion handling with
+    // the start of incremental repair, from the replica side.
+    co_await _sg_manager->wait_for_background_tablet_resize_work();
+
+    for (auto sg : storage_groups_for_token_range(range)) {
+      // FIXME: indentation
+      auto cgs = sg->compaction_groups_immediate();
+      for (auto& cg : cgs) {
+        auto gate_holder = cg->async_gate().hold();
+        auto& view = cg->view_for_unrepaired_data();
+        auto cre = co_await db.get_compaction_manager().await_and_disable_compaction(view);
         tlogger.info("Disabled compaction for range={} session_id={} for incremental repair", range, guard);
         ret.cres.push_back(std::make_unique<compaction::compaction_reenabler>(std::move(cre)));
 
         // This lock prevents the unrepaired compaction started by major compaction to run in parallel with repair.
         // The unrepaired compaction started by minor compaction does not need to take the lock since it ignores
         // sstables being repaired, so it can run in parallel with repair.
-        auto lock_holder = co_await db.get_compaction_manager().get_incremental_repair_write_lock(*view, "row_level_repair");
+        auto lock_holder = co_await db.get_compaction_manager().get_incremental_repair_write_lock(view, "row_level_repair");
         tlogger.info("Got unrepaired compaction and repair lock for range={} session_id={} for incremental repair", range, guard);
         ret.lock_holders.push_back(std::move(lock_holder));
+      }
     }
     co_return ret;
 }
@@ -2722,6 +2774,9 @@ public:
     sstables::shared_sstable make_sstable(sstables::sstable_state state) const override {
         return _t.make_sstable(state);
     }
+    sstables::shared_sstable make_sstable(sstables::sstable_state state, sstables::sstable_version_types version) const override {
+        return _t.make_sstable(state, version);
+    }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin));
         return cfg;
@@ -2750,14 +2805,14 @@ public:
     bool tombstone_gc_enabled() const noexcept override {
         return _t.tombstone_gc_enabled()  &&  _cg.tombstone_gc_enabled();
     }
-    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
-        return _t.get_compaction_manager().get_tombstone_gc_state();
+    tombstone_gc_state get_tombstone_gc_state() const noexcept override {
+        return _t.get_tombstone_gc_state();
     }
     compaction::compaction_backlog_tracker& get_backlog_tracker() override {
         return _cg.get_backlog_tracker();
     }
     const std::string get_group_id() const noexcept override {
-        return fmt::format("{}", _cg.group_id());
+        return fmt::to_string(_cg.group_id());
     }
 
     seastar::condition_variable& get_staging_done_condition() noexcept override {
@@ -2909,6 +2964,8 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
 
     recalculate_tablet_count_stats();
     set_metrics();
+
+    update_tombstone_gc_rf_one();
 }
 
 void table::on_flush_timer() {
@@ -2922,17 +2979,110 @@ void table::on_flush_timer() {
     });
 }
 
-locator::combined_load_stats tablet_storage_group_manager::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const {
+// The following functions return true if we should return the tablet size of a tablet in
+// migration depending on its transition stage and whether it is a leaving or pending replica
+bool has_size_on_leaving (locator::tablet_transition_stage stage) {
+    switch (stage) {
+        case locator::tablet_transition_stage::allow_write_both_read_old:               [[fallthrough]];
+        case locator::tablet_transition_stage::write_both_read_old:                     [[fallthrough]];
+        case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:    [[fallthrough]];
+        case locator::tablet_transition_stage::streaming:                               [[fallthrough]];
+        case locator::tablet_transition_stage::write_both_read_new:                     [[fallthrough]];
+        case locator::tablet_transition_stage::use_new:                                 [[fallthrough]];
+        case locator::tablet_transition_stage::cleanup_target:                          [[fallthrough]];
+        case locator::tablet_transition_stage::revert_migration:                        [[fallthrough]];
+        case locator::tablet_transition_stage::rebuild_repair:                          [[fallthrough]];
+        case locator::tablet_transition_stage::repair:                                  [[fallthrough]];
+        case locator::tablet_transition_stage::end_repair:
+            return true;
+        case locator::tablet_transition_stage::cleanup:                                 [[fallthrough]];
+        case locator::tablet_transition_stage::end_migration:
+            return false;
+    }
+}
+
+bool has_size_on_pending (locator::tablet_transition_stage stage) {
+    switch (stage) {
+        case locator::tablet_transition_stage::allow_write_both_read_old:               [[fallthrough]];
+        case locator::tablet_transition_stage::write_both_read_old:                     [[fallthrough]];
+        case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:    [[fallthrough]];
+        case locator::tablet_transition_stage::streaming:                               [[fallthrough]];
+        case locator::tablet_transition_stage::cleanup_target:                          [[fallthrough]];
+        case locator::tablet_transition_stage::revert_migration:                        [[fallthrough]];
+        case locator::tablet_transition_stage::rebuild_repair:
+            return false;
+        case locator::tablet_transition_stage::write_both_read_new:                     [[fallthrough]];
+        case locator::tablet_transition_stage::use_new:                                 [[fallthrough]];
+        case locator::tablet_transition_stage::cleanup:                                 [[fallthrough]];
+        case locator::tablet_transition_stage::end_migration:                           [[fallthrough]];
+        case locator::tablet_transition_stage::repair:                                  [[fallthrough]];
+        case locator::tablet_transition_stage::end_repair:
+            return true;
+    }
+}
+
+locator::combined_load_stats tablet_storage_group_manager::table_load_stats() const {
     locator::table_load_stats table_stats;
     table_stats.split_ready_seq_number = _split_ready_seq_number;
 
     locator::tablet_load_stats tablet_stats;
 
     for_each_storage_group([&] (size_t id, storage_group& sg) {
-        locator::global_tablet_id gid { _t.schema()->id(), locator::tablet_id(id) };
-        if (tablet_filter(*_tablet_map, gid)) {
-            const uint64_t tablet_size = sg.live_disk_space_used();
+        auto tid = locator::tablet_id(id);
+        locator::global_tablet_id gid { _t.schema()->id(), tid };
+        locator::tablet_replica me { _my_host_id, this_shard_id() };
+        const uint64_t tablet_size = sg.live_disk_space_used();
+
+        auto transition = _tablet_map->get_tablet_transition_info(tid);
+        auto& info = _tablet_map->get_tablet_info(tid);
+        bool is_pending = transition && transition->pending_replica == me;
+        bool is_leaving = transition && locator::get_leaving_replica(info, *transition) == me;
+
+        // It's important to tackle the anomaly in reported size, since both leaving and
+        // pending replicas could otherwise be accounted during tablet migration.
+        // If transition hasn't reached write_both_read_new stage, then leaving replicas are accounted.
+        // Otherwise, pending replicas are accounted.
+        // This helps to reduce the discrepancy window.
+        auto table_size_filter = [&] () {
+            // if tablet is not in transit, it's filtered in.
+            if (!transition) {
+                return true;
+            }
+
+            auto s = transition->reads; // read selector
+
+            return (!is_pending && !is_leaving)
+                    || (is_leaving && s == locator::read_replica_set_selector::previous)
+                    || (is_pending && s == locator::read_replica_set_selector::next);
+        };
+
+        // When a tablet is in migration, we want to send its size during any migration stage when
+        // we still know the tablet's size. This way the balancer will have better information about
+        // tablet sizes, and we reduce the chance that the node will be ignored during balancing
+        // due to missing tablet size. On the leaving replica we include tablets until the use_new
+        // stage (inclusive), and on the pending we include tablets after the streaming stage.
+        // There is an overlap in tablet sizes (we report sizes on both the leaving and pending
+        // replicas for some stages), but that should not be a problem.
+        auto tablet_size_filter = [&] () {
+            // if tablet is not in transit, it's filtered in.
+            if (!transition) {
+                return true;
+            }
+
+            if (is_leaving) {
+                return has_size_on_leaving(transition->stage);
+            } else if (is_pending) {
+                return has_size_on_pending(transition->stage);
+            }
+
+            return true;
+        };
+
+        if (table_size_filter()) {
             table_stats.size_in_bytes += tablet_size;
+        }
+
+        if (tablet_size_filter()) {
             const dht::token_range trange = _tablet_map->get_token_range(gid.tablet);
             // Make sure the token range is in the form (a, b]
             SCYLLA_ASSERT(!trange.start()->is_inclusive() && trange.end()->is_inclusive());
@@ -2945,8 +3095,8 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats(std:
     };
 }
 
-locator::combined_load_stats table::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const {
-    return _sg_manager->table_load_stats(std::move(tablet_filter));
+locator::combined_load_stats table::table_load_stats() const {
+    return _sg_manager->table_load_stats();
 }
 
 void tablet_storage_group_manager::handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
@@ -3018,7 +3168,7 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
 
     while (!_t.async_gate().is_closed()) {
         try {
-            co_await utils::get_local_injector().inject("merge_completion_fiber", utils::wait_for_message(60s));
+            co_await utils::get_local_injector().inject("merge_completion_fiber", utils::wait_for_message(5min));
             auto ks_name = schema()->ks_name();
             auto cf_name = schema()->cf_name();
             // Enable compaction after merge is done.
@@ -3052,6 +3202,7 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
         utils::get_local_injector().inject("replica_merge_completion_wait", [] () {
             tlogger.info("Merge completion fiber finished, about to sleep");
         });
+        _pending_merge_fiber_work.reset();
         co_await _merge_completion_event.wait();
         tlogger.debug("Merge completion fiber woke up for {}.{}", schema()->ks_name(), schema()->cf_name());
     }
@@ -3110,6 +3261,7 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
         new_storage_groups[new_tid] = std::move(new_sg);
     }
     _storage_groups = std::move(new_storage_groups);
+    _pending_merge_fiber_work = _merge_fiber_barrier.start();
     _merge_completion_event.signal();
 }
 
@@ -3126,6 +3278,9 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
     } else if (new_tablet_count < old_tablet_count) {
         tlogger.info0("Detected tablet merge for table {}.{}, decreasing from {} to {} tablets",
                       schema()->ks_name(), schema()->cf_name(), old_tablet_count, new_tablet_count);
+        if (utils::get_local_injector().is_enabled("tablet_force_tablet_count_decrease_once")) {
+            utils::get_local_injector().disable("tablet_force_tablet_count_decrease");
+        }
         handle_tablet_merge_completion(*old_tablet_map, *new_tablet_map);
     }
 
@@ -3219,6 +3374,17 @@ void table::update_effective_replication_map(locator::effective_replication_map_
     }
 
     recalculate_tablet_count_stats();
+
+    update_tombstone_gc_rf_one();
+}
+
+void table::update_tombstone_gc_rf_one() {
+    auto& st = _compaction_manager.get_shared_tombstone_gc_state();
+    if (_erm && _erm->get_replication_factor() == 1) {
+        st.set_table_rf_one(_schema->id());
+    } else {
+        st.set_table_rf_n(_schema->id());
+    }
 }
 
 void table::recalculate_tablet_count_stats() {
@@ -3280,7 +3446,7 @@ table::sstables_as_snapshot_source() {
                 std::move(reader),
                 gc_clock::now(),
                 get_max_purgeable_fn_for_cache_underlying_reader(),
-                _compaction_manager.get_tombstone_gc_state().with_commitlog_check_disabled(),
+                get_tombstone_gc_state().with_commitlog_check_disabled(),
                 fwd);
         }, [this, sst_set] {
             return make_partition_presence_checker(sst_set);
@@ -3290,8 +3456,9 @@ table::sstables_as_snapshot_source() {
 
 // define in .cc, since sstable is forward-declared in .hh
 table::~table() {
+    auto& st = _compaction_manager.get_shared_tombstone_gc_state();
+    st.remove_table_from_rf_registry(_schema->id());
 }
-
 
 logalloc::occupancy_stats table::occupancy() const {
     logalloc::occupancy_stats res;
@@ -3306,6 +3473,13 @@ logalloc::occupancy_stats table::occupancy() const {
 db::replay_position table::highest_flushed_replay_position() const {
     return _highest_flushed_rp;
 }
+
+struct snapshot_tablet_info {
+    size_t id;
+    dht::token first_token, last_token;
+    db_clock::time_point repair_time;
+    int64_t repaired_at;
+};
 
 struct manifest_json : public json::json_base {
     struct info : public json::json_base {
@@ -3439,6 +3613,7 @@ struct manifest_json : public json::json_base {
         json::json_element<uint64_t> index_size;
         json::json_element<int64_t> first_token;
         json::json_element<int64_t> last_token;
+        json::json_element<uint64_t> tablet_id;
 
         sstable_info() {
             register_params();
@@ -3451,6 +3626,9 @@ struct manifest_json : public json::json_base {
             index_size = e.index_size;
             first_token = e.first_token;
             last_token = e.last_token;
+            if (e.tablet_id) {
+                tablet_id = *e.tablet_id;
+            }
         }
         sstable_info(const sstable_info& e) {
             register_params();
@@ -3460,6 +3638,7 @@ struct manifest_json : public json::json_base {
             index_size = e.index_size;
             first_token = e.first_token;
             last_token = e.last_token;
+            tablet_id = e.tablet_id;
         }
         sstable_info(sstable_info&& e) {
             register_params();
@@ -3469,6 +3648,7 @@ struct manifest_json : public json::json_base {
             index_size = e.index_size;
             first_token = e.first_token;
             last_token = e.last_token;
+            tablet_id = e.tablet_id;
         }
         sstable_info& operator=(sstable_info&& e) {
             id = e.id;
@@ -3477,6 +3657,7 @@ struct manifest_json : public json::json_base {
             index_size = e.index_size;
             first_token = e.first_token;
             last_token = e.last_token;
+            tablet_id = e.tablet_id;
             return *this;
         }
     private:
@@ -3487,6 +3668,51 @@ struct manifest_json : public json::json_base {
             add(&index_size, "index_size");
             add(&first_token, "first_token");
             add(&last_token, "last_token");
+            add(&tablet_id, "tablet_id");
+        }
+    };
+
+    struct tablet_info : public json::json_base {
+        json::json_element<uint64_t> id;
+        json::json_element<int64_t> first_token;
+        json::json_element<int64_t> last_token;
+        json::json_element<time_t> repair_time;
+        json::json_element<int64_t> repaired_at;
+
+        tablet_info() {
+            register_params();
+        }
+        tablet_info(const snapshot_tablet_info& e) {
+            register_params();
+            id = e.id;
+            first_token = dht::token::to_int64(e.first_token);
+            last_token = dht::token::to_int64(e.last_token);
+            repair_time = db_clock::to_time_t(e.repair_time);
+            repaired_at = e.repaired_at;
+        }
+        tablet_info(const tablet_info& e) {
+            register_params();
+            id = e.id;
+            first_token = e.first_token;
+            last_token = e.last_token;
+            repair_time = e.repair_time;
+            repaired_at = e.repaired_at;
+        }
+        tablet_info& operator=(tablet_info&& e) {
+            id = e.id;
+            first_token = e.first_token;
+            last_token = e.last_token;
+            repair_time = e.repair_time;
+            repaired_at = e.repaired_at;
+            return *this;
+        }
+    private:
+        void register_params() {
+            add(&id, "id");
+            add(&first_token, "first_token");
+            add(&last_token, "last_token");
+            add(&repair_time, "repair_time");
+            add(&repaired_at, "repaired_at");
         }
     };
 
@@ -3495,6 +3721,7 @@ struct manifest_json : public json::json_base {
     json::json_element<snapshot_info> snapshot;
     json::json_element<table_info> table;
     json::json_chunked_list<sstable_info> sstables;
+    json::json_chunked_list<tablet_info> tablets;
 
     manifest_json() {
         register_params();
@@ -3506,6 +3733,7 @@ struct manifest_json : public json::json_base {
         snapshot = std::move(e.snapshot);
         table = std::move(e.table);
         sstables = std::move(e.sstables);
+        tablets = std::move(e.tablets);
     }
     manifest_json& operator=(manifest_json&& e) {
         if (this != &e) {
@@ -3514,6 +3742,7 @@ struct manifest_json : public json::json_base {
             snapshot = std::move(e.snapshot);
             table = std::move(e.table);
             sstables = std::move(e.sstables);
+            tablets = std::move(e.tablets);
         }
         return *this;
     }
@@ -3524,6 +3753,7 @@ private:
         add(&snapshot, "snapshot");
         add(&table, "table");
         add(&sstables, "sstables");
+        add(&tablets, "tablets");
     }
 };
 
@@ -3537,7 +3767,7 @@ public:
 
 using snapshot_sstable_set = foreign_ptr<std::unique_ptr<utils::chunked_vector<sstables::sstable_snapshot_metadata>>>;
 
-static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_sstable_set> sstable_sets, sstring name, db::snapshot_options opts, schema_ptr schema, std::optional<int64_t> tablet_count) {
+static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_sstable_set> sstable_sets, std::vector<snapshot_tablet_info> tablets, sstring name, db::snapshot_options opts, schema_ptr schema, std::optional<int64_t> tablet_count) {
     manifest_json manifest;
 
     manifest_json::info info;
@@ -3573,6 +3803,11 @@ static future<> write_manifest(const locator::topology& topology, snapshot_write
             manifest.sstables.push(manifest_json::sstable_info(md));
         }
     }
+
+    for (const auto& sti : tablets) {
+        manifest.tablets.push(manifest_json::tablet_info(sti));
+    }
+
     auto streamer = json::stream_object(std::move(manifest));
     auto out = co_await writer.stream_for("manifest.json");
     std::exception_ptr ex;
@@ -3674,7 +3909,6 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         tlogger.debug("Taking snapshot of {}.{}: name={}", s->ks_name(), s->cf_name(), name);
 
         std::vector<snapshot_sstable_set> sstable_sets(smp::count);
-        std::vector<int64_t> tablet_counts(smp::count);
 
         co_await writer->init();
         co_await smp::invoke_on_all([&] -> future<> {
@@ -3682,7 +3916,6 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
             auto [tables, permit] = co_await t.snapshot_sstables();
             auto sstables_metadata = co_await t.get_sstables_manager().take_snapshot(std::move(tables), name);
             sstable_sets[this_shard_id()] = make_foreign(std::make_unique<utils::chunked_vector<sstables::sstable_snapshot_metadata>>(std::move(sstables_metadata)));
-            tablet_counts[this_shard_id()] = t.calculate_tablet_count();
         });
         co_await writer->sync();
 
@@ -3696,12 +3929,32 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         });
         tlogger.debug("snapshot {}: seal_snapshot", name);
         const auto& topology = sharded_db.local().get_token_metadata().get_topology();
-        std::optional<int64_t> min_tablet_count;
+        std::optional<int64_t> tablet_count;
+        std::vector<snapshot_tablet_info> tablets;
+        std::unordered_set<size_t> tids;
         if (t.uses_tablets()) {
-            SCYLLA_ASSERT(!tablet_counts.empty());
-            min_tablet_count = *std::ranges::min_element(tablet_counts);
+            auto erm = t.get_effective_replication_map();
+            auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+            tablet_count = tm.tablet_count();
+            for (auto& ssts : sstable_sets) {
+                for (auto& sst : *ssts) {
+                    auto tok = sst.first_token;
+                    auto tid = tm.get_tablet_id(dht::token::from_int64(tok));
+                    sst.tablet_id = tid.id;
+                    if (tids.emplace(tid.id).second) {
+                        auto& tinfo = tm.get_tablet_info(tid);
+                        tablets.emplace_back(snapshot_tablet_info{
+                            .id = tid.id,
+                            .first_token = tm.get_first_token(tid),
+                            .last_token = tm.get_last_token(tid),
+                            .repair_time = tinfo.repair_time,
+                            .repaired_at = tinfo.sstables_repaired_at,
+                        });
+                    }
+                }
+            }
         }
-        co_await write_manifest(topology, *writer, std::move(sstable_sets), name, std::move(opts), s, min_tablet_count).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(topology, *writer, std::move(sstable_sets), std::move(tablets), name, std::move(opts), s, tablet_count).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
@@ -4382,7 +4635,7 @@ table::query(schema_ptr query_schema,
 
         if (!querier_opt) {
             querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_compaction_manager().get_tombstone_gc_state(), conf);
+            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_tombstone_gc_state(), conf);
         }
         auto& q = *querier_opt;
 
@@ -4434,7 +4687,7 @@ table::mutation_query(schema_ptr query_schema,
         querier_opt = std::move(*saved_querier);
     }
     if (!querier_opt) {
-        auto tombstone_gc_state = tombstone_gc_enabled ? get_compaction_manager().get_tombstone_gc_state() : tombstone_gc_state::no_gc();
+        auto tombstone_gc_state = tombstone_gc_enabled ? get_tombstone_gc_state() : tombstone_gc_state::no_gc();
         querier_base::querier_config conf(_config.tombstone_warn_threshold);
         querier_opt = querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, tombstone_gc_state, conf);
     }
@@ -4619,9 +4872,6 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     schema_ptr base = schema();
     m.upgrade(base);
     gc_clock::time_point now = gc_clock::now();
-    utils::get_local_injector().inject("table_push_view_replica_updates_stale_time_point", [&now] {
-        now -= 10s;
-    });
 
     if (!db::view::should_generate_view_updates_on_this_shard(base, get_effective_replication_map(), m.token())) {
         // This could happen if we are a pending replica.
@@ -4670,7 +4920,6 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.
     future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
-    co_await utils::get_local_injector().inject("table_push_view_replica_updates_timeout", timeout);
     auto lock = co_await std::move(lockf);
     auto pk = dht::partition_range::make_singular(m.decorated_key());
     auto permit = co_await sem.obtain_permit(base, "push-view-updates-read-before-write", estimate_read_memory_cost(), timeout, tr_state);
@@ -4967,7 +5216,6 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     co_await stop_compaction_groups(sg);
     co_await utils::get_local_injector().inject("delay_tablet_compaction_groups_cleanup", std::chrono::seconds(5));
     co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
-    co_await utils::get_local_injector().inject("tablet_cleanup_completion_wait", utils::wait_for_message(std::chrono::seconds(5)));
 }
 
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
@@ -5009,6 +5257,10 @@ future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const
         partition_count += co_await sst->estimated_keys_for_range(tr);
     });
     co_return partition_count;
+}
+
+tombstone_gc_state table::get_tombstone_gc_state() const {
+    return tombstone_gc_state(_compaction_manager.get_shared_tombstone_gc_state());
 }
 
 } // namespace replica

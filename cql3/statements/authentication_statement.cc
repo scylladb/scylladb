@@ -11,7 +11,6 @@
 #include "authentication_statement.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
-#include "auth/common.hh"
 
 uint32_t cql3::statements::authentication_statement::get_bound_terms() const {
     return 0;
@@ -26,7 +25,7 @@ future<> cql3::statements::authentication_statement::check_access(query_processo
 }
 
 bool cql3::statements::authentication_altering_statement::needs_guard(query_processor& qp, service::query_state&) const {
-    return !auth::legacy_mode(qp);
+    return true;
 }
 
 audit::statement_category cql3::statements::authentication_statement::category() const {

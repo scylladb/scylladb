@@ -77,12 +77,6 @@ inline size_t iovec_len(const std::vector<iovec>& iov)
 namespace s3 {
 
 static logging::logger s3l("s3");
-// "Each part must be at least 5 MB in size, except the last part."
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-static constexpr size_t aws_minimum_part_size = 5_MiB;
-// "Part numbers can be any number from 1 to 10,000, inclusive."
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-static constexpr unsigned aws_maximum_parts_in_piece = 10'000;
 
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     auto in = std::move(in_);
@@ -334,13 +328,13 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
                 s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
                          utils::aws::format_time_point(db_clock::now()),
                          request.get_header("x-amz-date"));
-                should_retry = aws::retryable::yes;
+                should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
             if (possible_error->get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
                 s3l.warn("Request failed with EXPIRED_TOKEN. Resetting credentials");
                 _credentials = {};
-                should_retry = aws::retryable::yes;
+                should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
             co_await coroutine::return_exception_ptr(std::make_exception_ptr(
@@ -355,7 +349,7 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
             // We need to be able to simulate a retry in s3 tests
             if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
                 throw aws::aws_exception(
-                    aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
+                    aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", utils::http::retryable::no});
             }
             co_return co_await handler(rep, std::move(_in));
         } catch (...) {
@@ -659,6 +653,8 @@ sstring parse_multipart_copy_upload_etag(sstring& body) {
 
 class client::multipart_upload {
 protected:
+    static constexpr size_t _max_multipart_concurrency = 16;
+
     shared_ptr<client> _client;
     sstring _object_name;
     sstring _upload_id;
@@ -728,10 +724,15 @@ private:
         std::exception_ptr ex;
 
         try {
-            for (size_t offset = 0; offset < source_size; offset += part_size) {
-                part_size = std::min(source_size - offset, part_size);
-                co_await copy_part(offset, part_size);
-            }
+            auto parts = std::views::iota(size_t{0}, (source_size + part_size - 1) / part_size);
+            _part_etags.resize(parts.size());
+            co_await max_concurrent_for_each(parts,
+                                             _max_multipart_concurrency,
+                                             [part_size, source_size, this](auto part_num) -> future<> {
+                                                 auto part_offset = part_num * part_size;
+                                                 auto actual_part_size = std::min(source_size - part_offset, part_size);
+                                                 co_await copy_part(part_offset, actual_part_size, part_num);
+                                             });
             // Here we are going to finalize the upload and close the _bg_flushes, in case an exception is thrown the
             // gate will be closed and the upload will be aborted. See below.
             co_await finalize_upload();
@@ -748,9 +749,7 @@ private:
         }
     }
 
-    future<> copy_part(size_t offset, size_t part_size) {
-        unsigned part_number = _part_etags.size();
-        _part_etags.emplace_back();
+    future<> copy_part(size_t offset, size_t part_size, size_t part_number) {
         auto req = http::request::make("PUT", _client->_host, _object_name);
         req._headers["x-amz-copy-source"] = _source_object;
         auto range = format("bytes={}-{}", offset, offset + part_size - 1);
@@ -760,11 +759,7 @@ private:
         req.set_query_param("partNumber", to_sstring(part_number + 1));
         req.set_query_param("uploadId", _upload_id);
 
-        // upload the parts in the background for better throughput
-        auto gh = _bg_flushes.hold();
-        // Ignoring the result of make_request() because we don't want to block and it is safe since we have a gate we are going to wait on and all argument are
-        // captured by value or moved into the fiber
-        std::ignore = _client->make_request(std::move(req),[this, part_number, start = s3_clock::now()](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
+        co_await _client->make_request(std::move(req),[this, part_number, start = s3_clock::now()](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
             auto _in = std::move(in);
             auto body = co_await util::read_entire_stream_contiguous(_in);
             auto etag = parse_multipart_copy_upload_etag(body);
@@ -776,8 +771,7 @@ private:
         },http::reply::status_type::ok, _as)
         .handle_exception([this, part_number](auto ex) {
             s3l.warn("Failed to upload part {}, upload id {}. Reason: {}", part_number, _upload_id, ex);
-        })
-        .finally([gh = std::move(gh)] {});
+        });
 
         co_return;
     }
@@ -1029,7 +1023,7 @@ future<> client::upload_sink_base::close() {
 class client::upload_sink final : public client::upload_sink_base {
     memory_data_sink_buffers _bufs;
     future<> maybe_flush() {
-        if (_bufs.size() >= aws_minimum_part_size) {
+        if (_bufs.size() >= minimum_part_size) {
             co_await upload_part(std::move(_bufs));
         }
     }
@@ -1137,7 +1131,7 @@ class client::upload_jumbo_sink final : public upload_sink_base {
 public:
     upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
         : upload_sink_base(std::move(cln), std::move(object_name), std::nullopt, as)
-        , _maximum_parts_in_piece(max_parts_per_piece.value_or(aws_maximum_parts_in_piece))
+        , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
         , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), piece_tag))
     {}
 
@@ -1285,7 +1279,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         while (_buffers_size < _max_buffers_size && !_is_finished) {
                             utils::get_local_injector().inject("kill_s3_inflight_req", [] {
                                 // Inject non-retryable error to emulate source failure
-                                throw aws::aws_exception(aws::aws_error(aws::aws_error_type::RESOURCE_NOT_FOUND, "Injected ResourceNotFound", aws::retryable::no));
+                                throw aws::aws_exception(aws::aws_error(aws::aws_error_type::RESOURCE_NOT_FOUND, "Injected ResourceNotFound", utils::http::retryable::no));
                             });
 
                             s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
@@ -1529,13 +1523,11 @@ class client::do_upload_file : private multipart_upload {
         }
     }
 
-    future<> upload_part(file f, uint64_t offset, uint64_t part_size) {
+    future<> upload_part(file f, uint64_t offset, uint64_t part_size, uint64_t part_number) {
         // upload a part in a multipart upload, see
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
         auto mem_units = co_await _client->claim_memory(_transmit_size, _as);
 
-        unsigned part_number = _part_etags.size();
-        _part_etags.emplace_back();
         auto req = http::request::make("PUT", _client->_host, _object_name);
         req._headers["Content-Length"] = to_sstring(part_size);
         req.set_query_param("partNumber", to_sstring(part_number + 1));
@@ -1546,9 +1538,7 @@ class client::do_upload_file : private multipart_upload {
             auto output = std::move(out_);
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
         });
-        // upload the parts in the background for better throughput
-        auto gh = _bg_flushes.hold();
-        std::ignore = _client->make_request(std::move(req), [this, part_size, part_number, start = s3_clock::now()] (group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+        co_await _client->make_request(std::move(req), [this, part_size, part_number, start = s3_clock::now()] (group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
             auto etag = reply.get_header("ETag");
             s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
             _part_etags[part_number] = std::move(etag);
@@ -1556,32 +1546,7 @@ class client::do_upload_file : private multipart_upload {
             return make_ready_future();
         }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
             s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-        }).finally([gh = std::move(gh)] {});
-    }
-
-    // returns pair<num_of_parts, part_size>
-    static std::pair<unsigned, size_t> calc_part_size(size_t total_size, size_t part_size) {
-        if (part_size > 0) {
-            if (part_size < aws_minimum_part_size) {
-                on_internal_error(s3l, fmt::format("part_size too large: {} < {}", part_size, aws_minimum_part_size));
-            }
-            const size_t num_parts = div_ceil(total_size, part_size);
-            if (num_parts > aws_maximum_parts_in_piece) {
-                on_internal_error(s3l, fmt::format("too many parts: {} > {}", num_parts, aws_maximum_parts_in_piece));
-            }
-            return {num_parts, part_size};
-        }
-        // if part_size is 0, this means the caller leaves it to us to decide
-        // the part_size. to be more reliance, say, we don't have to re-upload
-        // a giant chunk of buffer if a certain part fails to upload, we prefer
-        // small parts, let's make it a multiple of MiB.
-        part_size = div_ceil(total_size / aws_maximum_parts_in_piece, 1_MiB);
-        // The default part size for multipart upload is set to 50MiB.
-        // This value was determined empirically by running `perf_s3_client` with various part sizes to find the optimal one.
-        static constexpr size_t default_part_size = 50_MiB;
-
-        part_size = std::max(part_size, default_part_size);
-        return {div_ceil(total_size, part_size), part_size};
+        });
     }
 
     future<> multi_part_upload(file&& f, uint64_t total_size, size_t part_size) {
@@ -1589,12 +1554,14 @@ class client::do_upload_file : private multipart_upload {
 
         std::exception_ptr ex;
         try {
-            for (size_t offset = 0; offset < total_size; offset += part_size) {
-                part_size = std::min(total_size - offset, part_size);
-                s3l.trace("upload_part: {}~{}/{}", offset, part_size, total_size);
-                co_await upload_part(file{f}, offset, part_size);
-            }
-
+            co_await max_concurrent_for_each(std::views::iota(size_t{0}, (total_size + part_size - 1) / part_size),
+                                             _max_multipart_concurrency,
+                                             [part_size, total_size, this, f = file{f}](auto part_num) -> future<> {
+                                                 auto part_offset = part_num * part_size;
+                                                 auto actual_part_size = std::min(total_size - part_offset, part_size);
+                                                 s3l.trace("upload_part: {}~{}/{}", part_offset, actual_part_size, total_size);
+                                                 co_await upload_part(f, part_offset, actual_part_size, part_num);
+                                             });
             co_await finalize_upload();
         } catch (...) {
             ex = std::current_exception();
@@ -1650,9 +1617,9 @@ public:
         _progress.total += file_size;
         // use multipart upload when possible in order to transmit parts in
         // parallel to improve throughput
-        if (file_size > aws_minimum_part_size) {
+        if (file_size > minimum_part_size) {
             auto [num_parts, part_size] = calc_part_size(file_size, _part_size);
-            _part_etags.reserve(num_parts);
+            _part_etags.resize(num_parts);
             co_await multi_part_upload(std::move(f), file_size, part_size);
         } else {
             // single part upload
@@ -1947,6 +1914,36 @@ future<> client::bucket_lister::close() noexcept {
             // ignore all errors
         }
     }
+}
+
+// returns pair<num_of_parts, part_size>
+std::pair<unsigned, size_t> calc_part_size(size_t total_size, size_t part_size) {
+    if (total_size > maximum_object_size) {
+        on_internal_error(s3l, fmt::format("object size too large: {} is larger than maximum S3 object size: {}", total_size, maximum_object_size));
+    }
+    if (part_size > 0) {
+        if (part_size > maximum_part_size) {
+            on_internal_error(s3l, fmt::format("part_size too large: {} is larger than maximum part size: {}", part_size, maximum_part_size));
+        }
+        if (part_size < minimum_part_size) {
+            on_internal_error(s3l, fmt::format("part_size too small: {} is smaller than minimum part size: {}", part_size, minimum_part_size));
+        }
+        const size_t num_parts = div_ceil(total_size, part_size);
+        if (num_parts > maximum_parts_in_piece) {
+            on_internal_error(s3l, fmt::format("too many parts: {} > {}", num_parts, maximum_parts_in_piece));
+        }
+        return {num_parts, part_size};
+    }
+    // if part_size is 0, this means the caller leaves it to us to decide the part_size. The default part size for multipart upload is set to 50MiB. This
+    // value was determined empirically by running `perf_s3_client` with various part sizes to find the optimal one.
+    static constexpr size_t default_part_size = 50_MiB;
+    const size_t num_parts = div_ceil(total_size, default_part_size);
+    if (num_parts <= maximum_parts_in_piece) {
+        return {num_parts, default_part_size};
+    }
+
+    part_size = align_up(div_ceil(total_size, maximum_parts_in_piece), 1_MiB);
+    return {div_ceil(total_size, part_size), part_size};
 }
 
 } // s3 namespace

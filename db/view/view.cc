@@ -23,6 +23,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <flat_map>
 
@@ -931,8 +932,7 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
     const row& existing_row = existing.cells();
     const row& updated_row = update.cells();
 
-    const bool base_has_nonexpiring_marker = update.marker().is_live() && !update.marker().is_expiring();
-    return std::ranges::all_of(_base->regular_columns(), [this, &updated_row, &existing_row, base_has_nonexpiring_marker] (const column_definition& cdef) {
+    return std::ranges::all_of(_base->regular_columns(), [this, &updated_row, &existing_row] (const column_definition& cdef) {
         const auto view_it = _view->columns_by_name().find(cdef.name());
         const bool column_is_selected = view_it != _view->columns_by_name().end();
 
@@ -940,49 +940,29 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
         // as part of its PK, there are NO virtual columns corresponding to the unselected columns in the view.
         // Because of that, we don't generate view updates when the value in an unselected column is created
         // or changes.
-        if (!column_is_selected && _base_info.has_base_non_pk_columns_in_view_pk) {
+        if (!column_is_selected) {
             return true;
         }
 
-        //TODO(sarna): Optimize collections case - currently they do not go under optimization
-        if (!cdef.is_atomic()) {
-            return false;
-        }
-
-        // We cannot skip if the value was created or deleted, unless we have a non-expiring marker
+        // We cannot skip if the value was created or deleted
         const auto* existing_cell = existing_row.find_cell(cdef.id);
         const auto* updated_cell = updated_row.find_cell(cdef.id);
         if (existing_cell == nullptr || updated_cell == nullptr) {
-            return existing_cell == updated_cell || (!column_is_selected && base_has_nonexpiring_marker);
+            return existing_cell == updated_cell;
         }
+
+        if (!cdef.is_atomic()) {
+            return existing_cell->as_collection_mutation().data == updated_cell->as_collection_mutation().data;
+        }
+
         atomic_cell_view existing_cell_view = existing_cell->as_atomic_cell(cdef);
         atomic_cell_view updated_cell_view = updated_cell->as_atomic_cell(cdef);
 
         // We cannot skip when a selected column is changed
-        if (column_is_selected) {
-            if (view_it->second->is_view_virtual()) {
-                return atomic_cells_liveness_equal(existing_cell_view, updated_cell_view);
-            }
-            return compare_atomic_cell_for_merge(existing_cell_view, updated_cell_view) == 0;
+        if (view_it->second->is_view_virtual()) {
+            return atomic_cells_liveness_equal(existing_cell_view, updated_cell_view);
         }
-
-        // With non-expiring row marker, liveness checks below are not relevant
-        if (base_has_nonexpiring_marker) {
-            return true;
-        }
-
-        if (existing_cell_view.is_live() != updated_cell_view.is_live()) {
-            return false;
-        }
-
-        // We cannot skip if the change updates TTL
-        const bool existing_has_ttl = existing_cell_view.is_live_and_has_ttl();
-        const bool updated_has_ttl = updated_cell_view.is_live_and_has_ttl();
-        if (existing_has_ttl || updated_has_ttl) {
-            return existing_has_ttl == updated_has_ttl && existing_cell_view.expiry() == updated_cell_view.expiry();
-        }
-
-        return true;
+        return compare_atomic_cell_for_merge(existing_cell_view, updated_cell_view) == 0;
     });
 }
 
@@ -1459,7 +1439,7 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
+    const auto gc_state = _base.get_tombstone_gc_state();
     auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
@@ -1488,7 +1468,7 @@ void view_update_builder::generate_update(static_row&& update, const tombstone& 
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
+    const auto gc_state = _base.get_tombstone_gc_state();
     auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
@@ -1750,7 +1730,7 @@ static endpoints_to_update get_view_natural_endpoint_vnodes(
         std::vector<std::reference_wrapper<const locator::node>> base_nodes,
         std::vector<std::reference_wrapper<const locator::node>> view_nodes,
         locator::endpoint_dc_rack my_location,
-        const locator::network_topology_strategy* network_topology,
+        const bool network_topology,
         replica::cf_stats& cf_stats) {
     using node_vector = std::vector<std::reference_wrapper<const locator::node>>;
     node_vector base_endpoints, view_endpoints;
@@ -1903,7 +1883,7 @@ endpoints_to_update get_view_natural_endpoint(
         locator::host_id me,
         const locator::effective_replication_map_ptr& base_erm,
         const locator::effective_replication_map_ptr& view_erm,
-        const locator::abstract_replication_strategy& replication_strategy,
+        const bool network_topology,
         const dht::token& base_token,
         const dht::token& view_token,
         bool use_tablets,
@@ -1911,7 +1891,6 @@ endpoints_to_update get_view_natural_endpoint(
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
     auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
     auto& my_location = topology.get_location(me);
-    auto* network_topology = dynamic_cast<const locator::network_topology_strategy*>(&replication_strategy);
 
     auto resolve = [&] (const locator::topology& topology, const locator::host_id& ep, bool is_view) -> const locator::node& {
         if (auto* np = topology.find_node(ep)) {
@@ -1945,7 +1924,7 @@ endpoints_to_update get_view_natural_endpoint(
                 // view pairing as the leaving base replica.
                 // note that the recursive call will not recurse again because leaving_base is in base_nodes.
                 auto leaving_base = it->get().host_id();
-                return get_view_natural_endpoint(leaving_base, base_erm, view_erm, replication_strategy, base_token,
+                return get_view_natural_endpoint(leaving_base, base_erm, view_erm, network_topology, base_token,
                         view_token, use_tablets, cf_stats);
             }
         }
@@ -2041,7 +2020,9 @@ future<> view_update_generator::mutate_MV(
         wait_for_all_updates wait_for_all)
 {
     auto& ks = _db.find_keyspace(base->ks_name());
-    auto& replication = ks.get_replication_strategy();
+    const bool uses_tablets = ks.uses_tablets();
+    const bool uses_nts = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy()) != nullptr;
+    // The object pointed by `ks` may disappear after preeemption. It should not be touched again after this comment.
     std::unordered_map<table_id, locator::effective_replication_map_ptr> erms;
     auto get_erm = [&] (table_id id) {
         auto it = erms.find(id);
@@ -2060,8 +2041,8 @@ future<> view_update_generator::mutate_MV(
     co_await max_concurrent_for_each(view_updates, max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto view_ermp = erms.at(mut.s->id());
-        auto [target_endpoint, no_pairing_endpoint] = get_view_natural_endpoint(me, base_ermp, view_ermp, replication, base_token, view_token,
-                ks.uses_tablets(), cf_stats);
+        auto [target_endpoint, no_pairing_endpoint] = get_view_natural_endpoint(me, base_ermp, view_ermp, uses_nts, base_token, view_token,
+                uses_tablets, cf_stats);
         auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
         auto memory_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_update_memory_units.split(memory_usage_of(mut)));
         if (no_pairing_endpoint) {
@@ -2239,6 +2220,7 @@ void view_builder::setup_metrics() {
 }
 
 future<> view_builder::start_in_background(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
+    auto step_fiber = make_ready_future<>();
     try {
         view_builder_init_state vbi;
         auto fail = defer([&barrier] mutable { barrier.abort(); });
@@ -2272,8 +2254,10 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
         _mnotifier.register_listener(this);
         co_await calculate_shard_build_step(vbi);
         _current_step = _base_to_build_step.begin();
-        // Waited on indirectly in stop().
-        (void)_build_step.trigger();
+
+        // If preparation above fails, run_in_background() is not invoked, just
+        // the start_in_background() emits a warning into logs and resolves
+        step_fiber = run_in_background();
     } catch (...) {
         auto ex = std::current_exception();
         auto ll = log_level::error;
@@ -2288,10 +2272,12 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
         }
         vlogger.log(ll, "start aborted: {}", ex);
     }
+
+    co_await std::move(step_fiber);
 }
 
 future<> view_builder::start(service::migration_manager& mm, utils::cross_shard_barrier barrier) {
-    _started = start_in_background(mm, std::move(barrier));
+    _step_fiber = start_in_background(mm, std::move(barrier));
     return make_ready_future<>();
 }
 
@@ -2301,12 +2287,13 @@ future<> view_builder::drain() {
     }
     vlogger.info("Draining view builder");
     _as.request_abort();
-    co_await std::move(_started);
     co_await _mnotifier.unregister_listener(this);
+    co_await _ops_gate.close();
     co_await _vug.drain();
     co_await _sem.wait();
     _sem.broken();
-    co_await _build_step.join();
+    _build_step.broken();
+    co_await std::move(_step_fiber);
     co_await coroutine::parallel_for_each(_base_to_build_step, [] (std::pair<const table_id, build_step>& p) {
         return p.second.reader.close();
     });
@@ -2574,14 +2561,12 @@ static future<> announce_with_raft(
 future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
             auto host_id = _db.get_token_metadata().get_my_id();
             co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
                         return _sys_ks.make_view_build_status_mutation(ts, {ks_name, view_name}, host_id, build_status::STARTED);
                     }, "view builder: mark view build STARTED");
         },
         [this, ks_name, view_name] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
             co_await _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
         }
     );
@@ -2590,14 +2575,12 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
 future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
             auto host_id = _db.get_token_metadata().get_my_id();
             co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
                         return _sys_ks.make_view_build_status_update_mutation(ts, {ks_name, view_name}, host_id, build_status::SUCCESS);
                     }, "view builder: mark view build SUCCESS");
         },
         [this, ks_name, view_name] () -> future<> {
-            co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
             co_await _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
         }
     );
@@ -2727,8 +2710,7 @@ future<> view_builder::handle_create_view_local(const sstring& ks_name, const ss
         vlogger.error("Error setting up view for building {}.{}: {}", view->ks_name(), view->cf_name(), std::current_exception());
     }
 
-    // Waited on indirectly in stop().
-    static_cast<void>(_build_step.trigger());
+    _build_step.signal();
 }
 
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
@@ -2737,30 +2719,48 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
     }
 
     // Do it in the background, serialized and broadcast from shard 0.
-    static_cast<void>(dispatch_create_view(ks_name, view_name).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+    static_cast<void>(with_gate(_ops_gate, [this, ks_name = ks_name, view_name = view_name] () mutable {
+        return dispatch_create_view(std::move(ks_name), std::move(view_name));
+    }).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
         vlogger.warn("Failed to dispatch view creation {}.{}: {}", ks_name, view_name, ep);
     }));
 }
 
-void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
+future<> view_builder::dispatch_update_view(sstring ks_name, sstring view_name) {
     if (should_ignore_tablet_keyspace(_db, ks_name)) {
-        return;
+        co_return;
     }
 
+    [[maybe_unused]] auto sem_units = co_await get_or_adopt_view_builder_lock(std::nullopt);
+
+    auto view = view_ptr(_db.find_schema(ks_name, view_name));
+    auto step_it = _base_to_build_step.find(view->view_info()->base_id());
+    if (step_it == _base_to_build_step.end()) {
+        co_return; // In case all the views for this CF have finished building already.
+    }
+    auto status_it = std::ranges::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
+        return bs.view->id() == view->id();
+    });
+    if (status_it != step_it->second.build_status.end()) {
+        status_it->view = std::move(view);
+    }
+}
+
+void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
     // Do it in the background, serialized.
-    (void)with_semaphore(_sem, view_builder_semaphore_units, [ks_name, view_name, this] {
-        auto view = view_ptr(_db.find_schema(ks_name, view_name));
-        auto step_it = _base_to_build_step.find(view->view_info()->base_id());
-        if (step_it == _base_to_build_step.end()) {
-            return;// In case all the views for this CF have finished building already.
+    static_cast<void>(with_gate(_ops_gate, [this, ks_name = ks_name, view_name = view_name] () mutable {
+        return dispatch_update_view(std::move(ks_name), std::move(view_name));
+    }).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+        try {
+            std::rethrow_exception(ep);
+        } catch (const seastar::gate_closed_exception&) {
+            vlogger.warn("Ignoring gate_closed_exception during view update {}.{}", ks_name, view_name);
+        } catch (const seastar::broken_named_semaphore&) {
+            vlogger.warn("Ignoring broken_named_semaphore during view update {}.{}", ks_name, view_name);
+        } catch (const replica::no_such_column_family&) {
+            vlogger.warn("Ignoring no_such_column_family during view update {}.{}", ks_name, view_name);
         }
-        auto status_it = std::ranges::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
-            return bs.view->id() == view->id();
-        });
-        if (status_it != step_it->second.build_status.end()) {
-            status_it->view = std::move(view);
-        }
-    }).handle_exception_type([] (replica::no_such_column_family&) { });
+    }));
 }
 
 future<> view_builder::dispatch_drop_view(sstring ks_name, sstring view_name) {
@@ -2822,19 +2822,22 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
     }
 
     // Do it in the background, serialized and broadcast from shard 0.
-    static_cast<void>(dispatch_drop_view(ks_name, view_name).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+    static_cast<void>(with_gate(_ops_gate, [this, ks_name = ks_name, view_name = view_name] () mutable {
+        return dispatch_drop_view(std::move(ks_name), std::move(view_name));
+    }).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
         vlogger.warn("Failed to dispatch view drop {}.{}: {}", ks_name, view_name, ep);
     }));
 }
 
-future<> view_builder::do_build_step() {
-    // Run the view building in the streaming scheduling group
-    // so that it doesn't impact other tasks with higher priority.
-    seastar::thread_attributes attr;
-    attr.sched_group = _db.get_streaming_scheduling_group();
-    return seastar::async(std::move(attr), [this] {
+future<> view_builder::run_in_background() {
+    return seastar::async([this] {
         exponential_backoff_retry r(1s, 1min);
-        while (!_base_to_build_step.empty() && !_as.abort_requested()) {
+        while (!_as.abort_requested()) {
+            try {
+                _build_step.wait([this] { return !_base_to_build_step.empty(); }).get();
+            } catch (const seastar::broken_condition_variable&) {
+                return;
+            }
             auto units = get_units(_sem, view_builder_semaphore_units).get();
             ++_stats.steps_performed;
             try {
@@ -2924,8 +2927,6 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
         view_builder_query_state(),
         {},
         cql3::query_processor::cache_internal::no);
-
-    co_await utils::get_local_injector().inject("view_builder_pause_in_migrate_v2", utils::wait_for_message(5min));
 
     auto col_names = schema->all_columns() | std::views::transform([] (const auto& col) {return col.name_as_cql_string(); }) | std::ranges::to<std::vector<sstring>>();
     auto col_names_str = fmt::to_string(fmt::join(col_names, ", "));
@@ -3294,7 +3295,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
             step.pslice,
             batch_size,
             query::max_partitions,
-            tombstone_gc_state(nullptr));
+            tombstone_gc_state::no_gc());
     auto consumer = compact_for_query<view_builder::consumer>(compaction_state, view_builder::consumer{*this, _vug.shared_from_this(), step, now});
     auto built = step.reader.consume_in_thread(std::move(consumer));
     if (auto ds = std::move(*compaction_state).detach_state()) {

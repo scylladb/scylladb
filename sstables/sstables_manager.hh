@@ -58,6 +58,7 @@ struct sstable_snapshot_metadata {
     uint64_t index_size;
     int64_t first_token;
     int64_t last_token;
+    std::optional<size_t> tablet_id;
 };
 
 class storage_manager : public peering_sharded_service<storage_manager> {

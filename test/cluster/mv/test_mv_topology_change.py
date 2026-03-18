@@ -33,8 +33,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_topology_change(manager: ManagerClient):
-    cfg = {'force_gossip_topology_changes': True,
-           'tablets_mode_for_new_keyspaces': 'disabled',
+    cfg = {'tablets_mode_for_new_keyspaces': 'disabled',
            'error_injections_at_startup': ['delay_before_get_view_natural_endpoint']}
 
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
@@ -395,7 +394,8 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
 @pytest.mark.parametrize("migration_type", ["tablets_internode", "tablets_intranode", "vnodes"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_write_during_migration(manager: ManagerClient, migration_type: str):
-    cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug']
+    # RF=1 and fast boot options with streaming don't play well together, so force RBNO for bootstrap
+    cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug', "--allowed-repair-based-node-ops", "replace,removenode,rebuild,bootstrap,decommission"]
 
     servers = await manager.servers_add(3, cmdline=cmdline)
     cql = manager.get_cql()

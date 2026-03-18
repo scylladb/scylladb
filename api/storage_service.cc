@@ -515,6 +515,15 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto sstables = parsed.GetArray() |
             std::views::transform([] (const auto& s) { return sstring(rjson::to_string_view(s)); }) |
             std::ranges::to<std::vector>();
+        apilog.info("Restore invoked with following parameters: keyspace={}, table={}, endpoint={}, bucket={}, prefix={}, sstables_count={}, scope={}, primary_replica_only={}",
+                    keyspace,
+                    table,
+                    endpoint,
+                    bucket,
+                    prefix,
+                    sstables.size(),
+                    scope,
+                    primary_replica_only);
         auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket, scope, primary_replica_only);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
@@ -527,13 +536,15 @@ void unset_sstables_loader(http_context& ctx, routes& r) {
 }
 
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb, sharded<gms::gossiper>& g) {
-    ss::view_build_statuses.set(r, [&ctx, &vb, &g] (std::unique_ptr<http::request> req) {
+    ss::view_build_statuses.set(r, [&ctx, &vb, &g] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req);
         auto view = req->get_path_param("view");
-        return vb.local().view_build_statuses(std::move(keyspace), std::move(view), g.local()).then([] (std::unordered_map<sstring, sstring> status) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(std::move(status), res));
-        });
+        co_return json::json_return_type(stream_range_as_array(co_await vb.local().view_build_statuses(std::move(keyspace), std::move(view), g.local()), [] (const auto& i) {
+            storage_service_json::mapper res;
+            res.key = i.first;
+            res.value = i.second;
+            return res;
+        }));
     });
 
     cf::get_built_indexes.set(r, [&vb](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
@@ -571,6 +582,16 @@ static future<json::json_return_type> describe_ring_as_json_for_table(const shar
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring_for_table(keyspace, table), token_range_endpoints_to_json));
 }
 
+namespace {
+template <typename Key, typename Value>
+storage_service_json::mapper map_to_json(const std::pair<Key, Value>& i) {
+    storage_service_json::mapper val;
+    val.key = fmt::to_string(i.first);
+    val.value = fmt::to_string(i.second);
+    return val;
+}
+}
+
 static
 future<json::json_return_type>
 rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
@@ -588,12 +609,7 @@ rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss
             throw bad_param_exception("Either provide both keyspace and table (for tablet table) or neither (for vnodes)");
         }
 
-        co_return json::json_return_type(stream_range_as_array(token_endpoints, [](const auto& i) {
-            storage_service_json::mapper val;
-            val.key = fmt::to_string(i.first);
-            val.value = fmt::to_string(i.second);
-            return val;
-        }));
+        co_return json::json_return_type(stream_range_as_array(token_endpoints, &map_to_json<dht::token, gms::inet_address>));
 }
 
 static
@@ -677,7 +693,6 @@ rest_get_range_to_endpoint_map(http_context& ctx, sharded<service::storage_servi
             table_id = validate_table(ctx.db.local(), keyspace, table);
         }
 
-        std::vector<ss::maplist_mapper> res;
         co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace, table_id),
                 [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
             ss::maplist_mapper m;
@@ -768,17 +783,13 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 
         apilog.info("cleanup_all global={}", global);
 
-        auto done = !global ? false : co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
-            if (!ss.is_topology_coordinator_enabled()) {
-                co_return false;
-            }
-            co_await ss.do_clusterwide_vnodes_cleanup();
-            co_return true;
-        });
-        if (done) {
+        if (global) {
+            co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
+                co_return co_await ss.do_clusterwide_vnodes_cleanup();
+            });
             co_return json::json_return_type(0);
         }
-        // fall back to the local cleanup if topology coordinator is not enabled or local cleanup is requested
+        // fall back to the local cleanup if local cleanup is requested
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<compaction::global_cleanup_compaction_task_impl>({}, db);
@@ -786,9 +797,7 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 
         // Mark this node as clean
         co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
-            if (ss.is_topology_coordinator_enabled()) {
-                co_await ss.reset_cleanup_needed();
-            }
+            co_await ss.reset_cleanup_needed();
         });
 
         co_return json::json_return_type(0);
@@ -799,9 +808,6 @@ future<json::json_return_type>
 rest_reset_cleanup_needed(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         apilog.info("reset_cleanup_needed");
         co_await ss.invoke_on(0, [] (service::storage_service& ss) {
-            if (!ss.is_topology_coordinator_enabled()) {
-                throw std::runtime_error("mark_node_as_clean is only supported when topology over raft is enabled");
-            }
             return ss.reset_cleanup_needed();
         });
         co_return json_void();
@@ -829,9 +835,9 @@ rest_force_keyspace_flush(http_context& ctx, std::unique_ptr<http::request> req)
 
 static
 future<json::json_return_type>
-rest_decommission(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+rest_decommission(sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& ssc, std::unique_ptr<http::request> req) {
         apilog.info("decommission");
-        return ss.local().decommission().then([] {
+        return ss.local().decommission(ssc).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
 }
@@ -1308,10 +1314,7 @@ rest_get_ownership(http_context& ctx, sharded<service::storage_service>& ss, std
             throw httpd::bad_param_exception("storage_service/ownership cannot be used when a keyspace uses tablets");
         }
 
-        return ss.local().get_ownership().then([] (auto&& ownership) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
-        });
+        co_return json::json_return_type(stream_range_as_array(co_await ss.local().get_ownership(), &map_to_json<gms::inet_address, float>));
 }
 
 static
@@ -1328,10 +1331,7 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
             }
         }
 
-        return ss.local().effective_ownership(keyspace_name, table_name).then([] (auto&& ownership) {
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
-        });
+        co_return json::json_return_type(stream_range_as_array(co_await ss.local().effective_ownership(keyspace_name, table_name), &map_to_json<gms::inet_address, float>));
 }
 
 static
@@ -1341,7 +1341,7 @@ rest_estimate_compression_ratios(http_context& ctx, sharded<service::storage_ser
         apilog.warn("estimate_compression_ratios: called before the cluster feature was enabled");
         throw std::runtime_error("estimate_compression_ratios requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
     }
-    auto ticket = get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
+    auto ticket = co_await get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
     auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
     auto cf = api::req_param<sstring>(*req, "cf", {}).value;
     apilog.debug("estimate_compression_ratios: called with ks={} cf={}", ks, cf);
@@ -1407,7 +1407,7 @@ rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, serv
         apilog.warn("retrain_dict: called before the cluster feature was enabled");
         throw std::runtime_error("retrain_dict requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
     }
-    auto ticket = get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
+    auto ticket = co_await get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
     auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
     auto cf = api::req_param<sstring>(*req, "cf", {}).value;
     apilog.debug("retrain_dict: called with ks={} cf={}", ks, cf);
@@ -1565,26 +1565,14 @@ rest_reload_raft_topology_state(sharded<service::storage_service>& ss, service::
 static
 future<json::json_return_type>
 rest_upgrade_to_raft_topology(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        apilog.info("Requested to schedule upgrade to raft topology");
-        try {
-            co_await ss.invoke_on(0, [] (auto& ss) {
-                return ss.start_upgrade_to_raft_topology();
-            });
-        } catch (...) {
-            auto ex = std::current_exception();
-            apilog.error("Failed to schedule upgrade to raft topology: {}", ex);
-            std::rethrow_exception(std::move(ex));
-        }
+        apilog.info("Requested to schedule upgrade to raft topology, but this version does not need it since it uses raft topology by default.");
         co_return json_void();
 }
 
 static
 future<json::json_return_type>
 rest_raft_topology_upgrade_status(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        const auto ustate = co_await ss.invoke_on(0, [] (auto& ss) {
-            return ss.get_topology_upgrade_state();
-        });
-        co_return sstring(format("{}", ustate));
+        co_return sstring("done");
 }
 
 static
@@ -1794,7 +1782,7 @@ rest_bind(FuncType func, BindArgs&... args) {
     return std::bind_front(func, std::ref(args)...);
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& ssc, service::raft_group0_client& group0_client) {
     ss::get_token_endpoint.set(r, rest_bind(rest_get_token_endpoint, ctx, ss));
     ss::toppartitions_generic.set(r, rest_bind(rest_toppartitions_generic, ctx));
     ss::get_release_version.set(r, rest_bind(rest_get_release_version, ss));
@@ -1811,7 +1799,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::reset_cleanup_needed.set(r, rest_bind(rest_reset_cleanup_needed, ctx, ss));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
     ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
-    ss::decommission.set(r, rest_bind(rest_decommission, ss));
+    ss::decommission.set(r, rest_bind(rest_decommission, ss, ssc));
     ss::move.set(r, rest_bind(rest_move, ss));
     ss::remove_node.set(r, rest_bind(rest_remove_node, ss));
     ss::exclude_node.set(r, rest_bind(rest_exclude_node, ss));
@@ -2016,6 +2004,8 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
         auto sfopt = req->get_query_param("sf");
+        auto tcopt = req->get_query_param("tc");
+
         db::snapshot_options opts = {
             .skip_flush = strcasecmp(sfopt.c_str(), "true") == 0,
         };
@@ -2036,6 +2026,27 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             co_return json_void();
         } catch (...) {
             apilog.error("take_snapshot failed: {}", std::current_exception());
+            throw;
+        }
+    });
+
+    ss::take_cluster_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        apilog.info("take_cluster_snapshot: {}", req->get_query_params());
+        auto tag = req->get_query_param("tag");
+        auto column_families = split(req->get_query_param("table"), ",");
+        // Note: not published/active. Retain as internal option, but...
+        auto sfopt = req->get_query_param("skip_flush");
+
+        db::snapshot_options opts = {
+            .skip_flush = strcasecmp(sfopt.c_str(), "true") == 0,
+        };
+
+        std::vector<sstring> keynames = split(req->get_query_param("keyspace"), ",");
+        try {
+            co_await snap_ctl.local().take_cluster_column_family_snapshot(keynames, column_families, tag, opts);
+            co_return json_void();
+        } catch (...) {
+            apilog.error("take_cluster_snapshot failed: {}", std::current_exception());
             throw;
         }
     });
@@ -2130,6 +2141,7 @@ void unset_snapshot(http_context& ctx, routes& r) {
     ss::start_backup.unset(r);
     cf::get_true_snapshots_size.unset(r);
     cf::get_all_true_snapshots_size.unset(r);
+    ss::decommission.unset(r);
 }
 
 }

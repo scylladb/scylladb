@@ -14,11 +14,11 @@ Enable ScyllaDB :doc:`Authentication </operating-scylla/security/authentication>
 Enabling Audit
 ---------------
 
-By default, auditing is **enabled**. Enabling auditing is controlled by the ``audit:`` parameter in the ``scylla.yaml`` file.
+By default, table auditing is **enabled**. Enabling auditing is controlled by the ``audit:`` parameter in the ``scylla.yaml`` file.
 You can set the following options:
 
-* ``none`` - Audit is disabled (default).
-* ``table`` - Audit is enabled, and messages are stored in a Scylla table.
+* ``none`` - Audit is disabled.
+* ``table`` - Audit is enabled, and messages are stored in a Scylla table (default).
 * ``syslog`` - Audit is enabled, and messages are sent to Syslog.
 * ``syslog,table`` - Audit is enabled, and messages are stored in a Scylla table and sent to Syslog.
 
@@ -32,7 +32,7 @@ The audit can be tuned using the following flags or ``scylla.yaml`` entries:
 ==================  ==================================  ========================================================================================================================
 Flag                Default Value                       Description
 ==================  ==================================  ========================================================================================================================
-audit_categories    "DCL,DDL,AUTH,ADMIN"                                  Comma-separated list of statement categories that should be audited
+audit_categories    "DCL,AUTH,ADMIN"                                  Comma-separated list of statement categories that should be audited
 ------------------  ----------------------------------  ------------------------------------------------------------------------------------------------------------------------
 audit_tables        “”                                  Comma-separated list of table names that should be audited, in the format of <keyspacename>.<tablename>
 ------------------  ----------------------------------  ------------------------------------------------------------------------------------------------------------------------
@@ -86,9 +86,7 @@ Storing Audit Messages in Syslog
    .. code-block:: shell
 
       # audit setting
-      # by default, Scylla does not audit anything.
-      # It is possible to enable auditing to the following places:
-      #   - audit.audit_log column family by setting the flag to "table"
+      # 'audit' config option controls if and where to output audited events:
       audit: "syslog"
       #
       # List of statement categories that should be audited.
@@ -159,9 +157,7 @@ For example:
    .. code-block:: shell
 
       # audit setting
-      # by default, Scylla does not audit anything.
-      # It is possible to enable auditing to the following places:
-      #   - audit.audit_log column family by setting the flag to "table"
+      # 'audit' config option controls if and where to output audited events:
       audit: "table"
       #
       # List of statement categories that should be audited.
@@ -215,8 +211,8 @@ Handling Audit Failures
 
 In some cases, auditing may not be possible, for example, when:
 
-* A table is used as the audit’s backend, and the audit partition where the audit row is saved is not available because the node that holds this partition is down.
-* Syslog is used as the audit’s backend, and the Syslog sink (a regular unix socket) is unresponsive/unavailable.
+* A table is used as the audit’s backend, and the partitions where the audit rows are saved are unavailable because the nodes holding those partitions are down or unreachable due to network issues.
+* Syslog is used as the audit’s backend, and the Syslog sink (a regular Unix socket) is unresponsive or unavailable.
 
 If the audit fails and audit messages are not stored in the configured audit’s backend, you can still review the audit log in the regular ScyllaDB logs.
 

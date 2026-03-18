@@ -14,27 +14,34 @@
 #include "vint-serialization.hh"
 
 class vector_type_impl : public concrete_type<std::vector<data_value>> {
-    using intern = type_interning_helper<vector_type_impl, data_type, size_t>;
+    using intern = type_interning_helper<vector_type_impl, data_type, vector_dimension_t>;
 protected:
     data_type _elements_type;
-    size_t _dimension;
+    vector_dimension_t _dimension;
 public:
-    vector_type_impl(data_type elements_type, size_t dimension);
-    static shared_ptr<const vector_type_impl> get_instance(data_type type, size_t dimension);
+    vector_type_impl(data_type elements_type, vector_dimension_t dimension);
+    static shared_ptr<const vector_type_impl> get_instance(data_type type, vector_dimension_t dimension);
     data_type get_elements_type() const {
         return _elements_type;
     }
-    size_t get_dimension() const {
+    vector_dimension_t get_dimension() const {
         return _dimension;
     }
-    static std::strong_ordering compare_vectors(data_type elements_comparator, size_t dimension,
+    static std::strong_ordering compare_vectors(data_type elements_comparator, vector_dimension_t dimension,
                         managed_bytes_view o1, managed_bytes_view o2);
                         
     std::vector<managed_bytes> split_fragmented(FragmentedView auto v) const {
         std::vector<managed_bytes> elements;
-        for (size_t i = 0; i < _dimension; ++i) {
-            auto element = read_vector_element(v, _elements_type->value_length_if_fixed());
-            elements.push_back(managed_bytes(element));
+        elements.reserve(_dimension);
+        auto fixed_len = _elements_type->value_length_if_fixed();
+        if (fixed_len) {
+            for (size_t i = 0; i < _dimension; ++i) {
+                elements.push_back(managed_bytes(read_vector_element_fixed(v, *fixed_len)));
+            }
+        } else {
+            for (size_t i = 0; i < _dimension; ++i) {
+                elements.push_back(managed_bytes(read_vector_element_variable(v)));
+            }
         }
         return elements;
     }
@@ -94,20 +101,30 @@ public:
         return ret;
     }
 private:
-    static sstring make_name(data_type type, size_t dimension);
+    static sstring make_name(data_type type, vector_dimension_t dimension);
 
 };
 
+// Read a vector element with known fixed size.
 template <FragmentedView View>
-View read_vector_element(View& v, std::optional<size_t> value_length_if_fixed) {
-    uint64_t element_size;
-    if (value_length_if_fixed) {
-        element_size = value_length_if_fixed.value();
-    } else {
-        element_size = with_linearized(v, unsigned_vint::deserialize);
-        v.remove_prefix(unsigned_vint::serialized_size(element_size));
+View read_vector_element_fixed(View& v, size_t element_size) {
+    if (element_size == 0) {
+        throw exceptions::invalid_request_exception("null/unset is not supported inside vectors");
     }
-    
+
+    if (element_size > v.size_bytes()) {
+        throw exceptions::invalid_request_exception("Not enough bytes to read a vector element");
+    }
+
+    return read_simple_bytes(v, element_size);
+}
+
+// Read a vector element with variable-length encoding (vint-prefixed size).
+template <FragmentedView View>
+View read_vector_element_variable(View& v) {
+    auto element_size = with_linearized(v, unsigned_vint::deserialize);
+    v.remove_prefix(unsigned_vint::serialized_size(element_size));
+
     if (element_size == 0) {
         throw exceptions::invalid_request_exception("null/unset is not supported inside vectors");
     }
@@ -117,6 +134,15 @@ View read_vector_element(View& v, std::optional<size_t> value_length_if_fixed) {
     }
 
     return read_simple_bytes(v, element_size);
+}
+
+template <FragmentedView View>
+View read_vector_element(View& v, std::optional<size_t> value_length_if_fixed) {
+    if (value_length_if_fixed) {
+        return read_vector_element_fixed(v, *value_length_if_fixed);
+    } else {
+        return read_vector_element_variable(v);
+    }
 }
 
 data_value make_vector_value(data_type type, vector_type_impl::native_type value);

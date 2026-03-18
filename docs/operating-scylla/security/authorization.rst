@@ -7,6 +7,13 @@ Grant Authorization CQL Reference
 
 Authorization is the process by where users are granted permissions, which entitle them to access, or permission to change data on specific keyspaces, tables or an entire datacenter. Authorization for ScyllaDB is done internally within ScyllaDB and is not done with a third-party such as LDAP or OAuth. Granting permissions to users requires the use of a role such as a Database Administrator as well as :doc:`enabling the CassandraAuthorizer </operating-scylla/security/enable-authorization>`. It also requires a user who has been :doc:`authenticated </operating-scylla/security/authentication>`.
 
+.. note::
+
+   All role and permission management statements in this section are consistent: once a statement completes
+   successfully, the change is durable. However, the change may not be immediately visible on other nodes
+   in the cluster, as the data is replicated asynchronously. Queries such as ``LIST ROLES`` or
+   ``LIST ALL PERMISSIONS`` routed to a different node may temporarily return stale results until
+   replication converges, which typically happens within moments.
 
 
 This reference covers CQL specification version 3.3.1

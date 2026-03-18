@@ -11,6 +11,12 @@
 #include "mutation/mutation.hh"
 #include "query/query-result.hh"
 
+namespace gms {
+
+class gossiper;
+
+}
+
 namespace service::strong_consistency {
 
 class groups_manager;
@@ -24,11 +30,12 @@ using value_or_redirect = std::variant<T, need_redirect>;
 class coordinator : public peering_sharded_service<coordinator> {
     groups_manager& _groups_manager;
     replica::database& _db;
+    gms::gossiper& _gossiper;
 
     struct operation_ctx;
     future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema, const dht::token& token);
 public:
-    coordinator(groups_manager& groups_manager, replica::database& db);
+    coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper);
 
     using mutation_gen = noncopyable_function<mutation(api::timestamp_type)>;
     future<value_or_redirect<>> mutate(schema_ptr schema, 

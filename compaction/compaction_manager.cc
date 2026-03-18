@@ -778,6 +778,7 @@ compaction_manager::get_incremental_repair_read_lock(compaction::compaction_grou
         cmlog.debug("Get get_incremental_repair_read_lock for {} started", reason);
     }
     compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = cs.gate.hold();
     auto ret = co_await cs.incremental_repair_lock.hold_read_lock();
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_read_lock for {} done", reason);
@@ -791,6 +792,7 @@ compaction_manager::get_incremental_repair_write_lock(compaction::compaction_gro
         cmlog.debug("Get get_incremental_repair_write_lock for {} started", reason);
     }
     compaction::compaction_state& cs = get_compaction_state(&t);
+    auto gh = cs.gate.hold();
     auto ret = co_await cs.incremental_repair_lock.hold_write_lock();
     if (!reason.empty()) {
         cmlog.debug("Get get_incremental_repair_write_lock for {} done", reason);
@@ -1040,7 +1042,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
         _compaction_controller.set_max_shares(max_shares);
     }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(_shared_tombstone_gc_state) {
+{
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
     // Bandwidth throttling is node-wide, updater is needed on single shard
@@ -1064,7 +1066,7 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _compaction_max_shares_observer(_cfg.max_shares.observe([] (const float& max_shares) {}))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(_shared_tombstone_gc_state) {
+{
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     // No metric registration because this constructor is supposed to be used only by the testing
     // infrastructure.
@@ -1266,9 +1268,15 @@ future<> compaction_manager::start(const db::config& cfg, utils::disk_space_moni
     if (dsm && (this_shard_id() == 0)) {
         _out_of_space_subscription = dsm->subscribe(cfg.critical_disk_utilization_level, [this] (auto threshold_reached) {
             if (threshold_reached) {
-                return container().invoke_on_all([] (compaction_manager& cm) { return cm.drain(); });
+                return container().invoke_on_all([] (compaction_manager& cm) {
+                    cm._in_critical_disk_utilization_mode = true;
+                    return cm.drain();
+                });
             }
-            return container().invoke_on_all([] (compaction_manager& cm) { cm.enable(); });
+            return container().invoke_on_all([] (compaction_manager& cm) {
+                cm._in_critical_disk_utilization_mode = false;
+                cm.enable();
+            });
         });
     }
 
@@ -1519,7 +1527,9 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction_g
             | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier))
             | std::ranges::to<std::unordered_set>());
     };
-    const auto threshold = size_t(std::max(schema->max_compaction_threshold(), 32));
+    const auto injected_threshold = utils::get_local_injector().inject_parameter<size_t>("set_sstable_count_reduction_threshold");
+    const auto threshold = injected_threshold.value_or(size_t(std::max(schema->max_compaction_threshold(), 32)));
+
     auto count = co_await num_runs_for_compaction();
     if (count <= threshold) {
         cmlog.trace("No need to wait for sstable count reduction in {}: {} <= {}",
@@ -1534,9 +1544,7 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction_g
     auto& cstate = get_compaction_state(&t);
     try {
         while (can_perform_regular_compaction(t) && co_await num_runs_for_compaction() > threshold) {
-            co_await cstate.compaction_done.wait([this, &t] {
-                return !can_perform_regular_compaction(t);
-            });
+            co_await cstate.compaction_done.when();
         }
     } catch (const broken_condition_variable&) {
         co_return;
@@ -1786,6 +1794,41 @@ protected:
     }
 };
 
+class rewrite_sstables_component_compaction_task_executor final : public rewrite_sstables_compaction_task_executor {
+    std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& _rewritten_sstables;
+public:
+    rewrite_sstables_component_compaction_task_executor(compaction_manager& mgr,
+                                       throw_if_stopping do_throw_if_stopping,
+                                       compaction_group_view* t,
+                                       tasks::task_id parent_id,
+                                       compaction_type_options options,
+                                       std::vector<sstables::shared_sstable> sstables,
+                                       compacting_sstable_registration compacting,
+                                       std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables)
+            : rewrite_sstables_compaction_task_executor(mgr, do_throw_if_stopping, t, parent_id, options, {},
+                std::move(sstables), std::move(compacting), compaction_manager::can_purge_tombstones::no, "component_rewrite"),
+            _rewritten_sstables(rewritten_sstables)
+    {}
+protected:
+    virtual future<compaction_manager::compaction_stats_opt> do_run() override {
+        compaction_stats stats{};
+
+        switch_state(state::pending);
+        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+
+        while (!_sstables.empty()) {
+            auto sst = consume_sstable();
+            auto it = _rewritten_sstables.emplace(sst, sstables::shared_sstable{}).first;
+            auto res = co_await rewrite_sstable(std::move(sst));
+            _cm._validation_errors += res.stats.validation_errors;
+            stats += res.stats;
+            it->second = std::move(res.new_sstables.front());
+        }
+
+        co_return stats;
+    }
+};
+
 class split_compaction_task_executor final : public rewrite_sstables_compaction_task_executor {
     compaction_type_options::split _opt;
 public:
@@ -1897,6 +1940,28 @@ compaction_manager::rewrite_sstables(compaction_group_view& t, compaction_type_o
                                      get_candidates_func get_func, tasks::task_info info, can_purge_tombstones can_purge,
                                      sstring options_desc) {
     return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>("rewrite", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), throw_if_stopping::no, can_purge, std::move(options_desc));
+}
+
+future<compaction_manager::compaction_stats_opt>
+compaction_manager::rewrite_sstables_component(compaction_group_view& t,
+                                     std::vector<sstables::shared_sstable>& sstables,
+                                     compaction_type_options options,
+                                     std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables,
+                                     tasks::task_info info) {
+    auto gh = start_compaction(t);
+    if (!gh) {
+        co_return std::nullopt;
+    }
+
+    if (sstables.empty()) {
+        co_return std::nullopt;
+    }
+
+    compacting_sstable_registration compacting(*this, get_compaction_state(&t));
+    compacting.register_compacting(sstables);
+
+    co_return co_await perform_compaction<rewrite_sstables_component_compaction_task_executor>(throw_if_stopping::no, info, &t, info.id,
+        std::move(options), std::move(sstables), std::move(compacting), rewritten_sstables);
 }
 
 class validate_sstables_compaction_task_executor : public sstables_task_executor {
@@ -2289,6 +2354,16 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
     return perform_task_on_all_files<split_compaction_task_executor>("split", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_sstables), throw_if_stopping::no);
 }
 
+std::exception_ptr compaction_manager::make_disabled_exception(compaction::compaction_group_view& cg) {
+    std::exception_ptr ex;
+    if (_in_critical_disk_utilization_mode) {
+        ex = std::make_exception_ptr(std::runtime_error("critical disk utilization"));
+    } else {
+        ex = std::make_exception_ptr(compaction_stopped_exception(cg.schema()->ks_name(), cg.schema()->cf_name(), "compaction disabled"));
+    }
+    return ex;
+}
+
 future<std::vector<sstables::shared_sstable>>
 compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compaction_group_view& t, compaction_type_options::split opt) {
     if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
@@ -2298,8 +2373,7 @@ compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compac
     // We don't want to prevent split because compaction is temporarily disabled on a view only for synchronization,
     // which is unneeded against new sstables that aren't part of any set yet, so never use can_proceed(&t) here.
     if (is_disabled()) {
-        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(format("Cannot split {} because manager has compaction disabled, " \
-                                                                                         "reason might be out of space prevention", sst->get_filename()))));
+        co_return coroutine::exception(make_disabled_exception(t));
     }
     std::vector<sstables::shared_sstable> ret;
 
@@ -2321,6 +2395,18 @@ compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compac
     co_await sst->unlink();
 
     co_return ret;
+}
+
+future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> compaction_manager::perform_component_rewrite(compaction::compaction_group_view& t,
+            tasks::task_info info,
+            std::vector<sstables::shared_sstable> sstables,
+            sstables::component_type component,
+            std::function<void(sstables::sstable&)> modifier,
+            compaction_type_options::component_rewrite::update_sstable_id update_id) {
+    std::unordered_map<sstables::shared_sstable, sstables::shared_sstable> rewritten_sstables;
+    rewritten_sstables.reserve(sstables.size());
+    co_await rewrite_sstables_component(t, sstables, compaction_type_options::make_component_rewrite(component, std::move(modifier), update_id), rewritten_sstables, info);
+    co_return rewritten_sstables;
 }
 
 // Submit a table to be scrubbed and wait for its termination.
@@ -2387,6 +2473,8 @@ future<> compaction_manager::remove(compaction_group_view& t, sstring reason) no
     if (!c_state.gate.is_closed()) {
         auto close_gate = c_state.gate.close();
         co_await stop_ongoing_compactions(reason, &t);
+        // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
+        co_await c_state.incremental_repair_lock.write_lock();
         co_await std::move(close_gate);
     }
 

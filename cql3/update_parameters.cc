@@ -51,7 +51,7 @@ update_parameters::get_prefetched_list(const partition_key& pkey, const clusteri
     }
 
     // Ensured by collections_as_maps flag in read_command flags
-    SCYLLA_ASSERT(type->is_map());
+    throwing_assert(type->is_map());
 
     auto cell = type->deserialize(managed_bytes_view(*val));
     const map_type_impl& map_type = static_cast<const map_type_impl&>(*cell.type());
@@ -105,7 +105,7 @@ public:
     }
 
     void accept_new_partition(uint64_t row_count) {
-        SCYLLA_ASSERT(0);
+        throwing_assert(0);
     }
 
     void accept_new_row(const clustering_key& key, const query::result_row_view& static_row,
@@ -119,7 +119,7 @@ public:
     }
 
     void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
-        SCYLLA_ASSERT(0);
+        throwing_assert(0);
     }
 
     void accept_partition_end(const query::result_row_view& static_row) {

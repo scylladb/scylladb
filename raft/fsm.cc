@@ -8,6 +8,7 @@
 #include "fsm.hh"
 #include <random>
 #include <seastar/core/coroutine.hh>
+#include "raft/raft.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 
@@ -205,6 +206,11 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
+    if (utils::get_local_injector().enter("avoid_being_raft_leader")) {
+        become_follower(server_id{});
+        return;
+    }
+
     if (!std::holds_alternative<candidate>(_state)) {
         _output.state_changed = true;
     }
@@ -1106,6 +1112,14 @@ std::optional<std::pair<read_id, index_t>> fsm::start_read_barrier(server_id req
     read_id id = next_read_id();
     logger.trace("start_read_barrier[{}] starting read barrier with id {}", _my_id, id);
     return std::make_pair(id, _commit_idx);
+}
+
+void fsm::maybe_update_commit_idx_for_read(index_t read_idx) {
+    // read_idx from the leader might not be replicated to the local node yet.
+    const bool in_local_log = read_idx <= _log.last_idx();
+    if (in_local_log && log_term_for(read_idx) == get_current_term()) {
+        advance_commit_idx(read_idx);
+    }
 }
 
 void fsm::stop() {

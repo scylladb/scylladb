@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-
+import asyncio
 import logging
 import time
 
@@ -53,7 +53,14 @@ async def test_no_removed_node_event_on_ip_change(manager: ManagerClient, caplog
             logger.info("waiting for cql and hosts")
             await wait_for_cql_and_get_hosts(test_cql, servers, time.time() + 30)
 
-            log_output: str = caplog.text
-
-    assert f"'change_type': 'NEW_NODE', 'address': ('{s1_new_ip}'" in log_output
+    # This for loop is done to avoid the race condition when we're checking the logs before a message is arrived.
+    # Locally issue was not reproducible, but on CI it was.
+    log_output = caplog.text
+    for i in range(5):
+        try:
+            assert f"'change_type': 'NEW_NODE', 'address': ('{s1_new_ip}'" in log_output
+            break
+        except AssertionError:
+            await asyncio.sleep(i)
+            log_output = caplog.text
     assert f"'change_type': 'REMOVED_NODE', 'address': ('{s1_old_ip}'" not in log_output

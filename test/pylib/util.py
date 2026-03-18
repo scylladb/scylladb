@@ -28,7 +28,7 @@ from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-modu
 from cassandra.query import Statement # type: ignore # pylint: disable=no-name-in-module
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
-from test import BUILD_DIR, TOP_SRC_DIR
+from test import BUILD_DIR, TOP_SRC_DIR, MODES_TIMEOUT_FACTOR
 from test.pylib.internal_types import ServerInfo
 
 logger = logging.getLogger(__name__)
@@ -57,13 +57,18 @@ async def wait_for(
         pred: Callable[[], Awaitable[Optional[T]]],
         deadline: float,
         period: float = 1,
-        before_retry: Optional[Callable[[], Any]] = None) -> T:
+        before_retry: Optional[Callable[[], Any]] = None,
+        backoff_factor: float = 1,
+        max_period: float = None) -> T:
     while True:
         assert(time.time() < deadline), "Deadline exceeded, failing test."
         res = await pred()
         if res is not None:
             return res
         await asyncio.sleep(period)
+        period *= backoff_factor
+        if max_period is not None:
+            period = min(period, max_period)
         if before_retry:
             before_retry()
 
@@ -76,7 +81,7 @@ async def wait_for_cql(cql: Session, host: Host, deadline: float) -> None:
             logging.info(f"Driver not connected to {host} yet")
             return None
         return True
-    await wait_for(cql_ready, deadline)
+    await wait_for(cql_ready, deadline, period=0.1)
 
 
 async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], deadline: float) \
@@ -359,6 +364,14 @@ def get_modes_to_run(config) -> list[str]:
     if not modes:
         raise RuntimeError('No modes configured. Please run ./configure.py first')
     return modes
+
+
+def scale_timeout_by_mode(mode: str, timeout: int | float) -> int | float:
+    """Scale timeout according to test.py mode semantics.
+    Each mode has a different scale: debug and sanitize modes are multiplied by 3, dev by 2.
+    Unknown modes are left unchanged.
+    """
+    return MODES_TIMEOUT_FACTOR.get(mode, 1) * timeout
 
 
 async def gather_safely(*awaitables: Awaitable):

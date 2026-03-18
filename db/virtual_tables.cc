@@ -67,6 +67,7 @@ public:
         return schema_builder(system_keyspace::NAME, "cluster_status", std::make_optional(id))
             .with_column("peer", inet_addr_type, column_kind::partition_key)
             .with_column("dc", utf8_type)
+            .with_column("rack", utf8_type)
             .with_column("up", boolean_type)
             .with_column("draining", boolean_type)
             .with_column("excluded", boolean_type)
@@ -97,21 +98,22 @@ public:
                 auto hostid = eps.get_host_id();
 
                 set_cell(cr, "up", gossiper.is_alive(hostid));
-                if (!ss.raft_topology_change_enabled() || gossiper.is_shutdown(endpoint)) {
+                if (gossiper.is_shutdown(endpoint)) {
                     set_cell(cr, "status", gossiper.get_gossip_status(endpoint));
+                } else {
+                    set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(hostid))));
                 }
                 set_cell(cr, "load", gossiper.get_application_state_value(endpoint, gms::application_state::LOAD));
 
-                if (ss.raft_topology_change_enabled() && !gossiper.is_shutdown(endpoint)) {
-                    set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(hostid))));
-                }
                 set_cell(cr, "host_id", hostid.uuid());
 
                 if (tm.get_topology().has_node(hostid)) {
                     // Not all entries in gossiper are present in the topology
                     auto& node = tm.get_topology().get_node(hostid);
                     sstring dc = node.dc_rack().dc;
+                    sstring rack = node.dc_rack().rack;
                     set_cell(cr, "dc", dc);
+                    set_cell(cr, "rack", rack);
                     set_cell(cr, "draining", node.is_draining());
                     set_cell(cr, "excluded", node.is_excluded());
                 }
@@ -832,7 +834,10 @@ class clients_table : public streaming_virtual_table {
             auto& clients = cd_map[dip.ip];
 
             std::ranges::sort(clients, [] (const foreign_ptr<std::unique_ptr<client_data>>& a, const foreign_ptr<std::unique_ptr<client_data>>& b) {
-                return a->port < b->port || a->client_type_str() < b->client_type_str();
+                if (a->port != b->port) {
+                    return a->port < b->port;
+                }
+                return a->client_type_str() < b->client_type_str();
             });
 
             for (const auto& cd : clients) {
@@ -1345,8 +1350,8 @@ public:
 
 private:
     static schema_ptr build_schema() {
-        auto id = generate_legacy_id(system_keyspace::NAME, "cdc_timestamps");
-        return schema_builder(system_keyspace::NAME, "cdc_timestamps", std::make_optional(id))
+        auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::CDC_TIMESTAMPS);
+        return schema_builder(system_keyspace::NAME, system_keyspace::CDC_TIMESTAMPS, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::partition_key)
             .with_column("timestamp", reversed_type_impl::get_instance(timestamp_type), column_kind::clustering_key)
@@ -1428,8 +1433,8 @@ public:
     }
 private:
     static schema_ptr build_schema() {
-        auto id = generate_legacy_id(system_keyspace::NAME, "cdc_streams");
-        return schema_builder(system_keyspace::NAME, "cdc_streams", std::make_optional(id))
+        auto id = generate_legacy_id(system_keyspace::NAME, system_keyspace::CDC_STREAMS);
+        return schema_builder(system_keyspace::NAME, system_keyspace::CDC_STREAMS, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::partition_key)
             .with_column("timestamp", timestamp_type, column_kind::clustering_key)

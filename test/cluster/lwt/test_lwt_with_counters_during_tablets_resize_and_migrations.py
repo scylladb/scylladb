@@ -239,6 +239,7 @@ async def run_random_resizes(
                 table,
                 predicate=predicate,
                 target=target_cnt,
+                scale_timeout=tester.scale_timeout,
                 timeout_s=RESIZE_TIMEOUT,
             ),
             wait_for_tablet_count(
@@ -248,6 +249,7 @@ async def run_random_resizes(
                 counter_table,
                 predicate=predicate,
                 target=target_cnt,
+                scale_timeout=tester.scale_timeout,
                 timeout_s=RESIZE_TIMEOUT,
             ),
         )
@@ -293,7 +295,7 @@ async def run_random_resizes(
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode("debug", "debug mode is too slow for this test")
-async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClient):
+async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClient, scale_timeout):
 
     cfg = {
         "enable_tablets": True,
@@ -330,6 +332,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClien
             table,
             num_workers=DEFAULT_WORKERS,
             num_keys=DEFAULT_NUM_KEYS,
+            scale_timeout=scale_timeout,
             use_counters=True,
             counters_random_delta=True,
             counters_max_delta=5,
@@ -344,7 +347,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClien
             # PHASE: warmup
             tester.set_phase(PHASE_WARMUP)
             logger.info("LWT warmup: waiting for %d applied CAS", WARMUP_LWT_CNT)
-            await tester.wait_for_phase_ops(stop_event_, PHASE_WARMUP, WARMUP_LWT_CNT, timeout=180, poll=0.2)
+            await tester.wait_for_phase_ops(stop_event_, PHASE_WARMUP, WARMUP_LWT_CNT, timeout=180, poll=1.0)
             logger.info("LWT warmup complete: %d ops", tester.get_phase_ops(PHASE_WARMUP))
 
             # PHASE: resize + migrate
@@ -398,7 +401,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClien
             # PHASE: post
             tester.set_phase(PHASE_POST)
             logger.info("LWT post resize: waiting for %d applied CAS", POST_LWT_CNT)
-            await tester.wait_for_phase_ops(stop_event_, PHASE_POST, POST_LWT_CNT, timeout=180, poll=0.2)
+            await tester.wait_for_phase_ops(stop_event_, PHASE_POST, POST_LWT_CNT, timeout=180, poll=1.0)
             logger.info("LWT post resize complete: %d ops", tester.get_phase_ops(PHASE_POST))
 
             total_ops = sum(tester.phase_ops.values())

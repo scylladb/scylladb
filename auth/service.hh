@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
@@ -20,7 +21,6 @@
 #include "auth/authenticator.hh"
 #include "auth/authorizer.hh"
 #include "auth/permission.hh"
-#include "auth/permissions_cache.hh"
 #include "auth/cache.hh"
 #include "auth/role_manager.hh"
 #include "auth/common.hh"
@@ -37,19 +37,16 @@ class query_processor;
 
 namespace service {
 class migration_manager;
-class migration_notifier;
-class migration_listener;
 }
 
 namespace auth {
 
 class role_or_anonymous;
 
-struct service_config final {
-    sstring authorizer_java_name;
-    sstring authenticator_java_name;
-    sstring role_manager_java_name;
-};
+/// Factory function types for creating auth module instances on each shard.
+using authorizer_factory = std::function<std::unique_ptr<authorizer>()>;
+using authenticator_factory = std::function<std::unique_ptr<authenticator>()>;
+using role_manager_factory = std::function<std::unique_ptr<role_manager>()>;
 
 ///
 /// Due to poor (in this author's opinion) decisions of Apache Cassandra, certain choices of one role-manager,
@@ -75,15 +72,11 @@ public:
 /// peering_sharded_service inheritance is needed to be able to access shard local authentication service
 /// given an object from another shard. Used for bouncing lwt requests to correct shard.
 class service final : public seastar::peering_sharded_service<service> {
-    utils::loading_cache_config _loading_cache_config;
-    std::unique_ptr<permissions_cache> _permissions_cache;
     cache& _cache;
 
     cql3::query_processor& _qp;
 
     ::service::raft_group0_client& _group0_client;
-
-    ::service::migration_notifier& _mnotifier;
 
     authorizer::ptr_type _authorizer;
 
@@ -91,27 +84,15 @@ class service final : public seastar::peering_sharded_service<service> {
 
     role_manager::ptr_type _role_manager;
 
-    // Only one of these should be registered, so we end up with some unused instances. Not the end of the world.
-    std::unique_ptr<::service::migration_listener> _migration_listener;
-
-    std::function<void(uint32_t)> _permissions_cache_cfg_cb;
-    serialized_action _permissions_cache_config_action;
-
-    utils::observer<uint32_t> _permissions_cache_max_entries_observer;
-    utils::observer<uint32_t> _permissions_cache_update_interval_in_ms_observer;
-    utils::observer<uint32_t> _permissions_cache_validity_in_ms_observer;
-
     maintenance_socket_enabled _used_by_maintenance_socket;
 
     abort_source _as;
 
 public:
     service(
-            utils::loading_cache_config,
             cache& cache,
             cql3::query_processor&,
             ::service::raft_group0_client&,
-            ::service::migration_notifier&,
             std::unique_ptr<authorizer>,
             std::unique_ptr<authenticator>,
             std::unique_ptr<role_manager>,
@@ -119,16 +100,15 @@ public:
 
     ///
     /// This constructor is intended to be used when the class is sharded via \ref seastar::sharded. In that case, the
-    /// arguments must be copyable, which is why we delay construction with instance-construction instructions instead
+    /// arguments must be copyable, which is why we delay construction with instance-construction factories instead
     /// of the instances themselves.
     ///
     service(
-            utils::loading_cache_config,
             cql3::query_processor&,
             ::service::raft_group0_client&,
-            ::service::migration_notifier&,
-            ::service::migration_manager&,
-            const service_config&,
+            authorizer_factory,
+            authenticator_factory,
+            role_manager_factory,
             maintenance_socket_enabled,
             cache&);
 
@@ -137,8 +117,6 @@ public:
     future<> stop();
 
     future<> ensure_superuser_is_created();
-
-    void update_cache_config();
 
     void reset_authorization_cache();
 
@@ -153,6 +131,11 @@ public:
     future<permission_set> get_uncached_permissions(const role_or_anonymous&, const resource&) const;
 
     ///
+    /// Notify the service that the node is entering maintenance mode.
+    ///
+    void set_maintenance_mode();
+
+    ///
     /// Query whether the named role has been granted a role that is a superuser.
     ///
     /// A role is always granted to itself. Therefore, a role that "is" a superuser also "has" superuser.
@@ -161,6 +144,11 @@ public:
     ///
     future<bool> has_superuser(std::string_view role_name) const;
 
+    ///
+    /// Ensure that the role operations are enabled. Some role managers defer initialization.
+    ///
+    future<> ensure_role_operations_are_enabled();
+    
     ///
     /// Create a role with optional authentication information.
     ///
@@ -182,6 +170,13 @@ public:
     future<bool> exists(const resource&) const;
 
     ///
+    /// Revoke all permissions granted to any role for a particular resource.
+    ///
+    /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
+    ///
+    future<> revoke_all(const resource&, ::service::group0_batch&) const;
+
+    ///
     /// Produces descriptions that can be used to restore the state of auth. That encompasses
     /// roles, role grants, and permission grants.
     ///
@@ -199,12 +194,9 @@ public:
         return *_role_manager;
     }
 
-    cql3::query_processor& query_processor() const noexcept {
-        return _qp;
-    }
-
     future<> commit_mutations(::service::group0_batch&& mc) {
-        return std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{});
+        co_await std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{});
+        co_await _group0_client.send_group0_read_barrier_to_live_members();
     }
 
 private:
@@ -215,7 +207,11 @@ private:
     future<std::vector<cql3::description>> describe_permissions() const;
 };
 
+void set_maintenance_mode(service&);
+
 future<bool> has_superuser(const service&, const authenticated_user&);
+
+future<> ensure_role_operations_are_enabled(service&);
 
 future<role_set> get_roles(const service&, const authenticated_user&);
 
@@ -400,7 +396,50 @@ future<std::vector<permission_details>> list_filtered_permissions(
 // Finalizes write operations performed in auth by committing mutations via raft group0.
 future<> commit_mutations(service& ser, ::service::group0_batch&& mc);
 
-// Migrates data from old keyspace to new one which supports linearizable writes via raft.
-future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);
+///
+/// Factory helper functions for creating auth module instances.
+/// These are intended for use with sharded<service>::start() where copyable arguments are required.
+/// The returned factories capture the sharded references and call .local() when invoked on each shard.
+///
+
+/// Creates an authorizer factory for config-selectable authorizer types.
+/// @param name The authorizer class name (e.g., "CassandraAuthorizer", "AllowAllAuthorizer")
+authorizer_factory make_authorizer_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp);
+
+/// Creates an authenticator factory for config-selectable authenticator types.
+/// @param name The authenticator class name (e.g., "PasswordAuthenticator", "AllowAllAuthenticator")
+authenticator_factory make_authenticator_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& cache);
+
+/// Creates a role_manager factory for config-selectable role manager types.
+/// @param name The role manager class name (e.g., "CassandraRoleManager")
+role_manager_factory make_role_manager_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& cache);
+
+/// Creates a factory for the maintenance socket authenticator.
+/// This authenticator is not config-selectable and is only used for the maintenance socket.
+authenticator_factory make_maintenance_socket_authenticator_factory(
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& cache);
+
+/// Creates a factory for the maintenance socket role manager.
+/// This role manager is not config-selectable and is only used for the maintenance socket.
+role_manager_factory make_maintenance_socket_role_manager_factory(
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& cache);
 
 }

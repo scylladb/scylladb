@@ -156,7 +156,7 @@ How do I check the current version of ScyllaDB that I am running?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 * On a regular system or VM (running Ubuntu, CentOS, or RedHat Enterprise): :code:`$ scylla --version`
 
-Check the :doc:`Operating System Support Guide </getting-started/os-support>` for a list of supported operating systems and versions.
+Check the `Operating System Support Guide <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_ for a list of supported operating systems and versions.
 
 * On a docker node: :code:`$ docker exec -it Node_Z scylla --version`
 

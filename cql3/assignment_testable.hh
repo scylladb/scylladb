@@ -27,7 +27,7 @@ public:
 
     struct vector_test_result {
         test_result result;
-        std::optional<size_t> dimension_opt;
+        std::optional<vector_dimension_t> dimension_opt;
     };
 
     static bool is_assignable(test_result tr) {

@@ -44,7 +44,6 @@ async def test_gossiper_empty_self_id_on_shadow_round(manager: ManagerClient):
 
     logging.info("Starting cluster normally")
     node1 = await manager.server_add(cmdline=cmdline, start=False, config=cfg)
-    manager.server_add(cmdline=cmdline, start=False)
     node1_log = await manager.server_open_log(node1.server_id)
     node2 = await manager.server_add(cmdline=cmdline, start=False, seeds=[node1.ip_addr])
     node2_log = await manager.server_open_log(node2.server_id)

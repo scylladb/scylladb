@@ -224,6 +224,10 @@ import ssl
 # only one that matches this wildcard, but this can be overridden
 # by setting a SCYLLA environment variable:
 source_path = os.path.realpath(os.path.join(__file__, '../../..'))
+if source_path not in sys.path:
+    sys.path.append(source_path)
+from test.pylib.driver_utils import safe_driver_shutdown
+
 scylla = None
 def find_scylla():
     global scylla
@@ -321,6 +325,9 @@ def run_scylla_cmd(pid, dir):
         # and other modules dependent on it: e.g. service levels
         '--authenticator', 'PasswordAuthenticator',
         '--authorizer', 'CassandraAuthorizer',
+        '--auth-superuser-name=cassandra',
+        # password is "cassandra"
+        '--auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/',
         '--strict-allow-filtering=true',
         '--strict-is-not-null-in-views=true',
         '--permissions-update-interval-in-ms', '100',
@@ -331,6 +338,9 @@ def run_scylla_cmd(pid, dir):
         '--tablets-initial-scale-factor=1',
         # Avoid unhelpful "guardrails" warnings
         '--minimum-replication-factor-warn-threshold=-1',
+        # The expiration scanner's period (started for Alternator but
+        # now also CQL)
+        '--alternator-ttl-period-in-seconds=0.5',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
@@ -379,6 +389,8 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
     if major < [5,4] or (enterprise and major <= [2023,1]):
         cmd.remove('--strict-is-not-null-in-views=true')
         cmd.remove('--minimum-replication-factor-warn-threshold=-1')
+        cmd.remove('--auth-superuser-name=cassandra')
+        cmd.remove('--auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/')
     if major <= [5,1] or (enterprise and major <= [2022,2]):
         cmd.remove('--query-tombstone-page-limit=1000')
     if major <= [5,0] or (enterprise and major <= [2022,1]):
@@ -422,7 +434,7 @@ def check_cql(ip, ssl_context=None):
     try:
         cluster = get_cql_cluster(ip, ssl_context)
         cluster.connect()
-        cluster.shutdown()
+        safe_driver_shutdown(cluster)
     except cassandra.cluster.NoHostAvailable:
         raise NotYetUp
     # Any other exception may indicate a problem, and is passed to the caller.

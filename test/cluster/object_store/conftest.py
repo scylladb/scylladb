@@ -30,6 +30,11 @@ def format_tuples(tuples=None, **kwargs):
     return f'{{ {body} }}'
 
 
+def keyspace_options(object_storage, rf=1):
+    storage_opts = format_tuples(type=f'{object_storage.type}', endpoint=object_storage.address, bucket=object_storage.bucket_name)
+    return f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND STORAGE = {storage_opts}"
+
+
 class S3_Server:
     def __init__(self, tempdir: str, address: str, port: int, acc_key: str, secret_key: str, region: str, bucket_name):
         self.tempdir = tempdir
@@ -200,21 +205,18 @@ class GSServer(GSFront):
             elif os.environ.get(k):
                 del os.environ[k]
 
-    def _docker_args(self, host, port):
-        # pylint: disable=unused-argument
-        return ["-p", f'{port}:{port}']
-
     def _image_args(self, host, port):
         # pylint: disable=unused-argument
-        return ["-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', f'127.0.0.1:{port}']
+        # note: need to set 'public-host' to the IP we connect to, to make XML (s3) API work for listing
+        return ["-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', '127.0.0.1']
 
     async def start(self):
         self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.52.3", self.tmpdir, 
                                        logfilenamebase="fake-gcs-server",
-                                       docker_args=self._docker_args,
                                        image_args=self._image_args,
                                        success_string="server started at",
-                                       failure_string="address already in use"
+                                       failure_string="address already in use",
+                                       port=4443
                                        )
         await self.server.start()
         self.port = self.server.port

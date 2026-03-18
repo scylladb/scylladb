@@ -14,20 +14,6 @@
 namespace alternator {
 
 const char* ALTERNATOR_METRICS = "alternator";
-static seastar::metrics::histogram estimated_histogram_to_metrics(const utils::estimated_histogram& histogram) {
-    seastar::metrics::histogram res;
-    res.buckets.resize(histogram.bucket_offsets.size());
-    uint64_t cumulative_count = 0;
-    res.sample_count = histogram._count;
-    res.sample_sum = histogram._sample_sum;
-    for (size_t i = 0; i < res.buckets.size(); i++) {
-        auto& v = res.buckets[i];
-        v.upper_bound = histogram.bucket_offsets[i];
-        cumulative_count += histogram.buckets[i];
-        v.count = cumulative_count;
-    }
-    return res;
-}
 
 static seastar::metrics::label column_family_label("cf");
 static seastar::metrics::label keyspace_label("ks");
@@ -151,21 +137,21 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"), labels,
                     stats.api_operations.batch_get_item_batch_total)(op("BatchGetItem")).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_histogram("batch_item_count_histogram", seastar::metrics::description("Histogram of the number of items in a batch request"), labels,
-                    [&stats]{ return estimated_histogram_to_metrics(stats.api_operations.batch_get_item_histogram);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    [&stats]{ return to_metrics_histogram(stats.api_operations.batch_get_item_histogram);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("batch_item_count_histogram", seastar::metrics::description("Histogram of the number of items in a batch request"), labels,
-                    [&stats]{ return estimated_histogram_to_metrics(stats.api_operations.batch_write_item_histogram);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    [&stats]{ return to_metrics_histogram(stats.api_operations.batch_write_item_histogram);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
-                    [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.get_item_op_size_kb);})(op("GetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    [&stats]{ return to_metrics_histogram(stats.operation_sizes.get_item_op_size_kb);})(op("GetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
-                    [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.put_item_op_size_kb);})(op("PutItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    [&stats]{ return to_metrics_histogram(stats.operation_sizes.put_item_op_size_kb);})(op("PutItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
-                    [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.delete_item_op_size_kb);})(op("DeleteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    [&stats]{ return to_metrics_histogram(stats.operation_sizes.delete_item_op_size_kb);})(op("DeleteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
-                    [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.update_item_op_size_kb);})(op("UpdateItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    [&stats]{ return to_metrics_histogram(stats.operation_sizes.update_item_op_size_kb);})(op("UpdateItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
-                    [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.batch_get_item_op_size_kb);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    [&stats]{ return to_metrics_histogram(stats.operation_sizes.batch_get_item_op_size_kb);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
-                    [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.batch_write_item_op_size_kb);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+                    [&stats]{ return to_metrics_histogram(stats.operation_sizes.batch_write_item_op_size_kb);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
     });
 
     seastar::metrics::label expression_label("expression");

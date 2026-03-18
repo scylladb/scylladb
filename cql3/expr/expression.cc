@@ -1603,7 +1603,7 @@ static cql3::raw_value do_evaluate(const collection_constructor& collection, con
         case collection_constructor::style_type::vector:
             return evaluate_vector(collection, inputs);
     }
-    std::abort();
+    throwing_assert(0 && "do_evaluate invalid style");
 }
 
 static cql3::raw_value do_evaluate(const usertype_constructor& user_val, const evaluation_inputs& inputs) {

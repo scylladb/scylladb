@@ -61,8 +61,8 @@ async def test_mv_build_during_shutdown(manager: ManagerClient):
         # Start building two views. The first is delayed by the injection, and the second
         # view build is queued, waiting on the view builder semaphore.
         await manager.api.enable_injection(server.ip_addr, "delay_before_get_view_natural_endpoint", one_shot=True)
-        create_task1 = cql.run_async(f"CREATE materialized view {ks}.t_view1 AS select pk, v from {ks}.t where v is not null primary key (v, pk)")
-        create_task2 = cql.run_async(f"CREATE materialized view {ks}.t_view2 AS select pk, v from {ks}.t where v is not null primary key (v, pk)")
+        await cql.run_async(f"CREATE materialized view {ks}.t_view1 AS select pk, v from {ks}.t where v is not null primary key (v, pk)")
+        await cql.run_async(f"CREATE materialized view {ks}.t_view2 AS select pk, v from {ks}.t where v is not null primary key (v, pk)")
 
         log = await manager.server_open_log(server.server_id)
         mark = await log.mark()
@@ -80,4 +80,4 @@ async def test_mv_build_during_shutdown(manager: ManagerClient):
         # For dropping the keyspace
         await manager.server_start(server.server_id)
         await reconnect_driver(manager)
-        asyncio.gather(create_task1, create_task2)
+        

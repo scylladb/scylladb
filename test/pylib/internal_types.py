@@ -39,3 +39,4 @@ class ServerUpState(IntEnum):
     HOST_ID_QUERIED = auto()
     CQL_CONNECTED = auto()
     CQL_QUERIED = auto()
+    SERVING = auto()  # Scylla sent sd_notify("serving")

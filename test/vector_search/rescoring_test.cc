@@ -460,3 +460,38 @@ SEASTAR_TEST_CASE(no_nulls_in_rescored_results, *boost::unit_test::expected_fail
                 }));
     }
 }
+
+// Reproducer for SCYLLADB-456
+SEASTAR_TEST_CASE(rescoring_with_zerovector_query) {
+    for (const auto& params : test_data) {
+        auto server = co_await make_vs_mock_server();
+        co_await do_with_cql_env(
+                [&](cql_test_env& env) -> future<> {
+                    configure(env.local_qp().vector_store_client()).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                    env.local_qp().vector_store_client().start_background_tasks();
+
+                    co_await create_index_and_insert_data(env, params);
+
+                    server->next_ann_response({http::reply::status_type::ok, R"({
+                        "primary_keys": { "id": [4, 3, 2, 1] },
+                        "distances": [0, 0, 0, 0]
+                    })"});
+
+                    // For cosine similarity the ANN vector query would fail as `similarity_cosine` function did not support zero vectors.
+                    try {
+                        auto msg = co_await env.execute_cql("SELECT id FROM ks.cf ORDER BY embedding ANN OF [0, 0] LIMIT 3;");
+
+                        auto rms = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+                        BOOST_REQUIRE(rms);
+                        const auto& rows = rms->rs().result_set().rows();
+                        BOOST_REQUIRE_EQUAL(rows.size(), 3);
+                    } catch (const std::exception& e) {
+                        BOOST_FAIL(e.what());
+                    }
+                },
+                make_config(format("http://server.node:{}", server->port())))
+                .finally(seastar::coroutine::lambda([&] -> future<> {
+                    co_await server->stop();
+                }));
+    }
+}

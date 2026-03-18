@@ -20,6 +20,6 @@ namespace alternator {
 
 using key_cache = utils::loading_cache<std::string, std::string, 1>;
 
-future<std::string> get_key_from_roles(service::storage_proxy& proxy, auth::service& as, std::string username);
+future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::string username);
 
 }

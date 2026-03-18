@@ -53,6 +53,14 @@ public:
         }
     }
 
+    // Construct a response with pre-serialized body
+    response(int16_t stream, cql_binary_opcode opcode, uint8_t flags, bytes_ostream body)
+        : _stream{stream}
+        , _opcode{opcode}
+        , _flags{flags}
+        , _body{std::move(body)}
+    { }
+
     void set_frame_flag(cql_frame_flags flag) noexcept {
         _flags |= flag;
     }
@@ -88,6 +96,14 @@ public:
     size_t size() const {
         return _body.size();
     }
+    uint8_t flags() const {
+        return _flags;
+    }
+
+    bytes_ostream extract_body() && {
+        return std::move(_body);
+    }
+
 private:
     void compress(cql_compression compression);
     void compress_lz4();

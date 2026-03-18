@@ -149,19 +149,31 @@ public:
         const auto& node = nodes_info.at(voter_id);
 
         if (node.is_alive) {
-            SCYLLA_ASSERT(_alive_nodes_remaining > 0);
+            if (_alive_nodes_remaining == 0) {
+                on_internal_error(rvlogger,
+                        format("rack_info: no alive nodes remaining, but node {} is alive", voter_id));
+            }
             --_alive_nodes_remaining;
             if (node.is_leader) {
-                SCYLLA_ASSERT(_owns_alive_leader);
+                if (!_owns_alive_leader) {
+                    on_internal_error(rvlogger,
+                            format("rack_info: rack doesn't own a live leader, but leader {} is alive", voter_id));
+                }
                 _owns_alive_leader = false;
             }
         }
         if (node.is_voter) {
             if (node.is_alive) {
-                SCYLLA_ASSERT(_existing_alive_voters_remaining > 0);
+                if (_existing_alive_voters_remaining == 0) {
+                    on_internal_error(rvlogger,
+                            format("rack_info: no live voters remaining, but voter {} is alive", voter_id));
+                }
                 --_existing_alive_voters_remaining;
             } else {
-                SCYLLA_ASSERT(_existing_dead_voters_remaining > 0);
+                if (_existing_dead_voters_remaining == 0) {
+                    on_internal_error(rvlogger,
+                            format("rack_info: no dead voters remaining, but voter {} is dead", voter_id));
+                }
                 --_existing_dead_voters_remaining;
             }
         }
@@ -279,16 +291,25 @@ public:
 
             if (node.is_alive) {
                 if (node.is_voter) {
-                    SCYLLA_ASSERT(_existing_alive_voters_remaining > 0);
+                    if (_existing_alive_voters_remaining == 0) {
+                        on_internal_error(rvlogger,
+                                format("datacenter_info: no live voters remaining, but voter {} is alive", *voter_id));
+                    }
                     --_existing_alive_voters_remaining;
                 }
                 if (node.is_leader) {
-                    SCYLLA_ASSERT(_owns_alive_leader);
+                    if (!_owns_alive_leader) {
+                        on_internal_error(rvlogger,
+                                format("datacenter_info: DC doesn't own a live leader, but leader {} is alive", *voter_id));
+                    }
                     _owns_alive_leader = false;
                 }
             }
 
-            SCYLLA_ASSERT(_nodes_remaining > 0);
+            if (_nodes_remaining == 0) {
+                on_internal_error(rvlogger,
+                        format("datacenter_info: no nodes remaining, but voter {} belongs to this DC", *voter_id));
+            }
 
             --_nodes_remaining;
             ++_assigned_voters_count;

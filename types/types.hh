@@ -176,6 +176,8 @@ struct timeuuid_native_type {
 
 using data_type = shared_ptr<const abstract_type>;
 
+using vector_dimension_t = uint32_t;
+
 template <typename T>
 const T& value_cast(const data_value& value);
 

@@ -186,6 +186,9 @@ distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<d
             .need_mutate_level = true,
             .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
             .allow_loading_materialized_view = false,
+            .sstable_open_config = {
+                .ignore_component_digest_mismatch = db.local().get_config().ignore_component_digest_mismatch(),
+            },
         };
         process_sstable_dir(directory, flags).get();
 
@@ -376,6 +379,9 @@ future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& d
         .enable_dangerous_direct_import_of_cassandra_counters = _db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
         .allow_loading_materialized_view = true,
         .garbage_collect = true,
+        .sstable_open_config = {
+            .ignore_component_digest_mismatch = _db.local().get_config().ignore_component_digest_mismatch(),
+        },
     };
     co_await distributed_loader::process_sstable_dir(directory, flags);
 

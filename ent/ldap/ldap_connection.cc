@@ -482,6 +482,8 @@ void ldap_reuser::reap(conn_ptr& conn) {
 }
 
 future<> ldap_reuser::stop() {
-    reap(_conn);
-    return std::move(_reaper);
+    return _gate.close().then([this] {
+        reap(_conn);
+        return std::move(_reaper);
+    });
 }

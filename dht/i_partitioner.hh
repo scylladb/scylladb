@@ -91,6 +91,7 @@ inline token get_token(const schema& s, partition_key_view key) {
 
 dht::partition_range to_partition_range(dht::token_range);
 dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges, utils::can_yield can_yield = utils::can_yield::no);
+future<utils::chunked_vector<dht::partition_range>> to_partition_ranges_chunked(const dht::token_range_vector& ranges);
 
 // Each shard gets a sorted, disjoint vector of ranges
 std::map<unsigned, dht::partition_range_vector>
@@ -105,7 +106,7 @@ std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name);
 // Returns a sorted and deoverlapped list of ranges that are
 // the result of subtracting all ranges from ranges_to_subtract.
 // ranges_to_subtract must be sorted and deoverlapped.
-future<dht::partition_range_vector> subtract_ranges(const schema& schema, const dht::partition_range_vector& ranges, dht::partition_range_vector ranges_to_subtract);
+future<utils::chunked_vector<dht::partition_range>> subtract_ranges(const schema& schema, utils::chunked_vector<dht::partition_range> ranges, utils::chunked_vector<dht::partition_range> ranges_to_subtract);
 
 // Returns a token_range vector split based on the given number of most-significant bits
 dht::token_range_vector split_token_range_msb(unsigned most_significant_bits);

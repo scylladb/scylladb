@@ -12,7 +12,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name, wait_for
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
-from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace, get_topology_version
 from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
 
 import pytest
@@ -26,6 +26,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 import itertools
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,24 @@ async def safe_rolling_restart(manager, servers, with_down):
     await manager.rolling_restart(servers, with_down)
     cql = await reconnect_driver(manager)
     return cql
+
+async def wait_for_valid_load_stats(cql, table_id, timeout=120):
+    started = time.time()
+    # Wait until the given table has no missing tablet sizes
+    while True:
+        missing_cnt = 0
+        found_cnt = 0
+        for r in await cql.run_async(f"SELECT * FROM system.tablet_sizes WHERE table_id = {table_id};"):
+            found_cnt += 1
+            if len(r.missing_replicas) > 0:
+                missing_cnt += 1
+
+        if missing_cnt == 0 and found_cnt > 0:
+            break
+
+        assert time.time() - started < timeout, "Timed out while waiting for valid load_stats"
+
+        await asyncio.sleep(0.2)
 
 @pytest.mark.asyncio
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ManagerClient):
@@ -1305,7 +1324,7 @@ async def create_cluster(manager: ManagerClient, num_dcs: int, num_racks: int, n
     return servers
 
 
-class TestContext:
+class Context:
     def __init__(self, ks: str, table: str, rf: int, initial_tablets: int, num_keys: int):
         self.ks = ks
         self.table = table
@@ -1328,7 +1347,7 @@ async def create_and_populate_table(manager: ManagerClient, rf: int = 3, initial
         ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': {initial_tablets}}}")
         await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, c int)")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{table} (pk, c) VALUES ({k}, 1);") for k in range(num_keys)])
-        yield TestContext(ks, table, rf, initial_tablets, num_keys)
+        yield Context(ks, table, rf, initial_tablets, num_keys)
     finally:
         await cql.run_async(f"DROP KEYSPACE {ks}")
 
@@ -1923,8 +1942,55 @@ async def test_update_load_stats_after_migration(manager: ManagerClient):
         assert pending_replica[0] in replica_hosts, "Pending replica tablet size is in load_stats"
 
 @pytest.mark.asyncio
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+async def test_crash_on_missing_table_from_load_stats(manager: ManagerClient):
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True,
+            'tablet_load_stats_refresh_interval_in_seconds': 1
+            }
+    cmdline = [
+        '--logger-log-level', 'load_balancer=debug',
+        '--logger-log-level', 'raft_topology=debug',
+        '--smp', '2',
+    ]
+    servers = await manager.servers_add(2, config=cfg, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack1"},
+    ])
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        # Make sure load_stats has been refreshed and that the coordinator has cached load_stats
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+        await wait_for_valid_load_stats(cql, table_id)
+
+        # Kill the non-coordinator node
+        await manager.server_stop_gracefully(servers[1].server_id)
+
+        # Drop the table; this leaves the table size in the cached load_stats on the coordinator
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        # Wait for the next load_stats refresh
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+        await s0_log.wait_for('raft topology: Refreshed table load stats for all DC', from_mark=s0_mark)
+
+
+@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
+async def test_tablets_barrier_waits_for_replica_erms(manager: ManagerClient):
+    """
+    The test verifies that tablet replicas hold ERMS while processing requests,
+    and that the tablet's global barrier waits for all replicas to acknowledge it.
+    To do this, the test starts a read request and makes it hang on the
+    `replica_query_wait` injection, then initiates tablet migration. Finally, it
+    checks that the tablet's global barrier waits for the replica handling that
+    request to complete.
+    """
+
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -1953,7 +2019,6 @@ async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
 
         replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
 
-        s0_host_id = await manager.get_host_id(servers[0].server_id)
         s1_host_id = await manager.get_host_id(servers[1].server_id)
         dst_shard = 0
 
@@ -1965,13 +2030,19 @@ async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
         replica_query = cql.run_async(f"SELECT * from {ks}.test where pk={key} BYPASS CACHE", host=hosts[1])
         await s0_log.wait_for('replica_query_wait: waiting', from_mark=s0_mark)
 
-        await manager.api.enable_injection(servers[0].ip_addr, "tablet_cleanup_completion_wait", one_shot=False)
+        version_before_move = await get_topology_version(cql, hosts[0])
 
+        s0_mark = await s0_log.mark()
         migration_task = asyncio.create_task(
             manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token))
 
         # migration should proceed once replica query times out on coordinator, causing it to be abandoned
-        await s0_log.wait_for('tablet_cleanup_completion_wait: waiting', from_mark=s0_mark)
+        new_version = version_before_move + 1
+        await s0_log.wait_for(re.escape(
+            f"Got raft_topology_cmd::barrier_and_drain, version {new_version}, "
+            f"current version {new_version}, "
+            f"stale versions (version: use_count): {{{version_before_move}: 1}}"),
+            from_mark=s0_mark)
 
         await manager.api.message_injection(servers[0].ip_addr, "replica_query_wait")
         await manager.api.disable_injection(servers[0].ip_addr, "replica_query_wait")
@@ -1982,7 +2053,6 @@ async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
         except:
             pass
 
-        await manager.api.message_injection(servers[0].ip_addr, "tablet_cleanup_completion_wait")
         logger.info("Waiting for migration to finish")
         await migration_task
         logger.info("Migration done")
@@ -2041,7 +2111,7 @@ async def test_split_and_incremental_repair_synchronization(manager: ManagerClie
             insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
             insert_stmt.consistency_level = ConsistencyLevel.ONE
 
-            await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False)
+            await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": "test", "what": "throw"})
             pks = range(256, 512)
             await asyncio.gather(*[cql.run_async(insert_stmt, (k, k)) for k in pks])
             await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
@@ -2157,3 +2227,74 @@ async def test_split_and_intranode_synchronization(manager: ManagerClient):
             return tablet_count >= expected_tablet_count or None
         # Give enough time for split to happen in debug mode
         await wait_for(finished_splitting, time.time() + 120)
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_stopped_on_shutdown(manager: ManagerClient):
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True,
+            'tablet_load_stats_refresh_interval_in_seconds': 1
+            }
+    cmdline = [
+        '--logger-log-level', 'debug_error_injection=debug',
+        '--smp', '1',
+    ]
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+
+    logger.info(f'server_id = {server.server_id}')
+
+    cql = manager.get_cql()
+
+    await manager.disable_tablet_balancing()
+
+    initial_tablets = 2
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': {initial_tablets}}};")
+
+        await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
+
+        # insert data
+        pks = range(256)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in pks])
+
+        # flush the table
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        # force split on the test table
+        expected_tablet_count = 4
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {expected_tablet_count}}}")
+
+        log = await manager.server_open_log(server.server_id)
+        log_mark = await log.mark()
+
+        await manager.api.enable_injection(server.ip_addr, "splitting_mutation_writer_switch_wait", one_shot=True)
+        await manager.api.enable_injection(server.ip_addr, "storage_service_drain_wait", one_shot=True)
+        await manager.enable_tablet_balancing()
+
+        await log.wait_for('Emitting resize decision of type split', from_mark=log_mark)
+        await log.wait_for('splitting_mutation_writer_switch_wait: waiting', from_mark=log_mark)
+
+        log_mark = await log.mark()
+
+        shutdown_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+
+        await log.wait_for('Stopping.*ongoing compactions')
+        await manager.api.message_injection(server.ip_addr, "splitting_mutation_writer_switch_wait")
+
+        await log.wait_for('storage_service_drain_wait: waiting', from_mark=log_mark)
+        await log.wait_for('Failed to complete splitting of table', from_mark=log_mark)
+
+        await manager.api.message_injection(server.ip_addr, "storage_service_drain_wait")
+
+        await shutdown_task
+
+        errors = await log.grep_for_errors(from_mark=log_mark)
+        assert errors == []
+
+        await manager.server_start(server.server_id)
+        await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+
+        await log.wait_for('Detected tablet split for table', from_mark=log_mark)
+        tablet_count = await get_tablet_count(manager, server, ks, 'test')
+        assert tablet_count >= expected_tablet_count

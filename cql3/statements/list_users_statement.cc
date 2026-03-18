@@ -14,6 +14,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/column_identifier.hh"
 #include "auth/common.hh"
+#include "db/system_keyspace.hh"
 #include "transport/messages/result_message.hh"
 
 std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_users_statement::prepare(
@@ -30,9 +31,9 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::list_users_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
     static const sstring virtual_table_name("users");
 
-    const auto make_column_spec = [auth_ks = auth::get_auth_ks_name(qp)](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
+    const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
         return make_lw_shared<column_specification>(
-            auth_ks,
+            db::system_keyspace::NAME,
             virtual_table_name,
             ::make_shared<column_identifier>(name, true),
             ty);
@@ -74,7 +75,7 @@ cql3::statements::list_users_statement::execute(query_processor& qp, service::qu
     const auto& cs = state.get_client_state();
     const auto& as = *cs.get_auth_service();
 
-    return auth::has_superuser(as, *cs.user()).then([&cs, &as, make_results = std::move(make_results)](bool has_superuser) mutable {
+    return cs.has_superuser().then([&cs, &as, make_results = std::move(make_results)](bool has_superuser) mutable {
         if (has_superuser) {
             return as.underlying_role_manager().query_all().then([&as, make_results = std::move(make_results)](std::unordered_set<sstring> roles) mutable {
                 return make_results(as, std::move(roles));

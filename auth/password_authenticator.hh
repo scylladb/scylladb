@@ -13,7 +13,6 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_future.hh>
 
-#include "db/consistency_level_type.hh"
 #include "auth/authenticator.hh"
 #include "auth/passwords.hh"
 #include "auth/cache.hh"
@@ -44,15 +43,11 @@ class password_authenticator : public authenticator {
     cache& _cache;
     future<> _stopped;
     abort_source _as;
-    std::string _superuser; // default superuser name from the config (may or may not be present in roles table)
     shared_promise<> _superuser_created_promise;
     // We used to also support bcrypt, SHA-256, and MD5 (ref. scylladb#24524).
     constexpr static auth::passwords::scheme _scheme = passwords::scheme::sha_512;
 
 public:
-    static db::consistency_level consistency_for_user(std::string_view role_name);
-    static std::string default_superuser(const db::config&);
-
     password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&);
 
     ~password_authenticator();
@@ -90,12 +85,6 @@ public:
     virtual future<> ensure_superuser_is_created() const override;
 
 private:
-    bool legacy_metadata_exists() const;
-
-    future<> migrate_legacy_metadata() const;
-
-    future<> legacy_create_default_if_missing();
-
     future<> maybe_create_default_password();
     future<> maybe_create_default_password_with_retries();
 

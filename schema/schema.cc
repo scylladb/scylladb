@@ -39,6 +39,7 @@
 #include "utils/hashers.hh"
 #include "alternator/extract_from_attrs.hh"
 #include "utils/managed_string.hh"
+#include "alternator/ttl_tag.hh"
 
 #include <boost/lexical_cast.hpp>
 
@@ -1072,6 +1073,9 @@ managed_string schema::get_create_statement(const schema_describe_helper& helper
         }
     } else {
         os << "TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " (";
+        // Find the name of the per-row TTL column, if there is one, so we
+        // can mark it with "TTL".
+        std::optional<std::string> ttl_column = db::find_tag(*this, TTL_TAG_KEY);
         for (auto& cdef : all_columns()) {
             if (with_internals && dropped_columns().contains(cdef.name_as_text())) {
                 // If the column has been re-added after a drop, we don't include it right away. Instead, we'll add the
@@ -1082,6 +1086,9 @@ managed_string schema::get_create_statement(const schema_describe_helper& helper
 
             os << "\n    ";
             column_definition_as_cql_key(os, cdef);
+            if (ttl_column && *ttl_column == cdef.name_as_text()) {
+                os << " TTL";
+            }
             os << ",";
         }
 
@@ -1287,6 +1294,11 @@ schema_builder& schema_builder::with_partitioner(sstring name) {
 
 schema_builder& schema_builder::with_sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits) {
     _raw._sharder = get_sharder(shard_count, sharding_ignore_msb_bits);
+    return *this;
+}
+
+schema_builder& schema_builder::with_sharder(const dht::static_sharder& sharder) {
+    _raw._sharder = sharder;
     return *this;
 }
 

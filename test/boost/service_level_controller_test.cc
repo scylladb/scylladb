@@ -163,15 +163,6 @@ SEASTAR_THREAD_TEST_CASE(too_many_service_levels) {
             }
             return make_ready_future<>();
         }    
-        virtual bool is_v2() const override {
-            return true;
-        }
-        virtual bool can_use_effective_service_level_cache() const override {
-            return true;
-        }
-        virtual ::shared_ptr<service_level_distributed_data_accessor> upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const override {
-            return make_shared<data_accessor>();
-        }
         virtual future<> commit_mutations(service::group0_batch&& mc, abort_source& as) const override {
             return make_ready_future<>();
         }

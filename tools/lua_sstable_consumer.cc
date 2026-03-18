@@ -9,6 +9,7 @@
 #include "utils/assert.hh"
 #include <fmt/chrono.h>
 #include <lua.hpp>
+#include <random>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -32,7 +33,22 @@
 #    define LUA_504_PLUS(x...)
 #endif
 
+// Lua 5.5 added a seed parameter to lua_newstate
+
+#if LUA_VERSION_NUM >= 505
+#    define LUA_505_PLUS(x...) x
+#else
+#    define LUA_505_PLUS(x...)
+#endif
+
 namespace {
+
+#if LUA_VERSION_NUM >= 505
+static unsigned lua_random_seed() {
+    static thread_local std::default_random_engine rng{std::random_device{}()};
+    return rng();
+}
+#endif
 
 class gc_clock_time_point;
 class counter_shards_value;
@@ -1367,7 +1383,7 @@ public:
         : _schema(std::move(s))
         , _permit(std::move(p))
         , _script_params(std::move(script_params))
-        , _l(lua_newstate(lua_alloc, nullptr))
+        , _l(lua_newstate(lua_alloc, nullptr LUA_505_PLUS(, lua_random_seed())))
     {
     }
     future<> load_script(std::string_view script_name, std::string_view script) {

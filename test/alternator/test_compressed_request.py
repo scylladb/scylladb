@@ -232,23 +232,11 @@ def test_gzip_request_with_missing_character(dynamodb, test_table):
 # Let's try a 20 MB that compresses extremely well to a tiny string, but
 # should still be rejected as an oversized request.
 #
-# This test is marked scylla_only because DynamoDB does NOT limit the
-# uncompressed size of a compressed request:
-# DynamoDB does (as we check in test_manual_requests.py) limit non-compressed
-# request sizes, but these limits are not enforced for compressed requests -
-# I checked that even a 1 GB (!) pre-compression-size request is accepted
-# (but a 10 GB pre-compression-size request is silently rejected with 500
-# error). It is debateable whether this should be considered a DynamoDB bug -
-# or a "feature". I would claim it's a bug - there is no reason why a huge
-# well-compressible request should be allowed while not allowed when not
-# compressed. A counter-argument is that the biggest reason why a large
-# request is not allowed is the signature algorithm - we need to read
-# the entire request to verify its validity and only then we can start acting
-# on it. But with a compressed request we validate the small compressed
-# version's validity, so we can then - at least in theory - read the
-# uncompressed request in a streaming fashion, without ever reading the
-# entire request into memory.
-def test_gzip_request_oversized(dynamodb, test_table, scylla_only):
+# When this test was first written, DynamoDB failed it - DynamoDB would
+# accept even a 1GB request if it compresses to a small size. This was
+# a potential denial-of-service vulnerability, so after we reported it
+# to AWS it was fixed - and now this test passes on DynamoDB.
+def test_gzip_request_oversized(dynamodb, test_table):
     # Take a legal PutItem payload and add a lot of spaces to make it very
     # long, but it's highly compressible so the compressed payload will be
     # very small. The server should still reject the oversized uncompressed
@@ -258,13 +246,16 @@ def test_gzip_request_oversized(dynamodb, test_table, scylla_only):
     payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "' + p + '"}, "c": {"S": "x"}}}'
     payload = payload[:-1] + ' '*long_len + payload[-1]
     payload = gzip.compress(payload.encode('utf-8'))
-    # the compressed payload is very small, it won't cause the 413 error
     assert len(payload) < 16*1024*1024
     req = get_signed_request(dynamodb, 'PutItem', payload)
     headers = dict(req.headers)
     headers.update({'Content-Encoding': 'gzip'})
     r = requests.post(req.url, headers=headers, data=req.body, verify=False)
-    assert r.status_code == 413
+    # Alternator returns 413 (Content Too Large), DynamoDB currently returns
+    # 500 (Internal Server Error), which is arguably less suitable but let's
+    # accept both in the test. The important thing is that the oversized
+    # request is rejected.
+    assert r.status_code == 413 or r.status_code == 500
     assert 'Item' not in test_table.get_item(Key={'p': p, 'c': 'x'}, ConsistentRead=True)
 
 # An empty string is NOT a valid gzip, so if we try to pass it off as a

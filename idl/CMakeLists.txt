@@ -48,6 +48,7 @@ set(idl_headers
   messaging_service.idl.hh
   paxos.idl.hh
   raft.idl.hh
+  raft_util.idl.hh
   raft_storage.idl.hh
   group0.idl.hh
   hinted_handoff.idl.hh
@@ -68,6 +69,8 @@ set(idl_headers
   migration_manager.idl.hh
   node_ops.idl.hh
   tasks.idl.hh
+  client_state.idl.hh
+  forward_cql.idl.hh
   )
 
 foreach(idl_header ${idl_headers})

@@ -11,7 +11,6 @@
 #include "seastarx.hh"
 #include "db/config.hh"
 
-#include <boost/algorithm/string/trim.hpp>
 #include <seastar/core/coroutine.hh>
 #include "sstables/sstable_compressor_factory.hh"
 #include "gms/feature_service.hh"
@@ -30,11 +29,7 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
 
     std::set<gms::inet_address> seeds;
     if (seed_provider.parameters.contains("seeds")) {
-        size_t begin = 0;
-        size_t next = 0;
-        sstring seeds_str = seed_provider.parameters.find("seeds")->second;
-        while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-            auto seed = boost::trim_copy(seeds_str.substr(begin,next-begin));
+        for (const auto& seed : utils::split_comma_separated_list(seed_provider.parameters.at("seeds"))) {
             try {
                 seeds.emplace(gms::inet_address::lookup(seed, family, preferred).get());
             } catch (...) {
@@ -46,11 +41,10 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
                                seed,
                                std::current_exception());
             }
-            begin = next+1;
         }
     }
     if (seeds.empty()) {
-        seeds.emplace(gms::inet_address("127.0.0.1"));
+        seeds.emplace("127.0.0.1");
     }
     startlog.info("seeds={{{}}}, listen_address={}, broadcast_address={}",
             fmt::join(seeds, ", "), listen, broadcast_address);
@@ -101,13 +95,6 @@ std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, st
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
         disabled.insert("STRONGLY_CONSISTENT_TABLES"s);
-    }
-    if (cfg.force_gossip_topology_changes()) {
-        if (cfg.enable_tablets_by_default()) {
-            throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --tablets-mode-for-new-keyspaces=enabled|enforced or --force-gossip-topology-changes, but not both.");
-        }
-        startlog.warn("The tablets feature is disabled due to forced gossip topology changes");
-        disabled.insert("TABLETS"s);
     }
     if (!cfg.table_digest_insensitive_to_expiry()) {
         disabled.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);

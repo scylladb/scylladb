@@ -72,7 +72,7 @@ void group0_state_id_handler::refresh() {
     const auto min_state_id = std::ranges::min(group0_members_state_ids, [](auto a, auto b) {
         if (!a || !b) {
             // This should never happen, but if it does, it's a bug.
-            on_fatal_internal_error(slogger, "unexpected empty state_id");
+            on_internal_error(slogger, "unexpected empty state_id");
         }
         return utils::timeuuid_tri_compare(a, b) < 0;
     });

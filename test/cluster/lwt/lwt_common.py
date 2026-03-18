@@ -67,6 +67,7 @@ class Worker:
       bump global phase-ops counter via on_applied()
     It checks for applied state and retries on "uncertainty" timeouts.
     """
+
     def __init__(
         self,
         worker_id: int,
@@ -77,6 +78,7 @@ class Worker:
         other_columns: List[int],
         get_lower_bound: Callable[[int, int], int],
         on_applied: Callable[[int, int, int], None],
+        scale_timeout: Callable[[int | float], int | float],
         stop_event: asyncio.Event,
         counter_update_statement: Optional[PreparedStatement] = None,
         counters_random_delta: bool = False,
@@ -94,6 +96,7 @@ class Worker:
         self.cql = cql
         self.get_lower_bound = get_lower_bound
         self.on_applied = on_applied
+        self.scale_timeout = scale_timeout
         # counters
         self.counter_update_statement = counter_update_statement
         self.counters_random_delta = counters_random_delta
@@ -200,7 +203,7 @@ class Worker:
                     self.counter_deltas[pk] += delta
                     await self._inc_counter(pk, delta)
 
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(self.scale_timeout(0.5))
 
             except Exception:
                 self.stop()
@@ -217,8 +220,10 @@ class BaseLWTTester:
 
     def __init__(
             self, manager: ManagerClient, ks: str, tbl: str,
-            num_workers: int = DEFAULT_WORKERS, num_keys: int = DEFAULT_NUM_KEYS, use_counters: bool = False,
-            counters_random_delta: bool = False, counters_max_delta: int = 5, counter_tbl: Optional[str] = None
+            num_workers: int = DEFAULT_WORKERS, num_keys: int = DEFAULT_NUM_KEYS, *,
+            scale_timeout: Callable[[int | float], int | float],
+            use_counters: bool = False, counters_random_delta: bool = False,
+            counters_max_delta: int = 5, counter_tbl: Optional[str] = None
     ):
         self.ks = ks
         self.tbl = tbl
@@ -233,6 +238,7 @@ class BaseLWTTester:
         self.migrations = 0
         self.phase = "warmup"  # "warmup" -> "migrating" -> "post"
         self.phase_ops = defaultdict(int)
+        self.scale_timeout = scale_timeout
         # counters config
         self.use_counters = use_counters
         self.counters_random_delta = counters_random_delta
@@ -253,12 +259,12 @@ class BaseLWTTester:
     def get_phase_ops(self, phase: str) -> int:
         return self.phase_ops.get(phase, 0)
 
-    async def wait_for_phase_ops(self, stop_event, phase: str, target: int, timeout: float = 120.0, poll: float = 0.2):
-        deadline = time.time() + timeout
+    async def wait_for_phase_ops(self, stop_event, phase: str, target: int, timeout: float = 120.0, poll: float = 1):
+        deadline = time.time() + self.scale_timeout(timeout)
         while time.time() < deadline and not stop_event.is_set():
             if self.get_phase_ops(phase) >= target:
                 return
-            await asyncio.sleep(poll)
+            await asyncio.sleep(self.scale_timeout(poll))
         raise asyncio.TimeoutError(
             f"phase '{phase}' did not reach {target} ops in time (have {self.get_phase_ops(phase)})")
 
@@ -292,6 +298,7 @@ class BaseLWTTester:
                 other_columns=other_columns,
                 get_lower_bound=self._get_lower_bound,
                 on_applied=self._on_applied,
+                scale_timeout=self.scale_timeout,
                 counter_update_statement=counter_stmt,
                 counters_random_delta=self.counters_random_delta,
                 counters_max_delta=self.counters_max_delta,
@@ -428,20 +435,20 @@ async def pick_non_replica_server(manager: ManagerClient, servers, replica_host_
 
 async def wait_for_tablet_count(
         manager: ManagerClient, server, ks: str, tbl: str,
-        predicate, target: int, timeout_s: int = 180, poll_s: float = 1.0
+        predicate, target: int, scale_timeout: Callable[[int | float], int | float], timeout_s: int = 180, poll_s: float = 1.0
     ):
     """
     Wait for tablet count to match predicate.
     predicate: callable like lambda c: c >= target (for split) or lambda c: c <= target (for merge)
     """
-    deadline = time.time() + timeout_s
+    deadline = time.time() + scale_timeout(timeout_s)
     last = None
     while time.time() < deadline:
         count = await get_tablet_count(manager, server, ks, tbl)
         last = count
         if predicate(count):
             return count
-        await asyncio.sleep(poll_s)
+        await asyncio.sleep(scale_timeout(poll_s))
     raise TimeoutError(f"tablet count wait timed out (last={last}, target={target})")
 
 

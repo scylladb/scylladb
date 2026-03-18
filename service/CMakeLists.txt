@@ -15,11 +15,11 @@ target_sources(service
     paxos/proposal.cc
     qos/qos_common.cc
     qos/service_level_controller.cc
-    qos/standard_service_level_distributed_data_accessor.cc
     qos/raft_service_level_distributed_data_accessor.cc
     strong_consistency/groups_manager.cc
     strong_consistency/state_machine.cc
     strong_consistency/coordinator.cc
+    strong_consistency/raft_groups_storage.cc
     raft/discovery.cc
     raft/group0_state_id_handler.cc
     raft/group0_state_machine.cc
@@ -50,7 +50,6 @@ target_link_libraries(service
   PRIVATE
     cql3
     mutation
-    node_ops
     raft
     repair
     streaming

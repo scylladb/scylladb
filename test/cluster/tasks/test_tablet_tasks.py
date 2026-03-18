@@ -12,8 +12,10 @@ import pytest
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import create_table_insert_data_for_repair, get_tablet_task_id
+from test.pylib.rest_client import read_barrier
 from test.pylib.tablets import get_all_tablet_replicas
-from test.cluster.util import create_new_test_keyspace, new_test_keyspace
+from test.cluster.util import create_new_test_keyspace, new_test_keyspace, get_topology_coordinator, find_server_by_host_id
+from test.cluster.test_incremental_repair import trigger_tablet_merge
 from test.cluster.test_tablets2 import inject_error_on
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.tasks.task_manager_types import TaskStatus, TaskStats
@@ -95,6 +97,50 @@ async def test_tablet_repair_task(manager: ManagerClient):
 
     await asyncio.gather(repair_task(), check_and_abort_repair_task(manager, tm, servers, module_name, ks))
 
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_wait_with_table_drop(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    injection = "tablet_virtual_task_wait"
+
+    cmdline = [
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline)
+    assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
+
+    token = -1
+    await enable_injection(manager, servers, "repair_tablet_fail_on_rpc_call")
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, await_completion=False)
+
+    repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, "user_repair", keyspace=ks)
+
+    task = repair_tasks[0]
+    assert task.scope == "table"
+    assert task.keyspace == ks
+    assert task.table == "test"
+    assert task.state in ["created", "running"]
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    await enable_injection(manager, [servers[0]], injection)
+
+    async def wait_for_task():
+        status_wait = await tm.wait_for_task(servers[0].ip_addr, task.task_id)
+        assert status_wait.state == "done"
+
+    async def drop_table():
+        await log.wait_for(f'"{injection}"', from_mark=mark)
+        await disable_injection(manager, servers, "repair_tablet_fail_on_rpc_call")
+        await manager.get_cql().run_async(f"DROP TABLE {ks}.test")
+        await manager.api.message_injection(servers[0].ip_addr, injection)
+
+    await asyncio.gather(wait_for_task(), drop_table())
+
+    await disable_injection(manager, servers, injection)
+
 async def check_repair_task_list(tm: TaskManagerClient, servers: list[ServerInfo], module_name: str, keyspace: str):
     def get_task_with_id(repair_tasks, task_id):
         tasks_with_id1 = [task for task in repair_tasks if task.task_id == task_id]
@@ -152,6 +198,45 @@ async def test_tablet_repair_task_list(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_repair_wait(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+
+    stop_repair_injection = "repair_tablet_repair_task_impl_run"
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+    assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
+
+    await inject_error_on(manager, stop_repair_injection, servers)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", await_completion=False)
+
+    repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, "user_repair", keyspace=ks)
+    task = repair_tasks[0]
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    async def wait_for_task():
+        await enable_injection(manager, servers, "tablet_virtual_task_wait")
+        status_wait = await tm.wait_for_task(servers[0].ip_addr, task.task_id)
+
+    async def merge_tablets():
+        await log.wait_for('tablet_virtual_task: wait until tablet operation is finished', from_mark=mark)
+
+        # Resume repair.
+        await message_injection(manager, servers, stop_repair_injection)
+
+        # Merge tablets.
+        coord = await find_server_by_host_id(manager, servers, await get_topology_coordinator(manager))
+        log2 = await manager.server_open_log(coord.server_id)
+        await trigger_tablet_merge(manager, servers, [log2])
+
+        await read_barrier(manager.api, servers[0].ip_addr)
+        await message_injection(manager, servers, "tablet_virtual_task_wait")
+
+    await asyncio.gather(wait_for_task(), merge_tablets())
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_task_children(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
@@ -159,7 +244,7 @@ async def test_tablet_repair_task_children(manager: ManagerClient):
 
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
     for server in servers:
-        tm.set_task_ttl(server.ip_addr, 3600)
+        await tm.set_task_ttl(server.ip_addr, 3600)
     assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
 
     log = await manager.server_open_log(servers[0].server_id)

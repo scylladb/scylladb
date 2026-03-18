@@ -19,6 +19,8 @@
 #include <type_traits>
 #include <fmt/format.h>
 
+#include <seastar/util/defer.hh>
+
 template <typename Comparator, typename T>
 concept IntervalComparatorFor = requires (T a, T b, Comparator& cmp) {
     { cmp(a, b) } -> std::same_as<std::strong_ordering>;
@@ -190,16 +192,15 @@ public:
         if (_start_exists) {
             std::construct_at(&_start_value, std::move(o._start_value));
         }
-        if (_end_exists) {
-            try {
-                std::construct_at(&_end_value, std::move(o._end_value));
-            } catch (...) {
-                if (_start_exists) {
-                    std::destroy_at(&_start_value);
-                }
-                throw;
+        auto undo = seastar::defer([&] noexcept {
+            if (_start_exists) {
+                std::destroy_at(&_start_value);
             }
+        });
+        if (_end_exists) {
+            std::construct_at(&_end_value, std::move(o._end_value));
         }
+        undo.cancel();
     }
     interval_data& operator=(const interval_data& o) {
         if (this != &o) {

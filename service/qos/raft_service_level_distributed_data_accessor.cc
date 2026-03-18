@@ -51,9 +51,6 @@ static void validate_state(const service::raft_group0_client& group0_client) {
     if (this_shard_id() != 0) {
         on_internal_error(logger, "raft_service_level_distributed_data_accessor: must be executed on shard 0");
     }
-    if (group0_client.in_recovery()) {
-        throw exceptions::invalid_request_exception("The cluster is in recovery mode. Changes to service levels are not allowed.");
-    }
 }
 
 future<utils::chunked_vector<mutation>> raft_service_level_distributed_data_accessor::set_service_level_mutations(cql3::query_processor& qp, sstring service_level_name, qos::service_level_options slo, api::timestamp_type timestamp) {
@@ -96,19 +93,8 @@ future<> raft_service_level_distributed_data_accessor::drop_service_level(sstrin
 }
 
 future<> raft_service_level_distributed_data_accessor::commit_mutations(service::group0_batch&& mc, abort_source& as) const {
-    return std::move(mc).commit(_group0_client, as, ::service::raft_timeout{});
-}
-
-bool raft_service_level_distributed_data_accessor::is_v2() const {
-    return true;
-}
-
-bool raft_service_level_distributed_data_accessor::can_use_effective_service_level_cache() const {
-    return !auth::legacy_mode(_qp);
-}
-
-::shared_ptr<service_level_controller::service_level_distributed_data_accessor> raft_service_level_distributed_data_accessor::upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const {
-    return nullptr;
+    co_await std::move(mc).commit(_group0_client, as, ::service::raft_timeout{});
+    co_await _group0_client.send_group0_read_barrier_to_live_members();
 }
 
 }

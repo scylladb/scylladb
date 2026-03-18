@@ -20,6 +20,7 @@
 seastar::logger plog("perf");
 
 class tester {
+    std::string _operation;
     std::chrono::seconds _duration;
     std::string _object_name;
     size_t _object_size;
@@ -45,8 +46,9 @@ class tester {
     std::chrono::steady_clock::time_point now() const { return std::chrono::steady_clock::now(); }
 
 public:
-    tester(std::chrono::seconds dur, unsigned sockets, unsigned part_size, sstring object_name, size_t obj_size)
-            : _duration(dur)
+    tester(const std::string& operation, std::chrono::seconds dur, unsigned sockets, unsigned part_size, sstring object_name, size_t obj_size)
+            : _operation(operation)
+            , _duration(dur)
             , _object_name(std::move(object_name))
             , _object_size(obj_size)
             , _mem(memory::stats().total_memory())
@@ -85,7 +87,7 @@ public:
     future<> start() {
         if (_object_name.empty()) {
             co_await make_temporary_file();
-        } else {
+        } else if (_operation != "upload") {
             _object_size = co_await _client->get_object_size(_object_name);
         }
     }
@@ -179,7 +181,7 @@ int main(int argc, char** argv) {
         auto operation = app.configuration()["operation"].as<sstring>();
         sharded<tester> test;
         plog.info("Creating");
-        co_await test.start(dur, sks, part_size, oname, osz);
+        co_await test.start(operation, dur, sks, part_size, oname, osz);
         try {
             plog.info("Starting");
             co_await test.invoke_on_all(&tester::start);

@@ -56,6 +56,7 @@
 #include "service/topology_guard.hh"
 #include "service/raft/join_node.hh"
 #include "db/view/view_building_state.hh"
+#include "transport/forward.hh"
 #include "idl/consistency_level.dist.hh"
 #include "idl/tracing.dist.hh"
 #include "idl/result.dist.hh"
@@ -81,6 +82,7 @@
 #include "idl/paxos.dist.hh"
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft.dist.hh"
+#include "idl/raft_util.dist.hh"
 #include "idl/group0.dist.hh"
 #include "idl/replica_exception.dist.hh"
 #include "idl/per_partition_rate_limit_info.dist.hh"
@@ -113,6 +115,7 @@
 #include "idl/paxos.dist.impl.hh"
 #include "idl/raft_storage.dist.impl.hh"
 #include "idl/raft.dist.impl.hh"
+#include "idl/raft_util.dist.impl.hh"
 #include "idl/group0.dist.impl.hh"
 #include "idl/view.dist.impl.hh"
 #include "idl/replica_exception.dist.impl.hh"
@@ -134,6 +137,7 @@
 #include "idl/storage_service.dist.impl.hh"
 #include "idl/join_node.dist.impl.hh"
 #include "idl/tasks.dist.impl.hh"
+#include "idl/forward_cql.dist.impl.hh"
 #include "gms/feature_service.hh"
 
 namespace netw {
@@ -687,6 +691,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_PULL_SNAPSHOT:
     case messaging_verb::NOTIFY_BANNED:
     case messaging_verb::DIRECT_FD_PING:
+    case messaging_verb::RAFT_READ_BARRIER:
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
         // DO NOT put any 'hot' (e.g. data path) verbs in this group,
         // only verbs which are 'rare' and 'cheap'.
@@ -728,13 +733,14 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::TABLE_LOAD_STATS_V1:
     case messaging_verb::TABLE_LOAD_STATS:
     case messaging_verb::WORK_ON_VIEW_BUILDING_TASKS:
+    case messaging_verb::SNAPSHOT_WITH_TABLETS:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
     case messaging_verb::READ_DATA:
     case messaging_verb::READ_MUTATION_DATA:
     case messaging_verb::READ_DIGEST:
-    case messaging_verb::DEFINITIONS_UPDATE:
+    case messaging_verb::UNUSED__DEFINITIONS_UPDATE:
     case messaging_verb::TRUNCATE:
     case messaging_verb::TRUNCATE_WITH_TABLETS:
     case messaging_verb::ESTIMATE_SSTABLE_VOLUME:
@@ -748,6 +754,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::PAXOS_ACCEPT:
     case messaging_verb::PAXOS_LEARN:
     case messaging_verb::PAXOS_PRUNE:
+    case messaging_verb::FORWARD_CQL_EXECUTE:
+    case messaging_verb::FORWARD_CQL_PREPARE:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:

@@ -65,7 +65,33 @@ serialized_size(sstable_version_types v, const T& object) {
     return size;
 }
 
-template <typename ChecksumType>
+class null_data_sink : public data_sink_impl {
+private:
+    size_t _bs;
+public:
+    null_data_sink(size_t bs) : _bs(bs) {}
+    virtual temporary_buffer<char> allocate_buffer(size_t size) override {
+        return temporary_buffer<char>(size);
+    }
+    virtual future<> put(std::span<temporary_buffer<char>> data) override {
+        return make_ready_future<>();
+    }
+    virtual future<> flush() override {
+        return make_ready_future<>();
+    }
+    virtual future<> close() override {
+        return make_ready_future<>();
+    }
+    virtual size_t buffer_size() const noexcept override {
+        return _bs;
+    }
+};
+
+inline data_sink make_null_data_sink(size_t bs) {
+    return data_sink(std::make_unique<null_data_sink>(bs));
+}
+
+template <typename ChecksumType, bool calculate_chunk_checksums>
 requires ChecksumUtils<ChecksumType>
 class checksummed_file_data_sink_impl : public data_sink_impl {
     data_sink _out;
@@ -92,7 +118,9 @@ public:
 
                 per_chunk_checksum = ChecksumType::checksum(per_chunk_checksum, buf.begin() + offset, size);
                 _full_checksum = checksum_combine_or_feed<ChecksumType>(_full_checksum, per_chunk_checksum, buf.begin() + offset, size);
-                _c.checksums.push_back(per_chunk_checksum);
+                if constexpr (calculate_chunk_checksums) {
+                    _c.checksums.push_back(per_chunk_checksum);
+                }
             }
         }
         return _out.put(std::move(bufs));
@@ -112,31 +140,36 @@ public:
     }
 };
 
-template <typename ChecksumType>
+template <typename ChecksumType, bool calculate_chunk_checksums>
 requires ChecksumUtils<ChecksumType>
 class checksummed_file_data_sink : public data_sink {
 public:
     checksummed_file_data_sink(data_sink out, struct checksum& cinfo, uint32_t& full_file_checksum)
-        : data_sink(std::make_unique<checksummed_file_data_sink_impl<ChecksumType>>(std::move(out), cinfo, full_file_checksum)) {}
+        : data_sink(std::make_unique<checksummed_file_data_sink_impl<ChecksumType, calculate_chunk_checksums>>(std::move(out), cinfo, full_file_checksum)) {}
 };
 
-template <typename ChecksumType>
+template <typename ChecksumType, bool calculate_chunk_checksums>
 requires ChecksumUtils<ChecksumType>
 inline
 output_stream<char> make_checksummed_file_output_stream(data_sink out, struct checksum& cinfo, uint32_t& full_file_checksum) {
-    return output_stream<char>(checksummed_file_data_sink<ChecksumType>(std::move(out), cinfo, full_file_checksum));
+    return output_stream<char>(checksummed_file_data_sink<ChecksumType, calculate_chunk_checksums>(std::move(out), cinfo, full_file_checksum));
 }
 
-template <typename ChecksumType>
+template <typename ChecksumType, bool calculate_chunk_checksums>
 requires ChecksumUtils<ChecksumType>
 class checksummed_file_writer : public file_writer {
     checksum _c;
     uint32_t _full_checksum;
 public:
     checksummed_file_writer(data_sink out, size_t buffer_size, component_name c)
-            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(out), _c, _full_checksum), std::move(c))
+            : file_writer(make_checksummed_file_output_stream<ChecksumType, calculate_chunk_checksums>(std::move(out), _c, _full_checksum), std::move(c))
             , _c(uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size)), {})
             , _full_checksum(ChecksumType::init_checksum()) {}
+
+    checksummed_file_writer(data_sink out, size_t buffer_size)
+        : file_writer(make_checksummed_file_output_stream<ChecksumType, calculate_chunk_checksums>(std::move(out), _c, _full_checksum))
+        , _c(uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size)), {})
+        , _full_checksum(ChecksumType::init_checksum()) {}
 
     // Since we are exposing a reference to _full_checksum, we delete the move
     // constructor.  If it is moved, the reference will refer to the old
@@ -152,8 +185,10 @@ public:
     }
 };
 
-using adler32_checksummed_file_writer = checksummed_file_writer<adler32_utils>;
-using crc32_checksummed_file_writer = checksummed_file_writer<crc32_utils>;
+using adler32_checksummed_file_writer = checksummed_file_writer<adler32_utils, true>;
+using crc32_checksummed_file_writer = checksummed_file_writer<crc32_utils, true>;
+
+using crc32_digest_file_writer = checksummed_file_writer<crc32_utils, false>;
 
 template <typename T, typename W>
 requires Writer<W>

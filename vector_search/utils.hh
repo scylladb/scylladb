@@ -16,9 +16,15 @@
 namespace vector_search {
 
 inline seastar::sstring response_content_to_sstring(const std::vector<seastar::temporary_buffer<char>>& buffers) {
-    seastar::sstring result;
+    size_t total_size = 0;
     for (const auto& buf : buffers) {
-        result.append(buf.get(), buf.size());
+        total_size += buf.size();
+    }
+    auto result = seastar::uninitialized_string(total_size);
+    size_t pos = 0;
+    for (const auto& buf : buffers) {
+        std::copy(buf.get(), buf.get() + buf.size(), result.data() + pos);
+        pos += buf.size();
     }
     return result;
 }

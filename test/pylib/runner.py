@@ -11,28 +11,33 @@ import logging
 import os
 import pathlib
 import platform
+import random
 import sys
 from argparse import BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count, product
 from functools import cache, cached_property
+from pathlib import Path
 from random import randint
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import pytest
 import xdist
 import yaml
+from _pytest.junitxml import xml_key
 
-from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, TESTPY_PREPARED_ENVIRONMENT
+
+from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, TESTPY_PREPARED_ENVIRONMENT, HOST_ID
 from test.pylib.scylla_cluster import merge_cmdline_options
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
+    PYTEST_TESTS_LOGS_FOLDER,
     TestSuite,
     get_testpy_test,
     prepare_environment,
     init_testsuite_globals,
 )
-from test.pylib.util import get_modes_to_run
+from test.pylib.util import get_modes_to_run, scale_timeout_by_mode
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -44,10 +49,13 @@ if TYPE_CHECKING:
 
 
 TEST_CONFIG_FILENAME = "test_config.yaml"
+PYTEST_LOG_FOLDER = "pytest_log"
 
 REPEATING_FILES = pytest.StashKey[set[pathlib.Path]]()
 BUILD_MODE = pytest.StashKey[str]()
 RUN_ID = pytest.StashKey[int]()
+PYTEST_LOG_FILE = pytest.StashKey[str]()
+
 EXIT_MAXFAIL_REACHED = 11
 
 logger = logging.getLogger(__name__)
@@ -103,7 +111,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     # Pass information about Scylla node from test.py to pytest.
     parser.addoption("--scylla-log-filename",
                      help="Path to a log file of a ScyllaDB node (for suites with type: Python)")
-
+    parser.addoption('--exe-path', default=False,
+                     dest="exe_path", action="store",
+                     help="Path to the executable to run. Not working with `mode`")
+    parser.addoption('--exe-url', default=False,
+                     dest="exe_url", action="store",
+                     help="URL to download the relocatable executable. Not working with `mode`")
 
 @pytest.fixture(autouse=True)
 def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]:
@@ -142,12 +155,24 @@ def build_mode(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope=testpy_test_fixture_scope)
+def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
+    def scale_timeout_inner(timeout: int | float) -> int | float:
+        return scale_timeout_by_mode(build_mode, timeout)
+
+    return scale_timeout_inner
+
+
+@pytest.fixture(scope=testpy_test_fixture_scope)
 async def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> Test | None:
     """Create an instance of Test class for the current test.py test."""
 
     if request.scope == "module":
         return await get_testpy_test(path=request.path, options=request.config.option, mode=build_mode)
     return None
+
+@pytest.fixture(scope="function")
+def scylla_binary(testpy_test) -> Path:
+    return testpy_test.suite.scylla_exe
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -195,7 +220,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         )
 
 
-@pytest.hookimpl(trylast=True)
+@pytest.hookimpl(tryfirst=True)
 def pytest_runtest_logreport(report):
     """Add custom XML attributes to JUnit testcase elements.
 
@@ -207,14 +232,8 @@ def pytest_runtest_logreport(report):
     Attributes added:
     - function_path: The function path of the test case (excluding parameters).
 
-    Uses trylast=True to run after LogXML's hook has created the node_reporter.
+    Uses tryfirst=True to run before LogXML's hook has created the node_reporter to avoid double recording.
     """
-    from _pytest.junitxml import xml_key
-
-    # Only process call phase
-    if report.when != "call":
-        return
-
     # Get the XML reporter
     config = _pytest_config
     if config is None:
@@ -226,28 +245,39 @@ def pytest_runtest_logreport(report):
 
     node_reporter = xml.node_reporter(report)
 
-    nodeid = report.nodeid
-    function_path = f'test/{nodeid.rsplit('.', 2)[0].rsplit('[', 1)[0]}'
+    # Only wrap once to avoid multiple wrapping (check on the node_reporter object itself)
+    if not getattr(node_reporter, '__reporter_modified', False):
 
-    # Wrap the to_xml method to add custom attributes to the element
-    original_to_xml = node_reporter.to_xml
+        function_path = f'test/{report.nodeid.rsplit('.', 2)[0].rsplit('[', 1)[0]}'
 
-    def custom_to_xml():
-        """Wrapper that adds custom attributes to the testcase element."""
-        element = original_to_xml()
-        element.set("function_path", function_path)
-        return element
+        # Wrap the to_xml method to add custom attributes to the element
+        original_to_xml = node_reporter.to_xml
 
-    node_reporter.to_xml = custom_to_xml
+        def custom_to_xml():
+            """Wrapper that adds custom attributes to the testcase element."""
+            element = original_to_xml()
+            element.set("function_path", function_path)
+            return element
+
+        node_reporter.to_xml = custom_to_xml
+        node_reporter.__reporter_modified = True
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
     if not session.config.getoption("--test-py-init"):
         return
 
+    is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
+    # If all tests passed, remove the log file to save space and avoid confusion with logs from failed runs.
+    # We check this at the end of the session to ensure that we have the complete log available for any failed tests.
+
+    if not (not is_xdist_worker and TESTPY_PREPARED_ENVIRONMENT in os.environ): # If this is not an xdist worker and test.py has prepared the environment, there is no separate xdist main process and no pytest_main.log file
+        if session.testsfailed == 0 and not session.config.getoption("--save-log-on-success"):
+            os.remove(_pytest_config.stash[PYTEST_LOG_FILE])
+
     # Check if this is an xdist worker - workers should not clean up (only the main process should)
     # Check if test.py has already prepared the environment, so it should clean up
-    is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
+
     if is_xdist_worker or TESTPY_PREPARED_ENVIRONMENT in os.environ:
         return
     # we only clean up when running with pure pytest
@@ -265,6 +295,40 @@ def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
 
+    if _pytest_config.getoption("--test-py-init"):
+        pytest_log_dir = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_LOG_FOLDER
+        worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+        # If this is an xdist worker, set up logging to a separate file for this worker. Otherwise, set up logging for the main process.
+        if worker_id is not None:
+            _pytest_config.stash[PYTEST_LOG_FILE] = f"{pytest_log_dir}/pytest_{worker_id}_{HOST_ID}.log"
+            logging.basicConfig(
+                format=config.getini("log_file_format"),
+                filename=_pytest_config.stash[PYTEST_LOG_FILE],
+                level=config.getini("log_file_level"),
+            )
+        else:
+            # For the main process, we want to clean up old logs before the run, so we create the log directory and remove any existing log files.
+            pytest_log_dir.mkdir(parents=True, exist_ok=True)
+            if not _pytest_config.getoption("--save-log-on-success"):
+                for file in pytest_log_dir.glob("*"):
+                    file.unlink()
+
+            _pytest_config.stash[PYTEST_LOG_FILE] = f"{pytest_log_dir}/pytest_main_{HOST_ID}.log"
+            logging.basicConfig(
+                format=config.getini("log_file_format"),
+                filename=_pytest_config.stash[PYTEST_LOG_FILE],
+                level=config.getini("log_file_level"),
+            )
+
+    if config.getoption("--exe-url") and config.getoption("--exe-path"):
+        raise RuntimeError("Can't use --exe-url and exe-path simultaneously.")
+
+    if  config.getoption("--exe-path") or config.getoption("--exe-url"):
+            if config.getoption("--mode"):
+                raise RuntimeError("Can't use --mode with --exe-path or --exe-url.")
+            config.option.modes = ["custom_exe"]
+
+    os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)
     repeat = int(config.getoption("--repeat"))
 
@@ -308,6 +372,24 @@ def pytest_collect_file(file_path: pathlib.Path,
 
     return collectors
 
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    # This hook is used to capture test failures and save their details to a file in the pytest_tests_logs directory.
+    # We use tryfirst=True to ensure that this hook runs before any other hooks that might modify the report,
+    # and we use hookwrapper=True to allow us to access the report after it has been generated by other hooks.
+    outcome = yield
+
+    if _pytest_config.getoption("--test-py-init"):
+        rep = outcome.get_result()
+        # we only look at actual failing test calls, not setup/teardown
+        pytest_tests_logs = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_TESTS_LOGS_FOLDER
+        if rep.failed or _pytest_config.getoption("--save-log-on-success"):
+            mode = "a" if os.path.exists(pytest_tests_logs) else "w"
+            with open(pytest_tests_logs/ f"{item._nodeid.replace("::", "-").replace("/", "-")}-{rep.when}-{HOST_ID}.log",mode) as f:
+                f.write(rep.longreprtext + "\n")
+                for section in rep.sections:
+                    f.write(section[0] + "\n")
+                    f.write(section[1] + "\n")
 
 class TestSuiteConfig:
     def __init__(self, config_file: pathlib.Path):
@@ -386,10 +468,21 @@ def modify_pytest_item(item: pytest.Item) -> None:
 
     for mark in skip_marks:
         def __skip_test(mode, reason, platform_key=None):
-            if mode == item.stash[BUILD_MODE]:
-                if platform_key is None or platform_key in platform.platform():
-                    item.add_marker(pytest.mark.skip(reason=reason))
+            modes = [mode] if isinstance(mode, str) else mode
+
+            for mode in modes:
+                if mode == item.stash[BUILD_MODE]:
+                    if platform_key is None or platform_key in platform.platform():
+                        item.add_marker(pytest.mark.skip(reason=reason))
         try:
             __skip_test(*mark.args, **mark.kwargs)
         except TypeError as e:
             raise TypeError(f"Failed to process skip_mode mark, {mark} for test {item}, error {e}")
+
+    if (any(mark.name == "xfail" for mark in item.iter_markers("xfail"))
+            and not any(mark.name == "nightly" for mark in item.iter_markers("nightly"))):
+        item.add_marker(pytest.mark.nightly)
+
+    if (any(mark.name in ("perf", "manual", "unstable") for mark in item.iter_markers())
+            and not any(mark.name == "non_gating" for mark in item.iter_markers("non_gating"))):
+        item.add_marker(pytest.mark.non_gating)

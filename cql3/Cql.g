@@ -389,8 +389,10 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         bool is_ann_ordering = false;
     }
     : K_SELECT (
-                ( K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; } )?
-                ( K_DISTINCT { is_distinct = true; } )?
+                ( (K_JSON K_DISTINCT)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
+                | (K_JSON selectClause K_FROM)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
+                )?
+                ( (K_DISTINCT selectClause K_FROM)=> K_DISTINCT { is_distinct = true; } )?
                 sclause=selectClause
                )
       K_FROM (
@@ -425,13 +427,13 @@ selector returns [shared_ptr<raw_selector> s]
 
 unaliasedSelector returns [uexpression tmp]
     :  ( c=cident                                  { tmp = unresolved_identifier{std::move(c)}; }
+       | v=value                                   { tmp = std::move(v); }
        | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
        | K_WRITETIME '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
                                                                                               unresolved_identifier{std::move(c)}}; }
        | K_TTL       '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
                                                                                               unresolved_identifier{std::move(c)}}; }
        | f=functionName args=selectionFunctionArgs { tmp = function_call{std::move(f), std::move(args)}; }
-       | f=similarityFunctionName args=vectorSimilarityArgs            { tmp = function_call{std::move(f), std::move(args)}; }
        | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = cast{.style = cast::cast_style::sql, .arg = std::move(arg), .type = std::move(t)}; }
        )
        ( '.' fi=cident { tmp = field_selection{std::move(tmp), std::move(fi)}; }
@@ -446,23 +448,9 @@ selectionFunctionArgs returns [std::vector<expression> a]
       ')'
     ;
 
-vectorSimilarityArgs returns [std::vector<expression> a]
-    : '(' ')'
-    | '(' v1=vectorSimilarityArg { a.push_back(std::move(v1)); }
-          ( ',' vn=vectorSimilarityArg { a.push_back(std::move(vn)); } )*
-      ')'
-    ;
-
-vectorSimilarityArg returns [uexpression a]
-    : s=unaliasedSelector { a = std::move(s); }
-    | v=value             { a = std::move(v); }
-    ;
-
 countArgument
     : '*'
-    | i=INTEGER { if (i->getText() != "1") {
-                    add_recognition_error("Only COUNT(1) is supported, got COUNT(" + i->getText() + ")");
-                } }
+    /* COUNT(1) is also allowed, it is recognized via the general function(args) path */
     ;
 
 whereClause returns [uexpression clause]
@@ -886,8 +874,8 @@ cfamDefinition[cql3::statements::create_table_statement::raw_statement& expr]
     ;
 
 cfamColumns[cql3::statements::create_table_statement::raw_statement& expr]
-    @init { bool is_static=false; }
-    : k=ident v=comparatorType (K_STATIC {is_static = true;})? { $expr.add_definition(k, v, is_static); }
+    @init { bool is_static=false, is_ttl=false; }
+    : k=ident v=comparatorType (K_TTL {is_ttl = true;})? (K_STATIC {is_static = true;})? { $expr.add_definition(k, v, is_static, is_ttl); }
         (K_PRIMARY K_KEY { $expr.add_key_aliases(std::vector<shared_ptr<cql3::column_identifier>>{k}); })?
     | K_PRIMARY K_KEY '(' pkDef[expr] (',' c=ident { $expr.add_column_alias(c); } )* ')'
     ;
@@ -1054,6 +1042,7 @@ alterTableStatement returns [std::unique_ptr<alter_table_statement::raw_statemen
         std::vector<alter_table_statement::column_change> column_changes;
         std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>, shared_ptr<cql3::column_identifier::raw>>> renames;
         auto attrs = std::make_unique<cql3::attributes::raw>();
+        shared_ptr<cql3::column_identifier::raw> ttl_change;
     }
     : K_ALTER K_COLUMNFAMILY cf=columnFamilyName
           ( K_ALTER id=cident K_TYPE v=comparatorType { type = alter_table_statement::type::alter; column_changes.emplace_back(alter_table_statement::column_change{id, v}); }
@@ -1072,9 +1061,11 @@ alterTableStatement returns [std::unique_ptr<alter_table_statement::raw_statemen
           | K_RENAME                                  { type = alter_table_statement::type::rename; }
                id1=cident K_TO toId1=cident { renames.emplace_back(id1, toId1); }
                ( K_AND idn=cident K_TO toIdn=cident { renames.emplace_back(idn, toIdn); } )*
+          | K_TTL                                     { type = alter_table_statement::type::ttl; }
+               ( id=cident { ttl_change = id; } | K_NULL )
           )
     {
-        $expr = std::make_unique<alter_table_statement::raw_statement>(std::move(cf), type, std::move(column_changes), std::move(props), std::move(renames), std::move(attrs));
+        $expr = std::make_unique<alter_table_statement::raw_statement>(std::move(cf), type, std::move(column_changes), std::move(props), std::move(renames), std::move(attrs), std::move(ttl_change));
     }
     ;
 
@@ -1706,21 +1697,12 @@ functionName returns [cql3::functions::function_name s]
     : (ks=keyspaceName '.')? f=allowedFunctionName   { $s.keyspace = std::move(ks); $s.name = std::move(f); }
     ;
 
-similarityFunctionName returns [cql3::functions::function_name s]
-    : f=allowedSimilarityFunctionName { $s = cql3::functions::function_name::native_function(std::move(f)); }
-    ;
-
 allowedFunctionName returns [sstring s]
     : f=IDENT                       { $s = $f.text; std::transform(s.begin(), s.end(), s.begin(), ::tolower); }
     | f=QUOTED_NAME                 { $s = $f.text; }
     | u=unreserved_function_keyword { $s = u; }
     | K_TOKEN                       { $s = "token"; }
     | K_COUNT                       { $s = "count"; }
-    ;
-
-allowedSimilarityFunctionName returns [sstring s]
-    : f=(K_SIMILARITY_COSINE | K_SIMILARITY_EUCLIDEAN | K_SIMILARITY_DOT_PRODUCT)
-      { $s = $f.text; std::transform(s.begin(), s.end(), s.begin(), ::tolower); }
     ;
 
 functionArgs returns [std::vector<expression> a]
@@ -2092,7 +2074,21 @@ vector_type returns [shared_ptr<cql3::cql3_type::raw> pt]
         {
             if ($d.text[0] == '-')
                 throw exceptions::invalid_request_exception("Vectors must have a dimension greater than 0");
-            $pt = cql3::cql3_type::raw::vector(t, std::stoul($d.text));
+            unsigned long parsed_dimension;
+            try {
+                parsed_dimension = std::stoul($d.text);
+            } catch (const std::exception& e) {
+                throw exceptions::invalid_request_exception(format("Invalid vector dimension: {}", $d.text));
+            }
+            static_assert(sizeof(unsigned long) >= sizeof(vector_dimension_t));
+            if (parsed_dimension == 0) {
+                throw exceptions::invalid_request_exception("Vectors must have a dimension greater than 0");
+            }
+            if (parsed_dimension > cql3::cql3_type::MAX_VECTOR_DIMENSION) {
+                throw exceptions::invalid_request_exception(
+                        format("Vectors must have a dimension less than or equal to {}", cql3::cql3_type::MAX_VECTOR_DIMENSION));
+            }
+            $pt = cql3::cql3_type::raw::vector(t, static_cast<vector_dimension_t>(parsed_dimension));
         }
     ;
 
@@ -2418,10 +2414,6 @@ K_EXECUTE:     E X E C U T E;
 K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
 
 K_VECTOR_SEARCH_INDEXING: V E C T O R '_' S E A R C H '_' I N D E X I N G;
-
-K_SIMILARITY_EUCLIDEAN:     S I M I L A R I T Y '_' E U C L I D E A N;
-K_SIMILARITY_COSINE:        S I M I L A R I T Y '_' C O S I N E;
-K_SIMILARITY_DOT_PRODUCT:   S I M I L A R I T Y '_' D O T '_' P R O D U C T;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');

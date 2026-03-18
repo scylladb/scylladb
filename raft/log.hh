@@ -167,7 +167,7 @@ public:
     //                          and non matching term is in second
     std::pair<bool, term_t> match_term(index_t idx, term_t term) const;
     // Return term number of the entry matching the index. If the
-    // entry is not in the log and does not match snapshot index,
+    // entry is in the truncated part of the log and does not match snapshot index,
     // return an empty optional.
     // Used to validate the log matching rule.
     std::optional<term_t> term_for(index_t idx) const;

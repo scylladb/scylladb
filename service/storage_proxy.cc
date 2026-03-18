@@ -94,6 +94,7 @@
 #include "locator/util.hh"
 #include "tools/build_info.hh"
 #include "utils/labels.hh"
+#include "debug.hh"
 
 namespace bi = boost::intrusive;
 
@@ -123,12 +124,7 @@ utils::small_vector<locator::host_id, N> addr_vector_to_id(const gms::gossiper& 
 // Check the effective replication map consistency:
 // we have an inconsistent effective replication map in case we the number of
 // read replicas is higher than the replication factor.
-void validate_read_replicas(const locator::effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) {
-    // Skip for non-debug builds.
-    if constexpr (!tools::build_info::is_debug_build()) {
-        return;
-    }
-
+[[maybe_unused]] void validate_read_replicas(const locator::effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) {
     const sstring error = erm.get_replication_strategy().sanity_check_read_replicas(erm, read_replicas);
     if (!error.empty()) {
         on_internal_error(slogger, error);
@@ -247,7 +243,10 @@ class storage_proxy::remote {
     const db::view::view_building_state_machine& _vb_state_machine;
     abort_source _group0_as;
 
+    // These two could probably share, but nice to
+    // have named separations...
     seastar::named_gate _truncate_gate;
+    seastar::named_gate _snapshot_gate;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -259,6 +258,7 @@ public:
                 sharded<paxos::paxos_store>& paxos_store, raft_group0_client& group0_client, topology_state_machine& tsm, const db::view::view_building_state_machine& vbsm)
         : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _paxos_store(paxos_store), _group0_client(group0_client), _topology_state_machine(tsm), _vb_state_machine(vbsm)
         , _truncate_gate("storage_proxy::remote::truncate_gate")
+        , _snapshot_gate("storage_proxy::remote::snapshot_gate")
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
     {
@@ -273,6 +273,7 @@ public:
         ser::storage_proxy_rpc_verbs::register_read_digest(&_ms, std::bind_front(&remote::handle_read_digest, this));
         ser::storage_proxy_rpc_verbs::register_truncate(&_ms, std::bind_front(&remote::handle_truncate, this));
         ser::storage_proxy_rpc_verbs::register_truncate_with_tablets(&_ms, std::bind_front(&remote::handle_truncate_with_tablets, this));
+        ser::storage_proxy_rpc_verbs::register_snapshot_with_tablets(&_ms, std::bind_front(&remote::handle_snapshot_with_tablets, this));
         // Register PAXOS verb handlers
         ser::storage_proxy_rpc_verbs::register_paxos_prepare(&_ms, std::bind_front(&remote::handle_paxos_prepare, this));
         ser::storage_proxy_rpc_verbs::register_paxos_accept(&_ms, std::bind_front(&remote::handle_paxos_accept, this));
@@ -287,6 +288,7 @@ public:
     future<> stop() {
         _group0_as.request_abort();
         co_await _truncate_gate.close();
+        co_await _snapshot_gate.close();
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
         _stopped = true;
     }
@@ -479,6 +481,12 @@ public:
         }
     }
 
+    future<> snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>>& ks_cf_names, sstring tag, const db::snapshot_options& opts) {
+        co_await seastar::with_gate(_snapshot_gate, [&] () -> future<> {
+            co_await request_snapshot_with_tablets(ks_cf_names, tag, opts);
+        });
+    }
+
     future<> send_truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms) {
         auto s = _sp.local_db().find_schema(keyspace, cfname);
         auto erm_ptr = s->table().get_effective_replication_map();
@@ -617,8 +625,13 @@ private:
                     try {
                         // FIXME: get_schema_for_write() doesn't timeout
                         schema_ptr s = co_await get_schema_for_write(schema_version, reply_to_host_id, shard, timeout);
+
+                        // This erm ensures that tablet migrations wait for replica requests,
+                        // even if the coordinator is no longer available.
+                        const auto erm = s->table().get_effective_replication_map();
+
                         // Note: blocks due to execution_stage in replica::database::apply()
-                        co_await p->run_fenceable_write(s->table().get_effective_replication_map()->get_replication_strategy(),
+                        co_await p->run_fenceable_write(erm->get_replication_strategy(),
                             fence, src_addr,
                             [&] { return apply_fn(p, trace_state_ptr, std::move(s), m, timeout); });
                         // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
@@ -868,6 +881,10 @@ private:
             slogger.info("storage_proxy::handle_read injection done");
         });
 
+        // This erm ensures that tablet migrations wait for replica requests,
+        // even if the coordinator is no longer available.
+        auto erm = s->table().get_effective_replication_map();
+
         auto pr2 = ::compat::unwrap(std::move(pr), *s);
         auto do_query = [&]() {
             if constexpr (verb == read_verb::read_data) {
@@ -875,7 +892,6 @@ private:
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DATA called with wrapping range");
                 }
-                auto erm = s->table().get_effective_replication_map();
                 p->get_stats().replica_data_reads++;
                 if (!oda) {
                     throw std::runtime_error("READ_DATA called without digest algorithm");
@@ -968,6 +984,18 @@ private:
         co_await replica::database::truncate_table_on_all_shards(_sp._db, _sys_ks, ksname, cfname);
     }
 
+    future<> handle_snapshot_with_tablets(utils::chunked_vector<table_id> ids, sstring tag, gc_clock::time_point ts, bool skip_flush, std::optional<gc_clock::time_point> expiry, service::frozen_topology_guard frozen_guard) {
+        topology_guard guard(frozen_guard);
+        db::snapshot_options opts {
+            .skip_flush = skip_flush,
+            .created_at = ts,
+            .expires_at = expiry
+        };
+        co_await coroutine::parallel_for_each(ids, [&] (const table_id& id) -> future<> {
+            co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts);
+        });
+    }
+
     future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>
     handle_paxos_prepare(
             const rpc::client_info& cinfo, rpc::opt_time_point timeout,
@@ -992,6 +1020,12 @@ private:
 
         auto schema = co_await get_schema_for_read(cmd.schema_version, src_addr, src_shard, *timeout);
         dht::token token = dht::get_token(*schema, key);
+
+        // This guard ensures that tablet migrations wait for replica requests,
+        // even if the LWT coordinator is no longer available.
+        locator::token_metadata_guard guard(schema->table(), token);
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
         unsigned shard = schema->table().shard_for_reads(token);
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;
@@ -1032,6 +1066,12 @@ private:
         });
         auto schema = co_await get_schema_for_read(proposal.update.schema_version(), src_addr, src_shard, *timeout);
         dht::token token = proposal.update.decorated_key(*schema).token();
+
+        // This guard ensures that tablet migrations wait for replica requests,
+        // even if the LWT coordinator is no longer available.
+        locator::token_metadata_guard guard(schema->table(), token);
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
         unsigned shard = schema->table().shard_for_reads(token);
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;
@@ -1073,6 +1113,12 @@ private:
         auto d = defer([] { pruning--; });
         auto schema = co_await get_schema_for_read(schema_id, src_addr, src_shard, *timeout);
         dht::token token = dht::get_token(*schema, key);
+
+        // This guard ensures that tablet migrations wait for replica requests,
+        // even if the LWT coordinator is no longer available.
+        locator::token_metadata_guard guard(schema->table(), token);
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
         unsigned shard = schema->table().shard_for_reads(token);
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;
@@ -1092,11 +1138,15 @@ private:
         }
     }
 
-    future<> request_truncate_with_tablets(sstring ks_name, sstring cf_name) {
+    using begin_op_func = std::function<std::string()>;
+    using can_replace_op_with_ongoing_func = std::function<bool(const db::system_keyspace::topology_requests_entry&, const service::global_topology_request&)>;
+    using create_op_mutations_func = std::function<global_topology_request(topology_request_tracking_mutation_builder&)>;
+
+    future<> do_topology_request(std::string_view reason, begin_op_func begin, can_replace_op_with_ongoing_func can_replace_op, create_op_mutations_func create_mutations, std::string_view origin) {
         if (this_shard_id() != 0) {
             // group0 is only set on shard 0
             co_return co_await _sp.container().invoke_on(0, [&] (storage_proxy& sp) {
-                return sp.remote().request_truncate_with_tablets(ks_name, cf_name);
+                return sp.remote().do_topology_request(reason, begin, can_replace_op, create_mutations, origin);
             });
         }
 
@@ -1105,10 +1155,10 @@ private:
         while (true) {
             group0_guard guard = co_await _group0_client.start_operation(_group0_as, raft_timeout{});
 
-            const table_id table_id = _sp.local_db().find_uuid(ks_name, cf_name);
+            auto desc = begin();
 
             if (!_sp._features.topology_global_request_queue) {
-                // Check if we already have a truncate queued for the same table. This can happen when a truncate has timed out
+                // Check if we already have a similar op for the same table. This can happen when a, say, truncate has timed out
                 // and the client retried by issuing the same truncate again. In this case, instead of failing the request with
                 // an "Another global topology request is ongoing" error, we can wait for the already queued request to complete.
                 // Note that we can not do this for a truncate which the topology coordinator has already started processing,
@@ -1117,21 +1167,15 @@ private:
                     utils::UUID ongoing_global_request_id = _topology_state_machine._topology.global_request_id.value();
                     const auto topology_requests_entry = co_await _sys_ks.local().get_topology_request_entry(ongoing_global_request_id);
                     auto global_request = std::get<service::global_topology_request>(topology_requests_entry.request_type);
-                    if (global_request == global_topology_request::truncate_table) {
-                        std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
-                        if (!tstate || *tstate != topology::transition_state::truncate_table) {
-                            if (topology_requests_entry.truncate_table_id == table_id) {
-                                global_request_id = ongoing_global_request_id;
-                                slogger.info("Ongoing TRUNCATE for table {}.{} (global request ID {}) detected; waiting for it to complete",
-                                                    ks_name, cf_name, global_request_id);
-                                break;
-                            }
-                        }
+
+                    if (can_replace_op(topology_requests_entry, global_request)) {
+                        global_request_id = ongoing_global_request_id;
+                        slogger.info("Ongoing {} (global request ID {}) detected; waiting for it to complete", desc, global_request_id);
+                        break;
                     }
-                    slogger.warn("Another global topology request ({}) is ongoing during attempt to TRUNCATE table {}.{}",
-                                    global_request, ks_name, cf_name);
-                    throw exceptions::invalid_request_exception(::format("Another global topology request is ongoing during attempt to TRUNCATE table {}.{}, please retry.",
-                                                                            ks_name, cf_name));
+
+                    slogger.warn("Another global topology request ({}) is ongoing during attempt to {}", global_request, desc);
+                    throw exceptions::invalid_request_exception(::format("Another global topology request is ongoing during attempt to {}, please retry.", desc));
                 }
             }
 
@@ -1139,28 +1183,24 @@ private:
 
             topology_mutation_builder builder(guard.write_timestamp());
             topology_request_tracking_mutation_builder trbuilder(global_request_id, _sp._features.topology_requests_type_column);
-            trbuilder.set_truncate_table_data(table_id)
-                     .set("done", false)
-                     .set("start_time", db_clock::now());
+
+            auto req = create_mutations(trbuilder);
 
             if (!_sp._features.topology_global_request_queue) {
-                builder.set_global_topology_request(global_topology_request::truncate_table)
+                builder.set_global_topology_request(req)
                        .set_global_topology_request_id(global_request_id);
             } else {
                 builder.queue_global_topology_request_id(global_request_id);
-                trbuilder.set("request_type", global_topology_request::truncate_table);
+                trbuilder.set("request_type", req);
             }
 
-            slogger.info("Creating TRUNCATE global topology request for table {}.{}", ks_name, cf_name);
-
             topology_change change{{builder.build(), trbuilder.build()}};
-            sstring reason = "Truncating table";
             group0_command g0_cmd = _group0_client.prepare_command(std::move(change), guard, reason);
             try {
                 co_await _group0_client.add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
                 break;
             } catch (group0_concurrent_modification&) {
-                slogger.debug("request_truncate_with_tablets: concurrent modification, retrying");
+                slogger.debug("{}: concurrent modification, retrying", origin);
             }
         }
 
@@ -1170,6 +1210,74 @@ private:
             throw std::runtime_error(error);
         }
     }
+
+    future<> request_truncate_with_tablets(sstring ks_name, sstring cf_name) {
+        table_id id;
+
+        co_await do_topology_request("Truncating table"
+            , [&] {
+                id = _sp.local_db().find_uuid(ks_name, cf_name);
+                return fmt::format("TRUNCATE table {}.{}", ks_name, cf_name);
+            }
+            , [&](const db::system_keyspace::topology_requests_entry& entry, const service::global_topology_request& global_request) {
+                if (global_request == global_topology_request::truncate_table) {
+                    const std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
+                    if (!tstate || *tstate != topology::transition_state::truncate_table) {
+                        return entry.truncate_table_id == id;
+                    }
+                }
+                return false;
+            }
+            , [&](topology_request_tracking_mutation_builder& trbuilder) {
+                trbuilder.set_truncate_table_data(id)
+                         .set("done", false)
+                         .set("start_time", db_clock::now());
+                slogger.info("Creating TRUNCATE global topology request for table {}.{}", ks_name, cf_name);
+                return global_topology_request::truncate_table;
+            }
+            , "request_truncate_with_tablets"
+        );
+    }
+
+    future<> request_snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>> ks_cf_names, sstring tag, const db::snapshot_options& opts) {
+        std::unordered_set<table_id> ids;
+        co_await do_topology_request("Snapshot table"
+            , [&] {
+                auto& db = _sp.local_db();
+                for (auto& [ks_name, cf_name] : ks_cf_names) {
+                    if (cf_name.empty()) {
+                        auto& ks = db.find_keyspace(ks_name);
+                        auto id_range = ks.metadata()->cf_meta_data() | std::views::values | std::views::transform(std::mem_fn(&schema::id));
+                        ids.insert(id_range.begin(), id_range.end());
+                    } else {
+                        ids.insert(db.find_uuid(ks_name, cf_name));
+                    }
+                }
+                return fmt::format("SNAPSHOT tables {}", ks_cf_names);
+            }
+            , [&](const db::system_keyspace::topology_requests_entry& entry, const service::global_topology_request& global_request) {
+                if (global_request == global_topology_request::snapshot_tables) {
+                    const std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
+                    if (!tstate || *tstate != topology::transition_state::snapshot_tables) {
+                        return entry.snapshot_table_ids == ids && entry.snapshot_tag == tag;
+                    }
+                }
+                return false;
+            }
+            , [&](topology_request_tracking_mutation_builder& trbuilder) {
+                trbuilder.set_snapshot_tables_data(ids, tag, opts.skip_flush)
+                         .set("done", false)
+                         .set("start_time", db_clock::now());
+                if (opts.expires_at) {
+                    trbuilder.set("snapshot_expiry", db_clock::from_time_t(gc_clock::to_time_t(*opts.expires_at)));
+                }
+                slogger.info("Creating SNAPSHOT global topology request for tables {}", ks_cf_names);
+                return global_topology_request::snapshot_tables;
+            }
+            , "request_snapshot_with_tablets"
+        );
+    }
+
 };
 
 using namespace exceptions;
@@ -1415,6 +1523,9 @@ public:
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm) override {
+        if (current_scheduling_group() != debug::streaming_scheduling_group) {
+            on_internal_error(dblog, format("attempted to apply hint in {} scheduling group", current_scheduling_group().name()));
+        }
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
         // becomes unavailable - this might include the current node
         return sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout);
@@ -4291,7 +4402,7 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
     public:
         context(storage_proxy & p, utils::chunked_vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, coordinator_mutate_options options)
                 : _p(p)
-                , _schema(_p.local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2))
+                , _schema(_p.local_db().find_schema(db::system_keyspace::NAME, _p.features().batchlog_v2 ? db::system_keyspace::BATCHLOG_V2 : db::system_keyspace::BATCHLOG))
                 , _ermp(_p.local_db().find_column_family(_schema->id()).get_effective_replication_map())
                 , _mutations(std::move(mutations))
                 , _cdc_tracker(std::move(cdc_tracker))
@@ -4542,6 +4653,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
     auto& global_stats = handler._proxy->_global_stats;
+    auto schema = handler_ptr->get_schema();
 
     if (handler.get_targets().size() == 0) {
         // Usually we remove the response handler when receiving responses from all targets.
@@ -4637,7 +4749,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         }
 
         // Waited on indirectly.
-        (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
+        (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats, schema] (std::exception_ptr eptr) {
             ++stats.writes_errors.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
             error err = error::FAILURE;
             std::optional<sstring> msg;
@@ -4651,8 +4763,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 // ignore, disconnect will be logged by gossiper
             } else if (const auto* e = try_catch_nested<seastar::gate_closed_exception>(eptr)) {
                 // may happen during shutdown, log and ignore it
-                slogger.warn("gate_closed_exception during mutation write to {}: {}",
-                    coordinator, e->what());
+                slogger.warn("gate_closed_exception during mutation write to {}.{} on {}: {}",
+                    schema->ks_name(), schema->cf_name(), coordinator, e->what());
             } else if (try_catch<timed_out_error>(eptr)) {
                 // from lmutate(). Ignore so that logs are not flooded
                 // database total_writes_timedout counter was incremented.
@@ -4663,7 +4775,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             } else if (auto* e = try_catch<replica::critical_disk_utilization_exception>(eptr)) {
                 msg = e->what();
             } else {
-                slogger.error("exception during mutation write to {}: {}", coordinator, eptr);
+                slogger.error("exception during mutation write to {}.{} on {}: {}",
+                    schema->ks_name(), schema->cf_name(), coordinator, eptr);
             }
             p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err, std::move(msg));
         });
@@ -6972,7 +7085,12 @@ host_id_vector_replica_set storage_proxy::get_endpoints_for_reading(const schema
         return host_id_vector_replica_set{my_host_id(erm)};
     }
     auto endpoints = erm.get_replicas_for_reading(token);
-    validate_read_replicas(erm, endpoints);
+    // Skip for non-debug builds and maintenance mode.
+    if constexpr (tools::build_info::is_debug_build()) {
+        if (!_db.local().get_config().maintenance_mode()) {
+            validate_read_replicas(erm, endpoints);
+        }
+    }
     auto it = std::ranges::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this, std::cref(erm)))).begin();
     endpoints.erase(it, endpoints.end());
     sort_endpoints_by_proximity(erm, endpoints);
@@ -7042,6 +7160,29 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     } else {
         co_await remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
     }
+}
+
+future<> storage_proxy::snapshot_keyspace(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, const db::snapshot_options& opts) {
+    if (!features().snapshot_as_topology_operation) {
+        throw std::runtime_error("Cannot do cluster wide snapshot. Feature 'snapshot_as_topology_operation' is not available in cluster");
+    }
+
+    for (auto& [ksname, _] : ks_tables) {
+        const replica::keyspace& ks = local_db().find_keyspace(ksname);
+        if (ks.get_replication_strategy().is_local()) {
+            throw std::invalid_argument(fmt::format("Keyspace {} uses local replication", ksname));
+        }
+        if (!ks.uses_tablets()) {
+            throw std::invalid_argument(fmt::format("Keyspace {} does not use tablets", ksname));
+        }
+    }
+
+    slogger.debug("Starting a blocking snapshot operation on keyspaces {}", ks_tables);
+
+    auto table_pairs = ks_tables | std::views::transform([](auto& p) { return std::pair<sstring, sstring>(p.first, p.second); }) 
+        | std::ranges::to<std::vector>()
+        ;
+    co_await remote().snapshot_with_tablets(table_pairs, tag, opts);
 }
 
 db::system_keyspace& storage_proxy::system_keyspace() {

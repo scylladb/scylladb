@@ -13,9 +13,10 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.util import gather_safely, unique_name, wait_for_cql_and_get_hosts
 from test.cluster.conftest import cluster_con
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
@@ -50,13 +51,10 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     rf_rack_cfg = {'rf_rack_valid_keyspaces': False}
     # Workaround for flakiness from https://github.com/scylladb/scylladb/issues/23565.
     hints_cfg = {'hinted_handoff_enabled': False}
-    # Workaround for https://github.com/scylladb/scylladb/issues/25163.
-    # It makes the test ~170 s faster with remove_dead_nodes_with == "replace".
-    tablet_load_stats_cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     cfg = {
         'endpoint_snitch': 'GossipingPropertyFileSnitch',
         'tablets_mode_for_new_keyspaces': 'enabled',
-    } | rf_rack_cfg | hints_cfg | tablet_load_stats_cfg
+    } | rf_rack_cfg | hints_cfg
 
     property_file_dc1 = {'dc': 'dc1', 'rack': 'rack1'}
     property_file_dc2 = {'dc': 'dc2', 'rack': 'rack2'}
@@ -71,6 +69,16 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     cql, _ = await manager.get_ready_cql(live_servers + dead_servers)
     hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 60)
     dead_hosts = await wait_for_cql_and_get_hosts(cql, dead_servers, time.time() + 60)
+    dead_host_ids = await gather_safely(*(manager.get_host_id(srv.server_id) for srv in dead_servers))
+
+    # When table audit is enabled, Scylla creates the "audit" keyspace with
+    # NetworkTopologyStrategy. During remove_node, streaming fails for the audit keyspace
+    # with "zero replica after the removal" when all nodes from dc2 are removed.
+    # By setting RF=3 only in dc1, we ensure the audit data stays on the surviving nodes.
+    # Only alter if the audit keyspace exists (it might not exist if audit is disabled).
+    result = await cql.run_async("SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
+    if result:
+        await cql.run_async("ALTER KEYSPACE audit WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}")
 
     first_group0_id = (await cql.run_async(
             "SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
@@ -90,7 +98,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     await asyncio.sleep(1)
 
     logging.info(f'Killing {dead_servers}')
-    await asyncio.gather(*(manager.server_stop(server_id=srv.server_id) for srv in dead_servers))
+    await gather_safely(*(manager.server_stop(server_id=srv.server_id) for srv in dead_servers))
 
     logging.info('Checking that group 0 has no majority')
     with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out"):
@@ -129,7 +137,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # replica, 1 pending replica, CL=LOCAL_QUORUM requires 2 normal replicas). So, we can start sending writes to dc2
     # only after increasing RF to 3, which we do - see finish_writes_dc2.
     await finish_writes()
-    ccluster_all_nodes.shutdown()
+    safe_driver_shutdown(ccluster_all_nodes)
     ccluster_dc1 = cluster_con(
             [srv.ip_addr for srv in live_servers],
             load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in live_servers]))
@@ -140,12 +148,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     if remove_dead_nodes_with == "remove":
         # We must mark dead nodes as permanently dead so that they are ignored in topology commands. Without this step,
         # ALTER KEYSPACE below would fail on the global token metadata barrier.
-        # For now, we do not have a specific API to mark nodes as dead, so we use a workaround.
-        # FIXME: use the specific API once scylladb/scylladb#21281 is fixed.
         logging.info(f'Marking {dead_servers} as permanently dead')
-        await manager.remove_node(live_servers[0].server_id, dead_servers[0].server_id,
-                                  [dead_srv.ip_addr for dead_srv in dead_servers[1:]],
-                                  expected_error='Removenode failed')
+        await manager.api.exclude_node(live_servers[0].ip_addr, dead_host_ids)
 
         logging.info(f'Decreasing RF of {ks_name} to 0 in dc2')
         for i in range(1, rf + 1):
@@ -217,5 +221,5 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     await finish_writes_dc1()
     await finish_writes_dc2()
-    ccluster_dc1.shutdown()
-    ccluster_dc2.shutdown()
+    safe_driver_shutdown(ccluster_dc1)
+    safe_driver_shutdown(ccluster_dc2)

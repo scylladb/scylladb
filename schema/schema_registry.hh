@@ -67,9 +67,8 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     const ::schema* _schema = nullptr;
     weak_ptr<replica::table> _table;
 
-    enum class sync_state { NOT_SYNCED, SYNCING, SYNCED };
+    enum class sync_state { NOT_SYNCED, SYNCED };
     sync_state _sync_state;
-    shared_promise<> _synced_promise; // valid when _sync_state == SYNCING
     timer<erase_clock> _erase_timer;
 
     friend class schema_registry;
@@ -84,9 +83,7 @@ public:
     schema_ptr get_schema(); // call only when state >= LOADED
     // Can be called from other shards
     bool is_synced() const;
-    // Initiates asynchronous schema sync or returns ready future when is already synced.
-    future<> maybe_sync(std::function<future<>()> sync);
-    // Marks this schema version as synced. Syncing cannot be in progress.
+    // Marks this schema version as synced.
     void mark_synced();
     // Can be called from other shards
     extended_frozen_schema extended_frozen() const;

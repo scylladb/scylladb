@@ -51,8 +51,6 @@ struct fmt::formatter<table_info> : fmt::formatter<string_view> {
 //
 // Schema changes merged in any order should result in the same final version.
 //
-// When table_schema_version changes, schema_tables::calculate_schema_digest() should
-// also change when schema mutations are applied.
 using table_schema_version = utils::tagged_uuid<struct table_schema_version_tag>;
 
 inline table_schema_version reversed(table_schema_version v) noexcept {

@@ -11,6 +11,7 @@
 #include <seastar/core/sharded.hh>
 
 #include "schema_registry.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include "db/schema_tables.hh"
 #include "view_info.hh"
@@ -103,6 +104,12 @@ schema_ptr schema_registry::learn(schema_ptr s) {
 }
 
 schema_registry_entry& schema_registry::get_entry(table_schema_version v) const {
+    if (auto ignore_version = utils::get_local_injector().inject_parameter<std::string_view>("schema_registry_ignore_version"); ignore_version) {
+        if (v == table_schema_version{utils::UUID(*ignore_version)}) {
+            throw schema_version_not_found(v);
+        }
+    }
+
     auto i = _entries.find(v);
     if (i == _entries.end()) {
         throw schema_version_not_found(v);
@@ -142,6 +149,12 @@ future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const as
 }
 
 schema_ptr schema_registry::get_or_null(table_schema_version v) const {
+    if (auto ignore_version = utils::get_local_injector().inject_parameter<std::string_view>("schema_registry_ignore_version"); ignore_version) {
+        if (v == table_schema_version{utils::UUID(*ignore_version)}) {
+            return nullptr;
+        }
+    }
+
     auto i = _entries.find(v);
     if (i == _entries.end()) {
         return nullptr;
@@ -263,43 +276,6 @@ frozen_schema schema_registry_entry::frozen() const {
     return _extended_frozen_schema->fs;
 }
 
-future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
-    switch (_sync_state) {
-        case schema_registry_entry::sync_state::SYNCED:
-            return make_ready_future<>();
-        case schema_registry_entry::sync_state::SYNCING:
-            return _synced_promise.get_shared_future();
-        case schema_registry_entry::sync_state::NOT_SYNCED: {
-            slogger.debug("Syncing {}", _version);
-            _synced_promise = {};
-            auto f = do_with(std::move(syncer), [] (auto& syncer) {
-                return syncer();
-            });
-            auto sf = _synced_promise.get_shared_future();
-            _sync_state = schema_registry_entry::sync_state::SYNCING;
-            // Move to background.
-            (void)f.then_wrapped([this, self = shared_from_this()] (auto&& f) {
-                if (_sync_state != sync_state::SYNCING) {
-                    f.ignore_ready_future();
-                    return;
-                }
-                if (f.failed()) {
-                    slogger.debug("Syncing of {} failed", _version);
-                    _sync_state = schema_registry_entry::sync_state::NOT_SYNCED;
-                    _synced_promise.set_exception(f.get_exception());
-                } else {
-                    slogger.debug("Synced {}", _version);
-                    _registry.attach_table(*this);
-                    _sync_state = schema_registry_entry::sync_state::SYNCED;
-                    _synced_promise.set_value();
-                }
-            });
-            return sf;
-        }
-    }
-    abort();
-}
-
 bool schema_registry_entry::is_synced() const {
     return _sync_state == sync_state::SYNCED;
 }
@@ -307,9 +283,6 @@ bool schema_registry_entry::is_synced() const {
 void schema_registry_entry::mark_synced() {
     if (_sync_state == sync_state::SYNCED) {
         return;
-    }
-    if (_sync_state == sync_state::SYNCING) {
-        _synced_promise.set_value();
     }
     _registry.attach_table(*this);
     _sync_state = sync_state::SYNCED;

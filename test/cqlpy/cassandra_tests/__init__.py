@@ -6,4 +6,4 @@
 # causes pytest to rewrite (i.e., improve) assert calls in utility
 # functions in porting.py.
 import pytest
-pytest.register_assert_rewrite("cassandra_tests.porting")
+pytest.register_assert_rewrite("test.cqlpy.cassandra_tests.porting")

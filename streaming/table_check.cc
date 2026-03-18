@@ -13,10 +13,8 @@
 namespace streaming {
 
 future<table_dropped> table_sync_and_check(replica::database& db, service::migration_manager& mm, const table_id& uuid) {
-    if (mm.use_raft()) {
-        // Trigger read barrier to synchronize schema.
-        co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
-    }
+    // Trigger read barrier to synchronize schema.
+    co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
 
     co_return !db.column_family_exists(uuid);
 }

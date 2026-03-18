@@ -153,70 +153,6 @@ SEASTAR_TEST_CASE(test_async_loading) {
     });
 }
 
-SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_doesnt_defer) {
-    return seastar::async([] {
-        dummy_init dummy;
-        auto s = random_schema();
-        s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) -> extended_frozen_schema { return s; });
-        BOOST_REQUIRE(!s->is_synced());
-        s->registry_entry()->maybe_sync([] { return make_ready_future<>(); }).get();
-        BOOST_REQUIRE(s->is_synced());
-    });
-}
-
-SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_defers) {
-    return seastar::async([] {
-        dummy_init dummy;
-        auto s = random_schema();
-        s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) -> extended_frozen_schema { return s; });
-
-        BOOST_REQUIRE(!s->is_synced());
-        s->registry_entry()->maybe_sync([] { return yield(); }).get();
-        BOOST_REQUIRE(s->is_synced());
-    });
-}
-
-SEASTAR_TEST_CASE(test_failed_sync_can_be_retried) {
-    return seastar::async([] {
-        dummy_init dummy;
-        auto s = random_schema();
-        s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) -> extended_frozen_schema { return s; });
-        BOOST_REQUIRE(!s->is_synced());
-
-        promise<> fail_sync;
-
-        auto f1 = s->registry_entry()->maybe_sync([&fail_sync] () mutable {
-            return fail_sync.get_future().then([] {
-                throw std::runtime_error("sync failed");
-            });
-        });
-
-        // concurrent maybe_sync should attach the the current one
-        auto f2 = s->registry_entry()->maybe_sync([] { return make_ready_future<>(); });
-
-        fail_sync.set_value();
-
-        try {
-            f1.get();
-            BOOST_FAIL("Should have failed");
-        } catch (...) {
-            // expected
-        }
-
-        try {
-            f2.get();
-            BOOST_FAIL("Should have failed");
-        } catch (...) {
-            // expected
-        }
-
-        BOOST_REQUIRE(!s->is_synced());
-
-        s->registry_entry()->maybe_sync([] { return make_ready_future<>(); }).get();
-        BOOST_REQUIRE(s->is_synced());
-    });
-}
-
 SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         auto s0 = schema_builder("ks", "cf")
@@ -237,11 +173,11 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
             utils::chunked_vector<mutation> muts;
             sm0.copy_to(muts);
             db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(),
-                                            e.get_feature_service().local(), muts).get();
+                                            muts).get();
         }
 
         // This should attach the table
-        s0->registry_entry()->maybe_sync([] { return make_ready_future<>(); }).get();
+        s0->registry_entry()->mark_synced();
         BOOST_REQUIRE(s0->maybe_table());
 
         // mark_synced() should attach the table
@@ -257,7 +193,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
         e.execute_cql("ALTER TABLE ks.cf ADD dummy int").get();
 
         s1 = local_schema_registry().learn(s1);
-        s1->registry_entry()->maybe_sync([] { return make_ready_future<>(); }).get();
+        s1->registry_entry()->mark_synced();
         BOOST_REQUIRE(&s1->table() == s0->maybe_table());
 
         auto learned_s1 = local_schema_registry().learn(s1);
@@ -370,7 +306,7 @@ SEASTAR_THREAD_TEST_CASE(test_merge_schema_with_large_collection_of_mutations) {
         BOOST_REQUIRE(seastar::memory::stats().large_allocations() == 0);
         seastar::memory::scoped_large_allocation_warning_threshold guard((size_t(128) << 10)+1); // 128 KiB + 1 byte
         db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(),
-                                        e.get_feature_service().local(), mutations).get();
+                                        mutations).get();
         BOOST_REQUIRE(seastar::memory::stats().large_allocations() == 0);
 
     }).get();

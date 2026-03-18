@@ -266,9 +266,18 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
     auto sst = co_await load_sstable(desc, storage_opts, flags.sstable_open_config);
     validate(sst, flags);
 
-    if (flags.need_mutate_level) {
+    if (flags.need_mutate_level && sst->should_mutate_sstable_level(0)) {
         dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
-        co_await sst->mutate_sstable_level(0);
+        auto modifier = [] (sstable& new_sst) {
+            new_sst.mutate_sstable_level(0);
+        };
+        auto sst_creator = [&](shared_sstable) {
+            return _manager.make_sstable(_schema, storage_opts, sstables::sstable_generation_generator{}(), _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
+        };
+        auto new_sst = co_await sst->link_with_rewritten_component(std::move(sst_creator), component_type::Statistics, std::move(modifier), false);
+        co_await sst->unlink();
+        sst = std::move(new_sst);
+        desc.generation = sst->generation();
     }
 
     if (flags.sort_sstables_according_to_owner) {
@@ -641,7 +650,7 @@ future<sstring> sstable_directory::create_pending_deletion_log(opened_directory&
         dirlog.trace("Writing {}", tmp_pending_delete_log);
 
             touch_directory(pending_delete_dir).get();
-            auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
+            auto oflags = sstable_write_open_flags;
             // Create temporary pending_delete log file.
             auto f = open_file_dma(tmp_pending_delete_log, oflags).get();
             // Write all toc names into the log file.

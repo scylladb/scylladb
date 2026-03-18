@@ -85,6 +85,10 @@ struct sstable_open_config {
     bool keep_sharding_metadata = false;
     // Allows unsealed sstable to be loaded, since it must read components from temporary TOC instead.
     bool unsealed_sstable = false;
+    // When true, log a warning instead of throwing on component digest mismatch.
+    // Useful for recovering sstables with corrupted non-vital components or
+    // working around bugs in digest calculation.
+    bool ignore_component_digest_mismatch = false;
 };
 
 }

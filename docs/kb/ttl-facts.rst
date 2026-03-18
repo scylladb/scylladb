@@ -15,6 +15,10 @@ It is not always clear under which circumstances data is deleted when using Time
 This article clarifies what may not be apparent.
 It corrects some assumptions you may have that are not exactly true.
 
+This document is about CQL's :doc:`per-write TTL feature </cql/time-to-live>`,
+the `per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_
+feature behaves differently.
+
 
 Facts About Expiring Data
 -------------------------

@@ -268,10 +268,22 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 
     inc_cql_stats(qs.get_client_state().is_internal());
 
+    const auto cl = options.get_consistency();
+    const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl);
+    if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
+        co_return coroutine::exception(
+                std::make_exception_ptr(exceptions::invalid_request_exception(
+                        format("Consistency level {} is not allowed for write operations", cl))));
+    }
+
     _restrictions->validate_primary_key(options);
 
     if (has_conditions()) {
-        co_return co_await execute_with_condition(qp, qs, options);
+        auto result = co_await execute_with_condition(qp, qs, options);
+        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+            result->add_warning(format("Write with consistency level {} is warned by guardrail configuration", cl));
+        }
+        co_return result;
     }
 
     json_cache_opt json_cache = maybe_prepare_json_cache(options);
@@ -290,6 +302,9 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     }
 
     auto result = seastar::make_shared<cql_transport::messages::result_message::void_message>();
+    if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+        result->add_warning(format("Write with consistency level {} is warned by guardrail configuration", cl));
+    }
     if (keys_size_one) {
         auto&& table = s->table();
         if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
@@ -356,7 +371,6 @@ process_forced_rebounce(unsigned shard, query_processor& qp, const query_options
     // On the last iteration, re-bounce to the correct shard.
     if (counter != 0) {
         const auto shard_num = smp::count;
-        assert(shard_num > 0);
         const auto local_shard = this_shard_id();
         auto target_shard = local_shard + 1;
         if (target_shard == shard) {
@@ -490,7 +504,7 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
      * partition to check conditions.
      */
     if (_if_exists || _if_not_exists) {
-        SCYLLA_ASSERT(!_has_static_column_conditions && !_has_regular_column_conditions);
+        throwing_assert(!_has_static_column_conditions && !_has_regular_column_conditions);
         if (s->has_static_columns() && !_restrictions->has_clustering_columns_restriction()) {
             _has_static_column_conditions = true;
         } else {
@@ -676,13 +690,13 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
 
         if (_if_not_exists) {
             // To have both 'IF NOT EXISTS' and some other conditions doesn't make sense.
-            // So far this is enforced by the parser, but let's SCYLLA_ASSERT it for sanity if ever the parse changes.
-            SCYLLA_ASSERT(!_conditions);
-            SCYLLA_ASSERT(!_if_exists);
+            // So far this is enforced by the parser, but let's throwing_assert it for sanity if ever the parse changes.
+            throwing_assert(!_conditions);
+            throwing_assert(!_if_exists);
             stmt.set_if_not_exist_condition();
         } else if (_if_exists) {
-            SCYLLA_ASSERT(!_conditions);
-            SCYLLA_ASSERT(!_if_not_exists);
+            throwing_assert(!_conditions);
+            throwing_assert(!_if_not_exists);
             stmt.set_if_exist_condition();
         } else {
             stmt._condition = column_condition_prepare(*_conditions, db, keyspace(), schema);

@@ -62,7 +62,7 @@ future<> sstable_dict_autotrainer::tick() {
             continue;
         }
         auto params = s->get_compressor_params();
-        auto ticket = get_units(_ss.get_do_sample_sstables_concurrency_limiter(), 1);
+        auto ticket = co_await get_units(_ss.get_do_sample_sstables_concurrency_limiter(), 1);
         // When we sample a block from a set of files, we can think of this block's
         // compression ratio like about a random variable, with value in [0;1] and
         // some underlying distribution.

@@ -17,15 +17,14 @@ target_sources(scylla_auth
     password_authenticator.cc
     passwords.cc
     permission.cc
-    permissions_cache.cc
     resource.cc
     role_or_anonymous.cc
-    roles-metadata.cc
     sasl_challenge.cc
     saslauthd_authenticator.cc
     service.cc
     standard_role_manager.cc
     transitional.cc
+    maintenance_socket_authenticator.cc
     maintenance_socket_role_manager.cc)
 target_include_directories(scylla_auth
   PUBLIC

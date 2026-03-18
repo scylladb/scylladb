@@ -42,6 +42,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 
+#include <boost/test/unit_test.hpp>
 #include "dht/sharder.hh"
 #include "schema/schema_builder.hh"
 #include "replica/cell_locking.hh"
@@ -68,6 +69,8 @@
 #include "readers/queue.hh"
 
 BOOST_AUTO_TEST_SUITE(mutation_reader_test)
+
+namespace test_label = boost::unit_test;
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -1030,7 +1033,7 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
 
 static mutation compacted(const mutation& m) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now(), tombstone_gc_state::for_tests());
     return result;
 }
 
@@ -1239,7 +1242,7 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
 }
 
 // Best run with SMP >= 2
-SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
+SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *test_label::label("nightly")) {
     if (smp::count < 2) {
         std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
         return;
@@ -2592,7 +2595,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
                 }
                 auto mr = make_compacting_reader(std::move(source), query_time,
                         can_never_purge,
-                        tombstone_gc_state(nullptr), fwd_sm);
+                        tombstone_gc_state::for_tests(), fwd_sm);
                 if (single_fragment_buffer) {
                     mr.set_max_buffer_size(1);
                 }
@@ -2649,7 +2652,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
         auto mr = make_compacting_reader(make_mutation_reader_from_fragments(ss.schema(), permit, std::move(mfs)),
                 gc_clock::now(),
                 can_never_purge,
-                tombstone_gc_state(nullptr));
+                tombstone_gc_state::for_tests());
         mr.set_max_buffer_size(buffer_size);
 
         return mr;
@@ -2694,7 +2697,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_is_consistent_with_compaction) {
         .produces_range_tombstone_change({position_in_partition::for_range_end(r), {}})
         .produces_partition_end();
 
-    assert_that(make_compacting_reader(read_m(), gc_clock::time_point::min(), can_never_purge, tombstone_gc_state(nullptr)))
+    assert_that(make_compacting_reader(read_m(), gc_clock::time_point::min(), can_never_purge, tombstone_gc_state::for_tests()))
             .exact()
             .produces_partition_start(m.decorated_key(), p_tomb)
             .produces_partition_end();

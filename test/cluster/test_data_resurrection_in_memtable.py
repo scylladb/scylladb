@@ -54,7 +54,7 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
 
         for write_statement, delete_statement in statement_pairs:
             execute_with_tracing(cql, write_statement.format(ks=ks), log = True)
-            await manager.api.enable_injection(node3.ip_addr, "database_apply", one_shot=False)
+            await manager.api.enable_injection(node3.ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": "tbl", "what": "throw"})
             execute_with_tracing(cql, delete_statement.format(ks=ks), log = True)
             await manager.api.disable_injection(node3.ip_addr, "database_apply")
 
@@ -73,12 +73,12 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
                 res = cql.execute(SimpleStatement(f"SELECT * FROM MUTATION_FRAGMENTS({ks}.tbl) WHERE pk = 0", consistency_level=ConsistencyLevel.LOCAL_ONE), host=host)
                 logger.info(f"MUTATION_FRAGMENTS {description} for {host.address}:\n{'\n'.join(map(str, res))}")
 
+        dump_mutation_fragments("before repair")
+
         # Before repair: we expect node3 to have the deleted row as live.
         check_data(host1, [])
         check_data(host2, [])
         check_data(host3, [{'pk': 0, 'ck': 100, 'v': 999}])
-
-        dump_mutation_fragments("before repair")
 
         await manager.api.tablet_repair(node1.ip_addr, ks, "tbl", "all", await_completion=True)
 

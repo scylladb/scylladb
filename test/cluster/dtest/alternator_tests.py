@@ -9,13 +9,14 @@ import os
 import random
 import string
 import tempfile
+import time
 from concurrent.futures.thread import ThreadPoolExecutor
 from pprint import pformat
 
 import pytest
 import requests
 from botocore.exceptions import ClientError, EndpointConnectionError
-from ccmlib.scylla_node import ScyllaNode
+from ccmlib.scylla_node import NodetoolError, ScyllaNode
 from deepdiff import DeepDiff
 
 from alternator.utils import schemas
@@ -646,3 +647,76 @@ class TesterAlternator(BaseAlternator):
         logger.info("Reading all existing data after delete-operations are completed")
         items = self.get_table_items(table_name=TABLE_NAME, node=node1, consistent_read=False, num_of_items=num_of_items)
         assert [item for item in items if NUM_OF_ELEMENTS_IN_SET > len(item["Item"]["hello_set"]) > 0]
+
+    def test_ttl_with_load_and_decommission(self):
+        """
+        1. Configure a table with TTL enabled and an 'expiration' column.
+        2. Create a load of read/write/update-items delete-set-elements
+        3. Run a loop of flush and compaction on cluster nodes.
+        4. Verify all data is eventually deleted on cluster nodes.
+        """
+        ttl_polling_interval = 4
+        if self.cluster.scylla_mode != "debug":
+            nodes = 4
+            topo = {"dc1": {"rack1": 1, "rack2": 1, "rack3": 2}}
+        else:
+            nodes = 2
+            topo = {"dc1": {"rack1": 2}}
+        self.prepare_dynamodb_cluster(num_of_nodes=nodes, extra_config={"alternator_ttl_period_in_seconds": ttl_polling_interval}, topo=topo)
+        node1, *_ = self.cluster.nodelist()
+        table = self.create_table(node=node1)
+        # Enable TTL for table
+        self.get_dynamodb_api(node=node1).client.update_time_to_live(TableName=table.name, TimeToLiveSpecification={"AttributeName": "expiration", "Enabled": True})
+        expiration_sec = 10
+        num_of_items = 100
+        logger.info("Running background stress and topology changes..")
+        stress_thread = self.run_write_stress(table_name=TABLE_NAME, node=node1, num_of_item=num_of_items, use_set_data_type=True, expiration_sec=expiration_sec, random_start_index=True, ignore_errors=True)
+        read_and_delete_set_elements_thread = self.run_delete_set_elements_stress(table_name=TABLE_NAME, node=node1, random_start_index=True)
+        # hardcoded decommission that repeats picking logic of run_decommission_add_node_thread
+        node_to_decommission = self.cluster.nodelist()[-1]
+        decommission_thread = self.run_decommission_add_node_thread()
+
+        logger.info("Run flush and compaction on cluster nodes")
+        iterations = 3 if self.cluster.scylla_mode != "debug" else 1
+
+        def get_live_nodes():
+            return [node for node in self.cluster.nodelist()
+                    if node.is_live() and node.server_id != node_to_decommission.server_id]
+
+        nodes_for_maintenance = get_live_nodes()
+
+        for _ in range(iterations):
+            try:
+                random.choice(nodes_for_maintenance).flush()
+                random.choice(nodes_for_maintenance).compact()
+            except NodetoolError as exc:
+                error_message = str(exc)
+                valid_errors = ["ConnectException", "status code 404 Not Found"]
+                if not any(err in error_message for err in valid_errors):
+                    raise
+
+        logger.info("Stopping background stress and decommission")
+        read_and_delete_set_elements_thread.join()
+        stress_thread.join()
+        decommission_thread.join()
+
+        logger.info("Verify all data is eventually deleted")
+
+        @retrying(num_attempts=expiration_sec + ttl_polling_interval, sleep_time=2, allowed_exceptions=TtlNotExpiredError, message="Wait for TTL expiration threshold of a configured table")
+        def wait_for_deletion_post_ttl_expiration(node: ScyllaNode):
+            """
+            Wait for TTL expiration threshold of a configured table.
+            :param node: the node for running table full scan
+            """
+            table_data = self.scan_table(table_name=TABLE_NAME, node=node, ConsistentRead=False)
+            logger.info("scan table result: %s", table_data)
+            if not table_data:
+                return
+            raise TtlNotExpiredError
+        # Check 2 nodes for TTL expiration of all data
+        for db_node in self.cluster.nodelist()[:1]:
+            wait_for_deletion_post_ttl_expiration(node=db_node)
+
+
+class TtlNotExpiredError(Exception):
+    pass

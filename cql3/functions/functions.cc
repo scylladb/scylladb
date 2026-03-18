@@ -544,7 +544,7 @@ functions::get_user_aggregates(const sstring& keyspace) const {
 
 std::ranges::subrange<functions::declared_t::const_iterator>
 functions::find(const function_name& name) const {
-    SCYLLA_ASSERT(name.has_keyspace()); // : "function name not fully qualified";
+    throwing_assert(name.has_keyspace()); // : "function name not fully qualified";
     auto pair = _declared.equal_range(name);
     return std::ranges::subrange(pair.first, pair.second);
 }

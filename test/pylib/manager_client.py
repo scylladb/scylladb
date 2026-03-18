@@ -22,6 +22,7 @@ from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMe
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer, ScyllaVersionDescription
+from test.pylib.driver_utils import safe_driver_shutdown
 from cassandra.cluster import Session as CassandraSession, \
     ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.policies import LoadBalancingPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy
@@ -114,7 +115,7 @@ class ManagerClient:
         """Disconnect from cluster"""
         if self.ccluster is not None:
             logger.debug("shutting down driver")
-            self.ccluster.shutdown()
+            safe_driver_shutdown(self.ccluster)
             self.ccluster = None
         self.cql = None
 
@@ -193,7 +194,7 @@ class ManagerClient:
             # check if we should ignore cores on this server
             ignore_cores = []
             if self.ignore_cores_log_patterns:
-                if matches := log_file.grep("|".join(f"({p})" for p in set(self.ignore_cores_log_patterns))):
+                if matches := await log_file.grep("|".join(f"({p})" for p in set(self.ignore_cores_log_patterns))):
                     logger.debug(f"Will ignore cores on {server}. Found the following log messages: {matches}")
                     ignore_cores.append(server)
             critical_error_pattern = r"Assertion.*failed|AddressSanitizer"
@@ -391,11 +392,13 @@ class ManagerClient:
             if expected_crash:
                 self.ignore_cores_log_patterns.append(re.escape(expected_error))
 
+        if not connect_driver:
+            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
+
         logger.debug("ManagerClient starting %s", server_id)
         data = {
             "expected_error": expected_error,
             "seeds": seeds,
-            "connect_driver": connect_driver,
             "expected_server_up_state": expected_server_up_state.name,
             "cmdline_options_override": cmdline_options_override,
             "append_env_override": append_env_override,
@@ -524,11 +527,14 @@ class ManagerClient:
                          seeds: Optional[List[IPAddress]] = None,
                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT,
                          server_encryption: str = "none",
-                         expected_server_up_state: Optional[ServerUpState] = None,
+                         expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
                          connect_driver: bool = True) -> ServerInfo:
         """Add a new server"""
         if expected_error is not None:
             self.ignore_log_patterns.append(re.escape(expected_error))
+
+        if not connect_driver:
+            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
 
         try:
             data = self._create_server_add_data(

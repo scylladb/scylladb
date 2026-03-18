@@ -7,6 +7,7 @@ import logging
 
 import pytest
 import asyncio
+from test.pylib.internal_types import ServerNum
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, InjectionHandler, read_barrier
 from test.cluster.util import create_new_test_keyspace
@@ -17,6 +18,20 @@ logger = logging.getLogger(__name__)
 @pytest.fixture(name="raft_op_timeout")  # avoid the W0621:redefined-outer-name pylint warning
 def fixture_raft_op_timeout(build_mode):
     return 10000 if build_mode == 'debug' else 1000
+
+
+async def update_group0_raft_op_timeout(server_id: ServerNum, manager: ManagerClient, timeout: int) -> None:
+    logger.info(f"Updating group0_raft_op_timeout_in_ms on server {server_id} to {timeout}")
+    running_ids = [srv.server_id for srv in await manager.running_servers()]
+    if server_id in running_ids:
+        # If the node is alive, server_update_config only sends the SIGHUP signal to the Scylla process, so awaiting it
+        # doesn't guarantee that the new config file is active. Work around this by looking at the logs.
+        log_file = await manager.server_open_log(server_id)
+        mark = await log_file.mark()
+        await manager.server_update_config(server_id, 'group0_raft_op_timeout_in_ms', timeout)
+        await log_file.wait_for("completed re-reading configuration file", from_mark=mark, timeout=60)
+    else:
+        await manager.server_update_config(server_id, 'group0_raft_op_timeout_in_ms', timeout)
 
 
 @pytest.mark.asyncio
@@ -41,7 +56,6 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
 
     config = {
         'direct_failure_detector_ping_timeout_in_ms': 300,
-        'group0_raft_op_timeout_in_ms': raft_op_timeout,
         'error_injections_at_startup': [
             {
                 'name': 'raft-group-registry-fd-threshold-in-ms',
@@ -63,6 +77,10 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
                          manager.server_stop_gracefully(servers[3].server_id),
                          manager.server_stop_gracefully(servers[4].server_id))
 
+    # Do it here to prevent unexpected timeouts before quorum loss.
+    await asyncio.gather(*(update_group0_raft_op_timeout(srv.server_id, manager, raft_op_timeout)
+                           for srv in servers[:2]))
+
     logger.info("starting a sixth node with no quorum")
     await manager.server_add(expected_error="raft operation \\[read_barrier\\] timed out, there is no raft quorum",
                              timeout=60)
@@ -75,7 +93,6 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_timeout: int) -> None:
     config = {
-        'group0_raft_op_timeout_in_ms': raft_op_timeout,
         'error_injections_at_startup': [
             {
                 'name': 'raft-group-registry-fd-threshold-in-ms',
@@ -106,6 +123,9 @@ async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_time
     await asyncio.gather(manager.server_stop_gracefully(servers[1].server_id),
                          manager.server_stop_gracefully(servers[2].server_id))
 
+    # Do it here to prevent unexpected timeouts before quorum loss.
+    await update_group0_raft_op_timeout(servers[0].server_id, manager, raft_op_timeout)
+
     logger.info("release join-node-before-add-entry injection")
     await injection_handler.message()
 
@@ -125,7 +145,6 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
 
     logger.info("adding a fourth node")
     servers += [await manager.server_add(config={
-        'group0_raft_op_timeout_in_ms': raft_op_timeout,
         'error_injections_at_startup': [
             {
                 'name': 'raft-group-registry-fd-threshold-in-ms',
@@ -152,6 +171,9 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
     await asyncio.gather(manager.server_stop_gracefully(servers[1].server_id),
                          manager.server_stop_gracefully(servers[2].server_id))
 
+    # Do it here to prevent unexpected timeouts before quorum loss.
+    await update_group0_raft_op_timeout(servers[3].server_id, manager, raft_op_timeout)
+
     logger.info("release join-node-response_handler-before-read-barrier injection")
     injection_handler = InjectionHandler(manager.api,
                                          'join-node-response_handler-before-read-barrier',
@@ -168,7 +190,6 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
 async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: int) -> None:
     logger.info("starting a first node (the leader)")
     servers = [await manager.server_add(config={
-        'group0_raft_op_timeout_in_ms': raft_op_timeout,
         'error_injections_at_startup': [
             {
                 'name': 'raft-group-registry-fd-threshold-in-ms',
@@ -187,6 +208,9 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
     logger.info("stopping the second and third nodes")
     await asyncio.gather(manager.server_stop_gracefully(servers[1].server_id),
                          manager.server_stop_gracefully(servers[2].server_id))
+
+    # Do it here to prevent unexpected timeouts before quorum loss.
+    await update_group0_raft_op_timeout(servers[0].server_id, manager, raft_op_timeout)
 
     logger.info("attempting removenode for the second node")
     await manager.remove_node(servers[0].server_id, servers[1].server_id,
@@ -231,9 +255,7 @@ async def test_can_restart(manager: ManagerClient, raft_op_timeout: int) -> None
     await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in servers))
 
     # This ensures the read barriers below fail quickly without group 0 quorum.
-    logger.info(f"Decreasing group0_raft_op_timeout_in_ms on {servers}")
-    await asyncio.gather(*(manager.server_update_config(srv.server_id, 'group0_raft_op_timeout_in_ms', raft_op_timeout)
-                           for srv in servers))
+    await asyncio.gather(*(update_group0_raft_op_timeout(srv.server_id, manager, raft_op_timeout) for srv in servers))
 
     logger.info(f"Restarting {servers[:2]} with no group 0 quorum")
     for idx, srv in enumerate(servers[:2]):
@@ -245,8 +267,7 @@ async def test_can_restart(manager: ManagerClient, raft_op_timeout: int) -> None
 
     # Increase the timeout back to 300s to ensure the new group 0 leader is elected before the first read barrier below
     # times out.
-    await asyncio.gather(*(manager.server_update_config(srv.server_id, 'group0_raft_op_timeout_in_ms', 300000)
-                           for srv in servers))
+    await asyncio.gather(*(update_group0_raft_op_timeout(srv.server_id, manager, 300000) for srv in servers))
 
     logger.info(f"Restarting {servers[2:]} with group 0 quorum")
     for srv in servers[2:]:

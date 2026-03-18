@@ -7,10 +7,10 @@
  */
 
 #include <functional>
-#include <memory>
 #include <seastar/core/abort_source.hh>
 #include <signal.h>
 #include <seastar/core/future.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/http/client.hh>
@@ -18,6 +18,7 @@
 #include <seastar/http/reply.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/core/smp.hh>
 #include <tuple>
 #include <boost/program_options.hpp>
 
@@ -43,8 +44,7 @@ struct test_config {
     bool flush;
     std::string remote_host;
     bool continue_after_error;
-
-    sharded<abort_source>* as;
+    std::string json_result_file;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
@@ -58,14 +58,10 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
 }
 
 static http::experimental::client get_client(const test_config& c, int port = 0) {
-    std::string host = "127.0.0.1";
-    if (!c.remote_host.empty()) {
-        host = c.remote_host;
-    }
     if (port == 0) {
         port = c.port;
     }
-    return http::experimental::client(socket_address(net::inet_address(host), port));
+    return http::experimental::client(socket_address(net::inet_address(c.remote_host), port));
 }
 
 static future<> make_request(http::experimental::client& cli, sstring operation, sstring body) {
@@ -79,6 +75,24 @@ static future<> make_request(http::experimental::client& cli, sstring operation,
             });
         });
     });
+}
+
+static void wait_for_alternator(const test_config& c, abort_source& as) {
+    for (int attempt = 0; attempt < 3000; ++attempt) {
+        as.check();
+        try {
+            auto cli = get_client(c);
+            auto close = defer([&] { cli.close().get(); });
+            make_request(cli, "ListTables", "{}").get();
+            return;
+        } catch (...) {
+        }
+        sleep_abortable(std::chrono::milliseconds(100), as).get();
+        if (attempt >= 100 && attempt % 10 == 0) {
+            std::cout << fmt::format("Retrying connect to alternator port (attempt {})", attempt + 1) << std::endl;
+        }
+    }
+    throw std::runtime_error("Timed out waiting for alternator port to become ready");
 }
 
 static void delete_alternator_table(http::experimental::client& cli) {
@@ -348,7 +362,7 @@ static void flush_table(const test_config& c) {
     auto cli = get_client(c, 10000);
     auto req = http::request::make("POST", "localhost", "/storage_service/keyspace_flush/alternator_workloads_test");
     cli.make_request(std::move(req), [] (const http::reply& rep, input_stream<char>&& in) {
-        return make_ready_future<>();
+        return in.close();
     }).get();
     cli.close().get();
 }
@@ -373,8 +387,10 @@ auto make_client_pool(const test_config& c) {
     return res;
 }
 
-void workload_main(const test_config& c) {
+void workload_main(const test_config& c, sharded<abort_source>* as) {
     std::cout << "Running test with config: " << c << std::endl;
+
+    wait_for_alternator(c, as->local());
 
     auto cli = get_client(c);
     auto finally = defer([&] {
@@ -408,17 +424,50 @@ void workload_main(const test_config& c) {
     }
     fun_t fun = it->second;
 
+    static thread_local std::vector<http::experimental::client> cli_pool;
+    smp::invoke_on_all([&c] {
+        cli_pool = make_client_pool(c);
+    }).get();
+    // Cleanup thread-local connections to avoid destruction issues at exit
+    auto close_pools = defer([] {
+        smp::invoke_on_all([] {
+            return parallel_for_each(cli_pool, [] (auto& cli) {
+                return cli.close();
+            }).then([] {
+                cli_pool.clear();
+            });
+        }).get();
+    });
+
     auto results = time_parallel([&] {
-        c.as->local().check();
-        static thread_local auto sharded_cli_pool = make_client_pool(c); // for simplicity never closed as it lives for the whole process runtime
+        as->local().check();
         static thread_local auto cli_iter = -1;
         auto seq = tests::random::get_int<uint64_t>(c.partitions - 1);
-        return fun(c, sharded_cli_pool[++cli_iter % c.concurrency], seq);
+        return fun(c, cli_pool[++cli_iter % c.concurrency], seq);
     }, c.concurrency, c.duration_in_seconds, c.operations_per_shard, !c.continue_after_error);
 
-    std::cout << aggregated_perf_results(results) << std::endl;
+    aggregated_perf_results agg(results);
+    std::cout << agg << std::endl;
+
+    if (!c.json_result_file.empty()) {
+        Json::Value params;
+        params["workload"] = c.workload;
+        params["partitions"] = c.partitions;
+        params["concurrency"] = c.concurrency;
+        params["duration"] = c.duration_in_seconds;
+        params["operations_per_shard"] = c.operations_per_shard;
+        params["remote_host"] = c.remote_host;
+        params["flush"] = c.flush;
+        params["scan_total_segments"] = c.scan_total_segments;
+        params["cpus"] = smp::count;
+
+        perf::write_json_result(c.json_result_file, agg, params, c.workload);
+    }
 }
 
+// This benchmark runs the whole Scylla so it needs scylla config and
+// commandline. Example usage:
+// ./build/release/scylla perf-alternator --workdir /tmp/scylla-workdir --smp 1 --cpus 0 --developer-mode 1 --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt --workload read 2> /dev/null
 std::function<int(int, char**)> alternator(std::function<int(int, char**)> scylla_main, std::function<future<>(lw_shared_ptr<db::config> cfg, sharded<abort_source>& as)>* after_init_func) {
     return [=](int ac, char** av) -> int {
         test_config c;
@@ -433,8 +482,10 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
             ("flush", bpo::value<bool>()->default_value(true), "flush memtables before test")
             ("remote-host", bpo::value<std::string>()->default_value(""), "address of remote alternator service, use localhost by default")
+            ("remote-port", bpo::value<unsigned>()->default_value(8000), "address of remote alternator port")
             ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retrieve 1/scan-total-segments portion of a table")
             ("continue-after-error", bpo::value<bool>()->default_value(false), "continue test after failed request")
+            ("json-result", bpo::value<std::string>()->default_value(""), "file to write json results to")
         ;
         bpo::variables_map opts;
         bpo::store(bpo::command_line_parser(ac, av).options(opts_desc).allow_unregistered().run(), opts);
@@ -449,6 +500,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         c.remote_host = opts["remote-host"].as<std::string>();
         c.scan_total_segments = opts["scan-total-segments"].as<unsigned>();
         c.continue_after_error = opts["continue-after-error"].as<bool>();
+        c.json_result_file = opts["json-result"].as<std::string>();
 
         if (c.scan_total_segments < 1 || c.scan_total_segments > 1'000'000) {
             throw std::invalid_argument("scan-total-segments must be between 1 and 1'000'000");
@@ -466,21 +518,21 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         }
         
         if (!c.remote_host.empty()) {
-            c.port = 8000; // TODO: make configurable
+            c.port = opts["remote-port"].as<unsigned>();
             app_template app;
             return app.run(ac, av, [c = std::move(c)] () -> future<> {
-                return seastar::async([c = std::move(c)] () {
-                    workload_main(c);
+                return run_standalone([c = std::move(c)] (sharded<abort_source>* as) {
+                    workload_main(c, as);
                 });
             });
         }
 
         *after_init_func = [c = std::move(c)] (lw_shared_ptr<db::config> cfg, sharded<abort_source>& as) mutable {
             c.port = cfg->alternator_port();
-            c.as = &as;
-            return seastar::async([c = std::move(c)] {
+            c.remote_host = cfg->api_address();
+            return seastar::async([c = std::move(c), &as] {
                 try {
-                    workload_main(c);
+                    workload_main(c, &as);
                 } catch(...) {
                     std::cerr << "Test failed: " << std::current_exception() << std::endl;
                     raise(SIGKILL); // request abnormal shutdown

@@ -50,6 +50,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::previous;
         case tablet_transition_stage::write_both_read_old:
             return write_replica_set_selector::both;
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
+            return write_replica_set_selector::both;
         case tablet_transition_stage::streaming:
             return write_replica_set_selector::both;
         case tablet_transition_stage::rebuild_repair:
@@ -80,6 +82,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
         case tablet_transition_stage::allow_write_both_read_old:
             return read_replica_set_selector::previous;
         case tablet_transition_stage::write_both_read_old:
+            return read_replica_set_selector::previous;
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
             return read_replica_set_selector::previous;
         case tablet_transition_stage::streaming:
             return read_replica_set_selector::previous;
@@ -612,12 +616,16 @@ tablet_replica tablet_map::get_primary_replica(tablet_id id, const locator::topo
     return maybe_get_primary_replica(id, replicas, topo, [&] (const auto& _) { return true; }).value();
 }
 
-tablet_replica tablet_map::get_secondary_replica(tablet_id id) const {
-    if (get_tablet_info(id).replicas.size() < 2) {
+tablet_replica tablet_map::get_secondary_replica(tablet_id id, const locator::topology& topo) const {
+    const auto& orig_replicas = get_tablet_info(id).replicas;
+    if (orig_replicas.size() < 2) {
         throw std::runtime_error(format("No secondary replica for tablet id {}", id));
     }
-    const auto& replicas = get_tablet_info(id).replicas;
-    return replicas.at((size_t(id)+1) % replicas.size());
+    tablet_replica_set replicas = orig_replicas;
+    std::ranges::sort(replicas, tablet_replica_comparator(topo));
+    // This formula must match the one in get_primary_replica(),
+    // just with + 1.
+    return replicas.at((size_t(id) + size_t(id) / replicas.size() + 1) % replicas.size());
 }
 
 std::optional<tablet_replica> tablet_map::maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
@@ -741,6 +749,7 @@ void tablet_map::set_tablet_raft_info(tablet_id id, tablet_raft_info raft_info) 
 static const std::unordered_map<tablet_transition_stage, sstring> tablet_transition_stage_to_name = {
     {tablet_transition_stage::allow_write_both_read_old, "allow_write_both_read_old"},
     {tablet_transition_stage::write_both_read_old, "write_both_read_old"},
+    {tablet_transition_stage::write_both_read_old_fallback_cleanup, "write_both_read_old_fallback_cleanup"},
     {tablet_transition_stage::write_both_read_new, "write_both_read_new"},
     {tablet_transition_stage::streaming, "streaming"},
     {tablet_transition_stage::rebuild_repair, "rebuild_repair"},

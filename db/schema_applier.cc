@@ -41,7 +41,6 @@
 #include "types/types.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "gms/feature_service.hh"
 #include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
 #include "query/query-result-set.hh"
@@ -1139,14 +1138,17 @@ future<> schema_applier::finalize_tables_and_views() {
     // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
     for (auto& dropped_view : diff.tables_and_views.local().views.dropped) {
         auto s = dropped_view.get();
+        co_await _ss.local().on_cleanup_for_drop_table(s->id());
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
     for (auto& dropped_table : diff.tables_and_views.local().tables.dropped) {
         auto s = dropped_table.get();
+        co_await _ss.local().on_cleanup_for_drop_table(s->id());
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
     for (auto& dropped_cdc : diff.tables_and_views.local().cdc.dropped) {
         auto s = dropped_cdc.get();
+        co_await _ss.local().on_cleanup_for_drop_table(s->id());
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
 
@@ -1276,19 +1278,19 @@ static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, gms::feature_service& feat, utils::chunked_vector<mutation> mutations, bool reload)
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, utils::chunked_vector<mutation> mutations, bool reload)
 {
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).
         co_await smp::submit_to(0, coroutine::lambda([&, fmuts = freeze(mutations)] () mutable -> future<> {
-            co_await merge_schema(sys_ks, proxy, ss, feat, co_await unfreeze_gently(fmuts), reload);
+            co_await merge_schema(sys_ks, proxy, ss, co_await unfreeze_gently(fmuts), reload);
         }));
         co_return;
     }
     co_await with_merge_lock([&] () mutable -> future<> {
         co_await do_merge_schema(proxy, ss, sys_ks, std::move(mutations), reload);
-        auto version_from_group0 = co_await get_group0_schema_version(sys_ks.local());
-        co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features(), version_from_group0);
+        auto version = co_await get_group0_schema_version(sys_ks.local());
+        co_await update_schema_version_and_announce(sys_ks, proxy, version);
     });
 }
 

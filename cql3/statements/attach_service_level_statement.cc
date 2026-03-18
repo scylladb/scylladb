@@ -25,7 +25,7 @@ attach_service_level_statement::attach_service_level_statement(sstring service_l
 }
 
 bool attach_service_level_statement::needs_guard(query_processor& qp, service::query_state& state) const {
-    return !auth::legacy_mode(qp) || state.get_service_level_controller().is_v2();
+    return true;
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

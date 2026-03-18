@@ -55,31 +55,11 @@ namespace service {
 static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-        gms::gossiper& gossiper, gms::feature_service& feat,
-        bool topology_change_enabled)
+        gms::gossiper& gossiper, gms::feature_service& feat)
     : _client(client), _mm(mm), _sp(sp), _ss(ss)
     , _gate("group0_state_machine")
-    , _topology_change_enabled(topology_change_enabled)
     , _state_id_handler(ss._topology_state_machine, sp.local_db(), gossiper)
     , _feature_service(feat)
-    , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
-        // Using features to decide whether to start fetching topology snapshots
-        // or not is technically not correct because we also use features to guard
-        // whether upgrade can be started, and upgrade starts by writing
-        // to the system.topology table (namely, to the `upgrade_state` column).
-        // If some node at that point didn't mark the feature as enabled
-        // locally, there is a risk that it might try to pull a snapshot
-        // and will decide not to use `raft_pull_snapshot` verb.
-        //
-        // The above issue is mitigated by requiring administrators to
-        // wait until the SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES feature
-        // is enabled on all nodes.
-        //
-        // The biggest value of using a cluster feature here is so that
-        // the node won't try to fetch a topology snapshot if the other
-        // node doesn't support it yet.
-        _topology_change_enabled = true;
-    }))
     , _in_memory_state_machine_enabled(utils::get_local_injector().is_enabled("group0_enable_sm_immediately")) {
     _state_id_handler.run();
 }
@@ -338,7 +318,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 }
 
 #ifndef SCYLLA_BUILD_MODE_RELEASE
-static void ensure_group0_schema(const group0_command& cmd, const replica::database& db) {
+static void ensure_group0_schema(const group0_command& cmd, data_dictionary::database db) {
     auto validate_schema = [&db](const utils::chunked_vector<canonical_mutation>& mutations) {
         for (const auto& mut : mutations) {
             // Get the schema for the column family
@@ -349,6 +329,10 @@ static void ensure_group0_schema(const group0_command& cmd, const replica::datab
 
             if (!schema->static_props().is_group0_table) {
                 on_internal_error(slogger, fmt::format("ensure_group0_schema: schema is not group0: {}", schema->cf_name()));
+            }
+
+            if (!schema->static_props().use_schema_commitlog) {
+                on_internal_error(slogger, fmt::format("ensure_group0_schema: group0 table {} does not use schema commitlog", schema->cf_name()));
             }
         }
     };
@@ -382,7 +366,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
 
     // max_mutation_size = 1/2 of commitlog segment size, thus max_command_size is set 1/3 of commitlog segment size to leave space for metadata.
     size_t max_command_size = _sp.data_dictionary().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 3;
-    group0_state_machine_merger m(co_await _client.sys_ks().get_last_group0_state_id(), std::move(read_apply_mutex_holder),
+    group0_state_machine_merger m(co_await _client.get_last_group0_state_id(), std::move(read_apply_mutex_holder),
                                   max_command_size, _sp.data_dictionary());
 
     for (auto&& c : command) {
@@ -392,7 +376,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
 #ifndef SCYLLA_BUILD_MODE_RELEASE
         // Ensure that the schema of the mutations is a group0 schema.
         // This validation is supposed to be only performed in tests, so it is skipped in the release mode.
-        ensure_group0_schema(cmd, _client.sys_ks().local_db());
+        ensure_group0_schema(cmd, _sp.data_dictionary());
 #endif
 
         slogger.trace("cmd: prev_state_id: {}, new_state_id: {}, creator_addr: {}, creator_id: {}",
@@ -495,28 +479,26 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     std::optional<service::raft_snapshot> topology_snp;
     std::optional<service::raft_snapshot> raft_snp;
 
-    if (_topology_change_enabled) {
-        auto auth_tables = db::system_keyspace::auth_tables();
-        std::vector<table_id> tables;
-        tables.reserve(3);
-        tables.push_back(db::system_keyspace::topology()->id());
-        tables.push_back(db::system_keyspace::topology_requests()->id());
-        tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
+    auto auth_tables = db::system_keyspace::auth_tables();
+    std::vector<table_id> tables;
+    tables.reserve(3);
+    tables.push_back(db::system_keyspace::topology()->id());
+    tables.push_back(db::system_keyspace::topology_requests()->id());
+    tables.push_back(db::system_keyspace::cdc_generations_v3()->id());
 
-        topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+    topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+        &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
 
-        tables = std::vector<table_id>();
-        tables.reserve(auth_tables.size() + 1);
+    tables = std::vector<table_id>();
+    tables.reserve(auth_tables.size() + 1);
 
-        for (const auto& schema : auth_tables) {
-            tables.push_back(schema->id());
-        }
-        tables.push_back(db::system_keyspace::service_levels_v2()->id());
-
-        raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
-            &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
+    for (const auto& schema : auth_tables) {
+        tables.push_back(schema->id());
     }
+    tables.push_back(db::system_keyspace::service_levels_v2()->id());
+
+    raft_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_snapshot(
+        &_mm._messaging, hid, as, from_id, service::raft_snapshot_pull_params{std::move(tables)});
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
 

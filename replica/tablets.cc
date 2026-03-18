@@ -25,6 +25,7 @@
 #include "dht/token.hh"
 #include "mutation/async_utils.hh"
 #include "compaction/compaction_manager.hh"
+#include "dht/fixed_shard.hh"
 
 namespace replica {
 
@@ -95,6 +96,103 @@ schema_ptr make_tablets_schema() {
     return builder
             .with_hash_version()
             .build();
+}
+
+schema_ptr make_raft_schema(sstring name, bool is_group0) {
+    auto id = generate_legacy_id(db::system_keyspace::NAME, name);
+    auto builder = schema_builder(db::system_keyspace::NAME, name, std::optional(id));
+    if (!is_group0) {
+        if (!strongly_consistent_tables_enabled) {
+            on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
+        }
+        builder.with_column("shard", short_type, column_kind::partition_key);
+    }
+    builder
+        .with_column("group_id", timeuuid_type, column_kind::partition_key)
+        // raft log part
+        .with_column("index", long_type, column_kind::clustering_key)
+        .with_column("term", long_type)
+        .with_column("data", bytes_type) // decltype(raft::log_entry::data) - serialized variant
+        // persisted term and vote
+        .with_column("vote_term", long_type, column_kind::static_column)
+        .with_column("vote", uuid_type, column_kind::static_column)
+        // id of the most recent persisted snapshot
+        .with_column("snapshot_id", uuid_type, column_kind::static_column)
+        .with_column("commit_idx", long_type, column_kind::static_column)
+
+        .with_hash_version()
+        .set_caching_options(caching_options::get_disabled_caching_options());
+
+    if (is_group0) {
+        return builder
+            .set_comment("Persisted RAFT log, votes and snapshot info")
+            .build();
+    } else {
+        return builder
+            .set_comment("Persisted RAFT log, votes and snapshot info for strongly consistent tablets")
+            .with_partitioner(dht::fixed_shard_partitioner::classname)
+            .with_sharder(dht::fixed_shard_sharder::instance())
+            .build();
+    }
+}
+
+schema_ptr make_raft_snapshots_schema(sstring name, bool is_group0) {
+    auto id = generate_legacy_id(db::system_keyspace::NAME, name);
+    auto builder = schema_builder(db::system_keyspace::NAME, name, std::optional(id));
+    if (!is_group0) {
+        if (!strongly_consistent_tables_enabled) {
+            on_internal_error(tablet_logger, "Can't create raft snapshots table for strongly consistent tablets when the feature is disabled");
+        }
+        builder.with_column("shard", short_type, column_kind::partition_key);
+    }
+    builder
+        .with_column("group_id", timeuuid_type, column_kind::partition_key)
+        .with_column("snapshot_id", uuid_type)
+        // Index and term of last entry in the snapshot
+        .with_column("idx", long_type)
+        .with_column("term", long_type)
+
+        .with_hash_version();
+    if (is_group0) {
+        return builder
+            .set_comment("Persisted RAFT snapshots for strongly consistent tablets")
+            .build();
+    } else {
+        return builder
+            .set_comment("Persisted RAFT snapshot descriptors info for strongly consistent tablets")
+            .with_partitioner(dht::fixed_shard_partitioner::classname)
+            .with_sharder(dht::fixed_shard_sharder::instance())
+            .build();
+    }
+}
+
+schema_ptr make_raft_snapshot_config_schema(sstring name, bool is_group0) {
+    auto id = generate_legacy_id(db::system_keyspace::NAME, name);
+    auto builder = schema_builder(db::system_keyspace::NAME, name, std::optional(id));
+    if (!is_group0) {
+        if (!strongly_consistent_tables_enabled) {
+            on_internal_error(tablet_logger, "Can't create raft snapshot config table for strongly consistent tablets when the feature is disabled");
+        }
+        builder.with_column("shard", short_type, column_kind::partition_key);
+    }
+    builder
+        .with_column("group_id", timeuuid_type, column_kind::partition_key)
+        .with_column("disposition", ascii_type, column_kind::clustering_key) // can be 'CURRENT` or `PREVIOUS'
+        .with_column("server_id", uuid_type, column_kind::clustering_key)
+        .with_column("can_vote", boolean_type)
+
+        .with_hash_version();
+    if (is_group0) {
+        return builder
+            .set_comment("RAFT configuration for the latest snapshot descriptor")
+            .build();
+    } else {
+        return builder
+            .set_comment("RAFT configuration for the snapshot descriptor for strongly consistent tablets")
+            .with_partitioner(dht::fixed_shard_partitioner::classname)
+            .with_sharder(dht::fixed_shard_sharder::instance())
+            .build();
+    }
 }
 
 std::vector<data_value> replicas_to_data_value(const tablet_replica_set& replicas) {

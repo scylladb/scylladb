@@ -135,7 +135,7 @@ enum class messaging_verb : int32_t {
     GOSSIP_ECHO = 9,
     GOSSIP_SHUTDOWN = 10,
     // end of gossip verb
-    DEFINITIONS_UPDATE = 11,
+    UNUSED__DEFINITIONS_UPDATE = 11,
     TRUNCATE = 12,
     UNUSED__REPLICATION_FINISHED = 13,
     MIGRATION_REQUEST = 14,
@@ -210,7 +210,11 @@ enum class messaging_verb : int32_t {
     REPAIR_UPDATE_REPAIRED_AT_FOR_MERGE = 81,
     WORK_ON_VIEW_BUILDING_TASKS = 82,
     NOTIFY_BANNED = 83,
-    LAST = 84,
+    SNAPSHOT_WITH_TABLETS = 84,
+    RAFT_READ_BARRIER = 85,
+    FORWARD_CQL_EXECUTE = 86,
+    FORWARD_CQL_PREPARE = 87,
+    LAST = 88,
 };
 
 } // namespace netw

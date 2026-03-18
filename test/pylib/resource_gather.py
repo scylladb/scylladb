@@ -93,33 +93,34 @@ class ResourceGather(ABC):
             env.update(os.environ)
         else:
             env = os.environ.copy()
-        p = subprocess.Popen(
-            args=args,
-            bufsize=1,
-            stdout=output_file.open(mode="w", encoding="utf-8"),
-            stderr=subprocess.STDOUT,
-            preexec_fn=self.put_process_to_cgroup,
-            close_fds=True,
-            cwd=cwd,
-            env=env,
-            text=True,
-        )
-        try:
-            p.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            logger.critical(f"Process {args} timed out")
-            p.kill()
-            p.communicate()
-        except KeyboardInterrupt:
-            p.kill()
-            raise
+        with output_file.open(mode="w", encoding="utf-8") as output_handle:
+            p = subprocess.Popen(
+                args=args,
+                bufsize=1,
+                stdout=output_handle,
+                stderr=subprocess.STDOUT,
+                preexec_fn=self.put_process_to_cgroup,
+                close_fds=True,
+                cwd=cwd,
+                env=env,
+                text=True,
+            )
+            try:
+                p.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                logger.critical(f"Process {args} timed out")
+                p.kill()
+                p.communicate()
+            except KeyboardInterrupt:
+                p.kill()
+                raise
         return p
 
     def make_cgroup(self) -> None:
         pass
 
     def put_process_to_cgroup(self) -> None:
-        os.setsid()
+        pass
 
     def get_test_metrics(self) -> Metric:
         pass
@@ -197,7 +198,6 @@ class ResourceGatherOn(ResourceGather):
         self.sqlite_writer.write_row(metrics, METRICS_TABLE)
 
     def put_process_to_cgroup(self) -> None:
-        super().put_process_to_cgroup()
         try:
             pid = os.getpid()
             with open(self.cgroup_path / 'cgroup.procs', "a") as cgroup:

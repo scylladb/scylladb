@@ -683,7 +683,7 @@ class EquivalentIp:
         return f'EquivalentIp("{self.obj}")'
 
 # Reproduces issue #7972, #7988, #7997, #8001
-@pytest.mark.xfail(reason="issues #7972, #7997, #8001")
+@pytest.mark.xfail(reason="issues #7997, #8001")
 def testToJsonFct(cql, test_keyspace):
     abc_tuple = collections.namedtuple('abc_tuple', ['a', 'b', 'c'])
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as type_name:
@@ -933,7 +933,6 @@ def testToJsonFct(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT k, toJson(durationval) FROM %s WHERE k = ?", 0), [0, "\"1y1mo2d10h5m\""])
 
 # Reproduces issue #8077
-@pytest.mark.xfail(reason="issues #8077")
 def testJsonWithGroupBy(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, v int, PRIMARY KEY (k, c))") as table:
         # tests SELECT JSON statements
@@ -954,7 +953,6 @@ def testJsonWithGroupBy(cql, test_keyspace):
                 ["{\"count\": 1}"])
 
 # Reproduces issues #8077, #8078
-@pytest.mark.xfail(reason="issues #8077")
 def testSelectJsonSyntax(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int primary key, v int)") as table:
         # tests SELECT JSON statements
@@ -1266,11 +1264,6 @@ def testEmptyStringJsonSerialization(cql, test_keyspace):
 
 # CASSANDRA-14286
 # Reproduces #8100
-# We have to *skip* this test instead of *xfail*, because our buggy
-# implementation not only fails to produce the right results, it reads
-# already-freed memory to do so, which crashes the debug build with the
-# sanitizer enabled.
-@pytest.mark.skip(reason="issue #8100")
 def testJsonOrdering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a INT, b INT, PRIMARY KEY(a, b))") as table:
         execute(cql, table, "INSERT INTO %s(a, b) VALUES (20, 30);")
@@ -1302,13 +1295,14 @@ def testJsonOrdering(cql, test_keyspace):
                    ["{\"a\": 20, \"c\": 30}"])
 
         # Check ordering with CAST
+        # Cassandra prints "30.0" and "200.0", Scylla prints "30" and "200". Both are fine.
         assert_rows(execute_without_paging(cql, table, "SELECT JSON a, CAST(b AS FLOAT) FROM %s WHERE a IN (20, 100) ORDER BY b"),
-                   ["{\"a\": 20, \"cast(b as float)\": 30.0}"],
-                   ["{\"a\": 100, \"cast(b as float)\": 200.0}"])
+                   [EquivalentJson("{\"a\": 20, \"cast(b as float)\": 30.0}")],
+                   [EquivalentJson("{\"a\": 100, \"cast(b as float)\": 200.0}")])
 
         assert_rows(execute_without_paging(cql, table, "SELECT JSON a, CAST(b AS FLOAT) FROM %s WHERE a IN (20, 100) ORDER BY b DESC"),
-                   ["{\"a\": 100, \"cast(b as float)\": 200.0}"],
-                   ["{\"a\": 20, \"cast(b as float)\": 30.0}"])
+                   [EquivalentJson("{\"a\": 100, \"cast(b as float)\": 200.0}")],
+                   [EquivalentJson("{\"a\": 20, \"cast(b as float)\": 30.0}")])
 
 def testInsertAndSelectJsonSyntaxWithEmptyAndNullValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT, name TEXT, name_asc ASCII, bytes BLOB, PRIMARY KEY(id))") as table:

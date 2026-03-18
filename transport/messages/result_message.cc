@@ -19,8 +19,8 @@ std::ostream& operator<<(std::ostream& os, const result_message::void_message& m
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const result_message::bounce_to_shard& msg) {
-    fmt::print(os, "{{result_message::bounce_to_shard {}}}", msg.move_to_shard());
+std::ostream& operator<<(std::ostream& os, const result_message::bounce& msg) {
+    fmt::print(os, "{{result_message::bounce to host {}, shard {} }}", msg.move_to_host(), msg.move_to_shard());
     return os;
 }
 
@@ -55,7 +55,7 @@ std::ostream& operator<<(std::ostream& os, const result_message& msg) {
         void visit(const result_message::prepared::cql& m) override { _os << m; };
         void visit(const result_message::schema_change& m) override { _os << m; };
         void visit(const result_message::rows& m) override { fmt::print(_os, "{}", m); };
-        void visit(const result_message::bounce_to_shard& m) override { _os << m; };
+        void visit(const result_message::bounce& m) override { _os << m; };
         void visit(const result_message::exception& m) override { _os << m; };
     };
     visitor print_visitor{os};
@@ -67,14 +67,17 @@ void result_message::visitor_base::visit(const result_message::exception& ex) {
     ex.throw_me();
 }
 
-result_message::prepared::prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared, bool support_lwt_opt)
-        : _prepared(std::move(prepared))
+result_message::prepared::prepared(cql3::prepared_statements_cache::pinned_value_type prepared_entry, bool support_lwt_opt)
+        : _prepared_entry(std::move(prepared_entry))
         , _metadata(
-            _prepared->bound_names,
-            _prepared->partition_key_bind_indices,
-            support_lwt_opt ? _prepared->statement->is_conditional() : false)
-        , _result_metadata{extract_result_metadata(_prepared->statement)}
+            (*_prepared_entry)->bound_names,
+            (*_prepared_entry)->partition_key_bind_indices,
+            support_lwt_opt ? (*_prepared_entry)->statement->is_conditional() : false)
+        , _result_metadata{extract_result_metadata((*_prepared_entry)->statement)}
 {
+    for (const auto& w : (*_prepared_entry)->warnings){
+        add_warning(w);
+    }
 }
 
 ::shared_ptr<const cql3::metadata> result_message::prepared::extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {

@@ -200,8 +200,6 @@ for two cases. One is setting replication factor to 0, in which case the number 
 The other is when the numeric replication factor is equal to the current number of replicas
 for a given datacanter, in which case the current rack list is preserved.
 
-Altering from a numeric replication factor to a rack list is not supported yet.
-
 Note that when ``ALTER`` ing keyspaces and supplying ``replication_factor``,
 auto-expansion will only *add* new datacenters for safety, it will not alter
 existing datacenters or remove any even if they are no longer in the cluster.
@@ -424,6 +422,21 @@ Altering from a rack list to a numeric replication factor is not supported.
 
 Keyspaces which use rack lists are :term:`RF-rack-valid <RF-rack-valid keyspace>` if each rack in the rack list contains at least one node (excluding :doc:`zero-token nodes </architecture/zero-token-nodes>`).
 
+.. _conversion-to-rack-list-rf:
+
+Conversion to rack-list replication factor
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To migrate a keyspace from a numeric replication factor to a rack-list replication factor, provide the rack-list replication factor explicitly in ALTER KEYSPACE statement. The number of racks in the list must be equal to the numeric replication factor. The replication factor can be converted in any number of DCs at once. In a statement that converts replication factor, no replication factor updates (increase or decrease) are allowed in any DC.
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 3, 'dc2' : 1} AND tablets = { 'enabled': true };
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2', 'RAC3'], 'dc2' : ['RAC4']} AND tablets = { 'enabled': true };
+
 .. _drop-keyspace-statement:
 
 DROP KEYSPACE
@@ -463,7 +476,7 @@ Creating a new table uses the ``CREATE TABLE`` statement:
                          :     [ ',' PRIMARY KEY '(' `primary_key` ')' ]
                          : ')' [ WITH `table_options` ]
    
-   column_definition: `column_name` `cql_type` [ STATIC ] [ PRIMARY KEY]
+   column_definition: `column_name` `cql_type` [ TTL ] [ STATIC ] [ PRIMARY KEY]
    
    primary_key: `partition_key` [ ',' `clustering_columns` ]
    
@@ -558,6 +571,11 @@ using an :ref:`alter statement<alter-table-statement>`).
 A :token:`column_definition` is primarily comprised of the name of the column defined and its :ref:`type <data-types>`,
 which restricts which values are accepted for that column. Additionally, a column definition can have the following
 modifiers:
+
+``TTL``
+    declares the column as being the expiration-time column for the
+    `per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_
+    feature.
 
 ``STATIC``
     declares the column as being a :ref:`static column <static-columns>`.
@@ -1026,7 +1044,29 @@ You can enable the after-repair tombstone GC by setting the ``repair`` mode usin
 
     ALTER TABLE ks.cf WITH tombstone_gc = {'mode':'repair'} ;
 
-The following modes are available:
+To support writes arriving out-of-order -- either due to natural delays, or user provided timestamps -- the repair mode has a propagation delay.
+Out-of-order writes present a problem for repair mode tombstone gc. Consider the following example sequence of events:
+
+1) Write ``DELETE FROM table WHERE key = K1`` arrives at the node.
+2) Repair is run.
+3) Compaction runs and garbage collects the tombstone for ``key = K1``.
+4) Write ``INSERT INTO table (key, ...) VALUES (K1, ...)`` arrives at the node with timestamp smaller than that of the delete. The tombstone for ``key = K1`` should apply to this write, but it is already garbage collected, so this data is resurrected.
+
+Propagation delay solves this problem by establishing a window before repair, where tombstones are not yet garbage collectible: a tombstone is garbage collectible if it was written before the last repair by at least the propagation delay.
+
+The value of the propagation delay can be set via the ``propagation_delay_in_seconds`` parameter:
+
+.. code-block:: cql
+
+    CREATE TABLE ks.cf (key blob PRIMARY KEY, val blob) WITH tombstone_gc = {'mode':'repair', 'propagation_delay_in_seconds': 120};
+
+.. code-block:: cql
+
+    ALTER TABLE ks.cf WITH tombstone_gc = {'mode':'repair', 'propagation_delay_in_seconds': 120};
+
+The default value of the propagation delay is 1 hour. This parameter should only be changed if your application uses user provided timestamps and writes and deletes can arrive out-of-order by more than the default 1 hour.
+
+The following tombstone gc modes are available:
 
 .. list-table::
    :widths: 20 80
@@ -1035,15 +1075,18 @@ The following modes are available:
    * - Mode
      - Description
    * - ``timeout``
-     - Tombstone GC is performed after the wait time specified with ``gc_grace_seconds`` (default).
+     - Tombstone GC is performed after the wait time specified with ``gc_grace_seconds``.
    * - ``repair``
-     - Tombstone GC is performed after repair is run.
+     - Tombstone GC is performed after repair is run (default).
    * - ``disabled``
      - Tombstone GC is never performed. This mode may be useful when loading data to the database, to avoid tombstone GC when part of the data is not yet available.
    * - ``immediate``
      - Tombstone GC is immediately performed. There is no wait time or repair requirement. This mode is useful for a table that uses the TWCS compaction strategy with no user deletes. After data is expired after TTL, ScyllaDB can perform compaction to drop the expired data immediately.
 
 .. warning:: The ``repair`` mode is not supported for :term:`Colocated Tables <Colocated Table>` in this version.
+
+The default tombstone-gc mode is ``repair`` for all tables that use ``NetworkTopologyStrategy`` or ``SimpleStrategy``, except for :term:`Colocated Tables <Colocated Table>`.
+Tables which have a single replica (RF=1) don't need repair (and cannot be repaired either). For such tables, tombstone-gc mode ``repair`` acts the same as ``immediate`` mode would: all tombstones are immediately collectible.
 
 .. _cql-per-table-tablet-options:
 
@@ -1088,6 +1131,13 @@ if its data size, or performance requirements are known in advance.
                                                 function of the tablet count, the replication factor in the datacenter, and the number
                                                 of nodes and shards in the datacenter.  It is recommended to use higher-level options
                                                 such as ``expected_data_size_in_gb`` or ``min_per_shard_tablet_count`` instead.
+ ``max_tablet_count``           0               Sets the maximum number of tablets for the table. When set, the tablet count
+                                                will not exceed this value, even if the table grows large enough to normally
+                                                trigger tablet splits. This option is mainly intended for use during restore
+                                                operations, to ensure that each SSTable fits entirely within a single tablet.
+                                                This enables efficient file-based streaming during restore. Setting both
+                                                ``min_tablet_count`` and ``max_tablet_count`` to the same value fixes the
+                                                tablet count for the table.
 =============================== =============== ===================================================================================
 
 When allocating tablets for a new table, ScyllaDB uses the maximum of the ``initial`` tablets configured for the keyspace
@@ -1137,6 +1187,7 @@ Altering an existing table uses the ``ALTER TABLE`` statement:
                           : | DROP '(' `column_name` ( ',' `column_name` )* ')' [ USING TIMESTAMP `timestamp` ]
                           : | ALTER `column_name` TYPE `cql_type`
                           : | WITH `options`
+                          : | TTL (`column_name` | NULL)
                           : | scylla_encryption_options: '=' '{'[`cipher_algorithm` : <hash>]','[`secret_key_strength` : <len>]','[`key_provider`: <provider>]'}'
 
 For instance:
@@ -1180,6 +1231,11 @@ The ``ALTER TABLE`` statement can:
 - Change or add any of the ``Encryption options`` above.
 - Change or add any of the :ref:`CDC options <cdc-options>` above.
 - Change or add per-partition rate limits. See :ref:`Limiting the rate of requests per partition <ddl-per-parition-rate-limit>`.
+- Enable `per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_
+  using the given column as the expiration-time column, or disable per-row
+  TTL on this table. If per-row TTL is already enabled, to change the choice
+  of expiration-time column you must first disable per-row TTL and then
+  re-enable it using the chosen column.
 
 .. warning:: Dropping a column assumes that the timestamps used for the value of this column are "real" timestamp in
    microseconds. Using "real" timestamps in microseconds is the default is and is **strongly** recommended, but as

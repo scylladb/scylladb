@@ -391,10 +391,19 @@ class ScyllaRESTAPIClient:
             params['scope'] = scope
         return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
 
-    async def take_snapshot(self, node_ip: str, ks: str, tag: str) -> None:
+    async def take_snapshot(self, node_ip: str, ks: str, tag: str, tables: list[str] = None) -> None:
         """Take keyspace snapshot"""
         params = { 'kn': ks, 'tag': tag }
+        if tables:
+            params['cf'] = ','.join(tables)
         await self.client.post(f"/storage_service/snapshots", host=node_ip, params=params)
+
+    async def take_cluster_snapshot(self, node_ip: str, ks: str, tag: str, tables: list[str] = None) -> None:
+        """Take keyspace snapshot"""
+        params = { 'keyspace': ks, 'tag': tag }
+        if tables:
+            params['table'] = ','.join(tables)
+        await self.client.post(f"/storage_service/tablets/snapshots", host=node_ip, params=params)
 
     async def cleanup_keyspace(self, node_ip: str, ks: str) -> None:
         """Cleanup keyspace"""
@@ -570,6 +579,11 @@ class ScyllaRESTAPIClient:
         if table:
             params['cf'] = table
         return await self.client.get_json('/storage_service/tokens_endpoint', host=node_ip, params=params)
+
+    async def log(self, node_ip: str, message: str, level: str = "info") -> None:
+        """Log a message at the given level"""
+        assert level in ["trace", "debug", "info", "warn", "error"]
+        await self.client.post(f"/system/log", host=node_ip, params={"message": message, "level": level})
 
     def close(self):
         """Close the client and release resources (connectors, file descriptors)"""

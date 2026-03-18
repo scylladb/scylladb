@@ -13,7 +13,8 @@
 #include <string_view>
 #include "alternator/auth.hh"
 #include <fmt/format.h>
-#include "auth/password_authenticator.hh"
+#include "db/consistency_level_type.hh"
+#include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "alternator/executor.hh"
 #include "cql3/selection/selection.hh"
@@ -25,8 +26,8 @@ namespace alternator {
 
 static logging::logger alogger("alternator-auth");
 
-future<std::string> get_key_from_roles(service::storage_proxy& proxy, auth::service& as, std::string username) {
-    schema_ptr schema = proxy.data_dictionary().find_schema(auth::get_auth_ks_name(as.query_processor()), "roles");
+future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::string username) {
+    schema_ptr schema = proxy.data_dictionary().find_schema(db::system_keyspace::NAME, "roles");
     partition_key pk = partition_key::from_single_value(*schema, utf8_type->decompose(username));
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
     std::vector<query::clustering_range> bounds{query::clustering_range::make_open_ended_both_sides()};
@@ -39,7 +40,7 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, auth::serv
     auto partition_slice = query::partition_slice(std::move(bounds), {}, query::column_id_vector{salted_hash_col->id, can_login_col->id}, selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice,
             proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()));
-    auto cl = auth::password_authenticator::consistency_for_user(username);
+    auto cl = db::consistency_level::LOCAL_ONE;
 
     service::client_state client_state{service::client_state::internal_tag()};
     service::storage_proxy::coordinator_query_result qr = co_await proxy.query(schema, std::move(command), std::move(partition_ranges), cl,

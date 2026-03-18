@@ -39,6 +39,17 @@ Both client and server use the same string identifiers for the keys to determine
 negotiated extension set, judging by the presence of a particular key in the
 SUPPORTED/STARTUP messages.
 
+## Client options
+
+`client_options` column in `system.clients` table stores all data sent by the
+client in STARTUP request, as a `map<text, text>`. This column may be useful
+for debugging and monitoring purposes.
+
+Drivers can send additional data in STARTUP, e.g. load balancing policy, retry
+policy, timeouts, and other configuration.
+Such data should be sent in `CLIENT_OPTIONS` key, as JSON. The recommended
+structure of this JSON will be decided in the future.
+
 ## Intranode sharding
 
 This extension allows the driver to discover how Scylla internally
@@ -74,8 +85,6 @@ The keys and values are:
     as an indicator to which shard client wants to connect. The desired shard number
     is calculated as: `desired_shard_no = client_port % SCYLLA_NR_SHARDS`.
     Its value is a decimal representation of type `uint16_t`, by default `19142`.
-  - `CLIENT_OPTIONS` is a string containing a JSON object representation that
-    contains CQL Driver configuration, e.g. load balancing policy, retry policy, timeouts, etc.
 
 Currently, one `SCYLLA_SHARDING_ALGORITHM` is defined,
 `biased-token-round-robin`. To apply the algorithm,

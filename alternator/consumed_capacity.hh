@@ -28,9 +28,9 @@ namespace alternator {
 class consumed_capacity_counter {
 public:
     consumed_capacity_counter() = default;
-    consumed_capacity_counter(bool should_add_to_reponse) : _should_add_to_reponse(should_add_to_reponse){}
+    consumed_capacity_counter(bool should_add_to_response) : _should_add_to_response(should_add_to_response){}
     bool operator()() const noexcept {
-        return _should_add_to_reponse;
+        return _should_add_to_response;
     }
 
     consumed_capacity_counter& operator +=(uint64_t bytes);
@@ -44,7 +44,7 @@ public:
     uint64_t _total_bytes = 0;
     static bool should_add_capacity(const rjson::value& request);
 protected:
-    bool _should_add_to_reponse = false;
+    bool _should_add_to_response = false;
 };
 
 class rcu_consumed_capacity_counter : public consumed_capacity_counter {

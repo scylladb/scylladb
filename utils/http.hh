@@ -9,7 +9,6 @@
 #pragma once
 
 #include <seastar/core/seastar.hh>
-#include <seastar/core/shared_future.hh>
 #include <seastar/http/client.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/tls.hh>
@@ -26,23 +25,26 @@ protected:
     std::string _host;
     int _port;
     logging::logger& _logger;
-    struct state {
-        bool initialized = false;
-        socket_address addr;
-        shared_ptr<tls::certificate_credentials> creds;
-        state(shared_ptr<tls::certificate_credentials>);
-    };
-    lw_shared_ptr<state> _state;
-    shared_future<> _done;
+    semaphore _init_semaphore{1};
+    bool _creds_init = false;
+    std::optional<std::vector<net::inet_address>> _addr_list;
+    shared_ptr<tls::certificate_credentials> _creds;
+    uint16_t _addr_pos{0};
+    bool _use_https;
+    std::chrono::seconds _address_ttl{0};
+    timer<lowres_clock> _addr_update_timer;
 
-    // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
-    static future<> initialize(lw_shared_ptr<state> state, std::string host, int port, bool use_https, logging::logger& logger);
+    future<> init_credentials();
+    future<net::inet_address> get_address();
+    future<shared_ptr<tls::certificate_credentials>> get_creds();
+    future<connected_socket> connect(net::inet_address address);
 public:
-    dns_connection_factory(dns_connection_factory&&);
+    dns_connection_factory(dns_connection_factory&&) = default;
     dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});
     dns_connection_factory(std::string endpoint_url, logging::logger& logger, shared_ptr<tls::certificate_credentials> = {});
 
     virtual future<connected_socket> make(abort_source*) override;
+    future<> close() override;
 };
 
 // simple URL parser, just enough to handle required aspects for normal endpoint usage

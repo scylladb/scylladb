@@ -47,7 +47,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
             const auto& elems = expr::get_user_type_elements(ut_value, type);
             // There might be fewer elements given than fields in the type
             // (e.g. when the user uses a short tuple literal), but never more.
-            SCYLLA_ASSERT(elems.size() <= type.size());
+            throwing_assert(elems.size() <= type.size());
 
             for (size_t i = 0; i < elems.size(); ++i) {
                 if (!elems[i]) {
@@ -71,7 +71,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
 }
 
 void user_types::setter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    SCYLLA_ASSERT(column.type->is_user_type() && column.type->is_multi_cell());
+    throwing_assert(column.type->is_user_type() && column.type->is_multi_cell());
 
     auto value = expr::evaluate(*_e, params._options);
 
@@ -86,7 +86,7 @@ void user_types::setter_by_field::execute(mutation& m, const clustering_key_pref
 }
 
 void user_types::deleter_by_field::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    SCYLLA_ASSERT(column.type->is_user_type() && column.type->is_multi_cell());
+    throwing_assert(column.type->is_user_type() && column.type->is_multi_cell());
 
     collection_mutation_description mut;
     mut.cells.emplace_back(serialize_field_index(_field_idx), params.make_dead_cell());

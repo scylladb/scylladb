@@ -1650,6 +1650,21 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
     }
 }
 
+static future<> apply_repair_transitions(token_metadata& tm, const migration_plan& plan) {
+    for (const auto& repair : plan.repair_plan().repairs()) {
+        co_await tm.tablets().mutate_tablet_map_async(repair.table, [&] (tablet_map& tmap) {
+            auto tablet_info = tmap.get_tablet_info(repair.tablet);
+            tmap.set_tablet_transition_info(repair.tablet, tablet_transition_info{
+                tablet_transition_stage::repair,
+                tablet_transition_kind::repair,
+                tablet_info.replicas,
+                std::nullopt,
+            });
+            return make_ready_future();
+        });
+    }
+}
+
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
 future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::topology& topology, shared_load_stats* load_stats) {
@@ -1674,6 +1689,7 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::top
     if (auto request_id = plan.rack_list_colocation_plan().request_to_resume(); request_id) {
         topology.paused_rf_change_requests.erase(request_id);
     }
+    co_await apply_repair_transitions(tm, plan);
 }
 
 // Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
@@ -5992,6 +6008,306 @@ SEASTAR_THREAD_TEST_CASE(test_tablets_describe_ring) {
         auto s = db.find_schema(table);
         auto ring = ss.describe_ring_for_table(s->ks_name(), s->cf_name()).get();
         BOOST_REQUIRE_GE(ring.size(), min_tablet_count);
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        auto dc1 = topo.dc();
+        auto rack1 = topo.rack();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        auto rack2 = topo.start_new_rack();
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+
+        tablet_id tablet{0};
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tablet = tid;
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        bool once = false;
+        rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet) == nullptr);
+    }, std::move(cfg_in)).get();
+}
+
+void run_tablet_manual_repair_rf1(cql_test_env& e) {
+    topology_builder topo(e);
+
+    unsigned shard_count = 1;
+    auto dc1 = topo.dc();
+    auto rack1 = topo.rack();
+    [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+    auto rack2 = topo.start_new_rack();
+    [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+
+    auto ks_name = add_keyspace(e, {{dc1, 1}}, 1);
+    auto table1 = add_table(e, ks_name).get();
+
+    tablet_id tablet{0};
+    mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+        tablet_map tmap(1);
+        auto tid = tmap.first_tablet();
+        tablet = tid;
+        tablet_info ti{
+            tablet_replica_set {
+                tablet_replica{host1, 0},
+            }
+        };
+        ti.repair_task_info = ti.repair_task_info.make_user_repair_request();
+        tmap.set_tablet(tid, std::move(ti));
+        tmeta.set_tablet_map(table1, std::move(tmap));
+        co_return;
+    });
+
+    auto& stm = e.shared_token_metadata().local();
+    bool once = false;
+    rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
+    BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet)->transition == tablet_transition_kind::repair);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_off) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(false);
+    do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_on) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
+}
+
+// Test for tablet_map::get_secondary_replica() and specifically how it
+// relates to get_primary_replica().
+// We never officially documented given a list of replicas, which replica
+// is to be considered the "primary" - it's not simply the first replica in
+// the list but the first in some reshuffling of the list, reshuffling whose
+// details changed in commits like 817fdad and d88036d. So this patch doesn't
+// enshrine what get_primary_replica() or get_secondary_replica() should
+// return. It just verifies that get_secondary_replica() returns a *different*
+// replica than get_primary_replica() if there are 2 or more replicas, or
+// throws an error when there's just one replica.
+// Reproduces SCYLLADB-777.
+SEASTAR_THREAD_TEST_CASE(test_get_secondary_replica) {
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+    auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+    locator::topology::config cfg = {
+        .this_endpoint = inet_address("127.0.0.1"),
+        .this_host_id = h1,
+        .local_dc_rack = endpoint_dc_rack::default_location,
+    };
+    auto topo = locator::topology(cfg);
+    topo.add_or_update_endpoint(h1, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_or_update_endpoint(h2, endpoint_dc_rack::default_location, node::state::normal);
+    topo.add_or_update_endpoint(h3, endpoint_dc_rack::default_location, node::state::normal);
+
+    // With 1 replica, get_secondary_replica should throw.
+    {
+        tablet_map tmap(1);
+        auto tid = tmap.first_tablet();
+        tmap.set_tablet(tid, tablet_info {
+            tablet_replica_set {
+                tablet_replica {h1, 0},
+            }
+        });
+        BOOST_REQUIRE_THROW(tmap.get_secondary_replica(tid, topo), std::runtime_error);
+    }
+
+    // With 2 replicas, get_secondary_replica should return a different replica
+    // than get_primary_replica for every tablet.
+    {
+        tablet_map tmap(4);
+        for (auto tid : tmap.tablet_ids()) {
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 0},
+                }
+            });
+        }
+        for (auto tid : tmap.tablet_ids()) {
+            auto primary = tmap.get_primary_replica(tid, topo);
+            auto secondary = tmap.get_secondary_replica(tid, topo);
+            BOOST_REQUIRE(primary != secondary);
+        }
+    }
+
+    // With 3 replicas, same check.
+    {
+        tablet_map tmap(4);
+        for (auto tid : tmap.tablet_ids()) {
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 0},
+                    tablet_replica {h3, 0},
+                }
+            });
+        }
+        for (auto tid : tmap.tablet_ids()) {
+            auto primary = tmap.get_primary_replica(tid, topo);
+            auto secondary = tmap.get_secondary_replica(tid, topo);
+            BOOST_REQUIRE(primary != secondary);
+        }
+    }
+
+    topo.clear_gently().get();
+}
+
+// The purpose of this test is to emulate a tablet aware restore process
+// When a snapshot is taken, load balancing is disabled, so we record the tablet count in a manifest for backup.
+// During restore, we set both min_tablet_count and max_tablet_count hints to the same value
+// The test makes sure that during restore the tablet count <= max_tablet_count hint which 
+// allows us to leverage file-based streaming of SSTables, ensuring each SSTable is fully contained within a single tablet.
+SEASTAR_THREAD_TEST_CASE(test_tablet_count_fixed_by_table_properties) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_per_shard_goal(16);
+    
+    do_with_cql_env_thread([&cfg] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        topo.add_node(node_state::normal, 1);
+
+        // keyspace 'initial' wants 8 tablets. We want to make sure that initial tablet count is greater than max_tablet_count hint
+        // to ensure that the hint is respected.
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 8);
+        
+        // Step 1: Create a table 
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1))", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto get_tablet_count = [&] {
+            auto tm = stm.get();
+            return tm->tablets().get_tablet_map(table1).tablet_count();
+        };
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 0); 
+
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 8);
+
+        // Step 2: Drop the table
+        e.execute_cql(fmt::format("DROP TABLE {}.table1", ks_name1)).get();
+
+        // Step 3: Create the same table with min_tablet_count=4 and max_tablet_count=4
+        auto force_tablet_count = 4;
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_tablet_count': {}, 'max_tablet_count': {}}}",
+                              ks_name1, force_tablet_count, force_tablet_count)).get();
+        
+        // We need fetch the table again as the previous table was dropped and recreated                      
+        table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+        //Initially table will be empty
+        load_stats.set_size(table1, 0);
+
+        // Step 4: Make sure the tablet count is equal to force_tablet_count
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), force_tablet_count);
+
+        // Step 5: Increase the load and make sure tablet count remains equal to force_tablet_count
+        load_stats.set_size(table1, default_target_tablet_size * force_tablet_count * 128);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), force_tablet_count);
+
+        // this should force tablets to be merged, the max_tablet_count hint will no longer be respected.
+        cfg.db_config->tablets_per_shard_goal(force_tablet_count / 2);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_LE(get_tablet_count(), force_tablet_count);
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_options_min_and_max_tablet_count) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_per_shard_goal(16);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        topo.add_node(node_state::normal, 1);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 8);
+
+        // Test valid combinations
+        {
+            // min=64, max=128 - both powers of 2, should work
+            BOOST_CHECK_NO_THROW(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 64, 'max_tablet_count': 128}}",
+                ks_name1)).get());
+        }
+
+        {
+            // min=100, max=200 - rounds to min=128, max=128, should work
+            BOOST_CHECK_NO_THROW(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table2 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 100, 'max_tablet_count': 200}}",
+                ks_name1)).get());
+        }
+
+        // Test invalid combinations that should throw exceptions
+        {
+            // min=100, max=100 - rounds to min=128, max=64, invalid
+            BOOST_CHECK_EXCEPTION(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table3 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 100, 'max_tablet_count': 100}}",
+                ks_name1)).get(),
+                exceptions::configuration_exception,
+                [&](const exceptions::configuration_exception& e) {
+                    const auto msg = sstring(e.what());
+                    return msg.contains("Invalid tablet count range");
+                });
+        }
+
+        {
+            // min=65, max=127 - rounds to min=128, max=64, invalid
+            BOOST_CHECK_EXCEPTION(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table4 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 65, 'max_tablet_count': 127}}",
+                ks_name1)).get(),
+                exceptions::configuration_exception,
+                [&](const exceptions::configuration_exception& e) {
+                    const auto msg = sstring(e.what());
+                    return msg.contains("Invalid tablet count range");
+                });
+        }
+
+       {
+            // min=129, max=128 - even without rounding, min > max is invalid
+            BOOST_CHECK_EXCEPTION(e.execute_cql(fmt::format(
+                "CREATE TABLE {}.table6 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                "WITH tablets = {{'min_tablet_count': 129, 'max_tablet_count': 128}}",
+                ks_name1)).get(),
+                exceptions::configuration_exception,
+                [&](const exceptions::configuration_exception& e) {
+                    const auto msg = sstring(e.what());
+                    return msg.contains("Invalid tablet count range");
+                });
+        }
+
     }, cfg).get();
 }
 

@@ -1499,7 +1499,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
             base_host,
             base_erm,
             view_erm,
-            *ars_ptr,
+            true, // uses NTS
             base_token,
             view_token,
             use_tablets,

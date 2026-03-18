@@ -1211,6 +1211,7 @@ private:
         }
 
         co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(60s));
+        rlogger.debug("Disabling compaction for range={} for incremental repair", _range);
         auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
         for (auto& lock_holder : reenablers_and_holders.lock_holders) {
             _rs._repair_compaction_locks[gid].push_back(std::move(lock_holder));
@@ -1240,6 +1241,8 @@ private:
         // compaction.
         reenablers_and_holders.cres.clear();
         rlogger.info("Re-enabled compaction for range={} for incremental repair", _range);
+
+        co_await utils::get_local_injector().inject("wait_after_prepare_sstables_for_incremental_repair", utils::wait_for_message(5min));
     }
 
     // Read rows from sstable until the size of rows exceeds _max_row_buf_size  - current_size
@@ -1798,9 +1801,7 @@ public:
         try {
             // Trigger read barrier to ensure that session_id is visible.
             auto& mm = repair.get_migration_manager();
-            if (mm.use_raft()) {
-                co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
-            }
+            co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
             co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard, repaired_at, incremental_mode);
             co_return repair_row_level_start_response{repair_row_level_start_status::ok};
         } catch (replica::no_such_column_family&) {
@@ -2168,25 +2169,55 @@ public:
 public:
     future<> mark_sstable_as_repaired() {
         auto& sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
-        if (_incremental_repair_meta.sst_set || !sstables.empty()) {
-            co_await seastar::async([&] {
-                auto do_mark_sstable_as_repaired = [&] (const sstables::shared_sstable& sst, const sstring& type) {
-                    auto filename = sst->toc_filename();
-                    auto name = sst->component_basename(component_type::Data);
-                    int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
-                    sst->update_repaired_at(repaired_at);
-                    rlogger.info("Marking filename={} name={} repaired_at={} being_repaired={} type={} for incremental repair",
-                            filename, name, repaired_at, sst->being_repaired, type);
-                };
-                _incremental_repair_meta.sst_set->for_each_sstable([&] (const sstables::shared_sstable& sst) {
-                    seastar::thread::maybe_yield();
-                    do_mark_sstable_as_repaired(sst, "existing");
-                });
-                for (auto& sst : sstables) {
-                    seastar::thread::maybe_yield();
-                    do_mark_sstable_as_repaired(sst, "repair_produced");
+        if (!_incremental_repair_meta.sst_set && !sstables.empty()) {
+            co_return;
+        }
+
+        auto& table = _db.local().find_column_family(_schema->id());
+        auto& cm = table.get_compaction_manager();
+        int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
+
+        auto modifier = [repaired_at] (sstables::sstable& new_sst) {
+            new_sst.update_repaired_at(repaired_at);
+        };
+
+        std::unordered_map<compaction::compaction_group_view*, std::vector<sstables::shared_sstable>> sstables_by_group;
+        auto add_sstable = [&] (const sstables::shared_sstable& sst) {
+            if (sst->should_update_repaired_at(repaired_at)) {
+                auto& view = table.compaction_group_view_for_sstable(sst);
+                sstables_by_group[&view].push_back(sst);
+            }
+        };
+
+        if (_incremental_repair_meta.sst_set) {
+            _incremental_repair_meta.sst_set->for_each_sstable(add_sstable);
+        }
+
+        for (auto& sst : sstables) {
+            add_sstable(sst);
+        }
+
+        for (auto& [view, ssts] : sstables_by_group) {
+            for (auto& sst : ssts) {
+                rlogger.info("Marking sstable={} repaired_at={} being_repaired={} for incremental repair",
+                        sst->toc_filename(), repaired_at, sst->being_repaired);
+            }
+            auto rewritten_sstables = co_await cm.perform_component_rewrite(*view, tasks::task_info{}, std::move(ssts),
+                    sstables::component_type::Statistics, modifier);
+
+            // remove the old sstables from incremental repair meta and add the new ones
+            for (auto& ss : rewritten_sstables) {
+                bool erased = _incremental_repair_meta.sst_set->erase(ss.first);
+                if (erased) {
+                    _incremental_repair_meta.sst_set->insert(ss.second);
                 }
-            });
+
+                auto it = sstables.find(ss.first);
+                if (it != sstables.end()) {
+                    sstables.erase(it);
+                    sstables.insert(ss.second);
+                }
+            }
         }
     }
 };
@@ -2331,6 +2362,15 @@ static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
     }
 }
 
+static future<repair_rows_on_wire> clone_gently(const repair_rows_on_wire& rows) {
+    repair_rows_on_wire cloned;
+    for (const auto& row : rows) {
+        cloned.push_back(row);
+        co_await seastar::coroutine::maybe_yield();
+    }
+    co_return cloned;
+}
+
 static future<> repair_put_row_diff_with_rpc_stream_process_op(
         sharded<repair_service>& repair,
         locator::host_id from,
@@ -2357,7 +2397,9 @@ static future<> repair_put_row_diff_with_rpc_stream_process_op(
                 co_await rm->put_row_diff_handler(std::move(*fp));
                 rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
             } else {
-                co_await rm->put_row_diff_handler(*fp);
+                // Gently clone to avoid copy stall on destination shard
+                repair_rows_on_wire local_rows = co_await clone_gently(*fp);
+                co_await seastar::when_all_succeed(rm->put_row_diff_handler(std::move(local_rows)), utils::clear_gently(fp));
                 rm->set_repair_state_for_local_node(repair_state::put_row_diff_with_rpc_stream_finished);
             }
         });
@@ -2633,7 +2675,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                         all_replayed = co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
                         utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "issue_flush", fmt::to_string(flush_time));
                     }
-                    rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={}", req.repair_uuid, from, issue_flush);
+                    rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={} all_replayed={}", req.repair_uuid, from, issue_flush, all_replayed);
                 }
             );
             if (!all_replayed) {
@@ -3952,4 +3994,20 @@ future<std::optional<repair_task_progress>> repair_service::get_tablet_repair_ta
     rlogger.debug("repair_task_progress: task_uuid={} table_uuid={} requested_tablets={} finished_tablets={} progress={} finished_nomerge={}",
             task_uuid, tid, requested, finished, progress.progress(), finished_nomerge);
     co_return progress;
+}
+
+void repair_service::on_cleanup_for_drop_table(const table_id& id) {
+    // Prevent repair lock from being leaked in repair_service when table is dropped midway.
+    // The RPC verb that removes the lock on success path will not be called by coordinator after table was dropped.
+    // We also cannot move the lock from repair_service to repair_meta, since the lock must outlive the latter.
+    // Since tablet metadata has been erased at this point, we can simply erase all instances for the dropped table.
+    rlogger.debug("Cleaning up state for dropped table {}", id);
+    for (auto it = _repair_compaction_locks.begin(); it != _repair_compaction_locks.end();) {
+        auto& [global_tid, _] = *it;
+        if (global_tid.table == id) {
+            it = _repair_compaction_locks.erase(it);
+        } else {
+            it++;
+        }
+    }
 }

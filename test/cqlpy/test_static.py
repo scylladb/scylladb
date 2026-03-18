@@ -10,7 +10,7 @@
 #############################################################################
 
 import pytest
-
+from cassandra.protocol import SyntaxException, InvalidRequest
 from .util import new_test_table, unique_key_int
 
 @pytest.fixture(scope="module")
@@ -95,3 +95,19 @@ def test_filter_with_only_static(cql, table1):
     # for r=4 should return nothing. But issue #10357 caused Scylla to wrongly
     # return a row with only the static value - which doesn't match the filter.
     assert list(cql.execute(f'SELECT p, s, c, r FROM {table1} WHERE p={p} AND r=4 ALLOW FILTERING')) == []
+
+# The CREATE TABLE syntax allows either "PRIMARY KEY" or "STATIC" to follow
+# a column's definition, but it's forbidden to use both at once!
+def test_syntax_primary_key_and_static(cql, test_keyspace):
+    # Because of implementation details of the parser, "STATIC PRIMARY KEY"
+    # is considered valid syntax but rejected as InvalidRequest with a message
+    # "Static column p cannot be part of the PRIMARY KEY", while the reverse
+    # "PRIMARY KEY STATIC" is rejected as a SyntaxException. We do not insist
+    # on this bizarre distinction, and allow both types of errors for both
+    # cases.
+    with pytest.raises((SyntaxException, InvalidRequest)):
+        with new_test_table(cql, test_keyspace, 'p int STATIC PRIMARY KEY, v int') as table:
+            pass
+    with pytest.raises((SyntaxException, InvalidRequest)):
+        with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY STATIC, v int') as table:
+            pass

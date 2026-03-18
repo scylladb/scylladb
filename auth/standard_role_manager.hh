@@ -40,7 +40,6 @@ class standard_role_manager final : public role_manager {
     cache& _cache;
     future<> _stopped;
     abort_source _as;
-    std::string _superuser;
     shared_promise<> _superuser_created_promise;
 
 public:
@@ -90,23 +89,26 @@ public:
 
 private:
     enum class membership_change { add, remove };
-
-    future<> create_legacy_metadata_tables_if_missing() const;
-
-    bool legacy_metadata_exists();
-
-    future<> migrate_legacy_metadata();
-
-    future<> legacy_create_default_role_if_missing();
+    struct record final {
+        sstring name;
+        bool is_superuser;
+        bool can_login;
+        role_set member_of;
+    };
 
     future<> maybe_create_default_role();
     future<> maybe_create_default_role_with_retries();
 
-    future<> create_or_replace(std::string_view auth_ks_name, std::string_view role_name, const role_config&, ::service::group0_batch&);
-
-    future<> legacy_modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change);
+    future<> create_or_replace(std::string_view role_name, const role_config&, ::service::group0_batch&);
 
     future<> modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change, ::service::group0_batch& mc);
+
+    future<std::optional<record>> find_record(std::string_view role_name);
+    future<record> require_record(std::string_view role_name);
+    future<> collect_roles(
+            std::string_view grantee_name,
+            bool recurse,
+            role_set& roles);
 };
 
 } // namespace auth

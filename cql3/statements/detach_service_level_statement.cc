@@ -23,7 +23,7 @@ detach_service_level_statement::detach_service_level_statement(sstring role_name
 }
 
 bool detach_service_level_statement::needs_guard(query_processor& qp, service::query_state&) const {
-    return !auth::legacy_mode(qp);
+    return true;
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

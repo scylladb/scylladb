@@ -49,9 +49,9 @@ static cql3_type::kind get_cql3_kind(const abstract_type& t) {
         cql3_type::kind operator()(const uuid_type_impl&) { return cql3_type::kind::UUID; }
         cql3_type::kind operator()(const varint_type_impl&) { return cql3_type::kind::VARINT; }
         cql3_type::kind operator()(const reversed_type_impl& r) { return get_cql3_kind(*r.underlying_type()); }
-        cql3_type::kind operator()(const tuple_type_impl&) { SCYLLA_ASSERT(0 && "no kind for this type"); }
-        cql3_type::kind operator()(const vector_type_impl&) { SCYLLA_ASSERT(0 && "no kind for this type"); }
-        cql3_type::kind operator()(const collection_type_impl&) { SCYLLA_ASSERT(0 && "no kind for this type"); }
+        cql3_type::kind operator()(const tuple_type_impl&) { throwing_assert(0 && "no kind for this type"); }
+        cql3_type::kind operator()(const vector_type_impl&) { throwing_assert(0 && "no kind for this type"); }
+        cql3_type::kind operator()(const collection_type_impl&) { throwing_assert(0 && "no kind for this type"); }
     };
     return visit(t, visitor{});
 }
@@ -124,7 +124,7 @@ class cql3_type::raw_collection : public raw {
         } else if (_kind == abstract_type::kind::map) {
             return format("{}map<{}, {}>{}", start, _keys, _values, end);
         }
-        abort();
+        throwing_assert(0 && "invalid raw_collection kind");
     }
 public:
     raw_collection(const abstract_type::kind kind, shared_ptr<raw> keys, shared_ptr<raw> values)
@@ -150,7 +150,7 @@ public:
     }
 
     virtual cql3_type prepare_internal(const sstring& keyspace, const data_dictionary::user_types_metadata& user_types) override {
-        SCYLLA_ASSERT(_values); // "Got null values type for a collection";
+        throwing_assert(_values); // "Got null values type for a collection";
 
         if (_values->is_counter()) {
             throw exceptions::invalid_request_exception(format("Counters are not allowed inside collections: {}", *this));
@@ -190,7 +190,7 @@ private:
             }
             return cql3_type(set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types).get_type(), !is_frozen()));
         } else if (_kind == abstract_type::kind::map) {
-            SCYLLA_ASSERT(_keys); // "Got null keys type for a collection";
+            throwing_assert(_keys); // "Got null keys type for a collection";
             if (_keys->is_duration()) {
                 throw exceptions::invalid_request_exception(format("Durations are not allowed as map keys: {}", *this));
             }
@@ -198,7 +198,7 @@ private:
                                                          _values->prepare_internal(keyspace, user_types).get_type(),
                                                          !is_frozen()));
         }
-        abort();
+        throwing_assert(0 && "do_prepare invalid kind");
     }
 };
 
@@ -307,17 +307,14 @@ public:
 
 class cql3_type::raw_vector : public raw {
     shared_ptr<raw> _type;
-    size_t _dimension;
-
-    // This limitation is acquired from the maximum number of dimensions in OpenSearch. 
-    static constexpr size_t MAX_VECTOR_DIMENSION = 16000;
+    vector_dimension_t _dimension;
 
     virtual sstring to_string() const override {
         return seastar::format("vector<{}, {}>", _type, _dimension);
     }
 
 public:
-    raw_vector(shared_ptr<raw> type, size_t dimension)
+    raw_vector(shared_ptr<raw> type, vector_dimension_t dimension)
             : _type(std::move(type)), _dimension(dimension) {
     }
 
@@ -417,7 +414,7 @@ cql3_type::raw::tuple(std::vector<shared_ptr<raw>> ts) {
 }
 
 shared_ptr<cql3_type::raw>
-cql3_type::raw::vector(shared_ptr<raw> t, size_t dimension) {
+cql3_type::raw::vector(shared_ptr<raw> t, vector_dimension_t dimension) {
     return ::make_shared<raw_vector>(std::move(t), dimension);
 }
 

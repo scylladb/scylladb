@@ -142,10 +142,6 @@ want modify a non-top-level attribute directly (e.g., a.b[3].c) need RMW:
 Alternator implements such requests by reading the entire top-level
 attribute a, modifying only a.b[3].c, and then writing back a.
 
-Currently, Alternator doesn't use Tablets. That's because Alternator relies
-on LWT (lightweight transactions), and LWT is not supported in keyspaces
-with Tablets enabled.
-
 ```{eval-rst}
 .. toctree::
     :maxdepth: 2

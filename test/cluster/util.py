@@ -7,7 +7,6 @@
 Test consistency of schema changes with topology changes.
 """
 import asyncio
-import datetime
 import logging
 import functools
 import operator
@@ -17,7 +16,6 @@ from contextlib import asynccontextmanager, contextmanager, suppress
 
 from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvailable, Session, SimpleStatement  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
-from cassandra.util import datetime_from_uuid1           # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
@@ -92,6 +90,13 @@ async def get_topology_coordinator(manager: ManagerClient) -> HostID:
     return await manager.api.get_raft_leader(host_address)
 
 
+async def get_topology_version(cql: Session, host: Host) -> int:
+    rows = await cql.run_async(
+        "select version from system.topology where key = 'topology'",
+        host=host)
+    return rows[0].version
+
+
 async def find_server_by_host_id(manager: ManagerClient, servers: List[ServerInfo], host_id: HostID) -> ServerInfo:
     for s in servers:
         if await manager.get_host_id(s.server_id) == host_id:
@@ -141,79 +146,15 @@ async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, dea
         await wait_for(token_ring_and_group0_match, deadline, period=.5)
 
 
-async def wait_for_upgrade_state(state: str, cql: Session, host: Host, deadline: float) -> None:
-    """Wait until group 0 upgrade state reaches `state` on `host`, using `cql` to query it.  Warning: if the
-       upgrade procedure may progress beyond `state` this function may not notice when it entered `state` and
-       then time out.  Use it only if either `state` is the last state or the conditions of the test don't allow
-       the upgrade procedure to progress beyond `state` (e.g. a dead node causing the procedure to be stuck).
-    """
-    async def reached_state():
-        rs = await cql.run_async("select value from system.scylla_local where key = 'group0_upgrade_state'", host=host)
-        if rs:
-            value = rs[0].value
-            if value == state:
-                return True
-            else:
-                logging.info(f"Upgrade not yet in state {state} on server {host}, state: {value}")
-        else:
-            logging.info(f"Upgrade not yet in state {state} on server {host}, no state was written")
-        return None
-    await wait_for(reached_state, deadline)
-
-
-async def wait_until_upgrade_finishes(cql: Session, host: Host, deadline: float) -> None:
-    await wait_for_upgrade_state('use_post_raft_procedures', cql, host, deadline)
-
-
-async def enter_recovery_state(cql: Session, host: Host) -> None:
-    await cql.run_async(
-            "update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'",
-            host=host)
-
-
-async def delete_raft_data(cql: Session, host: Host) -> None:
-    await cql.run_async("truncate table system.discovery", host=host)
-    await cql.run_async("truncate table system.group0_history", host=host)
-    await cql.run_async("delete value from system.scylla_local where key = 'raft_group0_id'", host=host)
-
-
 async def delete_discovery_state_and_group0_id(cql: Session, host: Host) -> None:
     await cql.run_async("truncate table system.discovery", host=host)
     await cql.run_async("delete value from system.scylla_local where key = 'raft_group0_id'", host=host)
-
-
-async def delete_upgrade_state(cql: Session, host: Host) -> None:
-    await cql.run_async("delete from system.scylla_local where key = 'group0_upgrade_state'", host=host)
 
 
 async def delete_raft_group_data(group_id: str, cql: Session, host: Host) -> None:
     await cql.run_async(f'delete from system.raft where group_id = {group_id}', host=host)
     await cql.run_async(f'delete from system.raft_snapshots where group_id = {group_id}', host=host)
     await cql.run_async(f'delete from system.raft_snapshot_config where group_id = {group_id}', host=host)
-
-
-async def delete_raft_data_and_upgrade_state(cql: Session, host: Host) -> None:
-    await delete_raft_data(cql, host)
-    await delete_upgrade_state(cql, host)
-
-
-async def wait_until_topology_upgrade_finishes(manager: ManagerClient, ip_addr: str, deadline: float):
-    async def check():
-        status = await manager.api.raft_topology_upgrade_status(ip_addr)
-        return status == "done" or None
-    await wait_for(check, deadline=deadline, period=1.0)
-
-async def wait_until_driver_service_level_created(manager: ManagerClient, deadline: float):
-    cql = manager.get_cql()
-    async def check():
-        service_levels = await cql.run_async("LIST ALL SERVICE_LEVELS")
-        return ("driver" in [sl.service_level for sl in service_levels]) or None
-    await wait_for(check, deadline=deadline, period=1.0)
-    # sync driver service level on all nodes
-    await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in await manager.running_servers()))
-
-async def delete_raft_topology_state(cql: Session, host: Host):
-    await cql.run_async("truncate table system.topology", host=host)
 
 
 async def wait_for_cdc_generations_publishing(cql: Session, hosts: list[Host], deadline: float):
@@ -226,22 +167,6 @@ async def wait_for_cdc_generations_publishing(cql: Session, hosts: list[Host], d
 
         await wait_for(all_generations_published, deadline=deadline, period=1.0)
 
-async def wait_until_last_generation_is_in_use(cql: Session):
-    topo_res = await cql.run_async("SELECT committed_cdc_generations FROM system.topology")
-    assert len(topo_res) != 0
-    generations = topo_res[0].committed_cdc_generations
-    last_generation_ts = max(gen[0] for gen in generations)
-
-    # datetime objects returned by the driver are timezone-naive and we assume they are in UTC.
-    # To subtract timestamp, we need to make sure they are both timezone-aware (or both are timezone-naive).
-    last_generation_ts = last_generation_ts.replace(tzinfo=datetime.timezone.utc)
-    now = datetime.datetime.now(datetime.timezone.utc)
-    seconds = (last_generation_ts - now).total_seconds()
-    if seconds > 0:
-        logger.info(f"Waiting {seconds} seconds for the last generation to be in use.")
-        await asyncio.sleep(seconds)
-    else:
-        logger.info(f"The last generation is already in use.")
 
 async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, live_hosts: list[Host], cqls: Optional[list[Session]] = None, ignored_hosts: list[Host] = []):
     # The cqls parameter is a temporary workaround for testing the recovery mode in the presence of live zero-token
@@ -352,6 +277,7 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
             except Exception as e:
                 logging.error(f"Write started {time.time() - start_time}s ago failed: {e}")
                 raise
+            await asyncio.sleep(0.01)
         logging.info(f"Worker #{worker_id} did {write_count} successful writes")
 
     tasks = [asyncio.create_task(do_writes(worker_id)) for worker_id in range(concurrency)]
@@ -363,77 +289,7 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
 
     return finish
 
-async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
-    logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
 
-    stop_event = asyncio.Event()
-
-    ks_name = unique_name()
-    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{ 'enabled': false }}")
-    await cql.run_async(f"CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled':true}}")
-
-    stmt = cql.prepare(f"INSERT INTO {ks_name}.tbl (pk, v) VALUES (?, 0)")
-    # FIXME: this function is used by tests that use clusters with at least 3 nodes and restart nodes sequentially.
-    # Therefore, RF=3 and CL=2 should work, but they don't. Some writes fail because CL=2 is not satisfied.
-    # We should investigate why it happens and increase CL to 2 if possible.
-    stmt.consistency_level = ConsistencyLevel.ONE
-
-    async def do_writes():
-        iteration = 0
-        while not stop_event.is_set():
-            start_time = time.time()
-            try:
-                await cql.run_async(stmt, [iteration])
-            except NoHostAvailable as e:
-                for _, err in e.errors.items():
-                    # ConnectionException can be raised when the node is shutting down.
-                    if not isinstance(err, ConnectionException):
-                        logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
-                        raise
-            except Exception as e:
-                logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
-                raise
-            iteration += 1
-            await asyncio.sleep(0.01)
-
-    tasks = [asyncio.create_task(do_writes()) for _ in range(concurrency)]
-
-    def restart(new_cql: Session):
-        nonlocal cql
-        nonlocal tasks
-        logger.info("Restarting write workers")
-        assert stop_event.is_set()
-        stop_event.clear()
-        cql = new_cql
-        tasks = [asyncio.create_task(do_writes()) for _ in range(concurrency)]
-
-    async def verify():
-        generations = await cql.run_async("SELECT * FROM system_distributed.cdc_streams_descriptions_v2")
-
-        stream_to_timestamp = { stream: gen.time for gen in generations for stream in gen.streams}
-
-        cdc_log = await cql.run_async(f"SELECT * FROM {ks_name}.tbl_scylla_cdc_log", all_pages=True)
-        for log_entry in cdc_log:
-            assert log_entry.cdc_stream_id in stream_to_timestamp
-            timestamp = stream_to_timestamp[log_entry.cdc_stream_id]
-            assert timestamp <= datetime_from_uuid1(log_entry.cdc_time)
-
-    async def stop_and_verify():
-        logger.info("Stopping write workers")
-        stop_event.set()
-        await asyncio.gather(*tasks)
-        await verify()
-
-    return restart, stop_and_verify
-
-def log_run_time(f):
-    @functools.wraps(f)
-    async def wrapped(*args, **kwargs):
-        start = time.time()
-        res = await f(*args, **kwargs)
-        logging.info(f"{f.__name__} took {int(time.time() - start)} seconds.")
-        return res
-    return wrapped
 
 async def trigger_snapshot(manager, server: ServerInfo) -> None:
     cql = manager.get_cql()

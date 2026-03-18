@@ -5,13 +5,13 @@ import logging
 import asyncio
 import subprocess
 import tempfile
+import itertools
 
 import pytest
 import time
 import random
 
-from test.cqlpy.util import local_process_id
-from test.pylib.manager_client import ManagerClient
+from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.cluster.object_store.conftest import format_tuples
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
 from test.pylib.rest_client import read_barrier
@@ -19,6 +19,7 @@ from test.pylib.util import unique_name, wait_all
 from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
+from test.pylib.rest_client import HTTPError
 import statistics
 
 logger = logging.getLogger(__name__)
@@ -42,21 +43,29 @@ def create_ks_and_cf(cql):
     return ks, cf
 
 
-async def prepare_snapshot_for_backup(manager: ManagerClient, server, snap_name='backup'):
-    cql = manager.get_cql()
-    print('Create keyspace')
-    ks, cf = create_ks_and_cf(cql)
-    print('Flush keyspace')
-    await manager.api.flush_keyspace(server.ip_addr, ks)
-    print('Take keyspace snapshot')
-    await manager.api.take_snapshot(server.ip_addr, ks, snap_name)
+async def take_snapshot(ks, servers, manager, logger):
+    logger.info(f'Take snapshot and collect sstables lists')
+    snap_name = unique_name('backup_')
+    sstables = dict()
+    await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+    await asyncio.gather(*(manager.api.take_snapshot(s.ip_addr, ks, snap_name) for s in servers))
+    for s in servers:
+        workdir = await manager.server_get_workdir(s.server_id)
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
+        logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
+        sstables[s] = tocs
 
-    return ks, cf
+    return snap_name,sstables
+
+async def take_snapshot_on_one_server(ks, server, manager, logger):
+    snap_name, sstables = await take_snapshot(ks, [server], manager, logger)
+    return snap_name, sstables[server]
 
 
 @pytest.mark.asyncio
-
-async def test_simple_backup(manager: ManagerClient, object_storage):
+@pytest.mark.parametrize("move_files", [False, True])
+async def test_simple_backup(manager: ManagerClient, object_storage, move_files):
     '''check that backing up a snapshot for a keyspace works'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -67,22 +76,24 @@ async def test_simple_backup(manager: ManagerClient, object_storage):
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
+    assert len(files) > 0
     workdir = await manager.server_get_workdir(server.server_id)
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 0
 
     print('Backup snapshot')
     prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix, move_files=move_files)
     print(f'Started task {tid}')
     status = await manager.api.get_task_status(server.ip_addr, tid)
     print(f'Status: {status}, waiting to finish')
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
     assert (status['progress_total'] > 0) and (status['progress_completed'] == status['progress_total'])
+
+    # all components in the "backup" snapshot should have been moved into bucket if move_files
+    assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}')) == 0 if move_files else len(files)
 
     objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
     for f in files:
@@ -93,41 +104,6 @@ async def test_simple_backup(manager: ManagerClient, object_storage):
     log = await manager.server_open_log(server.server_id)
     res = await log.grep(r'INFO.*\[shard [0-9]:([a-z]+)\] .* Backup sstables from .* to')
     assert len(res) == 1 and res[0][1].group(1) == 'strm'
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("move_files", [False, True])
-async def test_backup_move(manager: ManagerClient, object_storage, move_files):
-    '''check that backing up a snapshot by _moving_ sstable to object storage'''
-
-    objconf = object_storage.create_endpoint_conf()
-    cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
-           'task_ttl_in_seconds': 300
-           }
-    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
-    server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
-    workdir = await manager.server_get_workdir(server.server_id)
-    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 0
-
-    print('Backup snapshot')
-    prefix = f'{cf}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix,
-                                   move_files=move_files)
-    print(f'Started task {tid}')
-    status = await manager.api.get_task_status(server.ip_addr, tid)
-    print(f'Status: {status}, waiting to finish')
-    status = await manager.api.wait_task(server.ip_addr, tid)
-    assert (status is not None) and (status['state'] == 'done')
-    assert (status['progress_total'] > 0) and (status['progress_completed'] == status['progress_total'])
-
-    # all components in the "backup" snapshot should have been moved into bucket if move_files
-    assert len(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup')) == 0 if move_files else len(files)
 
 
 @pytest.mark.asyncio
@@ -143,12 +119,8 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    backup_snap_name = 'backup'
-    ks, cf = await prepare_snapshot_for_backup(manager, server, snap_name = backup_snap_name)
-
-    workdir = await manager.server_get_workdir(server.server_id)
-    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    backup_snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
     assert len(files) > 0
 
     prefix = f'{cf}/backup'
@@ -175,11 +147,12 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
            }
     cmd = ['--logger-log-level', 'sstables_manager=debug']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
 
     prefix = f'{cf}/backup'
 
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert status is not None
     assert status['state'] == 'failed'
@@ -197,14 +170,13 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
         return True
     await wait_for(endpoint_appeared_in_config, deadline=time.time() + 60)
 
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert status is not None
     assert status['state'] == 'done'
 
-
-async def do_test_backup_abort(manager: ManagerClient, object_storage,
-                               breakpoint_name, min_files, max_files = None):
+async def do_test_backup_helper(manager: ManagerClient, object_storage,
+                                breakpoint_name, handler, num_servers: int = 1):
     '''helper for backup abort testing'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -214,13 +186,11 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
            'task_ttl_in_seconds': 300
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
-    server = await manager.server_add(config=cfg, cmdline=cmd)
-    ks, cf = await prepare_snapshot_for_backup(manager, server)
-
+    server = (await manager.servers_add(num_servers, config=cfg, cmdline=cmd))[0]
+    ks, cf = create_ks_and_cf(manager.get_cql())
+    snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
     workdir = await manager.server_get_workdir(server.server_id)
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
-    assert len(files) > 1
 
     await manager.api.enable_injection(server.ip_addr, breakpoint_name, one_shot=True)
     log = await manager.server_open_log(server.server_id)
@@ -231,30 +201,39 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
     # If we just use {cf}/backup, files like "schema.cql" and "manifest.json" will remain after previous test
     # case, and we will count these erroneously.
     prefix = f'{cf_dir}/backup'
-    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
+    tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
 
     print(f'Started task {tid}, aborting it early')
     await log.wait_for(breakpoint_name + ': waiting', from_mark=mark)
-    await manager.api.abort_task(server.ip_addr, tid)
-    await manager.api.message_injection(server.ip_addr, breakpoint_name)
-    status = await manager.api.wait_task(server.ip_addr, tid)
-    print(f'Status: {status}')
-    assert (status is not None) and (status['state'] == 'failed')
-    assert "seastar::abort_requested_exception (abort requested)" in status['error']
+    await handler(server, prefix, files, tid)
 
-    objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
-    uploaded_count = 0
-    for f in files:
-        in_backup = f'{prefix}/{f}' in objects
-        print(f'Check {f} is in backup: {in_backup}')
-        if in_backup:
-            uploaded_count += 1
-    # Note: since s3 client is abortable and run async, we might fail even the first file
-    # regardless of if we set the abort status before or after the upload is initiated.
-    # Parallelism is a pain.
-    assert min_files <= uploaded_count < len(files)
-    assert max_files is None or uploaded_count < max_files
+async def do_test_backup_abort(manager: ManagerClient, object_storage,
+                               breakpoint_name, min_files, max_files = None):
+    '''helper for backup abort testing'''
 
+    async def abort_and_check(server, prefix, files, tid):
+        assert len(files) > 1
+        await manager.api.abort_task(server.ip_addr, tid)
+        await manager.api.message_injection(server.ip_addr, breakpoint_name)
+        status = await manager.api.wait_task(server.ip_addr, tid)
+        print(f'Status: {status}')
+        assert (status is not None) and (status['state'] == 'failed')
+        assert "seastar::abort_requested_exception (abort requested)" in status['error']
+
+        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+        uploaded_count = 0
+        for f in files:
+            in_backup = f'{prefix}/{f}' in objects
+            print(f'Check {f} is in backup: {in_backup}')
+            if in_backup:
+                uploaded_count += 1
+        # Note: since s3 client is abortable and run async, we might fail even the first file
+        # regardless of if we set the abort status before or after the upload is initiated.
+        # Parallelism is a pain.
+        assert min_files <= uploaded_count < len(files)
+        assert max_files is None or uploaded_count < max_files
+
+    await do_test_backup_helper(manager, object_storage, breakpoint_name, abort_and_check)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -271,7 +250,9 @@ async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, object_s
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
-async def do_test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmpdir, do_encrypt = False, do_abort = False):
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("do_encrypt", "do_abort"), [(False, False), (False, True), (True, False)])
+async def test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmpdir, do_encrypt, do_abort):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
 
     objconf = object_storage.create_endpoint_conf()
@@ -295,9 +276,8 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, object_stora
 
     # This test is sensitive not to share the bucket with any other test
     # that can run in parallel, so generate some unique name for the snapshot
-    snap_name = unique_name('backup_')
-    print(f'Create and backup keyspace (snapshot name is {snap_name})')
-    ks, cf = await prepare_snapshot_for_backup(manager, server, snap_name)
+    ks, cf = create_ks_and_cf(cql)
+    snap_name, toc_names = await take_snapshot_on_one_server(ks, server, manager, logger)
 
     cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
 
@@ -326,8 +306,6 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, object_stora
     #    - 1-TOC.txt
     #    - 2-TOC.txt
     #    - ...
-    old_files = list_sstables();
-    toc_names = [f'{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
 
     prefix = f'{cf}/{snap_name}'
     tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, f'{prefix}')
@@ -369,7 +347,8 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, object_stora
         # There is no guarantee we'll generate the same amount of sstables as was in the original
         # backup (?). But, since we are not stressing the server here (not provoking memtable flushes),
         # we should in principle never generate _more_ sstables than originated the backup.
-        assert len(old_files) >= len(files)
+        tocs = [f'{entry.name}' for entry in files if entry.name.endswith('TOC.txt')]
+        assert len(toc_names) >= len(tocs)
         assert len(sstable_names) <= len(db_objects)
     else:
         assert len(files) > 0
@@ -382,17 +361,6 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, object_stora
     print('Check that backup files are still there')  # regression test for #20938
     post_objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.filter(Prefix=prefix))
     assert objects == post_objects
-
-@pytest.mark.asyncio
-async def test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmp_path):
-    '''check that restoring from backed up snapshot for a keyspace:table works'''
-    await do_test_simple_backup_and_restore(manager, object_storage, tmp_path, False, False)
-
-@pytest.mark.asyncio
-async def test_abort_simple_backup_and_restore(manager: ManagerClient, object_storage, tmp_path):
-    '''check that restoring from backed up snapshot for a keyspace:table works'''
-    await do_test_simple_backup_and_restore(manager, object_storage, tmp_path, False, True)
-
 
 
 async def do_abort_restore(manager: ManagerClient, object_storage):
@@ -424,36 +392,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         num_keys = 10000
         await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), str(i))) for i in range(num_keys)))
 
-        # Flush keyspace on all servers
-        logger.info("Flushing keyspace on all servers...")
-        for server in servers:
-            await manager.api.flush_keyspace(server.ip_addr, keyspace)
-
-        # Take snapshot for keyspace
-        snapshot_name = unique_name('backup_')
-        logger.info(f"Taking snapshot '{snapshot_name}' for keyspace '{keyspace}'...")
-        for server in servers:
-            await manager.api.take_snapshot(server.ip_addr, keyspace, snapshot_name)
-
-        # Collect snapshot files from each server
-        async def get_snapshot_files(server, snapshot_name):
-            workdir = await manager.server_get_workdir(server.server_id)
-            data_path = os.path.join(workdir, 'data', keyspace)
-            cf_dirs = os.listdir(data_path)
-            if not cf_dirs:
-                raise RuntimeError(f"No column family directories found in {data_path}")
-            # Assumes that there is only one column family directory under the keyspace.
-            cf_dir = cf_dirs[0]
-            snapshot_path = os.path.join(data_path, cf_dir, 'snapshots', snapshot_name)
-            return [
-                f.name for f in os.scandir(snapshot_path)
-                if f.is_file() and f.name.endswith('TOC.txt')
-            ]
-
-        sstables = {}
-        for server in servers:
-            snapshot_files = await get_snapshot_files(server, snapshot_name)
-            sstables[server.server_id] = snapshot_files
+        snapshot_name, sstables = await take_snapshot(keyspace, servers, manager, logger)
 
         # Backup the keyspace on each server to S3
         prefix = f"{table}/{snapshot_name}"
@@ -491,7 +430,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
                 object_storage.address,
                 object_storage.bucket_name,
                 prefix,
-                sstables[server.server_id]
+                sstables[server]
             )
             restore_task_ids[server.server_id] = restore_tid
 
@@ -517,12 +456,6 @@ async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_stora
     await do_abort_restore(manager, object_storage)
 
 
-@pytest.mark.asyncio
-
-async def test_simple_backup_and_restore_with_encryption(manager: ManagerClient, object_storage, tmp_path):
-    '''check that restoring from backed up snapshot for a keyspace:table works'''
-    await do_test_simple_backup_and_restore(manager, object_storage, tmp_path, True, False)
-
 # Helper class to parametrize the test below
 class topo:
     def __init__(self, rf, nodes, racks, dcs):
@@ -531,7 +464,8 @@ class topo:
         self.racks = racks
         self.dcs = dcs
 
-async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, object_storage=None):
+async def create_cluster(topology, manager, logger, object_storage=None):
+    rf_rack_valid_keyspaces = (topology.rf <= topology.racks)
     logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
 
     cfg = {'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces}
@@ -592,30 +526,7 @@ async def do_restore_server(manager, logger, ks, cf, s, toc_names, scope, primar
     status = await manager.api.wait_task(s.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
 
-async def take_snapshot(ks, servers, manager, logger):
-    logger.info(f'Take snapshot and collect sstables lists')
-    snap_name = unique_name('backup_')
-    sstables = dict()
-    for s in servers:
-        await manager.api.flush_keyspace(s.ip_addr, ks)
-        await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
-        workdir = await manager.server_get_workdir(s.server_id)
-        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
-        logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
-        sstables[s] = tocs
-
-    return snap_name,sstables
-
-async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only, log_marks, different_min_tablet_count=False):
-    logger.info(f'Check the data is back')
-
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only)
-
-    if different_min_tablet_count:
-        logger.info(f'Skipping streaming directions checks, we restored with a different min_tablet_count, so streaming is not predictable')
-        return
-
+async def check_streaming_directions(logger, servers, topology, host_ids, scope, primary_replica_only, log_marks):
     host_ids_per_dc = defaultdict(list)
     host_ids_per_dc_rack = dict()
     servers_by_host_id = dict()
@@ -674,8 +585,7 @@ async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topolo
 
             assert max_deviation < 0.1 * mean_count, f'node {s.ip_addr} streaming to primary replicas was unbalanced: {streamed_to}'
 
-async def do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix = None, object_storage = None, primary_replica_only = False, load_fn=do_restore_server):
-    logger.info(f'Loading {servers=} with {sstables=} scope={scope}')
+def distribute_sstables(sstables, servers, topology, scope):
     sstables_per_server = defaultdict(list)
     # rf_rack_valid can be True also with rack lists
     rf_rack_valid = topology.rf == topology.racks
@@ -713,11 +623,9 @@ async def do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, 
                     for s in servers_per_dc_rack[dc][rack]:
                         sstables_per_server[s] = sstables_in_rack
     else:
-        raise f"do_load_sstables: {scope=} not supported"
+        raise f"distribute_sstables: {scope=} not supported"
+    return sstables_per_server
 
-    await asyncio.gather(*(load_fn(manager, logger, ks, cf, s, sstables, scope, primary_replica_only, prefix, object_storage) for s, sstables in sstables_per_server.items()))
-    if primary_replica_only:
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, cf, 'all', timeout=600)
 
 async def do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger):
     logger.info(f'Backup to {snap_name}')
@@ -733,7 +641,7 @@ async def collect_mutations(cql, server, manager, ks, cf):
         ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
     return ret
 
-async def check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=None, expected_replicas = None):
+async def check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas = None):
     '''Check that each mutation is replicated to the expected number of replicas'''
     if expected_replicas is None:
         expected_replicas = topology.rf * topology.dcs
@@ -747,7 +655,7 @@ async def check_mutation_replicas(cql, manager, servers, keys, topology, logger,
     for k in random.sample(keys, 10):
         if not str(k) in mutations:
             logger.info(f'Mutations: {mutations}')
-            assert False, f"Key '{k}' not found in mutations. {topology=} {scope=} {primary_replica_only=}"
+            assert False, f"Key '{k}' not found in mutations. {topology=}"
 
         if len(mutations[str(k)]) != expected_replicas:
             logger.info(f'Mutations: {mutations}')
@@ -767,64 +675,96 @@ def create_schema(ks, cf, min_tablet_count=None):
     schema += ';'
     return schema
 
+
+class SSTablesOnObjectStorage:
+    def __init__(self, object_storage):
+        self.object_storage = object_storage
+
+    async def save(self, manager, servers, snap_name, prefix, ks, cf, logger):
+        await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, self.object_storage, manager, logger) for s in servers))
+
+    async def restore(self, manager, sstables_per_server, prefix, ks, cf, scope, primary_replica_only, logger):
+        await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables, scope, primary_replica_only, prefix, self.object_storage) for s, sstables in sstables_per_server.items()))
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("topology_rf_validity", [
-        (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
-        (topo(rf = 3, nodes = 5, racks = 1, dcs = 1), False),
-        (topo(rf = 1, nodes = 4, racks = 2, dcs = 1), True),
-        (topo(rf = 3, nodes = 6, racks = 2, dcs = 1), False),
-        (topo(rf = 2, nodes = 8, racks = 4, dcs = 2), True)
+@pytest.mark.parametrize("topology", [
+        topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
+        topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
+        topo(rf = 1, nodes = 4, racks = 2, dcs = 1),
+        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
+        topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
     ])
-
-async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerClient, object_storage, topology_rf_validity):
+async def test_restore_with_streaming_scopes(build_mode: str, manager: ManagerClient, object_storage, topology):
     '''Check that restoring of a cluster with stream scopes works'''
+    await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnObjectStorage(object_storage))
 
-    topology, rf_rack_valid_keyspaces = topology_rf_validity
 
-    servers, host_ids = await create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, object_storage)
+async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topology, sstables_storage):
+    '''
+    This test creates a cluster specified by the topology parameter above,
+    configurable number of nodes, tacks, datacenters, and replication factor.
+
+    It creates a dataset, takes a snapshot and copies the sstables of all nodes to a temporary
+    location. It then truncates the table so all sstables are gone, copies all the sstables into
+    each node's upload directory, and refreshes the nodes given the scope passed as the test parameter.
+
+    The test then performs two types of checks:
+    1) Check that the data is back in the table by getting all mutations from the nodes and checking
+    that a random sample of them contains the expected key and that they are replicated according to RF * DCS factor.
+    2) Check that the streaming communication between nodes is as expected according to the scope parameter of the test.
+    This stage parses the logs and checks that the data was streamed to nodes within the configured scope.
+    '''
+
+    servers, host_ids = await create_cluster(topology, manager, logger, sstables_storage.object_storage)
 
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
 
-    ks = 'ks'
-    cf = 'cf'
-
     num_keys = 10
+    original_min_tablet_count=5
 
     scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
-    restored_min_tablet_counts = [5] if build_mode == 'debug' else [2, 5, 10]
+    pros = [ True, False ] # Primary Replica Only
+    restored_min_tablet_counts = [original_min_tablet_count] if (build_mode == 'debug' or sstables_storage.object_storage is None) else [2, original_min_tablet_count, 10]
     
-    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger, num_keys=num_keys, min_tablet_count=5)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(create_schema(ks, 'test', min_tablet_count=original_min_tablet_count))
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
 
-    # validate replicas assertions hold on fresh dataset
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope=None, primary_replica_only=False, expected_replicas = None)
+        # validate replicas assertions hold on fresh dataset
+        await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
-    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
-    prefix = f'{cf}/{snap_name}'
+        snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+        prefix = f'test/{snap_name}'
 
-    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+        await sstables_storage.save(manager, servers, snap_name, prefix, ks, 'test', logger)
 
-    for scope in scopes:
+    for scope, pro, restored_min_tablet_count in itertools.product(scopes, pros, restored_min_tablet_counts):
+        if scope == 'node' and pro == True:
+            continue
         # We can support rack-aware restore with rack lists, if we restore the rack-list per dc as it was at backup time.
         # Otherwise, with numeric replication_factor we'd pick arbitrary subset of the racks when the keyspace
         # is initially created and an arbitrary subset or the rack at restore time.
         if scope == 'rack' and topology.rf != topology.racks:
             logger.info(f'Skipping scope={scope} test since rf={topology.rf} != racks={topology.racks} and it cannot be supported with numeric replication_factor')
             continue
-        pros = [False] if scope == 'node' else [True, False]
-        for pro in pros:
-            for restored_min_tablet_count in restored_min_tablet_counts:
-                logger.info(f'Re-initialize keyspace with min_tablet_count={restored_min_tablet_count} from min_tablet_count=5')
-                cql.execute(f'DROP KEYSPACE {ks}')
-                cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-                schema = create_schema(ks, cf, restored_min_tablet_count)
-                cql.execute(schema)
 
-                log_marks = await mark_all_logs(manager, servers)
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+            await cql.run_async(create_schema(ks, 'test', min_tablet_count=restored_min_tablet_count))
 
-                await do_load_sstables(ks, cf, servers, topology, sstables, scope, manager, logger, prefix=prefix, object_storage=object_storage, primary_replica_only=pro)
+            log_marks = await mark_all_logs(manager, servers)
 
-                await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, host_ids, scope, primary_replica_only=pro, log_marks=log_marks, different_min_tablet_count=(restored_min_tablet_count != 512))
+            logger.info(f'Loading {servers=} with {sstables=} scope={scope}')
+            sstables_per_server = distribute_sstables(sstables, servers, topology, scope)
+            await sstables_storage.restore(manager, sstables_per_server, prefix, ks, 'test', scope, pro, logger)
+            if pro:
+                await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', 'all', timeout=600)
+            await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+            if restored_min_tablet_count == original_min_tablet_count:
+                await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
@@ -866,21 +806,7 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
 
     # Obtain the CQL interface from the manager.
     cql = manager.get_cql()
-
-    pid = local_process_id(cql)
-    if not pid:
-        pytest.skip("Can't find local Scylla process")
-    # Now that we know the process id, use /proc to find the executable.
-    try:
-        scylla_path = os.readlink(f'/proc/{pid}/exe')
-    except:
-        pytest.skip("Can't find local Scylla executable")
-    # Confirm that this executable is a real tool-providing Scylla by trying
-    # to run it with the "--list-tools" option
-    try:
-        subprocess.check_output([scylla_path, '--list-tools'])
-    except:
-        pytest.skip("Local server isn't Scylla")
+    scylla_path = await manager.server_get_exe(server.server_id)
 
     async with new_test_keyspace(manager,
                                  "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:
@@ -939,25 +865,28 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
 
         res = cql.execute(f"SELECT COUNT(*) FROM {keyspace}.{table} BYPASS CACHE USING TIMEOUT 600s;")
 
-        assert res[0].count == expected_rows, f"number of rows after restore is incorrect: {res[0].count}"
+        row = res.one()
+        assert row.count == expected_rows, f"number of rows after restore is incorrect: {row.count}"
         log = await manager.server_open_log(server.server_id)
         await log.wait_for("fully contained SSTables to local node from object storage", timeout=10)
         # just make sure we had partially contained sstables as well
         await log.wait_for("partially contained SSTables", timeout=10)
 
 @pytest.mark.asyncio
-async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClient, object_storage):
-    '''Check that restoring with primary_replica_only and scope rack streams only to primary replica in the same rack.
-    The test checks that each mutation exists exactly 2 times within the cluster, once in each rack
-    (each restoring node streams to one primary replica in its rack. Without primary_replica_only we'd see 4 replicas, 2 in each rack).
-    The test also checks that the logs of each restoring node shows streaming to a single node, which is the primary replica within the same rack.'''
+@pytest.mark.parametrize("domain", ['rack', 'dc'])
+async def test_restore_primary_replica_same_domain(manager: ManagerClient, object_storage, domain):
+    '''Check that restoring with primary_replica_only and domain scope streams only to primary replica in the same domain.
+    The test checks that each mutation exists exactly 2 times within the cluster, once in each domain
+    (each restoring node streams to one primary replica in its domain. Without primary_replica_only we'd see 4 replicas, 2 in each domain).
+    The test also checks that the logs of each restoring node shows streaming to a single node, which is the primary replica within the same domain.'''
 
-    topology = topo(rf = 4, nodes = 8, racks = 2, dcs = 1)
-    scope = "rack"
+    dcs = 1 if domain == 'rack' else 2
+    topology = topo(rf = 4, nodes = 8, racks = 2, dcs = dcs)
+    scope = domain
     ks = 'ks'
     cf = 'cf'
 
-    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
@@ -979,7 +908,7 @@ async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClie
 
     await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=2)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(servers):
@@ -989,27 +918,37 @@ async def test_restore_primary_replica_same_rack_scope_rack(manager: ManagerClie
         for r in res:
             nodes_by_operation[r[1].group(1)].append(r[1].group(2))
 
-        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers if s.rack == servers[i].rack ])
+        def same_domain(s1, s2):
+            if domain == 'rack':
+                return s1.rack == s2.rack
+            else:
+                return s1.datacenter == s2.datacenter
+
+        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers if same_domain(s, servers[i]) ])
         for op, nodes in nodes_by_operation.items():
             logger.info(f'Operation {op} streamed to nodes {nodes}')
             assert len(nodes) == 1, "Each streaming operation should stream to exactly one primary replica"
             assert nodes[0] in scope_nodes, f"Primary replica should be within the scope {scope}"
 
 @pytest.mark.asyncio
-async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerClient, object_storage):
-    '''Check that restoring with primary_replica_only and scope dc permits cross-rack streaming.
-    The test checks that each mutation exists exactly 1 time within the cluster, in one of the racks.
-    (each restoring node would pick the same primary replica, one would pick it within its own rack(itself), one would pick it from the other rack.
-     Without primary_replica_only we'd see 2 replicas, 1 in each rack).
-    The test also checks that the logs of each restoring node shows streaming to two nodes because cross-rack streaming is allowed
+@pytest.mark.parametrize("domain", ['rack', 'dc'])
+async def test_restore_primary_replica_different_domain(manager: ManagerClient, object_storage, domain):
+    '''Check that restoring with primary_replica_only and wider scope permits cross-domain streaming.
+    The test checks that each mutation exists exactly 1 time within the cluster, in one of the domains.
+    (each restoring node would pick the same primary replica, one would pick it within its own domain(itself), one would pick it from the other domain.
+     Without primary_replica_only we'd see 2 replicas, 1 in each domain).
+    The test also checks that the logs of each restoring node shows streaming to two nodes because cross-domain streaming is allowed
     and eventually one node, depending on tablet_id of mutations, will end up choosing either of the two nodes as primary replica.'''
 
-    topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
-    scope = "dc"
+    dcs = 1 if domain == 'rack' else 2
+    racks = 2 if domain == 'rack' else 1
+    rf = 2 if domain == 'rack' else 1
+    topology = topo(rf = rf, nodes = 2, racks = racks, dcs = dcs)
+    scope = "dc" if domain == 'rack' else "all"
     ks = 'ks'
     cf = 'cf'
 
-    servers, host_ids = await create_cluster(topology, True, manager, logger, object_storage)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
@@ -1031,7 +970,7 @@ async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerC
 
     await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=1)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(servers):
@@ -1041,100 +980,38 @@ async def test_restore_primary_replica_different_rack_scope_dc(manager: ManagerC
         logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}')
         assert len(streamed_to) == 2
 
-@pytest.mark.asyncio
-async def test_restore_primary_replica_same_dc_scope_dc(manager: ManagerClient, object_storage):
-    '''Check that restoring with primary_replica_only and scope dc streams only to primary replica in the local dc.
-    The test checks that each mutation exists exactly 2 times within the cluster, once in each dc
-    (each restoring node streams to one primary replica in its dc. Without primary_replica_only we'd see 4 replicas, 2 in each dc).
-    The test also checks that the logs of each restoring node shows streaming to a single node, which is the primary replica within the same dc.'''
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_decommision_waits_for_backup(manager: ManagerClient, object_storage):
+    '''check that backing up a snapshot for a keyspace blocks decommission'''
 
-    topology = topo(rf = 4, nodes = 8, racks = 2, dcs = 2)
-    scope = "dc"
-    ks = 'ks'
-    cf = 'cf'
+    async def decommission_and_check(server: ServerInfo, prefix: str, files, tid):
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
 
-    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
+        async def finish_backup():
+            # wait for snapshot to stop on waiting for backup
+            await log.wait_for("Waiting for snapshot/backup tasks to finish", from_mark=mark)
 
-    await manager.disable_tablet_balancing()
-    cql = manager.get_cql()
+            mark2 = await log.mark()
 
-    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
+            # let the backup run and finish
+            await manager.api.message_injection(server.ip_addr, "backup_task_pre_upload")
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert (status is not None) and (status['state'] == 'done')
 
-    # validate replicas assertions hold on fresh dataset
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
+            objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+            uploaded_count = 0
+            # all files should be uploaded. note: can be zero due to two nodes
+            for f in files:
+                in_backup = f'{prefix}/{f}' in objects
+                print(f'Check {f} is in backup: {in_backup}')
+                if in_backup:
+                    uploaded_count += 1
+            assert uploaded_count == len(files)
+            # Now wait for decommission to finish
+            await log.wait_for("DECOMMISSIONING: disabled backup and snapshots", from_mark=mark2)
 
-    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
-    prefix = f'{cf}/{snap_name}'
+        await asyncio.gather(manager.decommission_node(server.server_id), finish_backup())
 
-    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+    await do_test_backup_helper(manager, object_storage, "backup_task_pre_upload", decommission_and_check, 2)
 
-    logger.info(f'Re-initialize keyspace')
-    cql.execute(f'DROP KEYSPACE {ks}')
-    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-    cql.execute(schema)
-
-    await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
-
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=2)
-
-    logger.info(f'Validate streaming directions')
-    for i, s in enumerate(servers):
-        log = await manager.server_open_log(s.server_id)
-        res = await log.grep(r'INFO.*sstables_loader - load_and_stream: ops_uuid=([0-9a-z-]+).*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
-        nodes_by_operation = defaultdict(list)
-        for r in res:
-            nodes_by_operation[r[1].group(1)].append(r[1].group(2))
-
-        scope_nodes = set([ str(host_ids[s.server_id]) for s in servers if s.datacenter == servers[i].datacenter ])
-        for op, nodes in nodes_by_operation.items():
-            logger.info(f'Operation {op} streamed to nodes {nodes}')
-            assert len(nodes) == 1, "Each streaming operation should stream to exactly one primary replica"
-            assert nodes[0] in scope_nodes, f"Primary replica should be within the scope {scope}"
-
-@pytest.mark.asyncio
-async def test_restore_primary_replica_different_dc_scope_all(manager: ManagerClient, object_storage):
-    '''Check that restoring with primary_replica_only and scope all permits cross-dc streaming.
-    The test checks that each mutation exists exactly 1 time within the cluster, in only one of the dcs.
-    (each restoring node would pick the same primary replica, one would pick it within its own dc(itself), one would pick it from the other dc.
-     Without primary_replica_only, we'd see 2 replicas, 1 in each dc).
-    The test also checks that the logs of each restoring node shows streaming to two nodes because cross-dc streaming is allowed
-    and eventually one node, depending on tablet_id of mutations, will end up choosing either of the two nodes as primary replica.'''
-
-    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 2)
-    scope = "all"
-    ks = 'ks'
-    cf = 'cf'
-
-    servers, host_ids = await create_cluster(topology, False, manager, logger, object_storage)
-
-    await manager.disable_tablet_balancing()
-    cql = manager.get_cql()
-
-    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
-
-    # validate replicas assertions hold on fresh dataset
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=2)
-
-    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
-    prefix = f'{cf}/{snap_name}'
-
-    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
-
-    logger.info(f'Re-initialize keyspace')
-    cql.execute(f'DROP KEYSPACE {ks}')
-    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-    cql.execute(schema)
-
-    r_servers = servers
-
-    await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in r_servers))
-
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, scope, primary_replica_only=True, expected_replicas=1)
-
-    logger.info(f'Validate streaming directions')
-    for i, s in enumerate(r_servers):
-        log = await manager.server_open_log(s.server_id)
-        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
-        streamed_to = set([ r[1].group(1) for r in res ])
-        logger.info(f'{s.ip_addr} {host_ids[s.server_id]} streamed to {streamed_to}, expected {r_servers}')
-        assert len(streamed_to) == 2

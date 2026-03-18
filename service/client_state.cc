@@ -55,15 +55,28 @@ void service::client_state::validate_login() const {
 }
 
 void service::client_state::ensure_not_anonymous() const {
+    if (_bypass_auth_checks) {
+        return;
+    }
     validate_login();
     if (auth::is_anonymous(*_user)) {
         throw exceptions::unauthorized_exception("You have to be logged in and not anonymous to perform this request");
     }
 }
 
+future<bool> service::client_state::has_superuser() const {
+    if (_bypass_auth_checks) {
+        co_return true;
+    }
+    if (!_user) {
+        co_return false;
+    }
+    co_return co_await auth::has_superuser(*_auth_service, *_user);
+}
+
 future<> service::client_state::has_all_keyspaces_access(
                 auth::permission p) const {
-    if (_is_internal) {
+    if (_bypass_auth_checks) {
         co_return;
     }
     validate_login();
@@ -96,16 +109,6 @@ future<> service::client_state::has_column_family_access(const sstring& ks,
                 const sstring& cf, auth::permission p, auth::command_desc::type t, std::optional<bool> is_vector_indexed) const {
     auto r = auth::make_data_resource(ks, cf);
     co_return co_await has_access(ks, {p, r, t}, is_vector_indexed);
-}
-
-future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
-    auth::resource r = auth::make_data_resource(s.ks_name(), s.cf_name());
-    co_return co_await has_access(s.ks_name(), {p, r});
-}
-
-future<> service::client_state::has_schema_access(const sstring& ks_name, const sstring& cf_name, auth::permission p) const {
-    auth::resource r = auth::make_data_resource(ks_name, cf_name);
-    co_return co_await has_access(ks_name, {p, r});
 }
 
 future<> service::client_state::check_internal_table_permissions(std::string_view ks, std::string_view table_name, const auth::command_desc& cmd) const {
@@ -152,7 +155,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
     }
-    if (_is_internal) {
+    if (_bypass_auth_checks) {
         co_return;
     }
 
@@ -227,6 +230,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
     static const std::unordered_set<auth::resource> vector_search_system_resources = {
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::VERSIONS),
+        auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::CDC_STREAMS),
+        auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::CDC_TIMESTAMPS),
     };
 
     if ((cmd.resource.kind() == auth::resource_kind::data && cmd.permission == auth::permission::SELECT && is_vector_indexed.has_value() && is_vector_indexed.value()) ||
@@ -264,7 +269,7 @@ sstring service::client_state::generate_authorization_error_msg(const auth::comm
 
 template <typename Cmd>
 future<bool> service::client_state::check_has_permission(Cmd cmd) const {
-    if (_is_internal) {
+    if (_bypass_auth_checks) {
         co_return true;
     }
 
@@ -314,13 +319,12 @@ future<> service::client_state::ensure_exists(const auth::resource& r) const {
     });
 }
 
-future<> service::client_state::maybe_update_per_service_level_params() {
+void service::client_state::maybe_update_per_service_level_params() {
     if (_sl_controller && _user && _user->name) {
-        auto slo_opt = co_await _sl_controller->find_effective_service_level(_user->name.value());
+        auto slo_opt = _sl_controller->find_cached_effective_service_level(_user->name.value());
         if (!slo_opt) {
-            co_return;
+            return;
         }
-        
         update_per_service_level_params(*slo_opt);
     }
 }
@@ -364,3 +368,27 @@ future<> service::client_state::set_client_options(
         _client_options.emplace_back(std::move(cached_key), std::move(cached_value));
     }
 }
+
+service::forwarded_client_state::forwarded_client_state(
+    sstring keyspace,
+    std::optional<sstring> username,
+    ::timeout_config timeout_config,
+    uint64_t protocol_extensions_mask,
+    gms::inet_address remote_address,
+    uint16_t remote_port)
+    : keyspace(std::move(keyspace))
+    , username(std::move(username))
+    , timeout_config(std::move(timeout_config))
+    , protocol_extensions_mask(protocol_extensions_mask)
+    , remote_address(std::move(remote_address))
+    , remote_port(remote_port)
+{ }
+
+service::forwarded_client_state::forwarded_client_state(const client_state& cs)
+    : keyspace(cs.get_raw_keyspace())
+    , username(cs.user() ? std::optional<sstring>{cs.user()->name} : std::nullopt)
+    , timeout_config(cs.get_timeout_config())
+    , protocol_extensions_mask(static_cast<uint64_t>(cs.get_protocol_extensions().mask()))
+    , remote_address(cs.get_client_address())
+    , remote_port(cs.get_client_port())
+{ }

@@ -252,7 +252,7 @@ SEASTAR_TEST_CASE(test_group0_batch) {
         // (group0 mutations are not allowed on non-group0 tables)
         schema_builder::register_schema_initializer([](schema_builder& builder) {
             if (builder.cf_name() == "test_group0_batch") {
-                builder.set_is_group0_table(true);
+                builder.set_is_group0_table();
             }
         });
 
@@ -342,6 +342,31 @@ SEASTAR_TEST_CASE(test_group0_batch) {
         // nop without mutations nor generator
         auto mc1 = service::group0_batch::unused();
         co_await std::move(mc1).commit(rclient, as, ::service::raft_timeout{});
+    });
+}
+
+SEASTAR_TEST_CASE(test_group0_tables_use_schema_commitlog) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        schema_builder::register_schema_initializer([](schema_builder& builder) {
+            if (builder.cf_name() == "test_group0_tables_use_schema_commitlog1") {
+                builder.set_is_group0_table();
+            }
+        });
+
+        auto test_group0_tables_use_schema_commitlog1 = schema_builder("test", "test_group0_tables_use_schema_commitlog1")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .build();
+
+        auto test_group0_tables_use_schema_commitlog2 = schema_builder("test", "test_group0_tables_use_schema_commitlog2")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .build();
+
+        BOOST_REQUIRE(test_group0_tables_use_schema_commitlog1->static_props().is_group0_table);
+        BOOST_REQUIRE(test_group0_tables_use_schema_commitlog1->static_props().use_schema_commitlog);
+        BOOST_REQUIRE(!test_group0_tables_use_schema_commitlog2->static_props().is_group0_table);
+        BOOST_REQUIRE(!test_group0_tables_use_schema_commitlog2->static_props().use_schema_commitlog);
+
+        return make_ready_future();
     });
 }
 

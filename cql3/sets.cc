@@ -34,7 +34,7 @@ sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const u
 void
 sets::adder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     const cql3::raw_value value = expr::evaluate(*_e, params._options);
-    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to add items to a frozen set";
+    throwing_assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen set";
     do_add(m, row_key, params, value, column);
 }
 
@@ -77,7 +77,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
 
 void
 sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    SCYLLA_ASSERT(column.type->is_multi_cell()); // "Attempted to remove items from a frozen set";
+    throwing_assert(column.type->is_multi_cell()); // "Attempted to remove items from a frozen set";
 
     cql3::raw_value svalue = expr::evaluate(*_e, params._options);
     if (svalue.is_null()) {
@@ -98,7 +98,7 @@ sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, cons
 
 void sets::element_discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params)
 {
-    SCYLLA_ASSERT(column.type->is_multi_cell() && "Attempted to remove items from a frozen set");
+    throwing_assert(column.type->is_multi_cell() && "Attempted to remove items from a frozen set");
     cql3::raw_value elt = expr::evaluate(*_e, params._options);
     if (elt.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null set element");

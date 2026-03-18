@@ -11,6 +11,7 @@
 #include "cql3/query_processor.hh"
 
 #include <seastar/core/metrics.hh>
+#include <seastar/core/memory.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -91,7 +92,11 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
         , _authorized_prepared_cache_validity_in_ms_observer(_db.get_config().permissions_validity_in_ms.observe(_auth_prepared_cache_cfg_cb))
         , _lang_manager(langm)
+        , _write_consistency_levels_warned_observer(_db.get_config().write_consistency_levels_warned.observe([this](const auto& v) { _write_consistency_levels_warned = to_consistency_level_set(v); }))
+        , _write_consistency_levels_disallowed_observer(_db.get_config().write_consistency_levels_disallowed.observe([this](const auto& v) { _write_consistency_levels_disallowed = to_consistency_level_set(v); }))
         {
+    _write_consistency_levels_warned = to_consistency_level_set(_db.get_config().write_consistency_levels_warned());
+    _write_consistency_levels_disallowed = to_consistency_level_set(_db.get_config().write_consistency_levels_disallowed());
     namespace sm = seastar::metrics;
     namespace stm = statements;
     using clevel = db::consistency_level;
@@ -506,7 +511,39 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             _cql_stats.replication_strategy_fail_list_violations,
                             sm::description("Counts the number of replication_strategy_fail_list guardrail violations, "
                                             "i.e. attempts to set a forbidden replication strategy in a keyspace via CREATE/ALTER KEYSPACE.")).set_skip_when_empty(),
+
+                    sm::make_counter(
+                            "forwarded_requests",
+                            _cql_stats.forwarded_requests,
+                            sm::description("Counts the total number of attempts to forward CQL requests to other nodes. One request may be forwarded multiple times, "
+                                            "particularly when a write is handled by a non-replica node.")).set_skip_when_empty(),
             });
+
+    std::vector<sm::metric_definition> cql_cl_group;
+    for (auto cl = size_t(clevel::MIN_VALUE); cl <= size_t(clevel::MAX_VALUE); ++cl) {
+        cql_cl_group.push_back(
+            sm::make_counter(
+                "writes_per_consistency_level",
+                _cql_stats.writes_per_consistency_level[cl],
+                sm::description("Counts the number of writes for each consistency level."),
+                {cl_label(clevel(cl)), basic_level}).set_skip_when_empty());
+    }
+    _metrics.add_group("cql", cql_cl_group);
+
+    _metrics.add_group("cql", {
+        sm::make_counter(
+            "write_consistency_levels_disallowed_violations",
+            _cql_stats.write_consistency_levels_disallowed_violations,
+            sm::description("Counts the number of write_consistency_levels_disallowed guardrail violations, "
+                            "i.e. attempts to write with a forbidden consistency level."),
+            {basic_level}),
+        sm::make_counter(
+            "write_consistency_levels_warned_violations",
+            _cql_stats.write_consistency_levels_warned_violations,
+            sm::description("Counts the number of write_consistency_levels_warned guardrail violations, "
+                            "i.e. attempts to write with a discouraged consistency level."),
+            {basic_level}),
+    });
 
     _mnotifier.register_listener(_migration_subscriber.get());
 }
@@ -549,8 +586,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
         ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options) {
     // execute all statements that need group0 guard on shard0
     if (this_shard_id() != 0) {
-        co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0,
-                    std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
+        co_return bounce_to_shard(0, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()), false);
     }
 
     auto [remote_, holder] = remote();
@@ -697,7 +733,7 @@ future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::prepare(sstring query_string, const service::client_state& client_state, cql3::dialect d) {
     try {
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
-        auto prep_ptr = co_await _prepared_cache.get(key, [this, &query_string, &client_state, d] {
+        auto prep_entry = co_await _prepared_cache.get_pinned(key, [this, &query_string, &client_state, d] {
                 auto prepared = get_statement(query_string, client_state, d);
                 prepared->calculate_metadata_id();
                 auto bound_terms = prepared->statement->get_bound_terms();
@@ -707,17 +743,17 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
                                 bound_terms,
                                 std::numeric_limits<uint16_t>::max()));
                 }
-                SCYLLA_ASSERT(bound_terms == prepared->bound_names.size());
+                throwing_assert(bound_terms == prepared->bound_names.size());
                 return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
             });
 
-        const auto& warnings = prep_ptr->warnings;
-        const auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key), std::move(prep_ptr),
+        co_await utils::get_local_injector().inject(
+                "query_processor_prepare_wait_after_cache_get",
+                utils::wait_for_message(std::chrono::seconds(60)));
+  
+        auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key), std::move(prep_entry),
                     client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK));
-        for (const auto& w : warnings) {
-            msg->add_warning(w);
-        }
-        co_return ::shared_ptr<cql_transport::messages::result_message::prepared>(std::move(msg));
+        co_return std::move(msg);
     } catch(typename prepared_statements_cache::statement_is_too_big&) {
         throw prepared_statement_is_too_big(query_string);
     }
@@ -738,6 +774,10 @@ prepared_cache_key_type query_processor::compute_id(
 
 std::unique_ptr<prepared_statement>
 query_processor::get_statement(const std::string_view& query, const service::client_state& client_state, dialect d) {
+    // Measuring allocation cost requires that no yield points exist
+    // between bytes_before and bytes_after. It needs fixing if this
+    // function is ever futurized.
+    auto bytes_before = seastar::memory::stats().total_bytes_allocated();
     std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
 
     // Set keyspace for statement that require login
@@ -753,6 +793,8 @@ query_processor::get_statement(const std::string_view& query, const service::cli
         audit_info->set_query_string(query);
         p->statement->sanitize_audit_info();
     }
+    auto bytes_after = seastar::memory::stats().total_bytes_allocated();
+    _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
     return p;
 }
 
@@ -1228,9 +1270,25 @@ future<> query_processor::query_internal(
     return query_internal(query_string, db::consistency_level::ONE, {}, 1000, std::move(f));
 }
 
-shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
-    _proxy.get_stats().replica_cross_shard_ops++;
-    return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls, bool track) {
+    if (track) {
+        _proxy.get_stats().replica_cross_shard_ops++;
+    }
+    const auto my_host_id = _proxy.get_token_metadata_ptr()->get_topology().my_host_id();
+    return ::make_shared<cql_transport::messages::result_message::bounce>(my_host_id, shard, std::move(cached_fn_calls));
+}
+
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_node(locator::tablet_replica replica, cql3::computed_function_values cached_fn_calls, seastar::lowres_clock::time_point timeout, bool is_write) {
+    get_cql_stats().forwarded_requests++;
+    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write);
+}
+
+query_processor::consistency_level_set query_processor::to_consistency_level_set(const query_processor::cl_option_list& levels) {
+    query_processor::consistency_level_set result;
+    for (const auto& opt : levels) {
+        result.set(static_cast<db::consistency_level>(opt));
+    }
+    return result;
 }
 
 void query_processor::update_authorized_prepared_cache_config() {

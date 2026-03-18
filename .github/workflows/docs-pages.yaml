@@ -19,6 +19,8 @@ on:
 jobs:
   release:
     permissions:
+      pages: write
+      id-token: write
       contents: write
     runs-on: ubuntu-latest
     steps:
@@ -31,7 +33,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
       - name: Set up env
         run: make -C docs FLAG="${{ env.FLAG }}" setupenv
       - name: Build docs

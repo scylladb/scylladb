@@ -31,9 +31,12 @@
 #include "vector_search/vector_store_client.hh"
 #include "utils/assert.hh"
 #include "utils/observable.hh"
+#include "utils/rolling_max_tracker.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
-#include "db/auth_version.hh"
+#include "db/consistency_level_type.hh"
+#include "db/config.hh"
+#include "utils/enum_option.hh"
 #include "service/storage_proxy_fwd.hh"
 
 
@@ -132,6 +135,9 @@ private:
     prepared_statements_cache _prepared_cache;
     authorized_prepared_statements_cache _authorized_prepared_cache;
 
+    // Tracks the rolling maximum of gross bytes allocated during CQL parsing
+    utils::rolling_max_tracker _parsing_cost_tracker{1000};
+
     std::function<void(uint32_t)> _auth_prepared_cache_cfg_cb;
     serialized_action _authorized_prepared_cache_config_action;
     utils::observer<uint32_t> _authorized_prepared_cache_update_interval_in_ms_observer;
@@ -142,6 +148,30 @@ private:
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
     lang::manager& _lang_manager;
+
+    using cl_option_list = std::vector<enum_option<db::consistency_level_restriction_t>>;
+
+    /// Efficient bitmask-based set of consistency levels.
+    using consistency_level_set = enum_set<super_enum<db::consistency_level,
+        db::consistency_level::ANY,
+        db::consistency_level::ONE,
+        db::consistency_level::TWO,
+        db::consistency_level::THREE,
+        db::consistency_level::QUORUM,
+        db::consistency_level::ALL,
+        db::consistency_level::LOCAL_QUORUM,
+        db::consistency_level::EACH_QUORUM,
+        db::consistency_level::SERIAL,
+        db::consistency_level::LOCAL_SERIAL,
+        db::consistency_level::LOCAL_ONE>>;
+
+
+    consistency_level_set _write_consistency_levels_warned;
+    consistency_level_set _write_consistency_levels_disallowed;
+    utils::observer<cl_option_list> _write_consistency_levels_warned_observer;
+    utils::observer<cl_option_list> _write_consistency_levels_disallowed_observer;
+
+    static consistency_level_set to_consistency_level_set(const cl_option_list& levels);
 public:
     static const sstring CQL_VERSION;
 
@@ -186,6 +216,11 @@ public:
         return _cql_stats;
     }
 
+    /// Returns the estimated peak memory cost of CQL parsing.
+    size_t parsing_cost_estimate() const noexcept {
+        return _parsing_cost_tracker.current_max();
+    }
+
     lang::manager& lang() { return _lang_manager; }
 
     const vector_search::vector_store_client& vector_store_client() const noexcept {
@@ -195,8 +230,6 @@ public:
     vector_search::vector_store_client& vector_store_client() noexcept {
         return _vector_store_client;
     }
-
-    db::auth_version_t auth_version;
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
         if (user) {
@@ -477,7 +510,12 @@ public:
 
     friend class migration_subscriber;
 
-    shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls);
+    shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls, bool track = true);
+    shared_ptr<cql_transport::messages::result_message> bounce_to_node(
+            locator::tablet_replica replica,
+            cql3::computed_function_values cached_fn_calls,
+            seastar::lowres_clock::time_point timeout,
+            bool is_write);
 
     void update_authorized_prepared_cache_config();
 
@@ -492,6 +530,21 @@ public:
             db::consistency_level,
             int32_t page_size = -1,
             service::node_local_only node_local_only = service::node_local_only::no) const;
+
+    enum class write_consistency_guardrail_state { NONE, WARN, FAIL };
+    inline write_consistency_guardrail_state check_write_consistency_levels_guardrail(db::consistency_level cl) {
+        _cql_stats.writes_per_consistency_level[size_t(cl)]++;
+
+        if (_write_consistency_levels_disallowed.contains(cl)) [[unlikely]] {
+            _cql_stats.write_consistency_levels_disallowed_violations++;
+            return write_consistency_guardrail_state::FAIL;
+        }
+        if (_write_consistency_levels_warned.contains(cl)) [[unlikely]] {
+            _cql_stats.write_consistency_levels_warned_violations++;
+            return write_consistency_guardrail_state::WARN;
+        }
+        return write_consistency_guardrail_state::NONE;
+    }
 
 private:
     // Keep the holder until you stop using the `remote` services.

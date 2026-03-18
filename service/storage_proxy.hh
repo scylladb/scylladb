@@ -72,6 +72,7 @@ class feature_service;
 
 namespace db {
 class system_keyspace;
+struct snapshot_options;
 
 namespace view {
 struct view_building_state_machine;
@@ -786,6 +787,11 @@ public:
      * @param timeout
      */
     future<> truncate_blocking(sstring keyspace, sstring cfname, std::chrono::milliseconds timeout_in_ms);
+
+    /**
+     * Performs snapshot on keyspace/tables. To snapshot all tables in a keyspace, put "ks: ''" in map
+     */
+    future<> snapshot_keyspace(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, const db::snapshot_options& opts);
 
     /*
      * Executes data query on the whole cluster.

@@ -267,6 +267,13 @@ const config_type& config_type_for<std::vector<enum_option<db::replication_strat
 }
 
 template <>
+const config_type& config_type_for<std::vector<enum_option<db::consistency_level_restriction_t>>>() {
+    static config_type ct(
+        "consistency level list", printable_vector_to_json<enum_option<db::consistency_level_restriction_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<enum_option<db::tri_mode_restriction_t>>() {
     static config_type ct(
         "restriction mode", printable_to_json<enum_option<db::tri_mode_restriction_t>>);
@@ -402,6 +409,23 @@ template <>
 class convert<enum_option<db::replication_strategy_restriction_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::replication_strategy_restriction_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::consistency_level_restriction_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::consistency_level_restriction_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -620,25 +644,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     * @Group: Names the category of subsequent config properties.
     * @GroupDescription: Provides an overview of the group.
     */
-    /**
-    * @Group Ungrouped properties
-    */
-    , background_writer_scheduling_quota(this, "background_writer_scheduling_quota", value_status::Deprecated, 1.0,
-        "max cpu usage ratio (between 0 and 1) for compaction process. Not intended for setting in normal operations. Setting it to 1 or higher will disable it, recommended operational setting is 0.5.")
-    , auto_adjust_flush_quota(this, "auto_adjust_flush_quota", value_status::Deprecated, false,
-        "true: auto-adjust memtable shares for flush processes")
-    , memtable_flush_static_shares(this, "memtable_flush_static_shares", liveness::LiveUpdate, value_status::Used, 0,
-        "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
-    , compaction_static_shares(this, "compaction_static_shares", liveness::LiveUpdate, value_status::Used, 0,
-        "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
-    , compaction_max_shares(this, "compaction_max_shares", liveness::LiveUpdate, value_status::Used, default_compaction_maximum_shares,
-        "Set the maximum shares of regular compaction to the specific value. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
-    , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
-        "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold.")
-    , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,
-        "Set the minimum interval in seconds between flushing all tables before each major compaction (default is 86400)."
-        "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments."
-        "Set to 0 to disable automatic flushing all tables before major compaction.")
     /**
     * @Group Initialization properties
     * @GroupDescription The minimal properties needed for configuring a cluster.
@@ -1085,7 +1090,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port.")
     , native_transport_port(this, "native_transport_port", "cql_port", value_status::Used, 9042,
         "Port on which the CQL native transport listens for clients.")
-    , maintenance_socket(this, "maintenance_socket", value_status::Used, "ignore",
+    , maintenance_socket(this, "maintenance_socket", value_status::Used, "workdir",
         "The Unix Domain Socket the node uses for maintenance socket.\n"
         "The possible options are:\n"
         "\tignore         the node will not open the maintenance socket.\n"
@@ -1220,13 +1225,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "* org.apache.cassandra.auth.CassandraRoleManager: Stores role data in the system_auth keyspace;\n"
         "* com.scylladb.auth.LDAPRoleManager: Fetches role data from an LDAP server.")
     , permissions_validity_in_ms(this, "permissions_validity_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
-        "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. Permissions caching is disabled when this property is set to 0 or when AllowAllAuthorizer is used. The cached value is considered valid as long as both its value is not older than the permissions_validity_in_ms "
+        "How long authorized statements cache entries remain valid. The cached value is considered valid as long as both its value is not older than the permissions_validity_in_ms "
         "and the cached value has been read at least once during the permissions_validity_in_ms time frame. If any of these two conditions doesn't hold the cached value is going to be evicted from the cache.\n"
         "\n"
         "Related information: Object permissions")
     , permissions_update_interval_in_ms(this, "permissions_update_interval_in_ms", liveness::LiveUpdate, value_status::Used, 2000,
-        "Refresh interval for permissions cache (if enabled). After this interval, cache entries become eligible for refresh. An async reload is scheduled every permissions_update_interval_in_ms time period and the old value is returned until it completes. If permissions_validity_in_ms has a non-zero value, then this property must also have a non-zero value. It's recommended to set this value to be at least 3 times smaller than the permissions_validity_in_ms.")
-    , permissions_cache_max_entries(this, "permissions_cache_max_entries", liveness::LiveUpdate, value_status::Used, 1000,
+        "Refresh interval for authorized statements cache. After this interval, cache entries become eligible for refresh. An async reload is scheduled every permissions_update_interval_in_ms time period and the old value is returned until it completes. If permissions_validity_in_ms has a non-zero value, then this property must also have a non-zero value. It's recommended to set this value to be at least 3 times smaller than the permissions_validity_in_ms. This option additionally controls the permissions refresh interval for LDAP.")
+    , permissions_cache_max_entries(this, "permissions_cache_max_entries", liveness::LiveUpdate, value_status::Unused, 1000,
         "Maximum cached permission entries. Must have a non-zero value if permissions caching is enabled (see a permissions_validity_in_ms description).")
     , server_encryption_options(this, "server_encryption_options", value_status::Used, {/*none*/},
         "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. The available options are:\n"
@@ -1291,7 +1296,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , ignore_dead_nodes_for_replace(this, "ignore_dead_nodes_for_replace", value_status::Used, "", "List dead nodes to ignore for replace operation using a comma-separated list of host IDs. E.g., scylla --ignore-dead-nodes-for-replace 8d5ed9f4-7764-4dbd-bad8-43fddce94b7c,125ed9f4-7777-1dbn-mac8-43fddce9123e")
     , override_decommission(this, "override_decommission", value_status::Deprecated, false, "Set true to force a decommissioned node to join the cluster (cannot be set if consistent-cluster-management is enabled).")
     , enable_repair_based_node_ops(this, "enable_repair_based_node_ops", liveness::LiveUpdate, value_status::Used, true, "Set true to use enable repair based node operations instead of streaming based.")
-    , allowed_repair_based_node_ops(this, "allowed_repair_based_node_ops", liveness::LiveUpdate, value_status::Used, "replace,removenode,rebuild,bootstrap,decommission", "A comma separated list of node operations which are allowed to enable repair based node operations. The operations can be bootstrap, replace, removenode, decommission and rebuild.")
+    , allowed_repair_based_node_ops(this, "allowed_repair_based_node_ops", liveness::LiveUpdate, value_status::Used, "replace,removenode,rebuild", "A comma separated list of node operations which are allowed to enable repair based node operations. The operations can be bootstrap, replace, removenode, decommission and rebuild.")
     , enable_compacting_data_for_streaming_and_repair(this, "enable_compacting_data_for_streaming_and_repair", liveness::LiveUpdate, value_status::Used, true, "Enable the compacting reader, which compacts the data for streaming and repair (load'n'stream included) before sending it to, or synchronizing it with peers. Can reduce the amount of data to be processed by removing dead data, but adds CPU overhead.")
     , enable_tombstone_gc_for_streaming_and_repair(this, "enable_tombstone_gc_for_streaming_and_repair", liveness::LiveUpdate, value_status::Used, false,
             "If the compacting reader is enabled for streaming and repair (see enable_compacting_data_for_streaming_and_repair), allow it to garbage-collect tombstones."
@@ -1311,7 +1316,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , fd_initial_value_ms(this, "fd_initial_value_ms", value_status::Used, 2 * 1000, "The initial failure_detector interval time in milliseconds.")
     , shutdown_announce_in_ms(this, "shutdown_announce_in_ms", value_status::Used, 2 * 1000, "Time a node waits after sending gossip shutdown message in milliseconds. Same as -Dcassandra.shutdown_announce_in_ms in cassandra.")
     , developer_mode(this, "developer_mode", value_status::Used, DEVELOPER_MODE_DEFAULT, "Relax environment checks. Setting to true can reduce performance and reliability significantly.")
-    , skip_wait_for_gossip_to_settle(this, "skip_wait_for_gossip_to_settle", value_status::Used, -1, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.")
+    , skip_wait_for_gossip_to_settle(this, "skip_wait_for_gossip_to_settle", value_status::Deprecated, -1, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.")
     , force_gossip_generation(this, "force_gossip_generation", liveness::LiveUpdate, value_status::Used, -1 , "Force gossip to use the generation number provided by user.")
     , experimental_features(this, "experimental_features", value_status::Used, {}, experimental_features_help_string())
     , lsa_reclamation_step(this, "lsa_reclamation_step", value_status::Used, 1, "Minimum number of segments to reclaim in a single step.")
@@ -1333,6 +1338,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.")
     , enable_sstable_key_validation(this, "enable_sstable_key_validation", value_status::Used, ENABLE_SSTABLE_KEY_VALIDATION, "Enable validation of partition and clustering keys monotonicity"
         " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.")
+    , ignore_component_digest_mismatch(this, "ignore_component_digest_mismatch", value_status::Used, false,
+        "When set, log a warning instead of refusing to load sstables with component digest mismatches."
+        " Useful for recovering from corrupted non-vital components or working around bugs in digest calculation.")
     , cpu_scheduler(this, "cpu_scheduler", value_status::Unused, true, "Enable cpu scheduling.")
     , view_building(this, "view_building", value_status::Used, true, "Enable view building; should only be set to false when the node is experience issues due to view building.")
     , enable_sstables_mc_format(this, "enable_sstables_mc_format", value_status::Unused, true, "Enable SSTables 'mc' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
@@ -1394,6 +1402,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Start killing reads after their collective memory consumption goes above $normal_limit * $multiplier.")
     , reader_concurrency_semaphore_cpu_concurrency(this, "reader_concurrency_semaphore_cpu_concurrency", liveness::LiveUpdate, value_status::Used, 2,
             "Admit new reads while there are less than this number of requests that need CPU.")
+    , reader_concurrency_semaphore_preemptive_abort_factor(this, "reader_concurrency_semaphore_preemptive_abort_factor", liveness::LiveUpdate, value_status::Used, 0.3,
+            "Admit new reads while their remaining time is more than this factor times their timeout times when arrived to a semaphore. Its vale means\n"
+            "* <= 0.0 means new reads will never get rejected during admission\n"
+            "* >= 1.0 means new reads will always get rejected during admission\n")
     , view_update_reader_concurrency_semaphore_serialize_limit_multiplier(this, "view_update_reader_concurrency_semaphore_serialize_limit_multiplier", liveness::LiveUpdate, value_status::Used, 2,
             "Start serializing view update reads after their collective memory consumption goes above $normal_limit * $multiplier.")
     , view_update_reader_concurrency_semaphore_kill_limit_multiplier(this, "view_update_reader_concurrency_semaphore_kill_limit_multiplier", liveness::LiveUpdate, value_status::Used, 4,
@@ -1513,7 +1525,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , index_cache_fraction(this, "index_cache_fraction", liveness::LiveUpdate, value_status::Used, 0.2,
         "The maximum fraction of cache memory permitted for use by index cache. Clamped to the [0.0; 1.0] range. Must be small enough to not deprive the row cache of memory, but should be big enough to fit a large fraction of the index. The default value 0.2 means that at least 80\% of cache memory is reserved for the row cache, while at most 20\% is usable by the index cache.")
     , consistent_cluster_management(this, "consistent_cluster_management", value_status::Deprecated, true, "Use RAFT for cluster management and DDL.")
-    , force_gossip_topology_changes(this, "force_gossip_topology_changes", value_status::Used, false, "Force gossip-based topology operations in a fresh cluster. Only the first node in the cluster must use it. The rest will fall back to gossip-based operations anyway. This option should be used only for testing.  Note: gossip topology changes are incompatible with tablets.")
+    , force_gossip_topology_changes(this, "force_gossip_topology_changes", value_status::Deprecated, false, "Force gossip-based topology operations in a fresh cluster. Only the first node in the cluster must use it. The rest will fall back to gossip-based operations anyway. This option should be used only for testing.  Note: gossip topology changes are incompatible with tablets.")
     , recovery_leader(this, "recovery_leader", liveness::LiveUpdate, value_status::Used, utils::null_uuid(), "Host ID of the node restarted first while performing the Manual Raft-based Recovery Procedure. Warning: this option disables some guardrails for the needs of the Manual Raft-based Recovery Procedure. Make sure you unset it at the end of the procedure.")
     , wasm_cache_memory_fraction(this, "wasm_cache_memory_fraction", value_status::Used, 0.01, "Maximum total size of all WASM instances stored in the cache as fraction of total shard memory.")
     , wasm_cache_timeout_in_ms(this, "wasm_cache_timeout_in_ms", value_status::Used, 5000, "Time after which an instance is evicted from the cache.")
@@ -1530,10 +1542,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Ignored if authentication tables already contain a super user password.")
     , auth_certificate_role_queries(this, "auth_certificate_role_queries", value_status::Used, { { { "source", "SUBJECT" }, {"query", "CN=([^,]+)" } } },
         "Regular expression used by CertificateAuthenticator to extract role name from an accepted transport authentication certificate subject info.")
+    , enable_create_table_with_compact_storage(this, "enable_create_table_with_compact_storage", liveness::LiveUpdate, value_status::Used, false, "Enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.  This feature will eventually be removed in a future version.")
     , minimum_replication_factor_fail_threshold(this, "minimum_replication_factor_fail_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
     , minimum_replication_factor_warn_threshold(this, "minimum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used,  3, "")
-    , maximum_replication_factor_warn_threshold(this, "maximum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
     , maximum_replication_factor_fail_threshold(this, "maximum_replication_factor_fail_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
+    , maximum_replication_factor_warn_threshold(this, "maximum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
+    , replication_strategy_fail_list(this, "replication_strategy_fail_list", liveness::LiveUpdate, value_status::Used, {}, "Controls which replication strategies are disallowed to be used when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
+    , replication_strategy_warn_list(this, "replication_strategy_warn_list", liveness::LiveUpdate, value_status::Used, {locator::replication_strategy_type::simple}, "Controls which replication strategies to warn about when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
+    , write_consistency_levels_disallowed(this, "write_consistency_levels_disallowed", liveness::LiveUpdate, value_status::Used, {}, "A list of consistency levels that are not allowed for write operations. Requests using these levels will fail.")
+    , write_consistency_levels_warned(this, "write_consistency_levels_warned", liveness::LiveUpdate, value_status::Used, {}, "A list of consistency levels that will trigger a warning when used in write operations. Requests using these levels will contain a warning in the query response.")
     , tablets_initial_scale_factor(this, "tablets_initial_scale_factor", liveness::LiveUpdate, value_status::Used, 10,
          "Minimum average number of tablet replicas per shard per table. Suppressed by tablet options in table's schema: min_per_shard_tablet_count and min_tablet_count")
     , tablets_per_shard_goal(this, "tablets_per_shard_goal", liveness::LiveUpdate, value_status::Used, 100,
@@ -1542,17 +1559,19 @@ db::config::config(std::shared_ptr<db::extensions> exts)
          "Allows target tablet size to be configured. Defaults to 5G (in bytes). Maintaining tablets at reasonable sizes is important to be able to " \
          "redistribute load. A higher value means tablet migration throughput can be reduced. A lower value may cause number of tablets to increase significantly, " \
          "potentially resulting in performance drawbacks.")
-    , replication_strategy_warn_list(this, "replication_strategy_warn_list", liveness::LiveUpdate, value_status::Used, {locator::replication_strategy_type::simple}, "Controls which replication strategies to warn about when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
-    , replication_strategy_fail_list(this, "replication_strategy_fail_list", liveness::LiveUpdate, value_status::Used, {}, "Controls which replication strategies are disallowed to be used when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
+    , tablet_streaming_read_concurrency_per_shard(this, "tablet_streaming_read_concurrency_per_shard", liveness::LiveUpdate, value_status::Used, 2,
+         "Maximum number of tablets which may be leaving a shard at the same time. Effecting only on topology coordinator. Set to the same value on all nodes.")
+    , tablet_streaming_write_concurrency_per_shard(this, "tablet_streaming_write_concurrency_per_shard", liveness::LiveUpdate, value_status::Used, 2,
+         "Maximum number of tablets which may be pending on a shard at the same time. Effecting only on topology coordinator. Set to the same value on all nodes.")
     , service_levels_interval(this, "service_levels_interval_ms", liveness::LiveUpdate, value_status::Used, 10000, "Controls how often service levels module polls configuration table")
 
-    , audit(this, "audit", value_status::Used, "none",
+    , audit(this, "audit", value_status::Used, "table",
         "Controls the audit feature:\n"
         "\n"
         "\tnone   : No auditing enabled.\n"
         "\tsyslog : Audit messages sent to Syslog.\n"
         "\ttable  : Audit messages written to column family named audit.audit_log.\n")
-    , audit_categories(this, "audit_categories", liveness::LiveUpdate, value_status::Used, "DCL,DDL,AUTH", "Comma separated list of operation categories that should be audited.")
+    , audit_categories(this, "audit_categories", liveness::LiveUpdate, value_status::Used, "DCL,AUTH,ADMIN", "Comma separated list of operation categories that should be audited.")
     , audit_tables(this, "audit_tables", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of table names (<keyspace>.<table>) that will be audited.")
     , audit_keyspaces(this, "audit_keyspaces", liveness::LiveUpdate, value_status::Used, "", "Comma separated list of keyspaces that will be audited. All tables in those keyspaces will be audited")
     , audit_unix_socket_path(this, "audit_unix_socket_path", value_status::Used, "/dev/log", "The path to the unix socket used for writing to syslog. Only applicable when audit is set to syslog.")
@@ -1581,7 +1600,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , disk_space_monitor_high_polling_interval_in_seconds(this, "disk_space_monitor_high_polling_interval_in_seconds", value_status::Used, 1, "Disk-space polling interval at or above polling threshold")
     , disk_space_monitor_polling_interval_threshold(this, "disk_space_monitor_polling_interval_threshold", value_status::Used, 0.9, "Disk-space polling threshold. Polling interval is increased when disk utilization is greater than or equal to this threshold")
     , critical_disk_utilization_level(this, "critical_disk_utilization_level", liveness::LiveUpdate, value_status::Used, 0.98, "Disk utilization level above which mechanisms preventing a node getting out of space are activated")
-    , enable_create_table_with_compact_storage(this, "enable_create_table_with_compact_storage", liveness::LiveUpdate, value_status::Used, false, "Enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.  This feature will eventually be removed in a future version.")
     , rf_rack_valid_keyspaces(this, "rf_rack_valid_keyspaces", liveness::MustRestart, value_status::Used, false,
         "Enforce RF-rack-valid keyspaces. Additionally, if there are existing RF-rack-invalid "
         "keyspaces, attempting to start a node with this option ON will fail. "
@@ -1602,6 +1620,25 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Sets the maximum difference in percentages between the most loaded and least loaded nodes, below which the load balancer considers nodes balanced.")
     , minimal_tablet_size_for_balancing(this, "minimal_tablet_size_for_balancing", liveness::LiveUpdate, value_status::Used, service::default_target_tablet_size / 100,
         "Sets the minimal tablet size for the load balancer. For any tablet smaller than this, the balancer will use this size instead of the actual tablet size.")
+    /**
+    * @Group Ungrouped properties
+    */
+    , background_writer_scheduling_quota(this, "background_writer_scheduling_quota", value_status::Deprecated, 1.0,
+        "max cpu usage ratio (between 0 and 1) for compaction process. Not intended for setting in normal operations. Setting it to 1 or higher will disable it, recommended operational setting is 0.5.")
+    , auto_adjust_flush_quota(this, "auto_adjust_flush_quota", value_status::Deprecated, false,
+        "true: auto-adjust memtable shares for flush processes")
+    , memtable_flush_static_shares(this, "memtable_flush_static_shares", liveness::LiveUpdate, value_status::Used, 0,
+        "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
+    , compaction_static_shares(this, "compaction_static_shares", liveness::LiveUpdate, value_status::Used, 0,
+        "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
+    , compaction_max_shares(this, "compaction_max_shares", liveness::LiveUpdate, value_status::Used, default_compaction_maximum_shares,
+        "Set the maximum shares of regular compaction to the specific value. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
+    , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
+        "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold.")
+    , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,
+        "Set the minimum interval in seconds between flushing all tables before each major compaction (default is 86400)."
+        "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments."
+        "Set to 0 to disable automatic flushing all tables before major compaction.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")
@@ -1833,6 +1870,30 @@ std::unordered_map<sstring, locator::replication_strategy_type> db::replication_
             {"LocalStrategy", locator::replication_strategy_type::local},
             {"NetworkTopologyStrategy", locator::replication_strategy_type::network_topology},
             {"EverywhereStrategy", locator::replication_strategy_type::everywhere_topology}};
+}
+
+std::unordered_map<sstring, db::consistency_level> db::consistency_level_restriction_t::map() {
+    using cl = db::consistency_level;
+    std::unordered_map<sstring, cl> result = {
+        {"ANY", cl::ANY},
+        {"ONE", cl::ONE},
+        {"TWO", cl::TWO},
+        {"THREE", cl::THREE},
+        {"QUORUM", cl::QUORUM},
+        {"ALL", cl::ALL},
+        {"LOCAL_QUORUM", cl::LOCAL_QUORUM},
+        {"EACH_QUORUM", cl::EACH_QUORUM},
+        {"SERIAL", cl::SERIAL},
+        {"LOCAL_SERIAL", cl::LOCAL_SERIAL},
+        {"LOCAL_ONE", cl::LOCAL_ONE},
+    };
+
+    constexpr auto expected_size = static_cast<size_t>(cl::MAX_VALUE) - static_cast<size_t>(cl::MIN_VALUE) + 1;
+    if (result.size() != expected_size) {
+        on_internal_error_noexcept(dblog, format("consistency_level_option::map() has {} entries but expected {}", result.size(), expected_size));
+    }
+
+    return result;
 }
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {

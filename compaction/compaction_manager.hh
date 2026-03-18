@@ -55,6 +55,7 @@ class custom_compaction_task_executor;
 class regular_compaction_task_executor;
 class offstrategy_compaction_task_executor;
 class rewrite_sstables_compaction_task_executor;
+class rewrite_sstables_component_compaction_task_executor;
 class split_compaction_task_executor;
 class cleanup_sstables_compaction_task_executor;
 class validate_sstables_compaction_task_executor;
@@ -114,6 +115,8 @@ private:
     uint32_t _disabled_state_count = 0;
 
     bool is_disabled() const { return _state != state::running || _disabled_state_count > 0; }
+    // precondition: is_disabled() is true.
+    std::exception_ptr make_disabled_exception(compaction::compaction_group_view& cg);
 
     std::optional<future<>> _stop_future;
 
@@ -167,12 +170,9 @@ private:
     std::unique_ptr<strategy_control> _strategy_control;
 
     shared_tombstone_gc_state _shared_tombstone_gc_state;
-    // TODO: tombstone_gc_state should now have value semantics, but the code
-    // still uses it with reference semantics (inconsistently though).
-    // Drop this member, once the code is converted into using value semantics.
-    tombstone_gc_state _tombstone_gc_state;
 
     utils::disk_space_monitor::subscription _out_of_space_subscription;
+    bool _in_critical_disk_utilization_mode = false;
 private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
@@ -255,6 +255,12 @@ private:
 
     future<compaction_stats_opt> rewrite_sstables(compaction::compaction_group_view& t, compaction_type_options options, owned_ranges_ptr, get_candidates_func, tasks::task_info info,
                                                   can_purge_tombstones can_purge = can_purge_tombstones::yes, sstring options_desc = "");
+
+    future<compaction_stats_opt> rewrite_sstables_component(compaction_group_view& t,
+                                                            std::vector<sstables::shared_sstable>& sstables,
+                                                            compaction_type_options options,
+                                                            std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables,
+                                                            tasks::task_info info);
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
@@ -364,6 +370,13 @@ public:
     // Submit a table to be scrubbed and wait for its termination.
     future<compaction_stats_opt> perform_sstable_scrub(compaction::compaction_group_view& t, compaction_type_options::scrub opts, tasks::task_info info);
 
+    future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(compaction::compaction_group_view& t,
+            tasks::task_info info,
+            std::vector<sstables::shared_sstable> sstables,
+            sstables::component_type component,
+            std::function<void(sstables::sstable&)> modifier,
+            compaction_type_options::component_rewrite::update_sstable_id update_id = compaction_type_options::component_rewrite::update_sstable_id::yes);
+
     // Submit a table for major compaction.
     future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false);
 
@@ -456,10 +469,6 @@ public:
 
     compaction::strategy_control& get_strategy_control() const noexcept;
 
-    const tombstone_gc_state& get_tombstone_gc_state() const noexcept {
-        return _tombstone_gc_state;
-    };
-
     shared_tombstone_gc_state& get_shared_tombstone_gc_state() noexcept {
         return _shared_tombstone_gc_state;
     };
@@ -489,6 +498,7 @@ public:
     friend class compaction::regular_compaction_task_executor;
     friend class compaction::offstrategy_compaction_task_executor;
     friend class compaction::rewrite_sstables_compaction_task_executor;
+    friend class compaction::rewrite_sstables_component_compaction_task_executor;
     friend class compaction::cleanup_sstables_compaction_task_executor;
     friend class compaction::validate_sstables_compaction_task_executor;
     friend compaction_reenabler;

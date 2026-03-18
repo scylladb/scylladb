@@ -25,7 +25,7 @@ bool keyspace_element_name::has_keyspace() const
 
 const sstring& keyspace_element_name::get_keyspace() const
 {
-    SCYLLA_ASSERT(_ks_name);
+    throwing_assert(_ks_name);
     return *_ks_name;
 }
 

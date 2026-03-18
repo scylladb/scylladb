@@ -20,6 +20,7 @@
 #include "cql3/attributes.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
+#include "cql3/query_options.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/values.hh"
 #include "timeout_config.hh"
@@ -65,7 +66,7 @@ evaluate_prepared(
 future<::shared_ptr<cql_transport::messages::result_message>>
 broadcast_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
     if (this_shard_id() != 0) {
-        co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
+        co_return qp.bounce_to_shard(0, cql3::computed_function_values{}, false);
     }
 
     auto result = co_await qp.execute_broadcast_table_query(

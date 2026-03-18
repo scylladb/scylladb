@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include "utils/http_client_error_processing.hh"
 
 namespace aws {
 
@@ -88,21 +89,20 @@ enum class aws_error_type : uint8_t {
 };
 
 class aws_error;
-using retryable = seastar::bool_class<struct is_retryable>;
 using aws_errors = std::unordered_map<std::string_view, const aws_error>;
 
 class aws_error {
     aws_error_type _type{aws_error_type::OK};
     std::string _message;
-    retryable _is_retryable{retryable::no};
+    utils::http::retryable _is_retryable{utils::http::retryable::no};
 
 public:
     aws_error() = default;
-    aws_error(aws_error_type error_type, retryable is_retryable);
-    aws_error(aws_error_type error_type, std::string&& error_message, retryable is_retryable);
+    aws_error(aws_error_type error_type, utils::http::retryable is_retryable);
+    aws_error(aws_error_type error_type, std::string&& error_message, utils::http::retryable is_retryable);
     [[nodiscard]] const std::string& get_error_message() const { return _message; }
     [[nodiscard]] aws_error_type get_error_type() const { return _type; }
-    [[nodiscard]] retryable is_retryable() const { return _is_retryable; }
+    [[nodiscard]] utils::http::retryable is_retryable() const { return _is_retryable; }
     static std::optional<aws_error> parse(seastar::sstring&& body);
     static aws_error from_http_code(seastar::http::reply::status_type http_code);
     static aws_error from_system_error(const std::system_error& system_error);

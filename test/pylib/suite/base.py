@@ -34,7 +34,7 @@ from test.pylib.resource_gather import get_resource_gather, setup_cgroup
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
-
+from test.pylib.scylla_cluster import get_scylla_executable
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from typing import Any, List
@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 SUITE_CONFIG_FILENAME = "suite.yaml"
 TEST_CONFIG_FILENAME = "test_config.yaml"
+PYTEST_TESTS_LOGS_FOLDER = "pytest_tests_logs"
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -528,6 +529,7 @@ async def prepare_environment(tempdir_base: pathlib.Path, modes: list[str], gath
 def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool = False) -> None:
     setup_cgroup(gather_metrics)
     prepare_dir(tempdir_base, "*.log", save_log_on_success)
+    prepare_dir(tempdir_base/ PYTEST_TESTS_LOGS_FOLDER, "*.log", save_log_on_success)
     for directory in ['report', 'ldap_instances']:
         full_path_directory = tempdir_base / directory
         prepare_dir(full_path_directory, '*', save_log_on_success)
@@ -537,7 +539,6 @@ def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: b
         prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
         prepare_dir(tempdir_base / mode / "failed_test", "*", save_log_on_success)
         prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "vector-search-validator", "*", save_log_on_success)
         if TEST_RUNNER != "pytest":
             prepare_dir(tempdir_base / mode / "pytest", "*", save_log_on_success)
 
@@ -600,5 +601,9 @@ async def get_testpy_test(path: pathlib.Path, options: argparse.Namespace, mode:
     except FileNotFoundError:
         suite_config = find_suite_config(path=path, config_filename=TEST_CONFIG_FILENAME)
     suite = TestSuite.opt_create(config=suite_config, options=options, mode=mode)
+    if getattr(options, "exe_path", False):
+        suite.scylla_exe = options.exe_path
+    elif getattr(options, "exe_url", False):
+        suite.scylla_exe = await get_scylla_executable(options.exe_url)
     await suite.add_test(shortname=str(path.relative_to(suite.suite_path).with_suffix("")), casename=None)
     return suite.tests[-1]

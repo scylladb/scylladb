@@ -530,8 +530,6 @@ def testDropAndReaddDroppedCollection(cql, test_keyspace):
         execute(cql, table, "alter table %s drop v")
         execute(cql, table, "alter table %s add v set<text>")
 
-# FIXME: this test is 20 times slower than the rest (run pytest with "--durations=5"
-# to see the 5 slowest tests). Is it checking anything worth this slowness??
 def testMapWithLargePartition(cql, test_keyspace):
     seed = time.time()
     print(f"Seed {seed}")
@@ -540,7 +538,7 @@ def testMapWithLargePartition(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(userid text PRIMARY KEY, properties map<int, text>) with compression = {}") as table:
         numKeys = 200
         for i in range(numKeys):
-            s = ''.join(random.choice(string.ascii_uppercase) for x in range(length))
+            s = 'x'*length
             execute(cql, table,"UPDATE %s SET properties[?] = ? WHERE userid = 'user'", i, s)
 
         flush(cql, table)

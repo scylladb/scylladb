@@ -126,6 +126,10 @@ seastar::future<> rest::httpclient::send(const handler_func& f, seastar::abort_s
 }
 
 seastar::future<> rest::simple_send(seastar::http::experimental::client& client, seastar::http::request& req, const handler_func_ex& f, seastar::abort_source* as) {
+    co_await simple_send(client, req, f, nullptr, as);
+}
+
+seastar::future<> rest::simple_send(seastar::http::experimental::client& client, seastar::http::request& req, const handler_func_ex& f, const http::experimental::retry_strategy* strategy, seastar::abort_source* as) {
     if (as) {
         as->check();
     }
@@ -139,6 +143,14 @@ seastar::future<> rest::simple_send(seastar::http::experimental::client& client,
         req._headers[httpclient::CONTENT_TYPE_HEADER] = "application/x-www-form-urlencoded";
     }
 
+    if (strategy) {
+        co_return co_await client.make_request(std::move(req), [&](const http::reply& rep, input_stream<char>&& in) -> future<> {
+            // ensure these are on our coroutine frame.
+            auto& resp_handler = f;
+            auto in_stream = std::move(in);
+            co_await resp_handler(rep, in_stream);
+        }, *strategy, std::nullopt, as);
+    }
     co_await client.make_request(std::move(req), [&](const http::reply& rep, input_stream<char>&& in) -> future<> {
         // ensure these are on our coroutine frame.
         auto& resp_handler = f;

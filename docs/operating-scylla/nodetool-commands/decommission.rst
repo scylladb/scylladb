@@ -25,7 +25,8 @@ Before you run ``nodetool decommission``:
   starting the removal procedure.
 * Make sure that the number of nodes remaining in the DC after you decommission a node
   will be the same or higher than the Replication Factor configured for the keyspace
-  in this DC. If the number of remaining nodes is lower than the RF, the decommission
+  in this DC. Please mind that e.g. audit feature, which is enabled by default, may require
+  adjusting ``audit`` keyspace. If the number of remaining nodes is lower than the RF, the decommission
   request may fail.
   In such a case, ALTER the keyspace to reduce the RF before running ``nodetool decommission``.
 

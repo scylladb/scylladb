@@ -23,7 +23,7 @@ column_specification::column_specification(std::string_view ks_name_, std::strin
 
 bool column_specification::all_in_same_table(const std::vector<lw_shared_ptr<column_specification>>& names)
 {
-    SCYLLA_ASSERT(!names.empty());
+    throwing_assert(!names.empty());
 
     auto first = names.front();
     return std::all_of(std::next(names.begin()), names.end(), [first] (auto&& spec) {

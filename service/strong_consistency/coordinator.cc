@@ -7,6 +7,8 @@
  */
 
 #include "coordinator.hh"
+#include "db/consistency_level_type.hh"
+#include "raft/raft.hh"
 #include "schema/schema.hh"
 #include "replica/database.hh"
 #include "locator/tablet_replication_strategy.hh"
@@ -14,6 +16,7 @@
 #include "service/strong_consistency/groups_manager.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
+#include "gms/gossiper.hh"
 
 namespace service::strong_consistency {
 
@@ -35,6 +38,32 @@ struct coordinator::operation_ctx {
     const locator::tablet_raft_info& raft_info;
     const locator::tablet_info& tablet_info;
 };
+
+// Select closest replica from a tablet replica set, preferring replicas in same rack
+static locator::tablet_replica select_closest_replica(const gms::gossiper& gossiper,
+                                               const locator::tablet_replica_set& replicas,
+                                               const dht::token& token,
+                                               const locator::topology& topo)
+{
+    // We need to convert tablet_replica_set to host_id_vector_replica_set first for sort_by_proximity
+    auto hosts = replicas | std::views::filter([&gossiper] (const locator::tablet_replica& replica) {
+        return gossiper.is_alive(replica.host);
+    }) | std::views::transform([] (const locator::tablet_replica& replica) {
+        return replica.host;
+    }) | std::ranges::to<host_id_vector_replica_set>();
+
+    if (hosts.empty()) {
+        // If all replicas are down, there's no node worth forwarding to, so we return an exception
+        throw exceptions::unavailable_exception(format("All replicas for token {} are down", token), db::consistency_level::ONE, 1, 0);
+    }
+    topo.sort_by_proximity(topo.my_host_id(), hosts);
+    const auto& closest_host = hosts.front();
+    const auto it = std::ranges::find_if(replicas,
+        [&] (const locator::tablet_replica& r) {
+            return r.host == closest_host;
+        });
+    return *it;
+}
 
 auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token) 
     -> future<value_or_redirect<operation_ctx>>
@@ -61,8 +90,10 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
 
     if (!contains(tablet_info.replicas, this_replica)) {
-        const auto* target = find_replica(tablet_info, this_replica.host);
-        co_return need_redirect{target ? *target : tablet_info.replicas.at(0)};
+        co_return need_redirect {
+            select_closest_replica(_gossiper, tablet_info.replicas, token,
+                erm->get_token_metadata().get_topology())
+        };
     }
     const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
     auto raft_server = co_await _groups_manager.acquire_server(raft_info.group_id);
@@ -76,9 +107,10 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     };
 }
 
-coordinator::coordinator(groups_manager& groups_manager, replica::database& db)
+coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper)
     : _groups_manager(groups_manager)
     , _db(db)
+    , _gossiper(gossiper)
 {
 }
 

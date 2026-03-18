@@ -10,9 +10,9 @@ import logging
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
-        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
-        wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created, get_topology_coordinator, \
+from test.pylib.driver_utils import safe_driver_shutdown
+from test.cluster.util import trigger_snapshot, reconnect_driver, \
+        wait_for_token_ring_and_group0_consistency, get_topology_coordinator, \
         find_server_by_host_id
 from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra import ConsistencyLevel
@@ -62,135 +62,6 @@ async def test_service_levels_snapshot(manager: ManagerClient):
 
     assert set([sl.service_level for sl in result]) == set([sl.service_level for sl in new_result])
 
-@pytest.mark.asyncio
-async def test_service_levels_upgrade(request, manager: ManagerClient, build_mode: str):
-    # First, force the first node to start in legacy mode
-    cfg = {**auth_config, 'force_gossip_topology_changes': True, 'tablets_mode_for_new_keyspaces': 'disabled'}
-
-    servers = [await manager.server_add(config=cfg)]
-    # Enable raft-based node operations for subsequent nodes - they should fall back to
-    # using gossiper-based node operations
-    cfg.pop('force_gossip_topology_changes')
-
-    servers += [await manager.server_add(config=cfg) for _ in range(2)]
-    cql = manager.get_cql()
-    assert(cql)
-
-    logging.info("Waiting until driver connects to every server")
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-
-    logging.info("Checking the upgrade state on all nodes")
-    for host in hosts:
-        status = await manager.api.raft_topology_upgrade_status(host.address)
-        assert status == "not_upgraded"
-
-    sls = ["sl" + unique_name() for _ in range(5)]
-    for sl in sls:
-        await cql.run_async(f"CREATE SERVICE LEVEL {sl}")
-
-    result = await cql.run_async("SELECT service_level FROM system_distributed.service_levels")
-    assert set([sl.service_level for sl in result]) == set(sls)
-
-    if build_mode in ("debug", "dev"):
-        # See scylladb/scylladb/#24963 for more details
-        logging.info("Enabling an error injection in legacy role manager, to check that we don't query auth in system_auth")
-        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "standard_role_manager_fail_legacy_query", one_shot=False) for s in servers))
-
-    logging.info("Triggering upgrade to raft topology")
-    await manager.api.upgrade_to_raft_topology(hosts[0].address)
-
-    logging.info("Waiting until upgrade finishes")
-    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
-    await wait_until_driver_service_level_created(manager, time.time() + 60)
-
-    result_v2 = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
-    assert set([sl.service_level for sl in result_v2]) == set(sls + [DRIVER_SL_NAME])
-
-    sl_v2 = "sl" + unique_name()
-    await cql.run_async(f"CREATE SERVICE LEVEL {sl_v2}")
-
-    await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
-    result_with_sl_v2 = await cql.run_async(f"SELECT service_level FROM system.service_levels_v2")
-    assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls + [DRIVER_SL_NAME] + [sl_v2])
-
-@pytest.mark.asyncio
-async def test_service_levels_work_during_recovery(manager: ManagerClient):
-    # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.
-    servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
-
-    logging.info("Waiting until driver connects to every server")
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-
-    logging.info("Creating a bunch of service levels")
-    sls = ["sl" + unique_name() for _ in range(5)]
-    for sl in sls:
-        await cql.run_async(f"CREATE SERVICE LEVEL {sl}")
-    
-    # insert a service levels into old table as if it was created before upgrade to v2 and later removed after upgrade
-    sl_v1 = "sl" + unique_name()
-    await cql.run_async(f"INSERT INTO system_distributed.service_levels (service_level) VALUES ('{sl_v1}')")
-
-    logging.info("Validating service levels were created in v2 table")
-    result = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
-    for sl in result:
-        assert sl.service_level in sls + [DRIVER_SL_NAME]
-
-    logging.info(f"Restarting hosts {hosts} in recovery mode")
-    await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
-    await manager.rolling_restart(servers)
-    cql = await reconnect_driver(manager)
-
-    logging.info("Cluster restarted, waiting until driver reconnects to every server")
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-
-    logging.info("Checking service levels can be read and v2 table is used")
-    recovery_result = await cql.run_async("LIST ALL SERVICE LEVELS")
-    assert sl_v1 not in [sl.service_level for sl in recovery_result]
-    assert set([sl.service_level for sl in recovery_result]) == set(sls + [DRIVER_SL_NAME])
-
-    logging.info("Checking changes to service levels are forbidden during recovery")
-    with pytest.raises(InvalidRequest, match="The cluster is in recovery mode. Changes to service levels are not allowed."):
-        await cql.run_async(f"CREATE SERVICE LEVEL sl_{unique_name()}")
-    with pytest.raises(InvalidRequest, match="The cluster is in recovery mode. Changes to service levels are not allowed."):
-        await cql.run_async(f"ALTER SERVICE LEVEL {sls[0]} WITH timeout = 1h")
-    with pytest.raises(InvalidRequest, match="The cluster is in recovery mode. Changes to service levels are not allowed."):
-        await cql.run_async(f"DROP SERVICE LEVEL {sls[0]}")
-
-    logging.info("Restoring cluster to normal status")
-    await asyncio.gather(*(delete_raft_topology_state(cql, h) for h in hosts))
-    await asyncio.gather(*(delete_raft_data_and_upgrade_state(cql, h) for h in hosts))
-
-    await manager.rolling_restart(servers)
-    cql = await reconnect_driver(manager)
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-
-    await asyncio.gather(*(wait_until_upgrade_finishes(cql, h, time.time() + 60) for h in hosts))
-    for host in hosts:
-        status = await manager.api.raft_topology_upgrade_status(host.address)
-        assert status == "not_upgraded"
-
-    await manager.servers_see_each_other(servers)
-    await manager.api.upgrade_to_raft_topology(hosts[0].address)
-    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
-    await wait_until_driver_service_level_created(manager, time.time() + 60)
-
-    logging.info("Validating service levels works in v2 mode after leaving recovery")
-    new_sl = "sl" + unique_name()
-    await cql.run_async(f"CREATE SERVICE LEVEL {new_sl}")
-
-    sls_list = await cql.run_async("LIST ALL SERVICE LEVELS")
-    assert sl_v1 not in [sl.service_level for sl in sls_list]
-    assert set([sl.service_level for sl in sls_list]) == set(sls + [new_sl] + [DRIVER_SL_NAME])
-
-def default_timeout(mode):
-    if mode == "dev":
-        return "30s"
-    elif mode == "debug":
-        return "1m30s"
-    else:
-        # this branch shouldn't be reached
-        assert False
 
 def create_roles_stmts():
     return [
@@ -257,20 +128,21 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
     cluster_connections, sessions = await get_roles_connections(manager, servers)
 
     logging.info("Asserting all connections have default parameters")
+    str_to = lambda build_mode : "1m" if build_mode=="dev" else ("1m30s" if build_mode=="debug" else f"Faild bad mode {build_mode}")
     await assert_connections_params(manager, hosts, {
         "r1": {
             "workload_type": "unspecified",
-            "timeout": default_timeout(build_mode),
+            "timeout": str_to(build_mode),
             "scheduling_group": "sl:default",
         },
         "r2": {
             "workload_type": "unspecified",
-            "timeout": default_timeout(build_mode),
+            "timeout": str_to(build_mode),
             "scheduling_group": "sl:default",
         },
         "r3": {
             "workload_type": "unspecified",
-            "timeout": default_timeout(build_mode),
+            "timeout": str_to(build_mode),
             "scheduling_group": "sl:default",
         },
     })
@@ -326,7 +198,7 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
     })
 
     for cluster_conn in cluster_connections:
-        cluster_conn.shutdown()
+        safe_driver_shutdown(cluster_conn)
 
 @pytest.mark.asyncio
 async def test_service_level_cache_after_restart(manager: ManagerClient):
@@ -383,50 +255,6 @@ async def test_shares_check(manager: ManagerClient):
     cql = manager.get_cql()
     await cql.run_async(f"CREATE SERVICE LEVEL {sl2} WITH shares=500")
     await cql.run_async(f"ALTER SERVICE LEVEL {sl1} WITH shares=100")
-
-@pytest.mark.asyncio
-@pytest.mark.skip_mode(mode='release', reason='error injection is not supported in release mode')
-async def test_workload_prioritization_upgrade(manager: ManagerClient):
-    # This test simulates OSS->enterprise upgrade in v1 service levels.
-    # Using error injection, the test disables WORKLOAD_PRIORITIZATION feature
-    # and removes `shares` column from system_distributed.service_levels table.
-    config = {
-        **auth_config,
-        'authenticator': 'AllowAllAuthenticator',
-        'authorizer': 'AllowAllAuthorizer',
-        'force_gossip_topology_changes': True,
-        'tablets_mode_for_new_keyspaces': 'disabled',
-        'error_injections_at_startup': [
-            {
-                'name': 'suppress_features',
-                'value': 'WORKLOAD_PRIORITIZATION'
-            },
-            {
-                'name': 'service_levels_v1_table_without_shares'
-            }
-        ]
-    }
-    servers = [await manager.server_add(config=config) for _ in range(3)]
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-
-    # Validate that service levels' table has no `shares` column
-    sl_schema = await cql.run_async("DESC TABLE system_distributed.service_levels")
-    assert "shares int" not in sl_schema[0].create_statement
-    with pytest.raises(InvalidRequest):
-        await cql.run_async("CREATE SERVICE LEVEL sl1 WITH shares = 100")
-    
-    # Do rolling restart of the cluster and remove error injections
-    for server in servers:
-        await manager.server_update_config(server.server_id, 'error_injections_at_startup', [])
-    await manager.rolling_restart(servers)
-
-    # Validate that `shares` column was added
-    logs = [await manager.server_open_log(server.server_id) for server in servers]
-    await logs[0].wait_for("Workload prioritization v1 started|Workload prioritization v1 is already started", timeout=10)
-    sl_schema_upgraded = await cql.run_async("DESC TABLE system_distributed.service_levels")
-    assert "shares int" in sl_schema_upgraded[0].create_statement
-    await cql.run_async("CREATE SERVICE LEVEL sl2 WITH shares = 100")
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')

@@ -81,7 +81,7 @@ list_effective_service_level_statement::execute(query_processor& qp, service::qu
     }
 
     auto& sl_controller = state.get_service_level_controller();
-    auto slo = co_await sl_controller.find_effective_service_level(_role_name);
+    auto slo = sl_controller.find_cached_effective_service_level(_role_name);
 
     if (!slo) {
         throw exceptions::invalid_request_exception(format("Role {} doesn't have assigned any service level", _role_name));

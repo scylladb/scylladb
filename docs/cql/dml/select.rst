@@ -25,6 +25,8 @@ Querying data from data is done using a ``SELECT`` statement:
            : | CAST '(' `selector` AS `cql_type` ')'
            : | `function_name` '(' [ `selector` ( ',' `selector` )* ] ')'
            : | COUNT '(' '*' ')'
+           : | literal
+           : | bind_marker
            : )
            : ( '.' `field_name` | '[' `term` ']' )*
    where_clause: `relation` ( AND `relation` )*
@@ -35,6 +37,8 @@ Querying data from data is done using a ``SELECT`` statement:
    operator: '=' | '<' | '>' | '<=' | '>=' | IN | NOT IN | CONTAINS | CONTAINS KEY
    ordering_clause: `column_name` [ ASC | DESC ] ( ',' `column_name` [ ASC | DESC ] )*
    timeout: `duration`
+   literal: number | 'string' | boolean | NULL | tuple_literal | list_literal | map_literal
+   bind_marker: '?' | ':' `identifier`
 
 For instance::
 
@@ -81,6 +85,13 @@ A :token:`selector` can be one of the following:
 - A casting, which allows you to convert a nested selector to a (compatible) type.
 - A function call, where the arguments are selector themselves.
 - A call to the :ref:`COUNT function <count-function>`, which counts all non-null results.
+- A literal value (constant).
+- A bind variable (`?` or `:name`).
+
+Note that due to a quirk of the type system, literals and bind markers cannot be
+used as top-level selectors, as the parser cannot infer their type. However, they can be used
+when nested inside functions, as the function formal parameter types provide the
+necessary context.
 
 Aliases
 ```````
@@ -282,16 +293,13 @@ For example::
 
 
 Vector queries also support filtering with ``WHERE`` clauses on columns that are part of the primary key.
+See :ref:`WHERE <where-clause>`.
 
 For example::
 
     SELECT image_id FROM ImageEmbeddings
       WHERE user_id = 'user123'
       ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
-
-The supported operations are equal relations (``=`` and ``IN``) with restrictions as in regular ``WHERE`` clauses. See :ref:`WHERE <where-clause>`.
-
-Other filtering scenarios are currently not supported.
 
 .. note::
 

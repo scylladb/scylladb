@@ -67,7 +67,7 @@ operation::set_element::prepare(data_dictionary::database db, const sstring& key
         verify_no_aggregate_functions(mval, "SET clause");
         return make_shared<maps::setter_by_key>(receiver, std::move(key), std::move(mval));
     }
-    abort();
+    throwing_assert(0 && "prepare set_element collection type");
 }
 
 bool
@@ -166,7 +166,7 @@ operation::addition::prepare(data_dictionary::database db, const sstring& keyspa
     } else if (ctype->get_kind() == abstract_type::kind::map) {
         return make_shared<maps::putter>(receiver, std::move(v));
     } else {
-        abort();
+        throwing_assert(0 && "prepare addition collection type");
     }
 }
 
@@ -216,7 +216,7 @@ operation::subtraction::prepare(data_dictionary::database db, const sstring& key
         verify_no_aggregate_functions(v, "SET clause");
         return ::make_shared<sets::discarder>(receiver, std::move(v));
     }
-    abort();
+    throwing_assert(0 && "prepare subtraction collection type");
 }
 
 bool
@@ -267,7 +267,7 @@ operation::set_value::prepare(data_dictionary::database db, const sstring& keysp
         } else if (k == abstract_type::kind::map) {
             return make_shared<maps::setter>(receiver, std::move(v));
         } else {
-            abort();
+            throwing_assert(0 && "prepare set_value collection type");
         }
     }
 
@@ -385,7 +385,7 @@ operation::element_deletion::prepare(data_dictionary::database db, const sstring
         verify_no_aggregate_functions(key, "SET clause");
         return make_shared<maps::discarder_by_key>(receiver, std::move(key));
     }
-    abort();
+    throwing_assert(0 && "prepare element_deletion collection type");
 }
 
 expr::expression

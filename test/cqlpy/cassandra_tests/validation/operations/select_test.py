@@ -918,7 +918,6 @@ def testFilteringOnStaticColumnsWithRowsWithOnlyStaticValues(cql, test_keyspace)
                        [4, 2, 4, 2, 6])
 
 # Reproduces #10357, #10358
-@pytest.mark.xfail(reason="#10358")
 def testFilteringWithoutIndices(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, s int static, PRIMARY KEY (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (1, 2, 4, 8)")

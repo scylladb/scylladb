@@ -391,21 +391,31 @@ SEASTAR_TEST_CASE(select_from_vector_search_system_table) {
     return do_with_cql_env_thread(
             [](auto&& env) {
                 create_user_if_not_exists(env, bob);
-                with_user(env, bob, [&env] {
-                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM system.group0_history").get(), exceptions::unauthorized_exception,
-                            exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT) on"));
-                });
-                with_user(env, bob, [&env] {
-                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM system.versions").get(), exceptions::unauthorized_exception,
-                            exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT) on"));
-                });
+
+                // All tables in vector_search_system_resources from client_state.cc
+                const std::vector<sstring> vector_search_system_tables = {
+                    "system.group0_history",
+                    "system.versions",
+                    "system.cdc_streams",
+                    "system.cdc_timestamps",
+                };
+
+                // Without VECTOR_SEARCH_INDEXING permission, bob cannot select from these tables
+                for (const auto& table : vector_search_system_tables) {
+                    with_user(env, bob, [&env, &table] {
+                        BOOST_REQUIRE_EXCEPTION(env.execute_cql(format("SELECT * FROM {}", table)).get(), exceptions::unauthorized_exception,
+                                exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT) on"));
+                    });
+                }
+
                 cquery_nofail(env, "GRANT VECTOR_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
-                with_user(env, bob, [&env] {
-                    cquery_nofail(env, "SELECT * FROM system.group0_history");
-                });
-                with_user(env, bob, [&env] {
-                    cquery_nofail(env, "SELECT * FROM system.versions");
-                });
+
+                // With VECTOR_SEARCH_INDEXING permission, bob can select from these tables
+                for (const auto& table : vector_search_system_tables) {
+                    with_user(env, bob, [&env, &table] {
+                        cquery_nofail(env, format("SELECT * FROM {}", table));
+                    });
+                }
             },
             db_config_with_auth());
 }

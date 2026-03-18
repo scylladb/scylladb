@@ -55,22 +55,26 @@ ninja build/<mode>/test/boost/<test_name>
 ninja build/<mode>/scylla
 
 # Run all tests in a file
-./test.py --mode=<mode> <test_path>
+./test.py --mode=<mode> test/<suite>/<test_name>.py
 
 # Run a single test case from a file
-./test.py --mode=<mode> <test_path>::<test_function_name>
+./test.py --mode=<mode> test/<suite>/<test_name>.py::<test_function_name>
+
+# Run all tests in a directory
+./test.py --mode=<mode> test/<suite>/
 
 # Examples
-./test.py --mode=dev alternator/
-./test.py --mode=dev cluster/test_raft_voters::test_raft_limited_voters_retain_coordinator
+./test.py --mode=dev test/alternator/
+./test.py --mode=dev test/cluster/test_raft_voters.py::test_raft_limited_voters_retain_coordinator
+./test.py --mode=dev test/cqlpy/test_json.py
 
 # Optional flags
-./test.py --mode=dev cluster/test_raft_no_quorum -v  # Verbose output
-./test.py --mode=dev cluster/test_raft_no_quorum --repeat 5  # Repeat test 5 times
+./test.py --mode=dev test/cluster/test_raft_no_quorum.py -v  # Verbose output
+./test.py --mode=dev test/cluster/test_raft_no_quorum.py --repeat 5  # Repeat test 5 times
 ```
 
 **Important:**
-- Use path without `.py` extension (e.g., `cluster/test_raft_no_quorum`, not `cluster/test_raft_no_quorum.py`)
+- Use full path with `.py` extension (e.g., `test/cluster/test_raft_no_quorum.py`, not `cluster/test_raft_no_quorum`)
 - To run a single test case, append `::<test_function_name>` to the file path
 - Add `-v` for verbose output
 - Add `--repeat <num>` to repeat a test multiple times

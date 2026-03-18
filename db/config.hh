@@ -24,6 +24,7 @@
 #include "utils/error_injection.hh"
 #include "message/dict_trainer.hh"
 #include "message/advanced_rpc_compressor.hh"
+#include "db/consistency_level_type.hh"
 #include "db/tri_mode_restriction.hh"
 #include "sstables/compressor.hh"
 
@@ -126,6 +127,10 @@ struct replication_strategy_restriction_t {
     static std::unordered_map<sstring, locator::replication_strategy_type> map(); // for enum_option<>
 };
 
+struct consistency_level_restriction_t {
+    static std::unordered_map<sstring, db::consistency_level> map(); // for enum_option<>
+};
+
 constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;
 
 struct tablets_mode_t {
@@ -185,13 +190,6 @@ public:
      * All values and documentation taken from
      * http://docs.datastax.com/en/cassandra/2.1/cassandra/configuration/configCassandra_yaml_r.html
      */
-    named_value<double> background_writer_scheduling_quota;
-    named_value<bool> auto_adjust_flush_quota;
-    named_value<float> memtable_flush_static_shares;
-    named_value<float> compaction_static_shares;
-    named_value<float> compaction_max_shares;
-    named_value<bool> compaction_enforce_min_threshold;
-    named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
     named_value<sstring> cluster_name;
     named_value<sstring> listen_address;
     named_value<sstring> listen_interface;
@@ -414,6 +412,7 @@ public:
     named_value<bool> enable_node_aggregated_table_metrics;
     named_value<bool> enable_sstable_data_integrity_check;
     named_value<bool> enable_sstable_key_validation;
+    named_value<bool> ignore_component_digest_mismatch;
     named_value<bool> cpu_scheduler;
     named_value<bool> view_building;
     named_value<bool> enable_sstables_mc_format;
@@ -446,6 +445,7 @@ public:
     named_value<uint32_t> reader_concurrency_semaphore_serialize_limit_multiplier;
     named_value<uint32_t> reader_concurrency_semaphore_kill_limit_multiplier;
     named_value<uint32_t> reader_concurrency_semaphore_cpu_concurrency;
+    named_value<float> reader_concurrency_semaphore_preemptive_abort_factor;
     named_value<uint32_t> view_update_reader_concurrency_semaphore_serialize_limit_multiplier;
     named_value<uint32_t> view_update_reader_concurrency_semaphore_kill_limit_multiplier;
     named_value<uint32_t> view_update_reader_concurrency_semaphore_cpu_concurrency;
@@ -540,17 +540,22 @@ public:
 
     named_value<std::vector<std::unordered_map<sstring, sstring>>> auth_certificate_role_queries;
 
+    // guardrails options
+    named_value<bool> enable_create_table_with_compact_storage;
     named_value<int> minimum_replication_factor_fail_threshold;
     named_value<int> minimum_replication_factor_warn_threshold;
-    named_value<int> maximum_replication_factor_warn_threshold;
     named_value<int> maximum_replication_factor_fail_threshold;
+    named_value<int> maximum_replication_factor_warn_threshold;
+    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_fail_list;
+    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_warn_list;
+    named_value<std::vector<enum_option<consistency_level_restriction_t>>> write_consistency_levels_disallowed;
+    named_value<std::vector<enum_option<consistency_level_restriction_t>>> write_consistency_levels_warned;
 
     named_value<double> tablets_initial_scale_factor;
     named_value<unsigned> tablets_per_shard_goal;
     named_value<uint64_t> target_tablet_size_in_bytes;
-
-    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_warn_list;
-    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_fail_list;
+    named_value<unsigned> tablet_streaming_read_concurrency_per_shard;
+    named_value<unsigned> tablet_streaming_write_concurrency_per_shard;
 
     named_value<uint32_t> service_levels_interval;
 
@@ -602,8 +607,6 @@ public:
     named_value<float> disk_space_monitor_polling_interval_threshold;
     named_value<float> critical_disk_utilization_level;
 
-    named_value<bool> enable_create_table_with_compact_storage;
-
     named_value<bool> rf_rack_valid_keyspaces;
     named_value<bool> enforce_rack_list;
 
@@ -611,6 +614,14 @@ public:
     named_value<bool> force_capacity_based_balancing;
     named_value<float> size_based_balance_threshold_percentage;
     named_value<uint64_t> minimal_tablet_size_for_balancing;
+
+    named_value<double> background_writer_scheduling_quota;
+    named_value<bool> auto_adjust_flush_quota;
+    named_value<float> memtable_flush_static_shares;
+    named_value<float> compaction_static_shares;
+    named_value<float> compaction_max_shares;
+    named_value<bool> compaction_enforce_min_threshold;
+    named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
 
     static const sstring default_tls_priority;
 private:

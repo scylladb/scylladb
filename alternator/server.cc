@@ -411,8 +411,8 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
         }
     }
 
-    auto cache_getter = [&proxy = _proxy, &as = _auth_service] (std::string username) {
-        return get_key_from_roles(proxy, as, std::move(username));
+    auto cache_getter = [&proxy = _proxy] (std::string username) {
+        return get_key_from_roles(proxy, std::move(username));
     };
     return _key_cache.get_ptr(user, cache_getter).then_wrapped([this, &req, &content,
                                                     user = std::move(user),
@@ -710,7 +710,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         ++_executor._stats.requests_blocked_memory;
     }
     auto units = co_await std::move(units_fut);
-    SCYLLA_ASSERT(req->content_stream);
+    throwing_assert(req->content_stream);
     chunked_content content = co_await read_entire_stream(*req->content_stream, request_content_length_limit);
     // If the request had no Content-Length, we reserved too many units
     // so need to return some
@@ -771,7 +771,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     if (!username.empty()) {
         client_state.set_login(auth::authenticated_user(username));
     }
-    co_await client_state.maybe_update_per_service_level_params();
+    client_state.maybe_update_per_service_level_params();
 
     tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, username, op, content, _max_users_query_size_in_trace_output.get());
     tracing::trace(trace_state, "{}", op);

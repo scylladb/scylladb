@@ -15,6 +15,7 @@
 #include "db/view/view_building_worker.hh"
 #include "replica/database_fwd.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/test_utils.hh"
 #include "cdc/generation_service.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
@@ -65,7 +66,6 @@
 #include "repair/row_level.hh"
 #include "utils/assert.hh"
 #include "utils/only_on_shard0.hh"
-#include "utils/class_registrator.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "streaming/stream_manager.hh"
 #include "debug.hh"
@@ -82,7 +82,6 @@
 #include "utils/disk_space_monitor.hh"
 
 #include <sys/time.h>
-#include <sys/resource.h>
 
 using namespace std::chrono_literals;
 
@@ -222,26 +221,10 @@ private:
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
-    static void adjust_rlimit() {
-        // Tests should use 1024 file descriptors, but don't punish them
-        // with weird behavior if they do.
-        //
-        // Since this more of a courtesy, don't make the situation worse if
-        // getrlimit/setrlimit fail for some reason.
-        struct rlimit lim;
-        int r = getrlimit(RLIMIT_NOFILE, &lim);
-        if (r == -1) {
-            return;
-        }
-        if (lim.rlim_cur < lim.rlim_max) {
-            lim.rlim_cur = lim.rlim_max;
-            setrlimit(RLIMIT_NOFILE, &lim);
-        }
-    }
 public:
     single_node_cql_env()
     {
-        adjust_rlimit();
+        tests::adjust_rlimit();
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text) override {
@@ -294,7 +277,15 @@ public:
         cql3::prepared_cache_key_type id,
         std::unique_ptr<cql3::query_options> qo) override
     {
-        auto prepared = local_qp().get_prepared(id);
+        auto qs = make_query_state();
+        bool needs_authorization = false;
+        // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
+        // look for the prepared statement and then authorize it.
+        auto prepared = local_qp().get_prepared(qs->get_client_state().user(), id);
+        if (!prepared) {
+            needs_authorization = true;
+            prepared = local_qp().get_prepared(id);
+        }
         if (!prepared) {
             throw not_prepared_exception(id);
         }
@@ -303,9 +294,8 @@ public:
         SCYLLA_ASSERT(stmt->get_bound_terms() == qo->get_values_count());
         qo->prepare(prepared->bound_names);
 
-        auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), true)
+        return local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), needs_authorization)
             .then([qs, qo = std::move(qo)] (auto msg) {
                 return cql_transport::messages::propagate_exception_as_future(std::move(msg));
             });
@@ -445,7 +435,7 @@ public:
 
     virtual future<> refresh_client_state() override {
         return _core_local.invoke_on_all([] (core_local_state& state) {
-            return state.client_state.maybe_update_per_service_level_params();
+            state.client_state.maybe_update_per_service_level_params();
         });
     }
 
@@ -577,6 +567,8 @@ private:
             }
 
             auto scheduling_groups = get_scheduling_groups().get();
+            debug::streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
+            debug::gossip_scheduling_group = scheduling_groups.streaming_scheduling_group;
 
             auto notify_set = init_configurables
                 ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
@@ -597,6 +589,10 @@ private:
             auto unregister_schema_initializers = defer_verbose_shutdown("schema initializers", [schema_initializer_checkpoint] {
                 schema_builder::restore_schema_initializers_checkpoint(schema_initializer_checkpoint);
             });
+
+            replica::set_strongly_consistent_tables_enabled(cfg->check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES
+            ));
 
             gms::feature_config fcfg;
             fcfg.disabled_features = get_disabled_features_from_db_config(*cfg, cfg_in.disabled_features);
@@ -875,24 +871,24 @@ private:
             std::set<gms::inet_address> seeds;
             auto seed_provider = db::config::seed_provider_type();
             if (seed_provider.parameters.contains("seeds")) {
-                size_t begin = 0;
-                size_t next = 0;
-                sstring seeds_str = seed_provider.parameters.find("seeds")->second;
-                while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-                    seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
-                    begin = next+1;
+                for (const auto& seed : utils::split_comma_separated_list(seed_provider.parameters.at("seeds"))) {
+                    seeds.emplace(seed);
                 }
             }
             if (seeds.empty()) {
-                seeds.emplace(gms::inet_address("127.0.0.1"));
+                seeds.emplace("127.0.0.1");
             }
+
+            _topology_state_machine.start().get();
+            auto stop_topology_state_machine = defer_verbose_shutdown("topology state machine", [this] {
+                _topology_state_machine.stop().get();
+            });
 
             gms::gossip_config gcfg;
             gcfg.cluster_name = "Test Cluster";
             gcfg.seeds = std::move(seeds);
-            gcfg.skip_wait_for_gossip_to_settle = 0;
             gcfg.shutdown_announce_ms = 0;
-            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map)).get();
+            _gossiper.start(std::ref(abort_sources), std::ref(_token_metadata), std::ref(_ms), std::move(gcfg), std::ref(_gossip_address_map), std::ref(_topology_state_machine)).get();
             auto stop_ms_fd_gossiper = defer_verbose_shutdown("gossiper", [this] {
                 _gossiper.stop().get();
             });
@@ -924,7 +920,7 @@ private:
             auto stop_mapreduce_service =  defer_verbose_shutdown("mapreduce service", [this] { _mapreduce_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
-            service::raft_group0_client group0_client(_group0_registry.local(), _sys_ks.local(), _token_metadata.local(), maintenance_mode_enabled::no);
+            service::raft_group0_client group0_client(_group0_registry.local(), _gossiper.local(), _sys_ks.local(), _token_metadata.local(), maintenance_mode_enabled::no);
 
             _mm.start(std::ref(_mnotifier), std::ref(_feature_service), std::ref(_ms), std::ref(_proxy), std::ref(_gossiper), std::ref(group0_client), std::ref(_sys_ks)).get();
             auto stop_mm = defer_verbose_shutdown("migration manager", [this] { _mm.stop().get(); });
@@ -934,11 +930,6 @@ private:
                 _tablet_allocator.stop().get();
             });
 
-            _topology_state_machine.start().get();
-            auto stop_topology_state_machine = defer_verbose_shutdown("topology state machine", [this] {
-                _topology_state_machine.stop().get();
-            });
-
             _view_building_state_machine.start().get();
             auto stop_view_building_state_machine = defer_verbose_shutdown("view building state machine", [this] {
                 _view_building_state_machine.stop().get();
@@ -946,7 +937,7 @@ private:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), _group0_registry.local(), _ms,
-                    _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
+                    _gossiper.local(), _feature_service.local(), group0_client, scheduling_groups.gossip_scheduling_group};
 
             auto compression_dict_updated_callback = [] (std::string_view) { return make_ready_future<>(); };
 
@@ -969,10 +960,10 @@ private:
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
             _groups_manager.start(std::ref(_ms), std::ref(_group0_registry), std::ref(_qp), 
-                std::ref(_db), std::ref(_feature_service)).get();
+                std::ref(_db), std::ref(_mm), std::ref(_sys_ks), std::ref(_feature_service)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
 
-            _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db)).get();
+            _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper)).get();
             auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [this] {
                 _sc_coordinator.stop().get();
             });
@@ -1053,12 +1044,6 @@ private:
                 return raft_gr.start();
             }).get();
 
-            if (cfg_in.run_with_raft_recovery) {
-                _sys_ks.local().save_group0_upgrade_state("RECOVERY").get();
-            }
-
-            group0_client.init().get();
-
             auto shutdown_db = defer_verbose_shutdown("database tables", [this] {
                 _db.invoke_on_all(&replica::database::shutdown).get();
             });
@@ -1087,7 +1072,6 @@ private:
             }).get();
 
             cdc::generation_service::config cdc_config;
-            cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
             /*
              * Currently used when choosing the timestamp of the first CDC stream generation:
              * normally we choose a timestamp in the future so other nodes have a chance to learn about it
@@ -1095,7 +1079,7 @@ private:
              * and would only slow down tests (by having them wait).
              */
             cdc_config.ring_delay = std::chrono::milliseconds(0);
-            _cdc_generation_service.start(std::ref(cdc_config), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_sys_ks), std::ref(abort_sources), std::ref(_token_metadata), std::ref(_feature_service), std::ref(_db), [&] { return !cfg->force_gossip_topology_changes(); }).get();
+            _cdc_generation_service.start(std::ref(cdc_config), std::ref(_sys_ks), std::ref(_db)).get();
             auto stop_cdc_generation_service = defer_verbose_shutdown("CDC generation service", [this] {
                 _cdc_generation_service.stop().get();
             });
@@ -1149,21 +1133,11 @@ private:
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             _db.local().check_rf_rack_validity(_token_metadata.local().get());
 
-            utils::loading_cache_config perm_cache_config;
-            perm_cache_config.max_size = cfg->permissions_cache_max_entries();
-            perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
-            perm_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
-
-            const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
-            const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
-            const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
-
-            auth::service_config auth_config;
-            auth_config.authorizer_java_name = qualified_authorizer_name;
-            auth_config.authenticator_java_name = qualified_authenticator_name;
-            auth_config.role_manager_java_name = qualified_role_manager_name;
-
-            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(_auth_cache)).get();
+            _auth_service.start(std::ref(_qp), std::ref(group0_client),
+                    auth::make_authorizer_factory(cfg->authorizer(), _qp),
+                    auth::make_authenticator_factory(cfg->authenticator(), _qp, group0_client, _mm, _auth_cache),
+                    auth::make_role_manager_factory(cfg->role_manager(), _qp, group0_client, _mm, _auth_cache),
+                    maintenance_socket_enabled::no, std::ref(_auth_cache)).get();
 
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local(), _sys_ks.local());
@@ -1194,7 +1168,7 @@ private:
             bmcfg.replay_timeout = cfg_in.batchlog_replay_timeout.value_or(2s);
             bmcfg.delay = cfg_in.batchlog_delay;
             bmcfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
-            _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), bmcfg).get();
+            _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), std::ref(_feature_service), bmcfg).get();
             auto stop_bm = defer_verbose_shutdown("batchlog manager", [this] {
                 _batchlog_manager.stop().get();
             });
@@ -1221,6 +1195,18 @@ private:
                         config,
                         auth::authentication_options(),
                         mc).get();
+
+                if (cfg->authenticator() == "PasswordAuthenticator") {
+                    auth::authentication_options auth_opts;
+                    auth_opts.credentials = auth::password_option{"cassandra"};
+                    auth::create_role(
+                        _auth_service.local(),
+                        "cassandra",
+                        config,
+                        auth_opts,
+                        mc).get();
+                }
+
                 std::move(mc).commit(group0_client, as, ::service::raft_timeout{}).get();
             } catch (const auth::role_already_exists&) {
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.

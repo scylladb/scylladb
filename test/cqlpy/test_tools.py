@@ -40,14 +40,20 @@ def simple_no_clustering_table(cql, keyspace):
 
     cql.execute(schema)
 
+    # Ensure at least 3 live rows for tests that depend on it
+    live_rows_needed = 3
     for pk in range(0, 10):
-        x = random.randrange(0, 4)
-        if x == 0:
-            # partition tombstone
-            cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk}")
-        else:
-            # live row
+        # For the first 3 rows, always insert; for the rest, use randomness
+        if pk < live_rows_needed:
             cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({pk}, 0)")
+        else:
+            x = random.randrange(0, 4)
+            if x == 0:
+                # partition tombstone
+                cql.execute(f"DELETE FROM {keyspace}.{table} WHERE pk = {pk}")
+            else:
+                # live row
+                cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v) VALUES ({pk}, 0)")
 
         if pk == 5:
             nodetool.flush(cql, f"{keyspace}.{table}")
@@ -1820,11 +1826,26 @@ textwrap.dedent("""
     None,
 )
 
+scylla_sstable_query_nested_udt = scylla_sstable_query_simple_table_param(
+textwrap.dedent("""
+    CREATE TABLE {}.{} (
+        pk int PRIMARY KEY,
+        col_nested_udt list<frozen<my_type>>
+    ) WITH
+        compaction = {{'class': 'NullCompactionStrategy'}};
+"""),
+    "INSERT INTO {}.{} (pk, col_nested_udt) VALUES (?, ?)",
+    (0, [my_udt(10, 'aasdad')]),
+    "CREATE TYPE {}.my_type (field_1 int, field_2 text)",
+    "DROP TYPE {}.my_type",
+)
+
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 @pytest.mark.parametrize("test_table", [
         scylla_sstable_query_simple_all_types_param,
         scylla_sstable_query_simple_collection_types_param,
         scylla_sstable_query_simple_counter_param,
+        scylla_sstable_query_nested_udt,
 ])
 def test_scylla_sstable_query_data_types(request, cql, test_keyspace, test_table, scylla_path, scylla_data_dir, temp_workdir):
     """Check read-all queries with all data-types.
@@ -2058,6 +2079,33 @@ def test_scylla_sstable_upgrade(cql, test_keyspace, scylla_path, scylla_data_dir
                 assert line.startswith(f"Nothing to do for sstable {sst}, skipping (use --all to force upgrade all sstables).")
 
 
+def test_scylla_sstable_upgrade_ignore_digest_mismatch(cql, test_keyspace, scylla_path, scylla_data_dir):
+    """Test that --ignore-component-digest-mismatch allows loading sstables with corrupted component digests."""
+    with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        assert len(sstables) >= 1
+        sst = sstables[0]
+
+        stats_file = sst.replace("-Data.db", "-Statistics.db")
+        assert os.path.exists(stats_file), f"Statistics file not found: {stats_file}"
+        with open(stats_file, "ab") as f:
+            f.write(b'\x00')
+
+        base_args = [scylla_path, "sstable", "upgrade", "--schema-file", schema_file, "--all",
+                     "--logger-log-level", "scylla-sstable=debug"]
+
+        # # Without --ignore-component-digest-mismatch, loading should fail due to digest mismatch
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            result = subprocess.run(base_args + ["--output-dir", tmp_dir, sst],
+                                    capture_output=True, text=True)
+            assert result.returncode != 0, "Expected failure due to digest mismatch"
+
+        # With --ignore-component-digest-mismatch, loading should succeed
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            result = subprocess.run(base_args + ["--ignore-component-digest-mismatch", "--output-dir", tmp_dir, sst],
+                                    capture_output=True, text=True)
+            assert result.returncode == 0, f"Expected success with --ignore-component-digest-mismatch, stderr: {result.stderr}"
+
+
 def test_scylla_sstable_dump_schema(cql, test_keyspace, scylla_path, scylla_data_dir):
     def query_system_schema(schema_table: str, table_name: str) -> list:
         q = f"SELECT * FROM system_schema.{schema_table} WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"
@@ -2069,6 +2117,11 @@ def test_scylla_sstable_dump_schema(cql, test_keyspace, scylla_path, scylla_data
                     d[k] = '$ID'
                 elif k == 'version':
                     d[k] = '$VERSION'
+                elif k == 'extensions':
+                    # Extensions like tombstone_gc are problematic, because the
+                    # scylla-sstable tool doesn't have access to the keyspace
+                    # definition, so it will come up with different defaults.
+                    pass
                 else:
                     d[k] = v
             return d
@@ -2141,3 +2194,72 @@ def test_scylla_sstable_filter(cql, test_keyspace, scylla_path, scylla_data_dir)
 
         assert filter("--include") == set(pks[:2])
         assert filter("--exclude") == set(pks[2:])
+
+
+def test_scylla_sstable_split(cql, test_keyspace, scylla_path, scylla_data_dir):
+    with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        # Get partition keys from sstables only (includes dead partitions)
+        sstable_rows = list(cql.execute(f"SELECT pk FROM MUTATION_FRAGMENTS({test_keyspace}.{table}) WHERE mutation_source >= 'sstable:' ALLOW FILTERING"))
+        sstable_pks = set(r.pk for r in sstable_rows)
+
+        # Get tokens for live partitions to use as split points
+        live_rows = list(cql.execute(f"SELECT pk, token(pk) FROM {test_keyspace}.{table}"))
+        live_partitions = [{'pk': r.pk, 'token': r.system_token_pk} for r in live_rows]
+
+        print(f"Partitions in sstables: {sstable_pks}")
+        print(f"Live partitions with tokens: {live_partitions}")
+
+        assert len(live_partitions) >= 2, "Need at least 2 live partitions for split test"
+
+        # Choose split token from a live partition
+        split_partition = live_partitions[1]
+        split_token = split_partition['token']
+
+        assert split_partition['pk'] in sstable_pks, "Split partition should be present in sstables"
+
+        print(f"Split token: {split_token}")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Test split (use --merge if multiple sstables to test that path too)
+            merge_flag = ["--merge"] if len(sstables) > 1 else []
+            cmd = [scylla_path, "sstable", "split", "--schema-file", schema_file, "--output-dir", tmp_dir,
+                   "-t", str(split_token)] + merge_flag + sstables
+
+            out = subprocess.check_output(cmd, text=True)
+
+            print(f"Split output:\n{out}")
+
+            # Parse output to find generated sstables
+            split_sstables = []
+            for line in out.strip().split('\n'):
+                m = re.match(r"^\s+(.+/[^/]+-Data\.db)\s*$", line)
+                if m:
+                    split_sstables.append(m.group(1))
+
+            # Should have created 2 output sstables (N+1 for N split tokens)
+            assert len(split_sstables) == 2, f"Expected 2 output sstables, got {len(split_sstables)}"
+
+            # Query each output sstable and collect partition keys
+            output_pks = [set(), set()]
+            for i, sst in enumerate(split_sstables):
+                dump_cmd = [scylla_path, "sstable", "dump-data", "--output-format", "json", "--schema-file", schema_file, sst]
+                dump_res = json.loads(subprocess.check_output(dump_cmd, text=True))
+
+                for sstable_data in dump_res["sstables"].values():
+                    for partition in sstable_data:
+                        pk = int(partition['key']['value'])
+                        token = int(partition['key']['token'])
+                        output_pks[i].add(pk)
+                        # Verify token is in expected range
+                        if i == 0:
+                            assert token < split_token, f"Token {token} in first sstable should be < {split_token}"
+                        else:
+                            assert token >= split_token, f"Token {token} in second sstable should be >= {split_token}"
+
+            print(f"First sstable contains: {output_pks[0]}")
+            print(f"Second sstable contains: {output_pks[1]}")
+
+            # Verify all partitions are present and no overlap (compare partition keys, not tokens)
+            all_output_pks = output_pks[0] | output_pks[1]
+            assert all_output_pks == sstable_pks, "Split sstables should contain all original partitions"
+            assert len(output_pks[0] & output_pks[1]) == 0, "Output sstables should not overlap"

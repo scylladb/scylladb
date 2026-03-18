@@ -24,11 +24,12 @@
 #include "readers/forwardable.hh"
 #include "readers/nonforwardable.hh"
 #include "cache_mutation_reader.hh"
-#include "partition_snapshot_reader.hh"
+#include "replica/partition_snapshot_reader.hh"
 #include "keys/clustering_key_filter.hh"
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
 #include "utils/labels.hh"
+#include "utils/chunked_vector.hh"
 
 namespace cache {
 
@@ -775,7 +776,7 @@ row_cache::make_reader_opt(schema_ptr s,
                        reader_permit permit,
                        const dht::partition_range& range,
                        const query::partition_slice& slice,
-                       const tombstone_gc_state* gc_state,
+                       tombstone_gc_state gc_state,
                        max_purgeable_fn get_max_purgeable,
                        tracing::trace_state_ptr trace_state,
                        streamed_mutation::forwarding fwd,
@@ -845,7 +846,7 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
             cache_entry& e = *i;
             upgrade_entry(e);
             tracing::trace(ts, "Reading partition {} from cache", pos);
-            return make_partition_snapshot_flat_reader<false, dummy_accounter>(
+            return replica::make_partition_snapshot_reader<false, dummy_accounter>(
                     schema,
                     std::move(permit),
                     e.key(),
@@ -1215,10 +1216,10 @@ future<> row_cache::invalidate(external_updater eu, const dht::decorated_key& dk
 }
 
 future<> row_cache::invalidate(external_updater eu, const dht::partition_range& range, cache_invalidation_filter filter) {
-    return invalidate(std::move(eu), dht::partition_range_vector({range}), std::move(filter));
+    return invalidate(std::move(eu), utils::chunked_vector<dht::partition_range>({range}), std::move(filter));
 }
 
-future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&& ranges, cache_invalidation_filter filter) {
+future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::partition_range>&& ranges, cache_invalidation_filter filter) {
     return do_update(std::move(eu), [this, ranges = std::move(ranges), filter = std::move(filter)] mutable {
         return seastar::async([this, ranges = std::move(ranges), filter = std::move(filter)] {
             auto on_failure = defer([this] () noexcept {

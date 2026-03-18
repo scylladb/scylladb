@@ -90,59 +90,6 @@ def get_keys_from_sst(sst_file, scylla_path):
         logging.error(f"An unexpected error occurred: {e}")
     return []
 
-def local_process_id(cql):
-    ip = socket.gethostbyname(cql.cluster.contact_points[0])
-    port = cql.cluster.port
-    ip2hex = lambda ip: ''.join([f'{int(x):02X}' for x in reversed(ip.split('.'))])
-    port2hex = lambda port: f'{int(port):04X}'
-    addr1 = ip2hex(ip) + ':' + port2hex(port)
-    addr2 = ip2hex('0.0.0.0') + ':' + port2hex(port)
-    LISTEN = '0A'
-    with open('/proc/net/tcp', 'r') as f:
-        for line in f:
-            cols = line.split()
-            if cols[3] == LISTEN and (cols[1] == addr1 or cols[1] == addr2):
-                inode = cols[9]
-                break
-        else:
-            # Didn't find a process listening on the given address
-            return None
-    target = f'socket:[{inode}]'
-    for proc in os.listdir('/proc'):
-        if not proc.isnumeric():
-            continue
-        dir = f'/proc/{proc}/fd/'
-        try:
-            for fd in os.listdir(dir):
-                if os.readlink(dir + fd) == target:
-                    # Found the process!
-                    return proc
-        except:
-            # Ignore errors. We can't check processes we don't own.
-            pass
-    return None
-
-def get_scylla_path(cql):
-    max_retries = 5
-    for attempt in range(1, max_retries + 1):
-        pid = local_process_id(cql)
-        if not pid:
-            logger.warning(f"Attempt {attempt}/{max_retries}: Could not get local process ID for CQL. Retrying...")
-            time.sleep(1)
-            continue
-
-        path = None
-        try:
-            path = os.readlink(f'/proc/{pid}/exe')
-            subprocess.check_output([path, '--list-tools'], stderr=subprocess.PIPE)
-            return path
-        except:
-            logger.warning(f"Attempt {attempt}/{max_retries}: Failed to determine or verify Scylla path. Retrying...")
-            time.sleep(1)
-            continue
-
-    assert False, f"Failed to find and verify Scylla executable path after {max_retries} attempts."
-
 def get_metrics(server, metric_name):
     num = 0
     metrics = requests.get(f"http://{server.ip_addr}:9180/metrics").text
@@ -425,7 +372,7 @@ async def test_tablet_incremental_repair_and_minor(manager: ManagerClient):
         await tm.drain_module_tasks(server.ip_addr, module_name)
 
     # Verify repaired and unrepaired keys
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     for server in servers:
         await manager.server_stop_gracefully(server.server_id)
@@ -465,7 +412,7 @@ async def do_test_tablet_incremental_repair_with_split_and_merge(manager, do_spl
     if do_merge:
         await trigger_tablet_merge(manager, servers, logs)
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     await asyncio.sleep(random.randint(1, 5))
 
@@ -508,7 +455,7 @@ async def test_tablet_incremental_repair_existing_and_repair_produced_sstable(ma
 
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     for server in servers:
         await manager.server_stop_gracefully(server.server_id)
@@ -536,12 +483,13 @@ async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 2
     await inject_error_off(manager, "repair_tablet_no_update_sstables_repair_at", servers)
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     s1_mark = await logs[0].mark()
     await trigger_tablet_merge(manager, servers, logs)
     # The merge process will set the unrepaired sstable with repaired_at=3 to repaired_at=0 during merge
-    await logs[0].wait_for('Finished repaired_at update for tablet merge .* old=3 new=0 sstables_repaired_at=2', from_mark=s1_mark)
+    await logs[0].wait_for('Updating repaired_at for tablet merge .* old=3 new=0 sstables_repaired_at=2', from_mark=s1_mark)
+    await logs[0].wait_for('Completed updating repaired_at=.* for tablet merge', from_mark=s1_mark)
 
     for server in servers:
         await manager.server_stop_gracefully(server.server_id)
@@ -577,7 +525,7 @@ async def test_tablet_incremental_repair_merge_correct_repaired_at_number_after_
         logging.info(f"Start repair for token={t}");
         await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", t, incremental_mode='incremental') # sstables_repaired_at 3
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     # Trigger merge
     await trigger_tablet_merge(manager, servers, logs)
@@ -606,16 +554,21 @@ async def do_test_tablet_incremental_repair_merge_error(manager, error):
     for server in servers:
         await manager.api.flush_keyspace(server.ip_addr, ks)
 
-    scylla_path = get_scylla_path(cql)
+    scylla_path = await manager.server_get_exe(server.server_id)
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_log = await manager.server_open_log(coord_serv.server_id)
 
     # Trigger merge and error in merge
-    s1_mark = await logs[0].mark()
-    await inject_error_on(manager, error, servers[:1])
+    mark = await coord_log.mark()
+    await inject_error_on(manager, error, [coord_serv])
     await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
-    await logs[0].wait_for(f'Got {error}', from_mark=s1_mark)
+    await inject_error_on(manager, "tablet_force_tablet_count_decrease_once", servers)
+    await coord_log.wait_for(f'Got {error}', from_mark=mark)
     await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
-    await manager.server_stop(servers[0].server_id)
-    await manager.server_start(servers[0].server_id)
+    await manager.server_stop(coord_serv.server_id)
+    await manager.server_start(coord_serv.server_id)
 
     for server in servers:
         await manager.server_stop_gracefully(server.server_id)
@@ -860,3 +813,80 @@ async def test_repair_sigsegv_with_diff_shard_count(manager: ManagerClient, use_
         else:
             logger.info("Starting vnode repair")
             await manager.api.repair(servers[1].ip_addr, ks, "test")
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/27365
+# Incremental repair vs tablet merge
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_incremental_repair_tablet_merge_compaction_group_gone(manager: ManagerClient):
+    cmdline = ['--logger-log-level', 'repair=debug']
+    servers, cql, hosts, ks, table_id, logs, _, _, _, _ = await preapre_cluster_for_incremental_repair(manager, cmdline=cmdline)
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_log = await manager.server_open_log(coord_serv.server_id)
+
+    # Trigger merge and wait until the merge fiber starts
+    s1_mark = await coord_log.mark()
+    await inject_error_on(manager, "merge_completion_fiber", servers)
+    await inject_error_on(manager, "tablet_force_tablet_count_decrease_once", servers)
+    await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
+    await coord_log.wait_for(f'Detected tablet merge for table', from_mark=s1_mark)
+    await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
+    await coord_log.wait_for(f'merge_completion_fiber: waiting for message', from_mark=s1_mark)
+
+    # Trigger repair and wait for the inc repair prepare preparation to start
+    s1_mark = await coord_log.mark()
+    await inject_error_on(manager, "wait_after_prepare_sstables_for_incremental_repair", servers)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token=-1, await_completion=False, incremental_mode='incremental')
+    # Wait for preparation to start.
+    await coord_log.wait_for('Disabling compaction for range', from_mark=s1_mark)
+    # Without the serialization, sleep to increase chances of preparation finishing before merge fiber.
+    # With the serialization, preparation will wait for merge fiber to finish.
+    await asyncio.sleep(0.1)
+
+    # Continue to execute the merge fiber so that the compaction group is removed
+    await inject_error_on(manager, "replica_merge_completion_wait", servers)
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, "merge_completion_fiber")
+
+    await coord_log.wait_for(f'Merge completion fiber finished', from_mark=s1_mark)
+
+    # Continue the repair to trigger use-after-free
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, "wait_after_prepare_sstables_for_incremental_repair")
+
+    await coord_log.wait_for(f'Finished tablet repair', from_mark=s1_mark)
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/27365
+# Incremental repair vs table drop
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_incremental_repair_table_drop_compaction_group_gone(manager: ManagerClient):
+    cmdline = ['--logger-log-level', 'repair=debug']
+    servers, cql, hosts, ks, table_id, logs, _, _, _, _ = await preapre_cluster_for_incremental_repair(manager, cmdline=cmdline)
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    coord_log = await manager.server_open_log(coord_serv.server_id)
+
+    # Trigger merge and wait until the merge fiber starts
+    s1_mark = await coord_log.mark()
+
+    # Trigger repair and wait for the inc repair prepare preparation to start
+    s1_mark = await coord_log.mark()
+    await inject_error_on(manager, "wait_after_prepare_sstables_for_incremental_repair", servers)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token=-1, await_completion=False, incremental_mode='incremental')
+    # Wait for preparation to finish.
+    await coord_log.wait_for('Re-enabled compaction for range', from_mark=s1_mark)
+
+    s1_mark = await coord_log.mark()
+    drop_future = cql.run_async(f"DROP TABLE {ks}.test;")
+    await coord_log.wait_for(f'Stopping.*ongoing compactions for table {ks}.test', from_mark=s1_mark)
+    await asyncio.sleep(0.2)
+
+    # Continue the repair to trigger use-after-free
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, "wait_after_prepare_sstables_for_incremental_repair")
+
+    await drop_future

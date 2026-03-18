@@ -87,6 +87,7 @@ enum class global_topology_request: uint16_t {
     // Used to synchronize API calls with topology coordinator.
     // Ensures that all later requests and tablet scheduler will see prior updates to group0.
     noop_request,
+    snapshot_tables,
 };
 
 struct ring_slice {
@@ -131,17 +132,10 @@ struct topology {
         rollback_to_normal,
         truncate_table,
         lock,
+        snapshot_tables,
     };
 
     std::optional<transition_state> tstate;
-
-    enum class upgrade_state_type: uint16_t {
-        not_upgraded,
-        build_coordinator_state,
-        done,
-    };
-
-    upgrade_state_type upgrade_state = upgrade_state_type::not_upgraded;
 
     using version_t = int64_t;
     static constexpr version_t initial_version = 1;
@@ -184,7 +178,7 @@ struct topology {
 
     // The IDs of the committed CDC generations sorted by timestamps.
     // The obsolete generations may not be in this list as they are continually deleted.
-    std::vector<cdc::generation_id_v2> committed_cdc_generations;
+    std::vector<cdc::generation_id> committed_cdc_generations;
 
     // This is the time UUID used to access the data of a new CDC generation introduced
     // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.
@@ -201,7 +195,7 @@ struct topology {
     std::unordered_set<utils::UUID> paused_rf_change_requests;
 
     // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
-    std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
+    std::vector<cdc::generation_id> unpublished_cdc_generations;
 
     // Set of features that are considered to be enabled by the cluster.
     std::set<sstring> enabled_features;
@@ -332,17 +326,11 @@ std::optional<topology_request> try_topology_request_from_string(const sstring& 
 topology_request topology_request_from_string(const sstring& s);
 global_topology_request global_topology_request_from_string(const sstring&);
 cleanup_status cleanup_status_from_string(const sstring& s);
-topology::upgrade_state_type upgrade_state_from_string(const sstring&);
 }
 
 template <> struct fmt::formatter<service::cleanup_status> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(service::cleanup_status status, fmt::format_context& ctx) const -> decltype(ctx.out());
-};
-
-template <> struct fmt::formatter<service::topology::upgrade_state_type> {
-    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(service::topology::upgrade_state_type status, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <> struct fmt::formatter<service::fencing_token> : fmt::formatter<string_view> {

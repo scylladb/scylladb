@@ -10,6 +10,7 @@
 #include "expr-utils.hh"
 #include "evaluate.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/aggregate_fcts.hh"
 #include "cql3/functions/castas_fcts.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/column_identifier.hh"
@@ -501,8 +502,8 @@ vector_validate_assignable_to(const collection_constructor& c, data_dictionary::
         throw exceptions::invalid_request_exception(format("Invalid vector type literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
     }
 
-    size_t expected_size = vt->get_dimension();
-    if (!expected_size) {
+    vector_dimension_t expected_size = vt->get_dimension();
+    if (expected_size == 0) {
         throw exceptions::invalid_request_exception(format("Invalid vector type literal for {}: type {} expects at least one element",
                                                             *receiver.name, receiver.type->as_cql3_type()));
     }
@@ -875,7 +876,7 @@ cast_test_assignment(const cast& c, data_dictionary::database db, const sstring&
             return assignment_testable::test_result::NOT_ASSIGNABLE;
         }
     } catch (exceptions::invalid_request_exception& e) {
-        abort();
+        throwing_assert(0 && "cast_test_assignment exception");
     }
 }
 
@@ -1047,8 +1048,47 @@ prepare_function_args_for_type_inference(std::span<const expression> args, data_
     return partially_prepared_args;
 }
 
+// Special case for count(1) - recognize it as the countRows() function. Note it is quite
+// artificial and we might relax it to the more general count(expression) later.
+static
+std::optional<expression>
+try_prepare_count_rows(const expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+    return std::visit(overloaded_functor{
+        [&] (const functions::function_name& name) -> std::optional<expression> {
+            auto native_name = name;
+            if (!native_name.has_keyspace()) {
+                native_name = name.as_native_function();
+            }
+            // Collapse count(1) into countRows()
+            if (native_name == functions::function_name::native_function("count")) {
+                if (fc.args.size() == 1) {
+                    if (auto uc_arg = expr::as_if<expr::untyped_constant>(&fc.args[0])) {
+                        if (uc_arg->partial_type == expr::untyped_constant::type_class::integer
+                                && uc_arg->raw_text == "1") {
+                            return expr::function_call{
+                                .func = functions::aggregate_fcts::make_count_rows_function(),
+                                .args = {},
+                            };
+                        } else {
+                            throw exceptions::invalid_request_exception(format("count() expects a column or the literal 1 as an argument", fc.args[0]));
+                        }
+                    }
+                }
+            }
+            return std::nullopt;
+        },
+        [] (const shared_ptr<functions::function>&) -> std::optional<expression> {
+            // Already prepared, nothing to do
+            return std::nullopt;
+        },
+    }, fc.func);
+}
+
 std::optional<expression>
 prepare_function_call(const expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+    if (auto prepared = try_prepare_count_rows(fc, db, keyspace, schema_opt, receiver)) {
+        return prepared;
+    }
     // Try to extract a column family name from the available information.
     // Most functions can be prepared without information about the column family, usually just the keyspace is enough.
     // One exception is the token() function - in order to prepare system.token() we have to know the partition key of the table,

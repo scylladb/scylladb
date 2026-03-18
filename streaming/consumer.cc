@@ -18,6 +18,7 @@
 #include "db/view/view_update_checks.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
+#include "debug.hh"
 
 namespace streaming {
 
@@ -33,7 +34,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
     return [&db, &vb = vb.container(), &vbw, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, on_sstable_written] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {
-            if (current_scheduling_group() != db.local().get_streaming_scheduling_group()) {
+            if (current_scheduling_group() != debug::streaming_scheduling_group) {
                 on_internal_error(sstables::sstlog, format("The stream consumer is not running in streaming group current_scheduling_group={}",
                         current_scheduling_group().name()));
             }

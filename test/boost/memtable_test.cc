@@ -191,7 +191,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                 const auto now = gc_clock::now();
                 auto compacted_muts = muts;
                 for (auto& mut : compacted_muts) {
-                    mut.partition().compact_for_compaction(*mut.schema(), always_gc, mut.decorated_key(), now, tombstone_gc_state(nullptr));
+                    mut.partition().compact_for_compaction(*mut.schema(), always_gc, mut.decorated_key(), now, tombstone_gc_state::for_tests());
                 }
 
                 testlog.info("Simple read");
@@ -1004,7 +1004,20 @@ SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
     }, db_config);
 }
 
-SEASTAR_TEST_CASE(memtable_flush_period) {
+static auto check_has_error_injection() {
+    return boost::unit_test::precondition([](auto){
+        return 
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+            true
+#else
+            false
+#endif
+        ;
+    });
+}
+
+SEASTAR_TEST_CASE(memtable_flush_period, *check_has_error_injection()) {
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
     auto db_config = make_shared<db::config>();
     db_config->enable_cache.set(false);
     return do_with_cql_env_thread([](cql_test_env& env) {
@@ -1028,6 +1041,9 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
         t.apply(m);
         BOOST_REQUIRE_EQUAL(t.sstables_count(), 0); // add mutation and check there are no sstables for this table
 
+        auto& errj = utils::get_local_injector();
+        errj.enable("table_seal_post_flush_waiters", true);
+
         // change schema to set memtable flush period
         // we use small value in this test but it is impossible to set the period less than 60000ms using ALTER TABLE construction
         schema_builder b(t.schema());
@@ -1035,8 +1051,10 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
         schema_ptr s2 = b.build();
         t.set_schema(s2);
 
-        sleep(500ms).get(); // wait until memtable flush starts at least once
-        BOOST_REQUIRE(t.sstables_count() == 1 || t.get_stats().pending_flushes > 0);    // flush started
+        BOOST_TEST_MESSAGE("Wait for flush");
+        errj.inject("table_seal_post_flush_waiters", utils::wait_for_message(std::chrono::minutes(2))).get();
+        BOOST_TEST_MESSAGE("Flush received");
+
         BOOST_REQUIRE(eventually_true([&] { // wait until memtable will be flushed at least once
             return t.sstables_count() == 1;
         }));
@@ -1047,6 +1065,10 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
             .produces(m)
             .produces_end_of_stream();
     }, db_config);
+#else
+    BOOST_TEST_MESSAGE("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev)");
+    return make_ready_future<>();
+#endif
 }
 
 SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
@@ -1185,6 +1207,13 @@ SEASTAR_TEST_CASE(failed_flush_prevents_writes) {
 }
 
 SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
+#ifdef DEBUG
+    // This test was observed to take multiple minutes to run in debug mode on CI machines.
+    // This test checks that a certain behaviour is triggered when compaction falls behind.
+    // Not critical to run in debug mode. Both compaction and memtable have their own
+    // correctness tests, which do run in debug mode.
+    return make_ready_future<>();
+#else
     BOOST_ASSERT(smp::count == 2);
     // The test simulates a situation where 2 threads issue flushes to 2
     // tables. Both issue small flushes, but one has injected reactor stalls.
@@ -1259,6 +1288,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
             sleep_ms *= 2;
         }
     });
+#endif
 }
 
 static future<> exceptions_in_flush_helper(std::unique_ptr<sstables::file_io_extension> mep, bool& should_fail, const bool& did_fail, const schema*& schema_filter, bool expect_isolate) {

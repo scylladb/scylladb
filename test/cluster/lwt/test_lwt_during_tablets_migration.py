@@ -99,7 +99,7 @@ async def tablet_migration_ops(stop_event: asyncio.Event,
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='debug mode is too slow for this test')
-async def test_multi_column_lwt_during_migration(manager: ManagerClient):
+async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_timeout):
     """
     Test scenario:
       1. Start N servers with tablets enabled
@@ -136,6 +136,7 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient):
             "lwt_table",
             num_workers=DEFAULT_WORKERS,
             num_keys=DEFAULT_NUM_KEYS,
+            scale_timeout=scale_timeout,
         )
         await tester.create_schema()
         await tester.initialize_rows()
@@ -151,7 +152,7 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient):
             # Phase 1: warmup LWT (100 applied CAS)
             tester.set_phase(PHASE_WARMUP)
             logger.info("LWT warmup: waiting for %d applied CAS", WARMUP_LWT_CNT)
-            await tester.wait_for_phase_ops(stop_event_, PHASE_WARMUP, WARMUP_LWT_CNT, timeout=60, poll=0.2)
+            await tester.wait_for_phase_ops(stop_event_, PHASE_WARMUP, WARMUP_LWT_CNT, timeout=60, poll=1.0)
             logger.info("LWT warmup complete: %d ops", tester.get_phase_ops('warmup'))
 
             # Phase 2: migrations with LWT running
@@ -160,12 +161,15 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient):
             migration_task = asyncio.create_task(
                 tablet_migration_ops(stop_event_, manager, servers, tester, NUM_MIGRATIONS)
             )
-            await asyncio.wait_for(migration_task, timeout=NUM_MIGRATIONS * 2 + 15) # 20*2+15 = 55s
+            await asyncio.wait_for(
+                migration_task,
+                timeout=scale_timeout(NUM_MIGRATIONS * 2 + 15),  # 20*2+15 = 55s before scaling
+            )
             logger.info("LWT during migrating phase: %d ops", tester.get_phase_ops(PHASE_MIGRATING))
 
             tester.set_phase(PHASE_POST)
             logger.info("LWT post phase: waiting for %d applied CAS", POST_LWT_CNT)
-            await tester.wait_for_phase_ops(stop_event_, PHASE_POST, POST_LWT_CNT, timeout=180, poll=0.2)
+            await tester.wait_for_phase_ops(stop_event_, PHASE_POST, POST_LWT_CNT, timeout=180, poll=1.0)
             logger.info("LWT post complete: %d ops", tester.get_phase_ops(PHASE_POST))
 
         finally:

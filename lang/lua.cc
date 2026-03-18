@@ -8,6 +8,7 @@
 
 #include <boost/date_time/gregorian/greg_date.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
+#include <random>
 #include "lua.hh"
 #include "lang/lua_scylla_types.hh"
 #include "exceptions/exceptions.hh"
@@ -26,6 +27,14 @@
 #    define LUA_504_PLUS(x...) x
 #else
 #    define LUA_504_PLUS(x...)
+#endif
+
+// Lua 5.5 added a seed parameter to lua_newstate
+
+#if LUA_VERSION_NUM >= 505
+#    define LUA_505_PLUS(x...) x
+#else
+#    define LUA_505_PLUS(x...)
 #endif
 
 using namespace seastar;
@@ -126,7 +135,11 @@ static void debug_hook(lua_State* l, lua_Debug* ar) {
 
 static lua_slice_state new_lua(const lua::runtime_config& cfg) {
     auto a_state = std::make_unique<alloc_state>(cfg.max_bytes, cfg.max_contiguous);
-    std::unique_ptr<lua_State, lua_closer> l{lua_newstate(lua_alloc, a_state.get())};
+#if LUA_VERSION_NUM >= 505
+    static thread_local std::default_random_engine rng{std::random_device{}()};
+    auto seed = rng();
+#endif
+    std::unique_ptr<lua_State, lua_closer> l{lua_newstate(lua_alloc, a_state.get() LUA_505_PLUS(, seed))};
     if (!l) {
         throw std::runtime_error("could not create lua state");
     }
@@ -270,17 +283,6 @@ concept CanHandleLuaTypes = requires(Func f) {
     { f(*static_cast<const lua_table*>(nullptr)) }                      -> std::same_as<lua_visit_ret_type<Func>>;
 };
 
-// This is used to test if a double fits in a long long, so
-// we expect overflows. Prevent the sanitizer from complaining.
-#ifdef __clang__
-[[clang::no_sanitize("undefined")]]
-#endif
-static
-long long
-cast_to_long_long_allow_overflow(double v) {
-    return (long long)v;
-}
-
 template <typename Func>
 requires CanHandleLuaTypes<Func>
 static auto visit_lua_value(lua_State* l, int index, Func&& f) {
@@ -291,9 +293,10 @@ static auto visit_lua_value(lua_State* l, int index, Func&& f) {
         auto operator()(const long long& v) { return f(utils::multiprecision_int(v)); }
         auto operator()(const utils::multiprecision_int& v) { return f(v); }
         auto operator()(const double& v) {
-            long long v2 = cast_to_long_long_allow_overflow(v);
-            if (v2 == v) {
-                return (*this)(v2);
+            auto min = double(std::numeric_limits<long long>::min());
+            auto max = double(std::numeric_limits<long long>::max());
+            if (min <= v && v <= max && std::trunc(v) == v) {
+                return (*this)((long long)v);
             }
             // FIXME: We could use frexp to produce a decimal instead of a double
             return f(v);
@@ -740,7 +743,7 @@ struct from_lua_visitor {
         }
 
         const data_type& elements_type = t.get_elements_type();
-        size_t num_elements = t.get_dimension();
+        vector_dimension_t num_elements = t.get_dimension();
 
         using table_pair = std::pair<utils::multiprecision_int, data_value>;
         std::vector<table_pair> pairs;

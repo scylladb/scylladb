@@ -16,6 +16,7 @@
 #include "auth/common.hh"
 #include "cql3/result_set.hh"
 #include "cql3/column_identifier.hh"
+#include "db/system_keyspace.hh"
 #include "transport/messages/result_message.hh"
 
 cql3::statements::list_permissions_statement::list_permissions_statement(
@@ -49,7 +50,7 @@ future<> cql3::statements::list_permissions_statement::check_access(query_proces
     const auto& as = *state.get_auth_service();
     const auto user = state.user();
 
-    return auth::has_superuser(as, *user).then([this, &as, user](bool has_super) {
+    return state.has_superuser().then([this, &as, user](bool has_super) {
         if (has_super) {
             return make_ready_future<>();
         }
@@ -80,9 +81,9 @@ cql3::statements::list_permissions_statement::execute(
         service::query_state& state,
         const query_options& options,
         std::optional<service::group0_guard> guard) const {
-    auto make_column = [auth_ks = auth::get_auth_ks_name(qp)](sstring name) {
+    auto make_column = [](sstring name) {
         return make_lw_shared<column_specification>(
-                auth_ks,
+                db::system_keyspace::NAME,
                 "permissions",
                 ::make_shared<column_identifier>(std::move(name), true),
                 utf8_type);

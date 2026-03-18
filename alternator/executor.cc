@@ -63,6 +63,7 @@
 #include "types/types.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "alternator/ttl_tag.hh"
 
 using namespace std::chrono_literals;
 
@@ -164,7 +165,7 @@ static map_type attrs_type() {
 
 static const column_definition& attrs_column(const schema& schema) {
     const column_definition* cdef = schema.get_column_definition(bytes(executor::ATTRS_COLUMN_NAME));
-    SCYLLA_ASSERT(cdef);
+    throwing_assert(cdef);
     return *cdef;
 }
 
@@ -237,7 +238,7 @@ static void validate_is_object(const rjson::value& value, const char* caller) {
 }
 
 // This function assumes the given value is an object and returns requested member value.
-// If it is not possible an api_error::validation is thrown.
+// If it is not possible, an api_error::validation is thrown.
 static const rjson::value& get_member(const rjson::value& obj, const char* member_name, const char* caller) {
     validate_is_object(obj, caller);
     const rjson::value* ret = rjson::find(obj, member_name);
@@ -249,7 +250,7 @@ static const rjson::value& get_member(const rjson::value& obj, const char* membe
 
 
 // This function assumes the given value is an object with a single member, and returns this member.
-// In case the requirements are not met an api_error::validation is thrown.
+// In case the requirements are not met, an api_error::validation is thrown.
 static const rjson::value::Member& get_single_member(const rjson::value& v, const char* caller) {
     if (!v.IsObject() || v.MemberCount() != 1) {
         throw api_error::validation(format("{}: expected an object with a single member.", caller));
@@ -682,7 +683,7 @@ static std::optional<int> get_int_attribute(const rjson::value& value, std::stri
 }
 
 // Sets a KeySchema object inside the given JSON parent describing the key
-// attributes of the the given schema as being either HASH or RANGE keys.
+// attributes of the given schema as being either HASH or RANGE keys.
 // Additionally, adds to a given map mappings between the key attribute
 // names and their type (as a DynamoDB type string).
 void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>* attribute_types, const std::map<sstring, sstring> *tags) {
@@ -916,7 +917,7 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
                 sstring index_name = cf_name.substr(delim_it + 1);
                 rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
                 rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
-                // Add indexes's KeySchema and collect types for AttributeDefinitions:
+                // Add index's KeySchema and collect types for AttributeDefinitions:
                 executor::describe_key_schema(view_entry, *vptr, key_attribute_types, db::get_tags_of_table(vptr));
                 // Add projection type
                 rjson::value projection = rjson::empty_object();
@@ -1649,7 +1650,7 @@ static future<> mark_view_schemas_as_built(utils::chunked_vector<mutation>& out,
 }
 
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization, const db::tablets_mode_t::mode tablets_mode) {
-    SCYLLA_ASSERT(this_shard_id() == 0);
+    throwing_assert(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
     // command. We can't inspect the current database schema at this point
@@ -2435,7 +2436,7 @@ std::unordered_map<bytes, std::string> si_key_attributes(data_dictionary::table 
 //   case, this function simply won't be called for this attribute.)
 //
 // This function checks if the given attribute update is an update to some
-// GSI's key, and if the value is unsuitable, a api_error::validation is
+// GSI's key, and if the value is unsuitable, an api_error::validation is
 // thrown. The checking here is similar to the checking done in
 // get_key_from_typed_value() for the base table's key columns.
 //
@@ -2837,14 +2838,12 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
-        SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
+        throwing_assert(m); // !needs_read_before_write, so apply() did not check a condition
         return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
             return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
         });
     }
-    if (!cas_shard) {
-        on_internal_error(elogger, "cas_shard is not set");
-    }
+    throwing_assert(cas_shard);
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
@@ -3464,7 +3463,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     if (should_add_wcu) {
         rjson::add(ret, "ConsumedCapacity", std::move(consumed_capacity));
     }
-    _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    auto duration = std::chrono::steady_clock::now() - start_time;
+    _stats.api_operations.batch_write_item_latency.mark(duration);
+    for (const auto& w : per_table_wcu) {
+        w.first->api_operations.batch_write_item_latency.mark(duration);
+    }
     co_return rjson::print(std::move(ret));
 }
 
@@ -3548,7 +3551,7 @@ static bool hierarchy_filter(rjson::value& val, const attribute_path_map_node<T>
     return true;
 }
 
-// Add a path to a attribute_path_map. Throws a validation error if the path
+// Add a path to an attribute_path_map. Throws a validation error if the path
 // "overlaps" with one already in the filter (one is a sub-path of the other)
 // or "conflicts" with it (both a member and index is requested).
 template<typename T>
@@ -4975,7 +4978,12 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     if (!some_succeeded && eptr) {
         co_await coroutine::return_exception_ptr(std::move(eptr));
     }
-    _stats.api_operations.batch_get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    auto duration = std::chrono::steady_clock::now() - start_time;
+    _stats.api_operations.batch_get_item_latency.mark(duration);
+    for (const table_requests& rs : requests) {
+        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
+        per_table_stats->api_operations.batch_get_item_latency.mark(duration);
+    }
     if (is_big(response)) {
         co_return make_streamed(std::move(response));
     } else {
@@ -5413,7 +5421,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
 }
 
 static dht::token token_for_segment(int segment, int total_segments) {
-    SCYLLA_ASSERT(total_segments > 1 && segment >= 0 && segment < total_segments);
+    throwing_assert(total_segments > 1 && segment >= 0 && segment < total_segments);
     uint64_t delta = std::numeric_limits<uint64_t>::max() / total_segments;
     return dht::token::from_int64(std::numeric_limits<int64_t>::min() + delta * segment);
 }

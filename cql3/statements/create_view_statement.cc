@@ -63,7 +63,7 @@ future<> create_view_statement::check_access(query_processor& qp, const service:
 
 static const column_definition* get_column_definition(const schema& schema, column_identifier::raw& identifier) {
     auto prepared = identifier.prepare(schema);
-    SCYLLA_ASSERT(dynamic_pointer_cast<column_identifier>(prepared));
+    throwing_assert(dynamic_pointer_cast<column_identifier>(prepared));
     auto id = static_pointer_cast<column_identifier>(prepared);
     return schema.get_column_definition(id->name());
 }

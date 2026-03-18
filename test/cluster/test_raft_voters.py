@@ -27,12 +27,17 @@ async def get_number_of_voters(manager: ManagerClient, srv: ServerInfo):
 
 
 @pytest.mark.asyncio
-# Make sure the algorithm works with different number of nodes.
-# Here with the "num_nodes == 1" we test that we'll only have one voter per DC, despite DC having two nodes
-# (the DC1 must not have 2 voters otherwise losing it would result in the raft majority loss).
-@pytest.mark.parametrize('num_nodes', [1, 3])
+# Make sure the algorithm works with different cluster sizes.
+# (3, 1, 1) specifically checks that the largest DC doesn't get 2+ voters
+# and keep half or more of all voters, which would make losing that DC unsafe.
+@pytest.mark.parametrize('dc1_nodes,dc2_nodes,dc3_nodes', [
+    pytest.param(3, 1, 1),
+    pytest.param(6, 3, 3,
+                 marks=pytest.mark.skip_mode(mode='debug', reason='larger topology case is too slow in debug on minipcs')),
+])
 @pytest.mark.parametrize('stop_gracefully', [True, False])
-async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: int, stop_gracefully: bool):
+async def test_raft_voters_multidc_kill_dc(
+        manager: ManagerClient, dc1_nodes: int, dc2_nodes: int, dc3_nodes: int, stop_gracefully: bool):
     """
     Test the basic functionality of limited voters in a multi-DC cluster.
 
@@ -41,7 +46,7 @@ async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: in
 
     Arrange:
         - create 2 smaller DCs and one large DC
-        - the sum of nodes in the smaller DCs is equal to the number of nodes of the large DC
+        - the large DC has significantly more nodes than each smaller DC
     Act:
         - kill all the nodes in the large DC
         - this would cause the loss of majority in the cluster without the limited voters feature
@@ -57,16 +62,15 @@ async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: in
     dc_setup = [
         {
             'property_file': {'dc': 'dc1', 'rack': 'rack1'},
-            # The large DC has 2x the number of nodes of the smaller DCs
-            'num_nodes': 2 * num_nodes,
+            'num_nodes': dc1_nodes,
         },
         {
             'property_file': {'dc': 'dc2', 'rack': 'rack2'},
-            'num_nodes': num_nodes,
+            'num_nodes': dc2_nodes,
         },
         {
             'property_file': {'dc': 'dc3', 'rack': 'rack3'},
-            'num_nodes': num_nodes,
+            'num_nodes': dc3_nodes,
         },
     ]
 

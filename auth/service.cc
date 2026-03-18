@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <chrono>
 
+#include <boost/algorithm/string.hpp>
+
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/sharded.hh>
@@ -23,8 +25,17 @@
 
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
+#include "auth/certificate_authenticator.hh"
 #include "auth/common.hh"
+#include "auth/default_authorizer.hh"
+#include "auth/ldap_role_manager.hh"
+#include "auth/maintenance_socket_authenticator.hh"
+#include "auth/maintenance_socket_role_manager.hh"
+#include "auth/password_authenticator.hh"
 #include "auth/role_or_anonymous.hh"
+#include "auth/saslauthd_authenticator.hh"
+#include "auth/standard_role_manager.hh"
+#include "auth/transitional.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/description.hh"
@@ -43,7 +54,6 @@
 #include "service/raft/raft_group0_client.hh"
 #include "mutation/timestamp.hh"
 #include "utils/assert.hh"
-#include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "service/storage_service.hh"
@@ -63,91 +73,6 @@ static const sstring superuser_col_name("super");
 
 static logging::logger log("auth_service");
 
-class auth_migration_listener final : public ::service::migration_listener {
-    authorizer& _authorizer;
-    cql3::query_processor& _qp;
-
-public:
-    explicit auth_migration_listener(authorizer& a, cql3::query_processor& qp) : _authorizer(a),  _qp(qp) {
-    }
-
-private:
-    void on_create_keyspace(const sstring& ks_name) override {}
-    void on_create_column_family(const sstring& ks_name, const sstring& cf_name) override {}
-    void on_create_user_type(const sstring& ks_name, const sstring& type_name) override {}
-    void on_create_function(const sstring& ks_name, const sstring& function_name) override {}
-    void on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
-    void on_create_view(const sstring& ks_name, const sstring& view_name) override {}
-
-    void on_update_keyspace(const sstring& ks_name) override {}
-    void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool) override {}
-    void on_update_user_type(const sstring& ks_name, const sstring& type_name) override {}
-    void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
-    void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
-    void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
-
-    void on_drop_keyspace(const sstring& ks_name) override {
-        if (!legacy_mode(_qp)) {
-            // in non legacy path revoke is part of schema change statement execution
-            return;
-        }
-        // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(auth::make_data_resource(ks_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on dropped keyspace: {}", e);
-        });
-
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(auth::make_functions_resource(ks_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on functions in dropped keyspace: {}", e);
-        });
-    }
-
-    void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
-        if (!legacy_mode(_qp)) {
-            // in non legacy path revoke is part of schema change statement execution
-            return;
-        }
-        // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &cf_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_data_resource(ks_name, cf_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on dropped table: {}", e);
-        });
-    }
-
-    void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
-    void on_drop_function(const sstring& ks_name, const sstring& function_name) override {
-        if (!legacy_mode(_qp)) {
-            // in non legacy path revoke is part of schema change statement execution
-            return;
-        }
-        // Do it in the background.
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &function_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_functions_resource(ks_name, function_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on dropped function: {}", e);
-        });
-    }
-    void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {
-        if (!legacy_mode(_qp)) {
-            // in non legacy path revoke is part of schema change statement execution
-            return;
-        }
-        (void)do_with(::service::group0_batch::unused(), [this, &ks_name, &aggregate_name] (auto& mc) mutable {
-            return _authorizer.revoke_all(
-                    auth::make_functions_resource(ks_name, aggregate_name), mc);
-        }).handle_exception([] (std::exception_ptr e) {
-            log.error("Unexpected exception while revoking all permissions on dropped aggregate: {}", e);
-        });
-    }
-    void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
-};
-
 static future<> validate_role_exists(const service& ser, std::string_view role_name) {
     return ser.underlying_role_manager().exists(role_name).then([role_name](bool exists) {
         if (!exists) {
@@ -157,50 +82,36 @@ static future<> validate_role_exists(const service& ser, std::string_view role_n
 }
 
 service::service(
-        utils::loading_cache_config c,
         cache& cache,
         cql3::query_processor& qp,
         ::service::raft_group0_client& g0,
-        ::service::migration_notifier& mn,
         std::unique_ptr<authorizer> z,
         std::unique_ptr<authenticator> a,
         std::unique_ptr<role_manager> r,
         maintenance_socket_enabled used_by_maintenance_socket)
-            : _loading_cache_config(std::move(c))
-            , _permissions_cache(nullptr)
-            , _cache(cache)
+            : _cache(cache)
             , _qp(qp)
             , _group0_client(g0)
-            , _mnotifier(mn)
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
-            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer, qp))
-            , _permissions_cache_cfg_cb([this] (uint32_t) { (void) _permissions_cache_config_action.trigger_later(); })
-            , _permissions_cache_config_action([this] { update_cache_config(); return make_ready_future<>(); })
-            , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
-            , _permissions_cache_update_interval_in_ms_observer(_qp.db().get_config().permissions_update_interval_in_ms.observe(_permissions_cache_cfg_cb))
-            , _permissions_cache_validity_in_ms_observer(_qp.db().get_config().permissions_validity_in_ms.observe(_permissions_cache_cfg_cb))
             , _used_by_maintenance_socket(used_by_maintenance_socket) {}
 
 service::service(
-        utils::loading_cache_config c,
         cql3::query_processor& qp,
         ::service::raft_group0_client& g0,
-        ::service::migration_notifier& mn,
-        ::service::migration_manager& mm,
-        const service_config& sc,
+        authorizer_factory authorizer_factory,
+        authenticator_factory authenticator_factory,
+        role_manager_factory role_manager_factory,
         maintenance_socket_enabled used_by_maintenance_socket,
         cache& cache)
             : service(
-                      std::move(c),
                       cache,
                       qp,
                       g0,
-                      mn,
-                      create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, cache),
-                      create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm, cache),
+                      authorizer_factory(),
+                      authenticator_factory(),
+                      role_manager_factory(),
                       used_by_maintenance_socket) {
 }
 
@@ -233,9 +144,6 @@ future<> service::create_legacy_keyspace_if_missing(::service::migration_manager
 }
 
 future<> service::start(::service::migration_manager& mm, db::system_keyspace& sys_ks) {
-    auto auth_version = co_await sys_ks.get_auth_version();
-    // version is set in query processor to be easily available in various places we call auth::legacy_mode check.
-    _qp.auth_version = auth_version;
     if (this_shard_id() == 0) {
         co_await _cache.load_all();
     }
@@ -257,25 +165,20 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
         co_await _role_manager->ensure_superuser_is_created();
     }
     co_await when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
-    _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
-    co_await once_among_shards([this] {
-        _mnotifier.register_listener(_migration_listener.get());
-        return make_ready_future<>();
-    });
+    if (!_used_by_maintenance_socket) {
+        // Maintenance socket mode can't cache permissions because it has
+        // different authorizer. We can't mix cached permissions, they could be
+        // different in normal mode.
+        _cache.set_permission_loader(std::bind(
+                &service::get_uncached_permissions,
+                this, std::placeholders::_1, std::placeholders::_2));
+    }
 }
 
 future<> service::stop() {
     _as.request_abort();
-    // Only one of the shards has the listener registered, but let's try to
-    // unregister on each one just to make sure.
-    return _mnotifier.unregister_listener(_migration_listener.get()).then([this] {
-        if (_permissions_cache) {
-            return _permissions_cache->stop();
-        }
-        return make_ready_future<>();
-    }).then([this] {
-        return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
-    });
+    _cache.set_permission_loader(nullptr);
+    return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
 }
 
 future<> service::ensure_superuser_is_created() {
@@ -283,21 +186,8 @@ future<> service::ensure_superuser_is_created() {
     co_await _authenticator->ensure_superuser_is_created();
 }
 
-void service::update_cache_config() {
-    auto db = _qp.db();
-
-    utils::loading_cache_config perm_cache_config;
-    perm_cache_config.max_size = db.get_config().permissions_cache_max_entries();
-    perm_cache_config.expiry = std::chrono::milliseconds(db.get_config().permissions_validity_in_ms());
-    perm_cache_config.refresh = std::chrono::milliseconds(db.get_config().permissions_update_interval_in_ms());
-
-    if (!_permissions_cache->update_config(std::move(perm_cache_config))) {
-        log.error("Failed to apply permissions cache changes. Please read the documentation of these parameters");
-    }
-}
 
 void service::reset_authorization_cache() {
-    _permissions_cache->reset();
     _qp.reset_cache();
 }
 
@@ -322,7 +212,14 @@ service::get_uncached_permissions(const role_or_anonymous& maybe_role, const res
 }
 
 future<permission_set> service::get_permissions(const role_or_anonymous& maybe_role, const resource& r) const {
-    return _permissions_cache->get(maybe_role, r);
+    if (_used_by_maintenance_socket) {
+        return get_uncached_permissions(maybe_role, r);
+    }
+    return _cache.get_permissions(maybe_role, r);
+}
+
+void service::set_maintenance_mode() {
+    _role_manager->set_maintenance_mode();
 }
 
 future<bool> service::has_superuser(std::string_view role_name, const role_set& roles) const {
@@ -360,6 +257,10 @@ static void validate_authentication_options_are_supported(
     }
 }
 
+future<> service::ensure_role_operations_are_enabled() {
+    return _role_manager->ensure_role_operations_are_enabled();
+}
+
 future<> service::create_role(std::string_view name,
         const role_config& config,
         const authentication_options& options,
@@ -377,11 +278,6 @@ future<> service::create_role(std::string_view name,
         ep = std::current_exception();
     }
     if (ep) {
-        // Rollback only in legacy mode as normally mutations won't be
-        // applied in case exception is raised
-        if (legacy_mode(_qp)) {
-            co_await underlying_role_manager().drop(name, mc);
-        }
         std::rethrow_exception(std::move(ep));
     }
 }
@@ -447,6 +343,11 @@ future<bool> service::exists(const resource& r) const {
     return make_ready_future<bool>(false);
 }
 
+future<> service::revoke_all(const resource& r, ::service::group0_batch& mc) const {
+    co_await _authorizer->revoke_all(r, mc);
+    co_await _cache.prune(r);
+}
+
 future<std::vector<cql3::description>> service::describe_roles(bool with_hashed_passwords) {
     std::vector<cql3::description> result{};
 
@@ -455,11 +356,11 @@ future<std::vector<cql3::description>> service::describe_roles(bool with_hashed_
 
     const bool authenticator_uses_password_hashes = _authenticator->uses_password_hashes();
 
-    auto produce_create_statement = [with_hashed_passwords] (const sstring& formatted_role_name,
+    const auto default_su = cql3::util::maybe_quote(default_superuser(_qp));
+
+    auto produce_create_statement = [&default_su, with_hashed_passwords] (const sstring& formatted_role_name,
             const std::optional<sstring>& maybe_hashed_password, bool can_login, bool is_superuser) {
-        // Even after applying formatting to a role, `formatted_role_name` can only equal `meta::DEFAULT_SUPER_NAME`
-        // if the original identifier was equal to it.
-        const sstring role_part = formatted_role_name == meta::DEFAULT_SUPERUSER_NAME
+        const sstring role_part = formatted_role_name == default_su
                 ? seastar::format("IF NOT EXISTS {}", formatted_role_name)
                 : formatted_role_name;
 
@@ -672,12 +573,20 @@ future<std::vector<cql3::description>> service::describe_auth(bool with_hashed_p
 // Free functions.
 //
 
+void set_maintenance_mode(service& ser) {
+    ser.set_maintenance_mode();
+}
+
 future<bool> has_superuser(const service& ser, const authenticated_user& u) {
     if (is_anonymous(u)) {
         return make_ready_future<bool>(false);
     }
 
     return ser.has_superuser(*u.name);
+}
+
+future<> ensure_role_operations_are_enabled(service& ser) {
+    return ser.underlying_role_manager().ensure_role_operations_are_enabled();
 }
 
 future<role_set> get_roles(const service& ser, const authenticated_user& u) {
@@ -801,7 +710,7 @@ future<> revoke_permissions(
 }
 
 future<> revoke_all(const service& ser, const resource& r, ::service::group0_batch& mc) {
-    return ser.underlying_authorizer().revoke_all(r, mc);
+    return ser.revoke_all(r, mc);
 }
 
 future<std::vector<permission_details>> list_filtered_permissions(
@@ -862,83 +771,109 @@ future<> commit_mutations(service& ser, ::service::group0_batch&& mc) {
     return ser.commit_mutations(std::move(mc));
 }
 
-future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {
-    // FIXME: if this function fails it may leave partial data in the new tables
-    // that should be cleared
-    auto gen = [&sys_ks] (api::timestamp_type ts) -> ::service::mutations_generator {
-        auto& qp = sys_ks.query_processor();
-        for (const auto& cf_name : std::vector<sstring>{
-                "roles", "role_members", "role_attributes", "role_permissions"}) {
-            schema_ptr schema;
-            try {
-                schema = qp.db().find_schema(meta::legacy::AUTH_KS, cf_name);
-            } catch (const data_dictionary::no_such_column_family&) {
-                continue; // some tables might not have been created if they were not used
-            }
+namespace {
 
-            std::vector<sstring> col_names;
-            for (const auto& col : schema->all_columns()) {
-                col_names.push_back(col.name_as_cql_string());
-            }
-            sstring val_binders_str = "?";
-            for (size_t i = 1; i < col_names.size(); ++i) {
-                val_binders_str += ", ?";
-            }
+std::string_view get_short_name(std::string_view name) {
+    auto pos = name.find_last_of('.');
+    if (pos == std::string_view::npos) {
+        return name;
+    }
+    return name.substr(pos + 1);
+}
 
-            std::vector<mutation> collected;
-            // use longer than usual timeout as we scan the whole table
-            // but not infinite or very long as we want to fail reasonably fast
-            const auto t = 5min;
-            const timeout_config tc{t, t, t, t, t, t, t};
-            ::service::client_state cs(::service::client_state::internal_tag{}, tc);
-            ::service::query_state qs(cs, empty_service_permit());
+} // anonymous namespace
 
-            co_await qp.query_internal(
-                seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, cf_name),
-                db::consistency_level::ALL,
-                {},
-                1000,
-                [&qp, &cf_name, &col_names, &val_binders_str, &schema, ts, &collected] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
-                    std::vector<data_value_or_unset> values;
-                    for (const auto& col : schema->all_columns()) {
-                        if (row.has(col.name_as_text())) {
-                            values.push_back(
-                                    col.type->deserialize(row.get_blob_unfragmented(col.name_as_text())));
-                        } else {
-                            values.push_back(unset_value{});
-                        }
-                    }
-                    auto muts = co_await qp.get_mutations_internal(
-                            seastar::format("INSERT INTO {}.{} ({}) VALUES ({})",
-                                    db::system_keyspace::NAME,
-                                    cf_name,
-                                    fmt::join(col_names, ", "),
-                                    val_binders_str),
-                            internal_distributed_query_state(),
-                            ts,
-                            std::move(values));
-                    if (muts.size() != 1) {
-                        on_internal_error(log,
-                                format("expecting single insert mutation, got {}", muts.size()));
-                    }
+authorizer_factory make_authorizer_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp) {
+    std::string_view short_name = get_short_name(name);
 
-                    collected.push_back(std::move(muts[0]));
-                    co_return stop_iteration::no;
-                },
-                std::move(qs));
+    if (boost::iequals(short_name, "AllowAllAuthorizer")) {
+        return [&qp] {
+            return std::make_unique<allow_all_authorizer>(qp.local());
+        };
+    } else if (boost::iequals(short_name, "CassandraAuthorizer")) {
+        return [&qp] {
+            return std::make_unique<default_authorizer>(qp.local());
+        };
+    } else if (boost::iequals(short_name, "TransitionalAuthorizer")) {
+        return [&qp] {
+            return std::make_unique<transitional_authorizer>(qp.local());
+        };
+    }
+    throw std::invalid_argument(fmt::format("Unknown authorizer: {}", name));
+}
 
-            for (auto& m : collected) {
-                co_yield std::move(m);
-            }
-        }
-        co_yield co_await sys_ks.make_auth_version_mutation(ts,
-                db::system_keyspace::auth_version_t::v2);
+authenticator_factory make_authenticator_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& auth_cache) {
+    std::string_view short_name = get_short_name(name);
+
+    if (boost::iequals(short_name, "AllowAllAuthenticator")) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<allow_all_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    } else if (boost::iequals(short_name, "PasswordAuthenticator")) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<password_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    } else if (boost::iequals(short_name, "CertificateAuthenticator")) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<certificate_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    } else if (boost::iequals(short_name, "SaslauthdAuthenticator")) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<saslauthd_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    } else if (boost::iequals(short_name, "TransitionalAuthenticator")) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<transitional_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    }
+    throw std::invalid_argument(fmt::format("Unknown authenticator: {}", name));
+}
+
+role_manager_factory make_role_manager_factory(
+        std::string_view name,
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& auth_cache) {
+    std::string_view short_name = get_short_name(name);
+
+    if (boost::iequals(short_name, "CassandraRoleManager")) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<standard_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    } else if (boost::iequals(short_name, "LDAPRoleManager")) {
+        return [&qp, &g0, &mm, &auth_cache] {
+            return std::make_unique<ldap_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
+        };
+    }
+    throw std::invalid_argument(fmt::format("Unknown role manager: {}", name));
+}
+
+authenticator_factory make_maintenance_socket_authenticator_factory(
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& auth_cache) {
+    return [&qp, &g0, &mm, &auth_cache] {
+        return std::make_unique<maintenance_socket_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
     };
-    co_await announce_mutations_with_batching(g0,
-            start_operation_func,
-            std::move(gen),
-            as,
-            std::nullopt);
+}
+
+role_manager_factory make_maintenance_socket_role_manager_factory(
+        sharded<cql3::query_processor>& qp,
+        ::service::raft_group0_client& g0,
+        sharded<::service::migration_manager>& mm,
+        sharded<cache>& auth_cache) {
+    return [&qp, &g0, &mm, &auth_cache] {
+        return std::make_unique<maintenance_socket_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
+    };
 }
 
 }

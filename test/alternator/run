@@ -10,7 +10,7 @@ import requests
 # When tests are to be run against AWS (the "--aws" option), it is not
 # necessary to start Scylla at all. All we need to do is to run pytest.
 if '--aws' in sys.argv:
-    success = run.run_pytest(sys.path[0], sys.argv[1:])
+    success = run.run_pytest(sys.path[0], ['-o', 'xfail_strict=false'] + sys.argv[1:])
     exit(0 if success else 1)
 
 # check_alternator() below uses verify=False to accept self-signed SSL
@@ -65,7 +65,9 @@ def run_alternator_cmd(pid, dir):
         '--alternator-write-isolation', 'only_rmw_uses_lwt',
         '--alternator-streams-time-window-s', '0',
         '--alternator-timeout-in-ms', '30000',
-        '--alternator-ttl-period-in-seconds', '0.5',
+        # no longer needed here because it's defined in test/cqlpy/run.py
+        # now that this parameter is used also by CQL's per-row TTL.
+        #'--alternator-ttl-period-in-seconds', '0.5',
         '--alternator-allow-system-table-write=1',
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.

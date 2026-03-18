@@ -544,7 +544,6 @@ scylla_tests = set([
     'test/boost/caching_options_test',
     'test/boost/canonical_mutation_test',
     'test/boost/cartesian_product_test',
-    'test/boost/cdc_generation_test',
     'test/boost/cell_locker_test',
     'test/boost/checksum_utils_test',
     'test/boost/chunked_managed_vector_test',
@@ -619,6 +618,7 @@ scylla_tests = set([
     'test/boost/reservoir_sampling_test',
     'test/boost/result_utils_test',
     'test/boost/rest_client_test',
+    'test/boost/rolling_max_tracker_test',
     'test/boost/reusable_buffer_test',
     'test/boost/rust_test',
     'test/boost/s3_test',
@@ -730,28 +730,6 @@ vector_search_tests = set([
     'test/vector_search/rescoring_test'
 ])
 
-vector_search_validator_bin = 'vector-search-validator/bin/vector-search-validator'
-vector_search_validator_deps = set([
-    'test/vector_search_validator/build-validator',
-    'test/vector_search_validator/Cargo.toml',
-    'test/vector_search_validator/crates/validator/Cargo.toml',
-    'test/vector_search_validator/crates/validator/src/main.rs',
-    'test/vector_search_validator/crates/validator-scylla/Cargo.toml',
-    'test/vector_search_validator/crates/validator-scylla/src/lib.rs',
-    'test/vector_search_validator/crates/validator-scylla/src/cql.rs',
-])
-
-vector_store_bin = 'vector-search-validator/bin/vector-store'
-vector_store_deps = set([
-    'test/vector_search_validator/build-env',
-    'test/vector_search_validator/build-vector-store',
-])
-
-vector_search_validator_bins = set([
-    vector_search_validator_bin,
-    vector_store_bin,
-])
-
 wasms = set([
     'wasm/return_input.wat',
     'wasm/test_complex_null_values.wat',
@@ -785,7 +763,7 @@ other = set([
     'iotune',
 ])
 
-all_artifacts = apps | cpp_apps | tests | other | wasms | vector_search_validator_bins
+all_artifacts = apps | cpp_apps | tests | other | wasms
 
 arg_parser = argparse.ArgumentParser('Configure scylla', add_help=False, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 arg_parser.add_argument('--out', dest='buildfile', action='store', default='build.ninja',
@@ -817,6 +795,9 @@ arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='clan
                         help='C compiler path')
 arg_parser.add_argument('--compiler-cache', action='store', dest='compiler_cache', default='auto',
                         help='Compiler cache to use: auto (default, prefers sccache), sccache, ccache, none, or a path to a binary')
+# Workaround for https://github.com/mozilla/sccache/issues/2575
+arg_parser.add_argument('--sccache-rust', action=argparse.BooleanOptionalAction, default=False,
+                        help='Use sccache for rust code (if sccache is selected as compiler cache). Doesn\'t work with distributed builds.')
 add_tristate(arg_parser, name='dpdk', dest='dpdk', default=False,
                         help='Use dpdk (from seastar dpdk sources)')
 arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
@@ -1193,6 +1174,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/gz/crc_combine.cc',
                 'utils/gz/crc_combine_table.cc',
                 'utils/http.cc',
+                'utils/http_client_error_processing.cc',
                 'utils/rest/client.cc',
                 'utils/s3/aws_error.cc',
                 'utils/s3/client.cc',
@@ -1210,6 +1192,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/azure/identity/default_credentials.cc',
                 'utils/gcp/gcp_credentials.cc',
                 'utils/gcp/object_storage.cc',
+                'utils/gcp/object_storage_retry_strategy.cc',
                 'gms/version_generator.cc',
                 'gms/versioned_value.cc',
                 'gms/gossiper.cc',
@@ -1221,6 +1204,7 @@ scylla_core = (['message/messaging_service.cc',
                 'gms/application_state.cc',
                 'gms/inet_address.cc',
                 'dht/i_partitioner.cc',
+                'dht/fixed_shard.cc',
                 'dht/token.cc',
                 'dht/murmur3_partitioner.cc',
                 'dht/boot_strapper.cc',
@@ -1256,7 +1240,6 @@ scylla_core = (['message/messaging_service.cc',
                 'service/pager/query_pagers.cc',
                 'service/qos/qos_common.cc',
                 'service/qos/service_level_controller.cc',
-                'service/qos/standard_service_level_distributed_data_accessor.cc',
                 'service/qos/raft_service_level_distributed_data_accessor.cc',
                 'streaming/stream_task.cc',
                 'streaming/stream_session.cc',
@@ -1290,11 +1273,10 @@ scylla_core = (['message/messaging_service.cc',
                 'auth/common.cc',
                 'auth/default_authorizer.cc',
                 'auth/resource.cc',
-                'auth/roles-metadata.cc',
                 'auth/passwords.cc',
+                'auth/maintenance_socket_authenticator.cc',
                 'auth/password_authenticator.cc',
                 'auth/permission.cc',
-                'auth/permissions_cache.cc',
                 'auth/service.cc',
                 'auth/standard_role_manager.cc',
                 'auth/ldap_role_manager.cc',
@@ -1358,6 +1340,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/strong_consistency/groups_manager.cc',
                 'service/strong_consistency/coordinator.cc',
                 'service/strong_consistency/state_machine.cc',
+                'service/strong_consistency/raft_groups_storage.cc',
                 'service/raft/group0_state_id_handler.cc',
                 'service/raft/group0_state_machine.cc',
                 'service/raft/group0_state_machine_merger.cc',
@@ -1379,7 +1362,6 @@ scylla_core = (['message/messaging_service.cc',
                 'service/topology_state_machine.cc',
                 'service/topology_mutation.cc',
                 'service/topology_coordinator.cc',
-                'node_ops/node_ops_ctl.cc',
                 'node_ops/task_manager_module.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
@@ -1492,6 +1474,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/messaging_service.idl.hh',
         'idl/paxos.idl.hh',
         'idl/raft.idl.hh',
+        'idl/raft_util.idl.hh',
         'idl/raft_storage.idl.hh',
         'idl/group0.idl.hh',
         'idl/hinted_handoff.idl.hh',
@@ -1511,7 +1494,9 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/gossip.idl.hh',
         'idl/migration_manager.idl.hh',
         "idl/node_ops.idl.hh",
-        "idl/tasks.idl.hh"
+        "idl/tasks.idl.hh",
+        "idl/client_state.idl.hh",
+        "idl/forward_cql.idl.hh",
         ]
 
 scylla_tests_generic_dependencies = [
@@ -1604,6 +1589,7 @@ pure_boost_tests = set([
     'test/boost/wrapping_interval_test',
     'test/boost/range_tombstone_list_test',
     'test/boost/reservoir_sampling_test',
+    'test/boost/rolling_max_tracker_test',
     'test/boost/serialization_test',
     'test/boost/small_vector_test',
     'test/boost/top_k_test',
@@ -1664,6 +1650,7 @@ for t in sorted(perf_tests):
 
 deps['test/boost/combined_tests'] += [
     'test/boost/aggregate_fcts_test.cc',
+    'test/boost/auth_cache_test.cc',
     'test/boost/auth_test.cc',
     'test/boost/batchlog_manager_test.cc',
     'test/boost/cache_algorithm_test.cc',
@@ -1751,6 +1738,7 @@ deps['test/boost/url_parse_test'] = ['utils/http.cc', 'test/boost/url_parse_test
 deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test/boost/murmur_hash_test.cc']
 deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc', 'utils/labels.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
+deps['test/boost/rolling_max_tracker_test'] = ['test/boost/rolling_max_tracker_test.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
@@ -2405,7 +2393,7 @@ def write_build_file(f,
     # If compiler cache is available, prefix the compiler with it
     cxx_with_cache = f'{compiler_cache} {args.cxx}' if compiler_cache else args.cxx
     # For Rust, sccache is used via RUSTC_WRAPPER environment variable
-    rustc_wrapper = f'RUSTC_WRAPPER={compiler_cache} ' if compiler_cache and 'sccache' in compiler_cache else ''
+    rustc_wrapper = f'RUSTC_WRAPPER={compiler_cache} ' if compiler_cache and 'sccache' in compiler_cache and args.sccache_rust else ''
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -2582,11 +2570,10 @@ def write_build_file(f,
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
         f.write(
-            'build {mode}-build: phony {artifacts} {wasms} {vector_search_validator_bins}\n'.format(
+            'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
-                artifacts=str.join(' ', ['$builddir/' + mode + '/' + x for x in sorted(build_artifacts - wasms - vector_search_validator_bins)]),
+                artifacts=str.join(' ', ['$builddir/' + mode + '/' + x for x in sorted(build_artifacts - wasms)]),
                 wasms = str.join(' ', ['$builddir/' + x for x in sorted(build_artifacts & wasms)]),
-                vector_search_validator_bins=str.join(' ', ['$builddir/' + x for x in sorted(build_artifacts & vector_search_validator_bins)]),
             )
         )
         if profile_recipe := modes[mode].get('profile_recipe'):
@@ -2616,7 +2603,7 @@ def write_build_file(f,
                 continue
             profile_dep = modes[mode].get('profile_target', "")
 
-            if binary in other or binary in wasms or binary in vector_search_validator_bins:
+            if binary in other or binary in wasms:
                 continue
             srcs = deps[binary]
             # 'scylla'
@@ -2727,11 +2714,10 @@ def write_build_file(f,
         )
 
         f.write(
-            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla {wasms} {vector_search_validator_bins} \n'.format(
+            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla {wasms}\n'.format(
                 mode=mode,
                 test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in sorted(tests)]),
                 wasms=' '.join([f'$builddir/{binary}' for binary in sorted(wasms)]),
-                vector_search_validator_bins=' '.join([f'$builddir/{binary}' for binary in sorted(vector_search_validator_bins)]),
             )
         )
         f.write(
@@ -2897,19 +2883,6 @@ def write_build_file(f,
     )
     f.write(
             'build compiler-training: phony {}\n'.format(' '.join(['{mode}-compiler-training'.format(mode=mode) for mode in default_modes]))
-    )
-
-    f.write(textwrap.dedent(f'''\
-        rule build-vector-search-validator
-            command = test/vector_search_validator/build-validator $builddir
-        rule build-vector-store
-            command = test/vector_search_validator/build-vector-store $builddir
-        '''))
-    f.write(
-            'build $builddir/{vector_search_validator_bin}: build-vector-search-validator {}\n'.format(' '.join([dep for dep in sorted(vector_search_validator_deps)]), vector_search_validator_bin=vector_search_validator_bin)
-    )
-    f.write(
-            'build $builddir/{vector_store_bin}: build-vector-store {}\n'.format(' '.join([dep for dep in sorted(vector_store_deps)]), vector_store_bin=vector_store_bin)
     )
 
     f.write(textwrap.dedent(f'''\
@@ -3149,7 +3122,7 @@ def configure_using_cmake(args):
         settings['CMAKE_CXX_COMPILER_LAUNCHER'] = compiler_cache
         settings['CMAKE_C_COMPILER_LAUNCHER'] = compiler_cache
         # For Rust, sccache is used via RUSTC_WRAPPER
-        if 'sccache' in compiler_cache:
+        if 'sccache' in compiler_cache and args.sccache_rust:
             settings['Scylla_RUSTC_WRAPPER'] = compiler_cache
 
     if args.date_stamp:

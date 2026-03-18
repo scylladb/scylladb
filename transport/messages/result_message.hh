@@ -13,14 +13,17 @@
 #include <concepts>
 
 #include "cql3/result_set.hh"
+#include "cql3/prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_options.hh"
 
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
 #include "exceptions/coordinator_result.hh"
+#include "locator/host_id.hh"
 #include "types/types.hh"
 
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 
@@ -30,14 +33,14 @@ namespace messages {
 
 class result_message::prepared : public result_message {
 private:
-    cql3::statements::prepared_statement::checked_weak_ptr _prepared;
+    cql3::prepared_statements_cache::pinned_value_type _prepared_entry;
     cql3::prepared_metadata _metadata;
     ::shared_ptr<const cql3::metadata> _result_metadata;
 protected:
-    prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared, bool support_lwt_opt);
+    prepared(cql3::prepared_statements_cache::pinned_value_type prepared_entry, bool support_lwt_opt);
 public:
-    cql3::statements::prepared_statement::checked_weak_ptr& get_prepared() {
-        return _prepared;
+    cql3::statements::prepared_statement::checked_weak_ptr get_prepared() {
+        return (*_prepared_entry)->checked_weak_from_this();
     }
 
     const cql3::prepared_metadata& metadata() const {
@@ -49,7 +52,7 @@ public:
     }
 
     cql3::cql_metadata_id_type get_metadata_id() const {
-        return _prepared->get_metadata_id();
+        return (*_prepared_entry)->get_metadata_id();
     }
 
     class cql;
@@ -64,7 +67,7 @@ public:
     virtual void visit(const result_message::prepared::cql&) = 0;
     virtual void visit(const result_message::schema_change&) = 0;
     virtual void visit(const result_message::rows&) = 0;
-    virtual void visit(const result_message::bounce_to_shard&) = 0;
+    virtual void visit(const result_message::bounce&) = 0;
     virtual void visit(const result_message::exception&) = 0;
 };
 
@@ -75,7 +78,7 @@ public:
     void visit(const result_message::prepared::cql&) override {};
     void visit(const result_message::schema_change&) override {};
     void visit(const result_message::rows&) override {};
-    void visit(const result_message::bounce_to_shard&) override { SCYLLA_ASSERT(false); };
+    void visit(const result_message::bounce&) override { SCYLLA_ASSERT(false); };
     void visit(const result_message::exception&) override;
 };
 
@@ -91,12 +94,21 @@ std::ostream& operator<<(std::ostream& os, const result_message::void_message& m
 // This result is handled internally and should never be returned
 // to a client. Any visitor should abort while handling it since
 // it is a sure sign of a error.
-class result_message::bounce_to_shard : public result_message {
+class result_message::bounce : public result_message {
+    locator::host_id _host;
     unsigned _shard;
     cql3::computed_function_values _cached_fn_calls;
+    std::optional<seastar::lowres_clock::time_point> _timeout;
+    std::optional<bool> _is_write;
+
 public:
-    bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls)
-        : _shard(shard), _cached_fn_calls(std::move(cached_fn_calls))
+    bounce(locator::host_id host, unsigned shard, cql3::computed_function_values cached_fn_calls,
+           std::optional<seastar::lowres_clock::time_point> timeout = std::nullopt, std::optional<bool> is_write = std::nullopt)
+        : _host(host)
+        , _shard(shard)
+        , _cached_fn_calls(std::move(cached_fn_calls))
+        , _timeout(std::move(timeout))
+        , _is_write(std::move(is_write))
     {}
     virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
@@ -105,12 +117,24 @@ public:
         return _shard;
     }
 
+    locator::host_id move_to_host() const {
+        return _host;
+    }
+
+    std::optional<seastar::lowres_clock::time_point> timeout() const {
+        return _timeout;
+    }
+
+    std::optional<bool> is_write() const {
+        return _is_write;
+    }
+
     cql3::computed_function_values&& take_cached_pk_function_calls() {
         return std::move(_cached_fn_calls);
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const result_message::bounce_to_shard& msg);
+std::ostream& operator<<(std::ostream& os, const result_message::bounce& msg);
 
 // This result is handled internally. It can be used to indicate an exception
 // which needs to be handled without involving the C++ exception machinery,
@@ -166,8 +190,8 @@ std::ostream& operator<<(std::ostream& os, const result_message::set_keyspace& m
 class result_message::prepared::cql : public result_message::prepared {
     bytes _id;
 public:
-    cql(const bytes& id, cql3::statements::prepared_statement::checked_weak_ptr p, bool support_lwt_opt)
-        : result_message::prepared(std::move(p), support_lwt_opt)
+    cql(const bytes& id, cql3::prepared_statements_cache::pinned_value_type prepared_entry, bool support_lwt_opt)
+        : result_message::prepared(std::move(prepared_entry), support_lwt_opt)
         , _id{id}
     { }
 

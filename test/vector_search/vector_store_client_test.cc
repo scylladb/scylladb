@@ -283,7 +283,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
                 auto schema = co_await create_test_table(env, "ks", "vs");
                 auto as = abort_source_timeout();
                 auto& vs = env.local_qp().vector_store_client();
-                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"bad.authority.here", std::nullopt}});
+                configure(vs)
+                        .with_dns_refresh_interval(seconds(1))
+                        .with_dns({{"bad.authority.here", std::nullopt}})
+                        .with_wait_for_client_timeout(milliseconds(100));
 
                 vs.start_background_tasks();
 
@@ -368,6 +371,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 auto* err = std::get_if<vector_store_client::service_error>(&keys.error());
                 BOOST_CHECK(err != nullptr);
                 BOOST_CHECK_EQUAL(err->status, status_type::not_found);
+                BOOST_CHECK_EQUAL(err->message, "idx2 not found");
 
                 // missing primary_keys in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
@@ -1008,8 +1012,9 @@ SEASTAR_TEST_CASE(vector_store_client_https) {
 
                 auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
-                BOOST_CHECK(keys);
-                co_return;
+                if (!keys) {
+                    BOOST_FAIL("Expected successful ANN result, but got error: " << std::visit(vector_search::error_visitor{}, keys.error()));
+                }
             },
             cfg)
             .finally(seastar::coroutine::lambda([&] -> future<> {
@@ -1044,7 +1049,16 @@ SEASTAR_TEST_CASE(vector_store_client_https_rewrite_ca_cert) {
                 std::filesystem::copy_file(
                         std::string(certs.ca_cert_file()), std::string(broken_cert.get_path().string()), std::filesystem::copy_options::overwrite_existing);
 
-                // Wait for the client to reload the CA cert and succeed
+                // Wait for the truststore to reload the updated cert on all shards before attempting ANN requests.
+                // This avoids a race where an ANN request initiates a TLS handshake using the old (broken) credentials
+                // while the reload is still in progress, which can cause a long hang due to TLS handshake timeout.
+                co_await env.vector_store_client().invoke_on_all([&](this auto, vector_store_client& vs) -> future<> {
+                    BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                        co_return vector_store_client_tester::truststore_reload_count(vs) >= 1;
+                    }));
+                });
+
+                // Wait for the client to succeed with the reloaded CA cert
                 co_await env.vector_store_client().invoke_on_all([&](this auto, vector_store_client& vs) -> future<> {
                     auto schema = env.local_db().find_schema("ks", "idx");
                     auto as = abort_source_timeout();
@@ -1089,7 +1103,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_wrong_hostname) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_https_different_ca_cert_verification_error) {
+SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error) {
     auto broken_cert = co_await seastar::make_tmp_file();
     certificates certs;
     auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
@@ -1102,6 +1116,33 @@ SEASTAR_TEST_CASE(vector_store_client_https_different_ca_cert_verification_error
                 auto schema = co_await create_test_table(env, "ks", "idx");
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns({{certs.server_cert_cn(), std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+                co_await remove(broken_cert);
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error_host_is_ip) {
+    auto broken_cert = co_await seastar::make_tmp_file();
+    certificates certs;
+    auto server = co_await make_vs_mock_server(co_await make_server_credentials(certs));
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("https://{}:{}", server->host(), server->port()));
+    cfg.db_config->vector_store_encryption_options.set({{"truststore", broken_cert.get_path().string()}});
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{server->host(), std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
 
                 auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
@@ -1169,6 +1210,65 @@ SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
                         exceptions::invalid_request_exception, [](const exceptions::invalid_request_exception& ex) {
                             return ex.what() == std::string("Vector Store request was aborted");
                         });
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}
+
+/// Verify that the HTTP error description from the vector store is propagated
+/// through the CQL interface as part of the invalid_request_exception message.
+SEASTAR_TEST_CASE(vector_store_client_cql_error_contains_http_error_description) {
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+                co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+
+                // Configure mock to return 404 with a specific error message
+                server->next_ann_response({status_type::not_found, "index does not exist"});
+
+                BOOST_CHECK_EXCEPTION(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"),
+                        exceptions::invalid_request_exception, [](const exceptions::invalid_request_exception& ex) {
+                            auto msg = std::string(ex.what());
+                            // Verify the error message contains both the HTTP status and the error description
+                            return msg.find("404") != std::string::npos && msg.find("index does not exist") != std::string::npos;
+                        });
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
+}
+
+// Create a vector index with an additional filtering column.
+// Because the local secondary index logic was used to determine the index target column,
+// the implementation wrongly selects last column as the target(vectors) column, leading to an exception
+// on the SELECT query:
+//     ANN ordering by vector requires the column to be indexed using 'vector_index'.
+// Reproduces SCYLLADB-635.
+SEASTAR_TEST_CASE(vector_store_client_vector_index_with_additional_filtering_column) {
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+                // Create a vector index on the embedding column, including ck1 for filtered ANN search support.
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding, ck1) USING 'vector_index'");
+
+                BOOST_CHECK_NO_THROW(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"));
             },
             cfg)
             .finally(seastar::coroutine::lambda([&] -> future<> {

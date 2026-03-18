@@ -136,7 +136,6 @@ class paxos_store:
     future<> create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout);
     static schema_ptr create_paxos_state_schema(const schema& s);
     schema_ptr try_get_paxos_state_schema(const schema& s) const;
-    void check_raft_is_enabled(const schema& s) const;
 public:
     explicit paxos_store(db::system_keyspace& sys_ks, gms::feature_service& features, replica::database& db, migration_manager& mm);
     ~paxos_store();

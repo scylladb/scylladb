@@ -114,6 +114,7 @@ inline auto check_run_test_decorator(std::string_view test_var, bool def = false
 }
 
 extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test::test_unit_id);
+void adjust_rlimit();
 future<bool> compare_files(std::string fa, std::string fb);
 future<> touch_file(std::string name);
 

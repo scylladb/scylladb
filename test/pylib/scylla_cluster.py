@@ -13,6 +13,7 @@ from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
 from collections import ChainMap
 import itertools
+import threading
 import logging
 import os
 import pathlib
@@ -30,7 +31,8 @@ from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
-from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id
+from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, scale_timeout_by_mode
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from functools import partial
 import aiohttp
@@ -44,6 +46,7 @@ import platform
 import contextlib
 import fcntl
 import urllib
+import socket
 
 import psutil
 
@@ -82,7 +85,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
     # reason, so we increase the timeouts according to each mode's needs. The client
     # should avoid timing out its requests before the server times out - for this reason
     # we increase the CQL driver's client-side timeout in conftest.py.
-    request_timeout_in_ms = 90000 if mode in {'debug', 'sanitize'} else 30000
+    request_timeout_in_ms = scale_timeout_by_mode(mode, 30000)
 
     return {
         'cluster_name': cluster_name,
@@ -111,6 +114,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
                                   'views-with-tablets'],
 
         'skip_wait_for_gossip_to_settle': 0,
+        'shutdown_announce_in_ms': 0,
         'ring_delay_ms': 0,
         'num_tokens': 16,
         'flush_schema_tables_after_modification': False,
@@ -140,6 +144,10 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
 
         'maintenance_socket': socket_path,
 
+        'auth_superuser_name': 'cassandra',
+        # password is 'cassandra'
+        'auth_superuser_salted_password': '$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/',
+
         'service_levels_interval_ms': 500,
 
         'server_encryption_options': {
@@ -152,6 +160,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         'rf_rack_valid_keyspaces': True,
 
         'alternator_allow_system_table_write': True,
+        'alternator_ttl_period_in_seconds': 0.5,
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line
@@ -214,15 +223,26 @@ async def with_file_lock(lock_path: pathlib.Path) -> AsyncIterator[None]:
 
 async def get_scylla_2025_1_executable(build_mode: str) -> str:
     async def run_process(cmd, **kwargs):
-        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
-        await proc.communicate()
-        assert proc.returncode == 0
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stderr=asyncio.subprocess.PIPE, **kwargs)
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Command {cmd} failed with exit code {proc.returncode}: {stderr.decode(errors='replace').strip()}"
+            )
 
     is_debug = build_mode == 'debug' or build_mode == 'sanitize'
     package = "scylla-debug" if is_debug else "scylla"
     arch = platform.machine()
     url = f'https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/{package}-2025.1.0-0.20250325.9dca28d2b818.{arch}.tar.gz'
 
+    return await get_scylla_executable(url)
+
+async def get_scylla_executable(url: str) -> str:
+    async def run_process(cmd, **kwargs):
+        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+        await proc.communicate()
+        assert proc.returncode == 0
     archive_filename = urllib.parse.urlparse(url).path.split("/")[-1]
 
     xdg_cache_dir = pathlib.Path(os.getenv("XDG_CACHE_HOME", str(pathlib.Path.home() / ".cache")))
@@ -243,7 +263,7 @@ async def get_scylla_2025_1_executable(build_mode: str) -> str:
             if not unpacked_marker.exists():
                 if not downloaded_marker.exists():
                     archive_path.unlink(missing_ok=True)
-                    await run_process(["curl", "--retry", "10", "--fail", "--silent", "--show-error", "--output", archive_path, url])
+                    await run_process(["curl", "--retry", "40", "--retry-max-time", "60", "--fail", "--silent", "--show-error", "--retry-all-errors", "--output", archive_path, url])
                     downloaded_marker.touch()
                 shutil.rmtree(unpack_dir, ignore_errors=True)
                 unpack_dir.mkdir(exist_ok=True, parents=True)
@@ -385,6 +405,10 @@ class ScyllaServer:
             prefix=f"scylladb-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}-test.py-"
         )
         self.maintenance_socket_path = f"{self.maintenance_socket_dir.name}/cql.m"
+        # Unix socket for receiving sd_notify messages from Scylla
+        self.notify_socket_path = pathlib.Path(self.maintenance_socket_dir.name) / "notify.sock"
+        self.notify_socket: Optional[socket.socket] = None
+        self._received_serving = False
         self.exe = pathlib.Path(version.path).resolve()
         self.vardir = pathlib.Path(vardir)
         self.logger = logger
@@ -401,6 +425,7 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
+        self.serving_signal = None
         shortname = f"scylla-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}"
 
         workdir = self.vardir / shortname
@@ -712,6 +737,66 @@ class ScyllaServer:
             caslog.setLevel(oldlevel)
         # Any other exception may indicate a problem, and is passed to the caller.
 
+    def _setup_notify_socket(self) -> None:
+        """Create a Unix datagram socket for receiving sd_notify messages from Scylla."""
+        if self.notify_socket is not None:
+            return
+        # Remove existing socket file if present
+        self.notify_socket_path.unlink(missing_ok=True)
+        self.notify_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC)
+        self.notify_socket.bind(str(self.notify_socket_path))
+        self._received_serving = False
+        def poll_status(s: socket.socket, f: asyncio.Future, logger: Union[logging.Logger, logging.LoggerAdapter]):
+            # Try to read all available messages from the socket
+            while True:
+                try:
+                    data = s.recv(4096)
+                    # sd_notify message format: "STATUS=serving\n" or "READY=1\nSTATUS=serving\n"
+                    message = data.decode('utf-8', errors='replace')
+                    if 'STATUS=serving' in message:
+                        logger.debug("Received sd_notify 'serving' message")
+                        f.set_result(True)
+                        return
+                    if 'STATUS=entering maintenance mode' in message:
+                        logger.debug("Receive sd_notify 'entering maintenance mode'")
+                        break
+                except socket.timeout:
+                    pass
+                except Exception as e:
+                    logger.debug("Error reading from notify socket: %s", e)
+                    break
+            f.set_result(False)
+
+        self.serving_signal = asyncio.get_running_loop().create_future()
+        t = threading.Thread(target=poll_status, args=[self.notify_socket, self.serving_signal, self.logger], daemon=True)
+        t.start()
+
+    def _cleanup_notify_socket(self) -> None:
+        """Clean up the sd_notify socket."""
+        if self.notify_socket is not None:
+            self.notify_socket.close()
+            self.notify_socket = None
+        if self.serving_signal is not None:
+            self.serving_signal.cancel()
+            self.serving_signal = None
+        self.notify_socket_path.unlink(missing_ok=True)
+
+    def check_serving_notification(self) -> bool:
+        """Check if Scylla has sent the 'serving' sd_notify message.
+
+        Returns True if the SERVING state has been reached.
+        """
+        if self._received_serving:
+            return True
+        if self.notify_socket is None:
+            return False
+        if self.serving_signal is None:
+            return False
+        if self.serving_signal.done():
+            self._received_serving = self.serving_signal.result()
+            self.serving_signal = None
+        return False
+
     async def try_get_host_id(self, api: ScyllaRESTAPIClient) -> Optional[HostID]:
         """Try to get the host id (also tests Scylla REST API is serving)"""
 
@@ -754,6 +839,10 @@ class ScyllaServer:
         env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={TOP_SRC_DIR / "ubsan-suppressions.supp"}'
         env['ASAN_OPTIONS'] = f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'
 
+        # Set up socket for receiving sd_notify messages from Scylla
+        self._setup_notify_socket()
+        env['NOTIFY_SOCKET'] = self.notify_socket_path
+
         # Reopen log file if it was closed (e.g., after a previous stop)
         if self.log_file is None or self.log_file.closed:
             self.log_file = self.log_filename.open("ab")  # append mode to preserve previous logs
@@ -765,7 +854,6 @@ class ScyllaServer:
             stderr=self.log_file,
             stdout=self.log_file,
             env=env,
-            preexec_fn=os.setsid,
         )
 
         if expected_server_up_state == ServerUpState.PROCESS_STARTED:
@@ -803,12 +891,15 @@ class ScyllaServer:
                                 return
                         await report_error("the node startup failed, but the log file doesn't contain the expected error")
                 await report_error("failed to start the node")
-
+            self.logger.info("Wait me %s expect %s is %s", self.server_id, expected_server_up_state, server_up_state)
             if await self.try_get_host_id(api):
                 if server_up_state == ServerUpState.PROCESS_STARTED:
                     server_up_state = ServerUpState.HOST_ID_QUERIED
                 server_up_state = await self.get_cql_up_state() or server_up_state
-                if server_up_state == expected_server_up_state:
+                # Check for SERVING state (sd_notify "serving" message)
+                if server_up_state >= ServerUpState.CQL_QUERIED and self.check_serving_notification():
+                    server_up_state = ServerUpState.SERVING
+                if server_up_state >= expected_server_up_state:
                     if expected_error is not None:
                         await report_error(
                             f"the node has reached {server_up_state} state,"
@@ -847,13 +938,14 @@ class ScyllaServer:
                 session.execute("DROP KEYSPACE k")
 
     async def shutdown_control_connection(self) -> None:
-        """Shut down driver connection"""
+        """Shut down driver connection and notify socket"""
         if self.control_connection is not None:
             self.control_connection.shutdown()
             self.control_connection = None
         if self.control_cluster is not None:
-            self.control_cluster.shutdown()
+            safe_driver_shutdown(self.control_cluster)
             self.control_cluster = None
+        self._cleanup_notify_socket()
 
     @stop_event
     @start_stop_lock
@@ -862,6 +954,7 @@ class ScyllaServer:
         stop, so is not graceful. Waits for the process to exit before return."""
         self.logger.info("stopping %s in %s", self, self.workdir.name)
         if not self.cmd:
+            await self.shutdown_control_connection()
             return
 
         # Dump the profile if exists and supported by the API.
@@ -1335,7 +1428,6 @@ class ScyllaCluster:
                            server_id: ServerNum,
                            expected_error: str | None = None,
                            seeds: list[IPAddress] | None = None,
-                           connect_driver = True,
                            expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None,
@@ -1362,8 +1454,6 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
-        if not connect_driver:
-            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
 
         def instance_auth_provider(desc: dict):
             module_path, class_name = desc["authenticator"].rsplit('.', 1)
@@ -1821,7 +1911,6 @@ class ScyllaClusterManager:
             server_id=server_id,
             expected_error=data.get("expected_error"),
             seeds=data.get("seeds"),
-            connect_driver=data.get("connect_driver"),
             expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_QUERIED")),
             cmdline_options_override=data.get("cmdline_options_override"),
             append_env_override=data.get("append_env_override"),

@@ -246,6 +246,7 @@ public:
 
     schema_builder& with_partitioner(sstring name);
     schema_builder& with_sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits);
+    schema_builder& with_sharder(const dht::static_sharder& sharder);
     schema_builder& set_in_memory(bool in_memory) {
         _raw._in_memory = in_memory;
         return *this;
@@ -263,8 +264,9 @@ public:
     void enable_schema_commitlog() {
         _static_props.enable_schema_commitlog();
     }
-    void set_is_group0_table(bool enabled = true) {
-        _static_props.is_group0_table = enabled;
+    void set_is_group0_table() {
+        _static_props.is_group0_table = true;
+        enable_schema_commitlog();
     }
 
     class default_names {

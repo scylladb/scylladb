@@ -38,7 +38,6 @@ Knowledge Base
   * :doc:`If a query does not reveal enough results </kb/cqlsh-results>`
   * :doc:`How to Change gc_grace_seconds for a Table </kb/gc-grace-seconds>` - How to change the ``gc_grace_seconds`` parameter and prevent data resurrection.
   * :doc:`How to flush old tombstones from a table </kb/tombstones-flush>` - How to remove old tombstones from SSTables.
-  * :doc:`Increase Cache to Avoid Non-paged Queries </kb/increase-permission-cache>` - How to increase the ``permissions_cache_max_entries`` setting.
   * :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`
   * :doc:`Facts about TTL, Compaction, and gc_grace_seconds <ttl-facts>`
   * :doc:`Efficient Tombstone Garbage Collection in ICS <garbage-collection-ics>`

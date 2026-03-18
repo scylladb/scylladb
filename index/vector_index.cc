@@ -16,11 +16,12 @@
 #include "index/vector_index.hh"
 #include "index/secondary_index.hh"
 #include "index/secondary_index_manager.hh"
+#include "index/target_parser.hh"
 #include "types/concrete_types.hh"
+#include "types/types.hh"
 #include "utils/managed_string.hh"
 #include <seastar/core/sstring.hh>
 #include <boost/algorithm/string.hpp>
-
 
 namespace secondary_index {
 
@@ -104,6 +105,19 @@ const static std::unordered_map<sstring, std::function<void(const sstring&, cons
         {"rescoring", std::bind_front(validate_enumerated_option, boolean_values)},
     };
 
+sstring get_vector_index_target_column(const sstring& targets) {
+    std::optional<rjson::value> json_value = rjson::try_parse(targets);
+    if (!json_value || !json_value->IsObject()) {
+        return target_parser::get_target_column_name_from_string(targets);
+    }
+
+    rjson::value* pk = rjson::find(*json_value, "pk");
+    if (pk && pk->IsArray() && !pk->Empty()) {
+        return sstring(rjson::to_string_view(pk->GetArray()[0]));
+    }
+    return target_parser::get_target_column_name_from_string(targets);
+}
+
 bool vector_index::is_rescoring_enabled(const index_options_map& properties) {
     auto q = properties.find("quantization");
     auto r = properties.find("rescoring");
@@ -147,17 +161,88 @@ std::optional<cql3::description> vector_index::describe(const index_metadata& im
 }
 
 void vector_index::check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const {
-    if (targets.size() != 1) {
-        throw exceptions::invalid_request_exception("Vector index can only be created on a single column");
-    }
-    auto target = targets[0];
-    auto c_def = schema.get_column_definition(to_bytes(target->column_name()));
-    if (!c_def) {
-        throw exceptions::invalid_request_exception(format("Column {} not found in schema", target->column_name()));
-    }
-    auto type = c_def->type;
-    if (!type->is_vector() || static_cast<const vector_type_impl*>(type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
-        throw exceptions::invalid_request_exception(format("Vector indexes are only supported on columns of vectors of floats", target->column_name()));
+
+    struct validate_visitor {
+        const class schema& schema;
+        bool& is_vector;
+
+        /// Vector indexes support filtering on native types that can be used as primary key columns.
+        /// There is no counter (it cannot be used with vector columns)
+        /// and no duration (it cannot be used as a primary key or in secondary indexes).
+        static bool is_supported_filtering_column(abstract_type const & kind_type) {
+            switch (kind_type.get_kind()) {
+                case abstract_type::kind::ascii:
+                case abstract_type::kind::boolean:
+                case abstract_type::kind::byte:
+                case abstract_type::kind::bytes:
+                case abstract_type::kind::date:
+                case abstract_type::kind::decimal:
+                case abstract_type::kind::double_kind:
+                case abstract_type::kind::float_kind:
+                case abstract_type::kind::inet:
+                case abstract_type::kind::int32:
+                case abstract_type::kind::long_kind:
+                case abstract_type::kind::short_kind:
+                case abstract_type::kind::simple_date:
+                case abstract_type::kind::time:
+                case abstract_type::kind::timestamp:
+                case abstract_type::kind::timeuuid:
+                case abstract_type::kind::utf8:
+                case abstract_type::kind::uuid:
+                case abstract_type::kind::varint:
+                    return true;
+                default:
+                    break;
+            }
+            return false;
+        }
+
+        void validate(cql3::column_identifier const& column, bool is_vector) const {
+            auto const& c_name = column.to_string();
+            auto const* c_def = schema.get_column_definition(column.name());
+            if (c_def == nullptr) {
+                throw exceptions::invalid_request_exception(format("Column {} not found in schema", c_name));
+            }
+
+            auto type = c_def->type;
+
+            if (is_vector) {
+                auto const* vector_type = dynamic_cast<const vector_type_impl*>(type.get());
+                if (vector_type == nullptr) {
+                    throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
+                }
+
+                auto elements_type = vector_type->get_elements_type();
+                if (elements_type->get_kind() != abstract_type::kind::float_kind) {
+                    throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
+                }
+                return;
+            }
+
+            if (!is_supported_filtering_column(*type)) {
+                throw exceptions::invalid_request_exception(format("Unsupported vector index filtering column {} type", c_name));
+            }
+        }
+
+        void operator()(const std::vector<::shared_ptr<cql3::column_identifier>>& columns) const {
+            for (const auto& column : columns) {
+                // CQL restricts the secondary local index to have multiple columns with partition key only.
+                // Vectors shouldn't be partition key columns and they aren't supported as a filtering column,
+                // so we can assume here that these are non-vectors filtering columns.
+                validate(*column, false);
+            }
+        }
+
+        void operator()(const ::shared_ptr<cql3::column_identifier>& column) {
+            validate(*column, is_vector);
+            // The first column is the vector column, the rest mustn't be vectors.
+            is_vector = false;
+        }
+    };
+
+    bool is_vector = true;
+    for (const auto& target : targets) {
+        std::visit(validate_visitor{.schema = schema, .is_vector = is_vector}, target->value);
     }
 }
 
@@ -249,12 +334,19 @@ bool vector_index::has_vector_index(const schema& s) {
 
 bool vector_index::has_vector_index_on_column(const schema& s, const sstring& target_name) {
     for (const auto& index : s.indices()) {
-        auto class_it = index.options().find(db::index::secondary_index::custom_class_option_name);
-        auto target_it = index.options().find(cql3_parser::index_target::target_option_name);
-        if (class_it != index.options().end() && target_it != index.options().end()) {
-            auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
-            return custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && target_it->second == target_name;
+        if (is_vector_index_on_column(index, target_name)) {
+            return true;
         }
+    }
+    return false;
+}
+
+bool vector_index::is_vector_index_on_column(const index_metadata& im, const sstring& target_name) {
+    auto class_it = im.options().find(db::index::secondary_index::custom_class_option_name);
+    auto target_it = im.options().find(cql3_parser::index_target::target_option_name);
+    if (class_it != im.options().end() && target_it != im.options().end()) {
+        auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
+        return custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && get_vector_index_target_column(target_it->second) == target_name;
     }
     return false;
 }

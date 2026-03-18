@@ -117,12 +117,6 @@ public:
         virtual future<> drop_service_level(sstring service_level_name, service::group0_batch& mc) const = 0;
         virtual future<> commit_mutations(service::group0_batch&& mc, abort_source& as) const = 0;
 
-        virtual bool is_v2() const = 0;
-        // Returns whether effective service level cache can be populated and used.
-        // This is equivalent to checking whether auth + raft have been migrated to raft.
-        virtual bool can_use_effective_service_level_cache() const = 0;
-        // Returns v2(raft) data accessor. If data accessor is already a raft one, returns nullptr.
-        virtual ::shared_ptr<service_level_distributed_data_accessor> upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const = 0;
     };
     using service_level_distributed_data_accessor_ptr = ::shared_ptr<service_level_distributed_data_accessor>;
 
@@ -150,23 +144,16 @@ public:
 
         /// Find the effective service level for a given role.
         /// If there is no applicable service level for it, `std::nullopt` is returned instead.
-        future<std::optional<service_level_options>> find_effective_service_level(const sstring& role_name);
-        /// Synchronous version of `find_effective_service_level` that only checks the cache.
         std::optional<service_level_options> find_cached_effective_service_level(const sstring& role_name);
 
-        /// Execute a function within the service level context of a user, get_user_scheduling_group - async version 
-        /// get_user_cached_scheduling_group - sync version (used for v2 servers).
-        future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
+        /// Get the scheduling group for a user based on their effective service level.
         scheduling_group get_user_cached_scheduling_group(const std::optional<auth::authenticated_user>& usr);
 
         template <typename Func, typename Ret = std::invoke_result_t<Func>>
             requires std::invocable<Func>
         futurize_t<Ret> with_user_service_level(const std::optional<auth::authenticated_user>& user, Func&& func) {
-            // No need to hold `_stop_gate` here. It'll be held during the call to `find_effective_service_level`,
-            // and after that it's not necessary. We do NOT hold it here to avoid postpoing finishing `stop`.
-
             if (user && user->name) {
-                const std::optional<service_level_options> maybe_sl_opts = co_await find_effective_service_level(*user->name);
+                const std::optional<service_level_options> maybe_sl_opts = find_cached_effective_service_level(*user->name);
                 const sstring& sl_name = maybe_sl_opts && maybe_sl_opts->shares_name
                         ? *maybe_sl_opts->shares_name
                         : service_level_controller::default_service_level_name;
@@ -252,7 +239,7 @@ public:
      * Reloads data accessor, this is used to align it with service level version
      * stored in scylla_local table.
      */
-    future<> reload_distributed_data_accessor(cql3::query_processor&, service::raft_group0_client&, db::system_keyspace&, db::system_distributed_keyspace&);
+    void reload_distributed_data_accessor(cql3::query_processor&, service::raft_group0_client&);
 
     /**
      *  Adds a service level configuration if it doesn't exists, and updates
@@ -293,18 +280,12 @@ public:
     template <typename Func, typename Ret = std::invoke_result_t<Func>>
     requires std::invocable<Func>
     futurize_t<Ret> with_user_service_level(const std::optional<auth::authenticated_user>& usr, Func&& func) {
-        // Special case:
-        // -------------
         // The maintenance socket can communicate with Scylla before `auth_integration`
         // is registered, and we need to prepare for it.
-        // For the discussion, see: scylladb/scylladb#26816.
-        //
-        // TODO: Get rid of this.
-        if (!usr.has_value() || auth::is_anonymous(usr.value())) {
+        if (!_auth_integration) {
             return with_scheduling_group(get_default_scheduling_group(), std::forward<Func>(func));
         }
 
-        SCYLLA_ASSERT(_auth_integration != nullptr);
         return _auth_integration->with_user_service_level(usr, std::forward<Func>(func));
     }
 
@@ -338,12 +319,6 @@ public:
      */
     scheduling_group get_scheduling_group(sstring service_level_name);
     /**
-     * Get the scheduling group of a specific user
-     * @param user - the user for determining the service level
-     * @return if the user is authenticated the user's scheduling group. otherwise get_scheduling_group("default")
-     */
-    future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
-    /**
      * Get the scheduling group of a specific user for the service level cache
      * @param user - the user for determining the service level
      * @return if the user is authenticated the user's scheduling group. otherwise get_scheduling_group("default")
@@ -356,21 +331,6 @@ public:
     std::optional<sstring> get_active_service_level();
 
     /**
-     * Start legacy update loop if RAFT_SERVICE_LEVELS_CHANGE feature is not enabled yet 
-     * or the cluster is in recovery mode
-     * or the cluster hasn't been migrated to raft topology.
-     *
-     * The update loop check the distributed data 
-     * for changes in a constant interval and updates
-     * the service_levels configuration in accordance (adds, removes, or updates
-     * service levels as necessary).
-     * @param interval_f - lambda function which returns a interval in milliseconds.
-                           The interval is time to check the distributed data.
-     * @return a future that is resolved when the update loop stops.
-     */
-    void maybe_start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f, service::storage_service& storage_service, service::raft_group0_client& group0_client);
-
-    /**
      * Get mutations required to:
      * 1. create `sl:driver`
      * 2. store information that `sl:driver` was created in `system.scylla_local`
@@ -381,12 +341,6 @@ public:
        the information it was created in `system.scylla_local`.
      */
     future<std::optional<service::group0_guard>> migrate_to_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks);
-
-    /**
-     * Request abort of update loop.
-     * Must be called on shard 0.
-     */
-    void stop_legacy_update_from_distributed_data();
 
     /**
      * Updates the service level cache from the distributed data store.
@@ -410,13 +364,6 @@ public:
     future<service_levels_info> get_distributed_service_levels(qos::query_context ctx);
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
 
-    /*
-    * Returns whether effective service level cache can be populated and used.
-    * This is equivalent to checking whether auth + raft have been migrated to raft.
-    */
-    bool can_use_effective_service_level_cache() const;
-    
-    
     /**
      * Returns the service level options **in effect** for a user having the given
      * collection of roles.
@@ -424,10 +371,6 @@ public:
      * @return the effective service level options - they may in particular be a combination
      *         of options from multiple service levels
      */
-    future<std::optional<service_level_options>> find_effective_service_level(const sstring& role_name);
-
-    // Synchronous equivalent of `find_effective_service_level`. 
-    // The method uses only effective service level cache, so it requires service levels in v2.
     std::optional<service_level_options> find_cached_effective_service_level(const sstring& role_name);
 
     /**
@@ -451,23 +394,9 @@ public:
     future<std::vector<cql3::description>> describe_service_levels();
 
     future<> commit_mutations(::service::group0_batch&& mc) {
-        if (_sl_data_accessor->is_v2()) {
-            return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
-        }
-        return make_ready_future();
+        return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
     }
 
-    /**
-     * Returns true if service levels module is running under raft
-     */
-    bool is_v2() const;
-
-    void upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client);
-
-    /**
-     * Migrate data from `system_distributed.service_levels` to `system.service_levels_v2`
-     */
-    static future<> migrate_to_v2(size_t nodes_count, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as);
 private:
     /**
      *  Adds a service level configuration if it doesn't exists, and updates
@@ -534,12 +463,5 @@ public:
 
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) override;
 };
-
-future<shared_ptr<service_level_controller::service_level_distributed_data_accessor>> 
-get_service_level_distributed_data_accessor_for_current_version(
-    db::system_keyspace& sys_ks,
-    db::system_distributed_keyspace& sys_dist_ks,
-    cql3::query_processor& qp, service::raft_group0_client& group0_client
-);
 
 }

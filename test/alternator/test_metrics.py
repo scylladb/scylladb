@@ -147,11 +147,11 @@ def check_table_increases_operation(metrics, operation_names, table, metric_name
 def histogram_bucket_offsets(size, ratio=1.2):
     """
     Generate bucket offsets for an estimated histogram.
-    
+
     Args:
         size (int): Number of bucket offsets to generate
         ratio (float): The multiplier for the exponential growth (default is 1.2)
-        
+
     Returns:
         list: List of bucket offset values
     """
@@ -168,23 +168,71 @@ def histogram_bucket_offsets(size, ratio=1.2):
         last = current
     return bucket_offsets
 
-def bucket_idx(size_in_kb, bucket_count=30, ratio=1.2):
-    buckets = histogram_bucket_offsets(bucket_count, ratio)
+def expo_estimated_histogram_bucket_offsets(max=512, precision=2):
+    """
+    Generate deduplicated Prometheus ``le`` boundaries for
+    ``estimated_histogram_with_max<max>``.
+
+    This mirrors ``approx_exponential_histogram<1, max, 2**precision>`` and
+    the deduplication done by ``to_metrics_histogram()``.
+
+    Args:
+        max (int): Histogram max value (must be a power of two and > 1).
+        precision (int): Precision bits (schema). ``2`` means 4 buckets per
+            exponential range.
+
+    Returns:
+        list[int]: Monotonically increasing bucket upper bounds (``le`` labels,
+            excluding ``+Inf``).
+    """
+    if max <= 1 or (max & (max - 1)) != 0:
+        raise ValueError(f"max must be a power of two greater than 1, got {max}")
+    if precision < 0:
+        raise ValueError(f"precision must be >= 0, got {precision}")
+
+    min_value = 1
+    buckets_per_range = 1 << precision
+
+    min_bits = (min_value.bit_length() - 1)
+    shift = precision - min_bits if precision > min_bits else 0
+    scaled_min = min_value << shift
+    scaled_max = max << shift
+
+    num_exp_ranges = (scaled_max // scaled_min).bit_length() - 1
+    num_buckets = num_exp_ranges * buckets_per_range + 1
+    base_shift = scaled_min.bit_length() - 1
+    lower_bits_mask = buckets_per_range - 1
+
+    def get_bucket_lower_limit(bucket_id):
+        if bucket_id == num_buckets - 1:
+            return max
+        exp_range = bucket_id >> precision
+        limit = (scaled_min << exp_range) + ((bucket_id & lower_bits_mask) << (exp_range + base_shift - precision))
+        return limit >> shift
+
+    bounds = []
+    for i in range(num_buckets - 1):
+        upper_bound = get_bucket_lower_limit(i + 1)
+        if not bounds or bounds[-1] != upper_bound:
+            bounds.append(upper_bound)
+    return bounds
+def bucket_idx(size_in_kb, max=512, precision=2):
+    buckets = expo_estimated_histogram_bucket_offsets(max, precision)
     return bisect_left(buckets, size_in_kb)
 
-def bucket(size_in_kb, bucket_count=30, ratio=1.2):
-    buckets = histogram_bucket_offsets(bucket_count, ratio)
-    idx = bucket_idx(size_in_kb, bucket_count, ratio)
+def bucket(size_in_kb, max=512, precision=2):
+    buckets = expo_estimated_histogram_bucket_offsets(max, precision)
+    idx = bucket_idx(size_in_kb, max, precision)
     return str(buckets[idx]) + '.000000' if size_in_kb <= buckets[-1] else '+Inf'
 
-def next_bucket(size_in_kb, bucket_count=30, ratio=1.2):
-    buckets = histogram_bucket_offsets(bucket_count, ratio)
-    idx = bucket_idx(size_in_kb, bucket_count, ratio)
-    return str(buckets[idx + 1]) + '.000000' if idx + 1 < bucket_count else None
+def next_bucket(size_in_kb, max=512, precision=2):
+    buckets = expo_estimated_histogram_bucket_offsets(max, precision)
+    idx = bucket_idx(size_in_kb, max, precision)
+    return str(buckets[idx + 1]) + '.000000' if idx + 1 < len(buckets) else None
 
-def prev_bucket(size_in_kb, bucket_count=30, ratio=1.2):
-    buckets = histogram_bucket_offsets(bucket_count, ratio)
-    idx = bucket_idx(size_in_kb, bucket_count, ratio)
+def prev_bucket(size_in_kb, max=512, precision=2):
+    buckets = expo_estimated_histogram_bucket_offsets(max, precision)
+    idx = bucket_idx(size_in_kb, max, precision)
     return str(buckets[idx - 1]) + '.000000' if idx > 0 else None
 
 ###### Test for metrics that count DynamoDB API operations:
@@ -205,7 +253,7 @@ def test_batch_write_item_histogram(test_table_s, metrics):
             test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}]})
     items = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
     items2 = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
-    with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '86.000000'}], [2, {'op': 'BatchWriteItem', 'le': '103.000000'}]]):
+    with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '86.000000'}], [2, {'op': 'BatchWriteItem', 'le': '112.000000'}]]):
         test_table_s.meta.client.batch_write_item(RequestItems = {
             test_table_s.name: items})
         test_table_s.meta.client.batch_write_item(RequestItems = {
@@ -217,7 +265,7 @@ def test_table_batch_write_item_histogram(test_table_s, metrics):
             test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}]})
     items = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
     items2 = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
-    with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '86.000000', 'cf': test_table_s.name}], [2, {'op': 'BatchWriteItem', 'le': '103.000000', 'cf': test_table_s.name}]]):
+    with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '86.000000', 'cf': test_table_s.name}], [2, {'op': 'BatchWriteItem', 'le': '112.000000', 'cf': test_table_s.name}]]):
         test_table_s.meta.client.batch_write_item(RequestItems = {
             test_table_s.name: items})
         test_table_s.meta.client.batch_write_item(RequestItems = {
@@ -229,7 +277,7 @@ def test_batch_get_item_histogram(test_table_s, metrics):
             test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
     keys = [{'p': random_string()} for i in range(100) ]
     keys2 = [{'p': random_string()} for i in range(100) ]
-    with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchGetItem', 'le': '86.000000'}], [2, {'op': 'BatchGetItem', 'le': '103.000000'}]]):
+    with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchGetItem', 'le': '86.000000'}], [2, {'op': 'BatchGetItem', 'le': '112.000000'}]]):
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': keys, 'ConsistentRead': True}})
         test_table_s.meta.client.batch_get_item(RequestItems = {
@@ -241,7 +289,7 @@ def test_table_batch_get_item_histogram(test_table_s, metrics):
             test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
     keys = [{'p': random_string()} for i in range(100) ]
     keys2 = [{'p': random_string()} for i in range(100) ]
-    with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count_histogram_bucket", [[0, {'op': 'BatchGetItem', 'le': '86.000000', 'cf': test_table_s.name}], [2, {'op': 'BatchGetItem', 'le': '103.000000', 'cf': test_table_s.name}]]):
+    with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count_histogram_bucket", [[0, {'op': 'BatchGetItem', 'le': '86.000000', 'cf': test_table_s.name}], [2, {'op': 'BatchGetItem', 'le': '112.000000', 'cf': test_table_s.name}]]):
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': keys, 'ConsistentRead': True}})
         test_table_s.meta.client.batch_get_item(RequestItems = {
@@ -423,19 +471,34 @@ def test_streams_operations(test_table_s, dynamodbstreams, metrics):
 # to update latencies for one kind of operation (#17616, and compare #9406),
 # and to do that checking that ..._count increases for that op is enough.
 @contextmanager
-def check_sets_latency(metrics, operation_names):
+def check_sets_latency_by_metric(metrics, operation_names, metric_name):
     the_metrics = get_metrics(metrics)
-    saved_latency_count = { x: get_metric(metrics, 'scylla_alternator_op_latency_count', {'op': x}, the_metrics) for x in operation_names }
+    saved_latency_count = { x: get_metric(metrics, f'{metric_name}_count', {'op': x}, the_metrics) for x in operation_names }
     yield
     the_metrics = get_metrics(metrics)
     for op in operation_names:
         # The total "count" on all shards should strictly increase
-        assert saved_latency_count[op] < get_metric(metrics, 'scylla_alternator_op_latency_count', {'op': op}, the_metrics)
+        assert saved_latency_count[op] < get_metric(metrics, f'{metric_name}_count', {'op': op}, the_metrics)
+
+def check_sets_latency(metrics, operation_names):
+    return check_sets_latency_by_metric(metrics, operation_names, 'scylla_alternator_op_latency')
 
 # Test latency metrics for PutItem, GetItem, DeleteItem, UpdateItem.
 # We can't check what exactly the latency is - just that it gets updated.
 def test_item_latency(test_table_s, metrics):
     with check_sets_latency(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem', 'BatchWriteItem', 'BatchGetItem']):
+        p = random_string()
+        test_table_s.put_item(Item={'p': p})
+        test_table_s.get_item(Key={'p': p})
+        test_table_s.delete_item(Key={'p': p})
+        test_table_s.update_item(Key={'p': p})
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
+
+def test_item_latency_per_table(test_table_s, metrics):
+    with check_sets_latency_by_metric(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem', 'BatchWriteItem', 'BatchGetItem'], 'scylla_alternator_table_op_latency'):
         p = random_string()
         test_table_s.put_item(Item={'p': p})
         test_table_s.get_item(Key={'p': p})
@@ -510,7 +573,7 @@ def test_get_item_size_item_falls_into_appropriate_bucket(dynamodb, test_table_s
         test_table_s.put_item(Item={'p': pk, 'a': 'a' * 7 * KB, 'b': 'b' * 10 * KB})
         def do_test():
             test_table_s.get_item(Key={'p': pk})
-        check_histogram_metric_increases('GetItem', 'operation_size_kb', metrics, do_test, [(0, bucket(17)), (1, bucket(17.1)), (1, bucket(INF))])
+        check_histogram_metric_increases('GetItem', 'operation_size_kb', metrics, do_test, [(0, bucket(16)), (1, bucket(16.1)), (1, bucket(INF))])
 
 def test_put_item_many_items_fall_into_appropriate_buckets(test_table_s, metrics):
     def do_test():
@@ -581,8 +644,7 @@ def test_update_item_many_items_fall_into_appropriate_buckets(dynamodb, test_tab
 # Verify that only the new item size is counted in the histogram if RBW is
 # disabled, and both sizes if it is enabled. The WCU is calculated as the
 # maximum of the old and new item sizes.
-@pytest.mark.xfail(reason="Updates don't consider the larger of the old item size and the new item size. This will be fixed in a next PR.")
-@pytest.mark.parametrize("force_rbw", [True, False])
+@pytest.mark.parametrize("force_rbw", [pytest.param(True, marks=pytest.mark.xfail(reason="Updates don't consider the larger of the old item size and the new item size.")), False])
 def test_update_item_increases_metrics_for_new_item_size_only(dynamodb, test_table_s, metrics, force_rbw):
     with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
         if force_rbw:
@@ -661,7 +723,7 @@ def test_batch_write_item_increases_metrics_for_bigger_item_only(dynamodb, test_
             })
 
 ### Test isolation of operation_size_kb metrics between multiple tables:
-# The tests check if operations on two different tables don't affect each 
+# The tests check if operations on two different tables don't affect each
 # others' metrics.
 
 def check_table_histogram_metric_increases(op, metrics, do_test, table_name_and_probes):
@@ -675,7 +737,7 @@ def test_get_item_size_separate_tables_track_metrics_independently(test_table_s,
     pk_2 = random_string()
     test_table_s.put_item(Item={'p': pk_1, 'a': 'a' * 12 * KB})  # 12KB item
     test_table_s_2.put_item(Item={'p': pk_2, 'a': 'a' * 35 * KB})  # 35KB item
-    
+
     def do_test():
         # Table1: Get 12KB+ item. Should fall in (12.000000, 14.000000] bucket
         test_table_s.get_item(Key={'p': pk_1})
@@ -708,7 +770,7 @@ def test_delete_item_size_separate_tables_track_metrics_independently(dynamodb, 
         pk_2 = random_string()
         test_table_s.put_item(Item={'p': pk_1, 'a': 'a' * 60 * KB})  # 60KB item
         test_table_s_2.put_item(Item={'p': pk_2, 'a': 'a' * 86 * KB})  # 86KB item
-        
+
         def do_test():
             # Table1: Delete 60KB+ item. Should fall in (60.000000, 72.000000] bucket
             test_table_s.delete_item(Key={'p': pk_1})
@@ -727,13 +789,13 @@ def test_update_item_size_separate_tables_track_metrics_independently(dynamodb, 
         pk_2 = random_string()
         test_table_s.put_item(Item={'p': pk_1})
         test_table_s_2.put_item(Item={'p': pk_2})
-        
+
         def do_test():
             # Table1: Update to create 24KB+ item. Should fall in (24.000000, 29.000000] bucket
-            test_table_s.update_item(Key={'p': pk_1}, UpdateExpression="SET a = :a", 
+            test_table_s.update_item(Key={'p': pk_1}, UpdateExpression="SET a = :a",
                                      ExpressionAttributeValues={':a': 'a' * 24 * KB})
             # Table2: Update to create 72KB+ item. Should fall in (72.000000, 86.000000] bucket
-            test_table_s_2.update_item(Key={'p': pk_2}, UpdateExpression="SET b = :b", 
+            test_table_s_2.update_item(Key={'p': pk_2}, UpdateExpression="SET b = :b",
                                        ExpressionAttributeValues={':b': 'b' * 72 * KB})
 
         check_table_histogram_metric_increases('UpdateItem', metrics, do_test, {
@@ -747,7 +809,7 @@ def test_batch_get_item_size_separate_tables_track_metrics_independently(test_ta
     pk_2 = random_string()
     test_table_s.put_item(Item={'p': pk_1, 'a': 'a' * 72 * KB})  # 72KB item
     test_table_s_2.put_item(Item={'p': pk_2, 'a': 'a' * 86 * KB})  # 86KB item
-    
+
     def do_test():
         # Table1: BatchGet 72KB+ item. Should fall in (72.000000, 86.000000] buckets
         test_table_s.meta.client.batch_get_item(RequestItems={

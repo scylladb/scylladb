@@ -103,8 +103,8 @@ thread_local dirty_memory_manager default_dirty_memory_manager;
 
 inline
 flush_controller
-make_flush_controller(const db::config& cfg, backlog_controller::scheduling_group& sg, std::function<double()> fn) {
-    return flush_controller(sg, cfg.memtable_flush_static_shares(), 50ms, cfg.unspooled_dirty_soft_limit(), std::move(fn));
+make_flush_controller(const db::config& cfg, const database_config& dbcfg, std::function<double()> fn) {
+    return flush_controller(dbcfg.memtable_scheduling_group, cfg.memtable_flush_static_shares(), 50ms, cfg.unspooled_dirty_soft_limit(), std::move(fn));
 }
 
 keyspace::keyspace(config cfg, locator::effective_replication_map_factory& erm_factory)
@@ -394,8 +394,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.unspooled_dirty_soft_limit(), default_scheduling_group())
     , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dbcfg(dbcfg)
-    , _flush_sg(dbcfg.memtable_scheduling_group)
-    , _memtable_controller(make_flush_controller(_cfg, _flush_sg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
+    , _memtable_controller(make_flush_controller(_cfg, _dbcfg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         auto backlog = (_dirty_memory_manager.unspooled_dirty_memory()) / limit;
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
             backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
@@ -412,6 +411,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(uint32_t(1)),
+            utils::updateable_value(0.0f),
             reader_concurrency_semaphore::register_metrics::yes)
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction", reader_concurrency_semaphore::register_metrics::no)
@@ -423,6 +423,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value(uint32_t(1)),
+            utils::updateable_value(0.0f),
             reader_concurrency_semaphore::register_metrics::yes)
     , _view_update_read_concurrency_semaphores_group(
             max_memory_concurrent_view_update_reads(),
@@ -431,6 +433,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             _cfg.view_update_reader_concurrency_semaphore_serialize_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_kill_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_cpu_concurrency,
+            utils::updateable_value(0.0f),
             "view_update")
     , _row_cache_tracker(_cfg.index_cache_fraction.operator utils::updateable_value<double>(), cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
@@ -460,7 +463,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _reader_concurrency_semaphores_group(max_memory_concurrent_reads(), max_count_concurrent_reads, max_inactive_queue_length(),
         _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
         _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
-        _cfg.reader_concurrency_semaphore_cpu_concurrency)
+        _cfg.reader_concurrency_semaphore_cpu_concurrency,
+        _cfg.reader_concurrency_semaphore_preemptive_abort_factor)
     , _stop_barrier(std::move(barrier))
     , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
     , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))
@@ -1499,12 +1503,10 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.compaction_concurrency_semaphore = _config.compaction_concurrency_semaphore;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
-    cfg.compaction_scheduling_group = _config.compaction_scheduling_group;
     cfg.memory_compaction_scheduling_group = _config.memory_compaction_scheduling_group;
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _config.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
-    cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.enable_node_aggregated_table_metrics = db_config.enable_node_aggregated_table_metrics();
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
@@ -1697,7 +1699,7 @@ static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
         if (!range.is_singular()) {
             continue;
         }
-        auto token = dht::token::to_int64(ranges.front().start()->value().token());
+        auto token = dht::token::to_int64(range.start()->value().token());
         if (limiter.account_operation(read_label, token, table_limit, rate_limit_info) == db::rate_limiter::can_proceed::no) {
             // Don't return immediately - account all ranges first
             ret = can_proceed::no;
@@ -2246,16 +2248,16 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     // assume failure until proven otherwise
     auto update_writes_failed = defer([&] { ++_stats->total_writes_failed; });
 
-    utils::get_local_injector().inject("database_apply", [&s] () {
-        if (!is_system_keyspace(s->ks_name())) {
-            throw std::runtime_error("injected error");
+    co_await utils::get_local_injector().inject("database_apply", [&s] (auto& handler) -> future<> {
+        if (s->ks_name() != handler.get("ks_name") || s->cf_name() != handler.get("cf_name")) {
+            co_return;
         }
-    });
-    co_await utils::get_local_injector().inject("database_apply_wait", [&] (auto& handler) -> future<> {
-        if (s->cf_name() == handler.get("cf_name")) {
-            dblog.info("database_apply_wait: wait");
+        if (handler.get("what") == "throw") {
+            throw std::runtime_error(format("injected error for {}.{}", s->ks_name(), s->cf_name()));
+        } else if (handler.get("what") == "wait") {
+            dblog.info("database_apply: wait");
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-            dblog.info("database_apply_wait: done");
+            dblog.info("database_apply: done");
         }
     });
 
@@ -2413,9 +2415,7 @@ future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::t
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply hint using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
-    return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(s), &m, tr_state = std::move(tr_state), timeout] () mutable {
-        return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no, std::monostate{});
-    });
+    return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no, std::monostate{});
 }
 
 keyspace::config
@@ -2448,12 +2448,10 @@ database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
 
-    cfg.compaction_scheduling_group = _dbcfg.compaction_scheduling_group;
     cfg.memory_compaction_scheduling_group = _dbcfg.memory_compaction_scheduling_group;
     cfg.memtable_scheduling_group = _dbcfg.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _dbcfg.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;
-    cfg.statement_scheduling_group = _dbcfg.statement_scheduling_group;
     cfg.enable_metrics_reporting = _cfg.enable_keyspace_column_family_metrics();
 
     cfg.view_update_memory_semaphore_limit = max_memory_pending_view_updates();
@@ -3777,7 +3775,7 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
             &result,
             chunk_size
         ] (database& local_db, state_by_shard& local_state) -> future<> {
-            auto ticket = get_units(local_db._sample_data_files_local_concurrency_limiter, 1);
+            auto ticket = co_await get_units(local_db._sample_data_files_local_concurrency_limiter, 1);
 
             // In `chosen_chunks`, the sorted array of chosen chunk offsets (in the "global chunk list"),
             // find the range of offsets which belongs to us.

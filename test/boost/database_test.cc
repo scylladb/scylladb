@@ -7,9 +7,9 @@
  */
 
 
-#include "seastar/core/shard_id.hh"
 #include <boost/test/tools/old/interface.hpp>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
@@ -979,7 +979,7 @@ SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
 SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
     return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
-        sc.start(std::ref(e.db()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
+        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
         auto stop_sc = deferred_stop(sc);
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
@@ -1027,7 +1027,7 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
 SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
     return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
-        sc.start(std::ref(e.db()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
+        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
         auto stop_sc = deferred_stop(sc);
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
@@ -1606,7 +1606,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
                 query::full_partition_range,
                 s->full_slice(),
                 nullptr,
-                tombstone_gc_state(nullptr));
+                tombstone_gc_state::no_gc());
 
         auto f = replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), "ks", "cf");
 
@@ -1804,7 +1804,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
 
     schema_builder::register_schema_initializer([] (schema_builder& builder) {
         if (builder.ks_name() == "test" && builder.cf_name() == "table_gc_mode_group0") {
-            builder.set_is_group0_table(true);
+            builder.set_is_group0_table();
         }
     });
     auto table_gc_mode_group0 = schema_builder("test", "table_gc_mode_group0")
@@ -1865,6 +1865,49 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
 
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_group0, dk, now), second_repair_time);
     BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_group0, dk, false), first_repair_time);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
+    auto table_gc_mode_repair1 = schema_builder("test", "table_gc_mode_repair1")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
+            .build();
+
+    auto table_gc_mode_repair2 = schema_builder("test", "table_gc_mode_repair2")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
+            .build();
+
+    // One pk to rule them all, all schemas have the same partition key, so we
+    // can reuse a single key for this test.
+    const auto pk = partition_key::from_single_value(*table_gc_mode_repair1, utf8_type->decompose(data_value("pk")));
+    const auto dk = dht::decorate_key(*table_gc_mode_repair1, pk);
+
+    shared_tombstone_gc_state shared_state;
+    shared_state.set_table_rf_one(table_gc_mode_repair1->id());
+
+    const auto now = gc_clock::now();
+    const auto gc_state = tombstone_gc_state(shared_state).with_commitlog_check_disabled();
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), now);
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
+
+    auto snapshot = shared_state.snapshot();
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), now);
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
+
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), snapshot.query_time());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), gc_clock::time_point::min());
+
+    shared_state.set_table_rf_n(table_gc_mode_repair1->id());
+    shared_state.set_table_rf_one(table_gc_mode_repair2->id());
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), gc_clock::time_point::min());
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), now);
+
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), snapshot.query_time());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), gc_clock::time_point::min());
 }
 
 SEASTAR_TEST_CASE(test_max_purgeable_combine) {
@@ -2078,6 +2121,75 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_tombstone_gc_rf_one) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const std::string keyspace_name = get_name();
+        const std::string table_name = "tbl";
+
+        env.execute_cql(std::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int PRIMARY KEY)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}", keyspace_name, table_name)).get();
+
+        auto& db = env.local_db();
+        auto& tbl = db.find_column_family(keyspace_name, table_name);
+        const auto schema = tbl.schema();
+
+        auto& st = tbl.get_compaction_manager().get_shared_tombstone_gc_state();
+
+        BOOST_REQUIRE(st.is_table_rf_one(schema->id()));
+
+        auto tombstone_gc = tbl.get_tombstone_gc_state();
+
+        const auto pk = partition_key::from_single_value(*schema, serialized(1));
+        const auto dk = dht::decorate_key(*schema, pk);
+
+        const auto now = gc_clock::now();
+
+        // With RF=1, tombstone-gc should act as if configured in 'immediate' mode.
+        BOOST_REQUIRE_EQUAL(tombstone_gc.get_gc_before_for_key(schema, dk, now), now);
+
+        env.execute_cql(std::format("ALTER KEYSPACE {}"
+                    " WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 2}}",
+                    keyspace_name)).get();
+
+        BOOST_REQUIRE(!st.is_table_rf_one(schema->id()));
+
+        // After changing RF to > 1, tombstone-gc should revert to regular
+        // repair-mode behaviour. Since there was no repair yet, this should
+        // return min timepoint (no GC).
+        BOOST_REQUIRE_EQUAL(tombstone_gc.get_gc_before_for_key(schema, dk, now), gc_clock::time_point::min());
+
+        // Altering back to RF=1 should re-add the table to the rf=1 table list
+        env.execute_cql(std::format("ALTER KEYSPACE {}"
+                    " WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}}",
+                    keyspace_name)).get();
+        BOOST_REQUIRE(st.is_table_rf_one(schema->id()));
+
+        // Dropping the table should clean up (removing the table from the rf=1 list).
+        env.execute_cql(std::format("DROP TABLE {}.{}", keyspace_name, table_name)).get();
+        BOOST_REQUIRE(!st.is_table_rf_one(schema->id()));
+    });
+}
+
+SEASTAR_TEST_CASE(test_default_tombstone_gc_local_replication) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const std::string keyspace_name = get_name();
+        const std::string table_name = "tbl";
+
+        env.execute_cql(std::format("CREATE KEYSPACE {} WITH replication = {{'class': 'LocalStrategy'}}", keyspace_name)).get();
+        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int PRIMARY KEY)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}", keyspace_name, table_name)).get();
+
+        auto& db = env.local_db();
+        auto& tbl = db.find_column_family(keyspace_name, table_name);
+        const auto schema = tbl.schema();
+
+        BOOST_REQUIRE_EQUAL(schema->tombstone_gc_options().mode(), tombstone_gc_mode::timeout);
+    });
+}
+
 SEASTAR_TEST_CASE(test_flush_empty_table_waits_on_outstanding_flush) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
@@ -2152,6 +2264,7 @@ struct scoped_execption_log_level {
 
 SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
     cql_test_config cfg;
+    cfg.db_config->reader_concurrency_semaphore_preemptive_abort_factor.set(0.0);
     const auto read_timeout = 10ms;
     const auto write_timeout = 10s;
     cfg.query_timeout.emplace(timeout_config{

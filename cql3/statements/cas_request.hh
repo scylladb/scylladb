@@ -51,7 +51,7 @@ public:
           , _key(std::move(key_arg))
           , _rows(schema_arg)
     {
-        SCYLLA_ASSERT(_key.size() == 1 && query::is_single_partition(_key.front()));
+        throwing_assert(_key.size() == 1 && query::is_single_partition(_key.front()));
     }
 
     dht::partition_range_vector key() const {

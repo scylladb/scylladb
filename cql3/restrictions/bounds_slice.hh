@@ -89,10 +89,10 @@ public:
      */
     void merge(const bounds_slice& other) {
         if (has_bound(statements::bound::START)) {
-            SCYLLA_ASSERT(!other.has_bound(statements::bound::START));
+            throwing_assert(!other.has_bound(statements::bound::START));
             _bounds[get_idx(statements::bound::END)] = other._bounds[get_idx(statements::bound::END)];
         } else {
-            SCYLLA_ASSERT(!other.has_bound(statements::bound::END));
+            throwing_assert(!other.has_bound(statements::bound::END));
             _bounds[get_idx(statements::bound::START)] = other._bounds[get_idx(statements::bound::START)];
         }
     }

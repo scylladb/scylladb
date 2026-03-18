@@ -191,6 +191,9 @@ public:
     static constexpr auto RAFT = "raft";
     static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
     static constexpr auto RAFT_SNAPSHOT_CONFIG = "raft_snapshot_config";
+    static constexpr auto RAFT_GROUPS = "raft_groups";
+    static constexpr auto RAFT_GROUPS_SNAPSHOTS = "raft_groups_snapshots";
+    static constexpr auto RAFT_GROUPS_SNAPSHOT_CONFIG = "raft_groups_snapshot_config";
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto REPAIR_TASKS = "repair_tasks";
     static constexpr auto GROUP0_HISTORY = "group0_history";
@@ -215,6 +218,8 @@ public:
     static constexpr auto BUILT_VIEWS = "built_views";
     static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
     static constexpr auto CDC_LOCAL = "cdc_local";
+    static constexpr auto CDC_TIMESTAMPS = "cdc_timestamps";
+    static constexpr auto CDC_STREAMS = "cdc_streams";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -242,6 +247,9 @@ public:
     static schema_ptr scylla_local();
     static schema_ptr raft();
     static schema_ptr raft_snapshots();
+    static schema_ptr raft_groups();
+    static schema_ptr raft_groups_snapshots();
+    static schema_ptr raft_groups_snapshot_config();
     static schema_ptr repair_history();
     static schema_ptr repair_tasks();
     static schema_ptr group0_history();
@@ -415,6 +423,10 @@ public:
         std::optional<sstring> new_keyspace_rf_change_ks_name;
         // The KS options to be used when executing the scheduled ALTER KS statement
         std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_data;
+        std::optional<std::unordered_set<table_id>> snapshot_table_ids;
+        std::optional<sstring> snapshot_tag;
+        std::optional<db_clock::time_point> snapshot_expiry;
+        bool snapshot_skip_flush;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
 
@@ -571,20 +583,6 @@ public:
 
     // CDC related functions
 
-    /*
-    * Save the CDC generation ID announced by this node in persistent storage.
-    */
-    future<> update_cdc_generation_id(cdc::generation_id);
-
-    /*
-    * Read the CDC generation ID announced by this node from persistent storage.
-    * Used to initialize a restarting node.
-    */
-    future<std::optional<cdc::generation_id>> get_cdc_generation_id();
-
-    future<bool> cdc_is_rewritten();
-    future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
-
     future<> read_cdc_streams_state(std::optional<table_id> table, noncopyable_function<future<>(table_id, db_clock::time_point, utils::chunked_vector<cdc::stream_id>)> f);
     future<> read_cdc_streams_history(table_id table, std::optional<db_clock::time_point> from, noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f);
 
@@ -609,6 +607,8 @@ public:
     future<service::topology> load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts);
 
     future<std::optional<service::topology_features>> load_topology_features_state();
+
+    future<sstring> load_topology_upgrade_state();
 
     // Read CDC generation data with the given UUID as key.
     // Precondition: the data is known to be present in the table (because it was committed earlier through group 0).

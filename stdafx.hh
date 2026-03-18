@@ -92,6 +92,9 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+
+#include "utils/rolling_max_tracker.hh"
+
 #include <endian.h>
 #include <exception>
 #if __has_include(<execinfo.h>)

@@ -11,8 +11,10 @@ import logging
 import subprocess
 import tempfile
 import pathlib
+import json
 from functools import cache, cached_property
 from itertools import chain
+from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree
@@ -57,9 +59,9 @@ class BoostTestFile(CppFile):
     def list_test_cases(self) -> list[str]:
         if self.no_parallel:
             return [self.test_name]
-        return get_boost_test_list_content(executable=self.exe_path, combined=self.combined)[self.test_name]
+        return get_boost_test_list_json_content(executable=self.exe_path,combined=self.combined).get(self.test_name, [])
 
-    def run_test_case(self, test_case: CppTestCase) -> tuple[None | list[CppTestFailure], str]:
+    def run_test_case(self, test_case: CppTestCase) -> tuple[list[CppTestFailure], Path] | tuple[None, Path]:
         run_test = f"{self.test_name}/{test_case.test_case_name}" if self.combined else test_case.test_case_name
 
         log_sink = tempfile.NamedTemporaryFile(mode="w+t")
@@ -85,12 +87,14 @@ class BoostTestFile(CppFile):
             log_xml = pathlib.Path(log_sink.name).read_text(encoding="utf-8")
         except IOError:
             log_xml = ""
+        finally:
+            log_sink.close()
         results = parse_boost_test_log_sink(log_xml=log_xml)
 
         if return_code := process.returncode:
             allure.attach(stdout_file_path.read_bytes(), name="output", attachment_type=allure.attachment_type.TEXT)
             return [CppTestFailure(
-                file_name=self.path.name,
+                file_name=results[0].file_name if results else self.path.name,
                 line_num=results[0].line_num if results else -1,
                 content=dedent(f"""\
                     working_dir: {os.getcwd()}
@@ -99,17 +103,61 @@ class BoostTestFile(CppFile):
                     command to repeat: {subprocess.list2cmdline(process.args)}
                     error: {results[0].lines if results else 'unknown'}
                 """),
-            )], ""
+            )], stdout_file_path
 
-        if not self.config.getoption("--save-log-on-success"):
-            log_sink.close()
-            stdout_file_path.unlink(missing_ok=True)
-
-        return None, ""
+        return None, stdout_file_path
 
 
 pytest_collect_file = BoostTestFile.pytest_collect_file
 
+@cache
+def get_boost_test_list_json_content(executable: pathlib.Path, combined: bool = False)-> dict[str, list[list[str, set[str]]]]:
+    """
+    mimic get_boost_test_list_content but using --list_json_content which provides more structured data including test labels
+
+    List the content of test tree in an executable.
+    Return a dict where key is the name of test file and value is a list of tests in this file with their labels.
+    In case of combined tests the dict will have multiple items, otherwise we assume that name of the executable is the same
+    as the source test file (.cc)
+    """
+    try:
+        output = subprocess.check_output(
+            [executable, "--","--list_json_content"],
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+        )
+    except subprocess.CalledProcessError as e:
+        if "Test setup error: test tree is empty" in e.output:
+            return {executable.name: []}
+        raise e
+
+    data = json.loads(output)
+    test_tree = {}
+
+    def parse_suite(key, suite, suite_str=""):
+        for _suite in suite["suites"]:
+            parse_suite(key, _suite, f'{suite_str}/{_suite["name"]}')
+        for test in suite["tests"]:
+            if test["name"].startswith("_"):
+                test_tree[key].append([suite["name"], []])
+                break
+            test_name = f'{suite_str}/{test["name"]}' if suite_str else test["name"]
+            labels = set(test["labels"].split(",")) if "labels" in test and test["labels"] else set()
+            test_tree[key].append([test_name, labels])
+
+    for file in data:
+        for s in file["content"]["suites"]:
+            k = s["name"] if combined else executable.name
+            if k not in test_tree:
+                test_tree[k] = []
+            parse_suite(k, s, suite_str=s["name"] if not combined else "")
+        if file["content"]["tests"]:
+            if executable.name not in test_tree:
+                test_tree[executable.name] = []
+            for test in file["content"]["tests"]:
+                labels = set(test["labels"].split(",")) if "labels" in test and test["labels"] else set()
+                test_tree[executable.name].append([test["name"], labels])
+    return test_tree
 
 @cache
 def get_boost_test_list_content(executable: pathlib.Path, combined: bool = False) -> dict[str, list[str]]:

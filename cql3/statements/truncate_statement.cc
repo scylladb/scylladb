@@ -31,8 +31,8 @@ truncate_statement::truncate_statement(cf_name name, std::unique_ptr<attributes:
 {
     // Validate the attributes.
     // Currently, TRUNCATE supports only USING TIMEOUT
-    SCYLLA_ASSERT(!_attrs->timestamp.has_value());
-    SCYLLA_ASSERT(!_attrs->time_to_live.has_value());
+    throwing_assert(!_attrs->timestamp.has_value());
+    throwing_assert(!_attrs->time_to_live.has_value());
 }
 
 std::unique_ptr<prepared_statement> truncate_statement::prepare(data_dictionary::database db, cql_stats& stats) {

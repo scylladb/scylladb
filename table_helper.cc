@@ -75,7 +75,7 @@ future<bool> table_helper::try_prepare(bool fallback, cql3::query_processor& qp,
     auto& stmt = fallback ? _insert_cql_fallback.value() : _insert_cql;
     try {
         shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr = co_await qp.prepare(stmt, qs.get_client_state(), dialect);
-        _prepared_stmt = std::move(msg_ptr->get_prepared());
+        _prepared_stmt = msg_ptr->get_prepared();
         shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
         _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
         _is_fallback_stmt = fallback;
