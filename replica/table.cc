@@ -1443,6 +1443,7 @@ table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
                                         sstables::offstrategy offstrategy) {
     std::vector<sstables::shared_sstable> ret, ssts;
     std::exception_ptr ex;
+    log_level failure_log_level = log_level::error;
     try {
         bool trigger_compaction = offstrategy == sstables::offstrategy::no;
         auto& cg = compaction_group_for_sstable(new_sst);
@@ -1464,6 +1465,9 @@ table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
             co_await do_add_sstable_and_update_cache(cg, sst, offstrategy, trigger_compaction);
             sst = nullptr;
         }
+    } catch (compaction::compaction_stopped_exception&) {
+        failure_log_level = log_level::warn;
+        ex = std::current_exception();
     } catch (...) {
         ex = std::current_exception();
     }
@@ -1471,13 +1475,13 @@ table::add_new_sstable_and_update_cache(sstables::shared_sstable new_sst,
     if (ex) {
         // on failed split, input sstable is unlinked here.
         if (new_sst) {
-            tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", new_sst->get_filename(), new_sst->get_origin(), ex);
+            tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", new_sst->get_filename(), new_sst->get_origin(), ex);
             co_await new_sst->unlink();
         }
         // on failure after successful split, sstables not attached yet will be unlinked
-        co_await coroutine::parallel_for_each(ssts, [&ex] (sstables::shared_sstable sst) -> future<> {
+        co_await coroutine::parallel_for_each(ssts, [&ex, failure_log_level] (sstables::shared_sstable sst) -> future<> {
             if (sst) {
-                tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
+                tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
                 co_await sst->unlink();
             }
         });
@@ -1491,6 +1495,7 @@ table::add_new_sstables_and_update_cache(std::vector<sstables::shared_sstable> n
                                          std::function<future<>(sstables::shared_sstable)> on_add) {
     std::exception_ptr ex;
     std::vector<sstables::shared_sstable> ret;
+    log_level failure_log_level = log_level::error;
 
     // We rely on add_new_sstable_and_update_cache() to unlink the sstable fed into it,
     // so the exception handling below will only have to unlink sstables not processed yet.
@@ -1500,14 +1505,17 @@ table::add_new_sstables_and_update_cache(std::vector<sstables::shared_sstable> n
             std::ranges::move(ssts, std::back_inserter(ret));
 
         }
+    } catch (compaction::compaction_stopped_exception&) {
+        failure_log_level = log_level::warn;
+        ex = std::current_exception();
     } catch (...) {
         ex = std::current_exception();
     }
 
     if (ex) {
-        co_await coroutine::parallel_for_each(new_ssts, [&ex] (sstables::shared_sstable sst) -> future<> {
+        co_await coroutine::parallel_for_each(new_ssts, [&ex, failure_log_level] (sstables::shared_sstable sst) -> future<> {
             if (sst) {
-                tlogger.error("Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
+                tlogger.log(failure_log_level, "Failed to load SSTable {} of origin {} due to {}, it will be unlinked...", sst->get_filename(), sst->get_origin(), ex);
                 co_await sst->unlink();
             }
         });

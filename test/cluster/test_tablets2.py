@@ -2213,3 +2213,74 @@ async def test_split_and_intranode_synchronization(manager: ManagerClient):
             return tablet_count >= expected_tablet_count or None
         # Give enough time for split to happen in debug mode
         await wait_for(finished_splitting, time.time() + 120)
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_stopped_on_shutdown(manager: ManagerClient):
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True,
+            'tablet_load_stats_refresh_interval_in_seconds': 1
+            }
+    cmdline = [
+        '--logger-log-level', 'debug_error_injection=debug',
+        '--smp', '1',
+    ]
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+
+    logger.info(f'server_id = {server.server_id}')
+
+    cql = manager.get_cql()
+
+    await manager.disable_tablet_balancing()
+
+    initial_tablets = 2
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': {initial_tablets}}};")
+
+        await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
+
+        # insert data
+        pks = range(256)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in pks])
+
+        # flush the table
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        # force split on the test table
+        expected_tablet_count = 4
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {expected_tablet_count}}}")
+
+        log = await manager.server_open_log(server.server_id)
+        log_mark = await log.mark()
+
+        await manager.api.enable_injection(server.ip_addr, "splitting_mutation_writer_switch_wait", one_shot=True)
+        await manager.api.enable_injection(server.ip_addr, "storage_service_drain_wait", one_shot=True)
+        await manager.enable_tablet_balancing()
+
+        await log.wait_for('Emitting resize decision of type split', from_mark=log_mark)
+        await log.wait_for('splitting_mutation_writer_switch_wait: waiting', from_mark=log_mark)
+
+        log_mark = await log.mark()
+
+        shutdown_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+
+        await log.wait_for('Stopping.*ongoing compactions')
+        await manager.api.message_injection(server.ip_addr, "splitting_mutation_writer_switch_wait")
+
+        await log.wait_for('storage_service_drain_wait: waiting', from_mark=log_mark)
+        await log.wait_for('Failed to complete splitting of table', from_mark=log_mark)
+
+        await manager.api.message_injection(server.ip_addr, "storage_service_drain_wait")
+
+        await shutdown_task
+
+        errors = await log.grep_for_errors(from_mark=log_mark)
+        assert errors == []
+
+        await manager.server_start(server.server_id)
+        await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+
+        await log.wait_for('Detected tablet split for table', from_mark=log_mark)
+        tablet_count = await get_tablet_count(manager, server, ks, 'test')
+        assert tablet_count >= expected_tablet_count

@@ -114,6 +114,8 @@ private:
     uint32_t _disabled_state_count = 0;
 
     bool is_disabled() const { return _state != state::running || _disabled_state_count > 0; }
+    // precondition: is_disabled() is true.
+    std::exception_ptr make_disabled_exception(compaction::compaction_group_view& cg);
 
     std::optional<future<>> _stop_future;
 
@@ -173,6 +175,7 @@ private:
     tombstone_gc_state _tombstone_gc_state;
 
     utils::disk_space_monitor::subscription _out_of_space_subscription;
+    bool _in_critical_disk_utilization_mode = false;
 private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);

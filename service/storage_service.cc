@@ -5003,6 +5003,8 @@ future<> storage_service::drain() {
 }
 
 future<> storage_service::do_drain() {
+    co_await utils::get_local_injector().inject("storage_service_drain_wait", utils::wait_for_message(60s));
+
     // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
     co_await stop_transport();
 
@@ -6088,6 +6090,9 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
             slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
             break;
         } catch (raft::request_aborted& ex) {
+            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            break;
+        } catch (seastar::gate_closed_exception& ex) {
             slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
             break;
         } catch (...) {

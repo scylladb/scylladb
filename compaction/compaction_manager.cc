@@ -1268,9 +1268,15 @@ future<> compaction_manager::start(const db::config& cfg, utils::disk_space_moni
     if (dsm && (this_shard_id() == 0)) {
         _out_of_space_subscription = dsm->subscribe(cfg.critical_disk_utilization_level, [this] (auto threshold_reached) {
             if (threshold_reached) {
-                return container().invoke_on_all([] (compaction_manager& cm) { return cm.drain(); });
+                return container().invoke_on_all([] (compaction_manager& cm) {
+                    cm._in_critical_disk_utilization_mode = true;
+                    return cm.drain();
+                });
             }
-            return container().invoke_on_all([] (compaction_manager& cm) { cm.enable(); });
+            return container().invoke_on_all([] (compaction_manager& cm) {
+                cm._in_critical_disk_utilization_mode = false;
+                cm.enable();
+            });
         });
     }
 
@@ -2291,6 +2297,16 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
     return perform_task_on_all_files<split_compaction_task_executor>("split", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_sstables), throw_if_stopping::no);
 }
 
+std::exception_ptr compaction_manager::make_disabled_exception(compaction::compaction_group_view& cg) {
+    std::exception_ptr ex;
+    if (_in_critical_disk_utilization_mode) {
+        ex = std::make_exception_ptr(std::runtime_error("critical disk utilization"));
+    } else {
+        ex = std::make_exception_ptr(compaction_stopped_exception(cg.schema()->ks_name(), cg.schema()->cf_name(), "compaction disabled"));
+    }
+    return ex;
+}
+
 future<std::vector<sstables::shared_sstable>>
 compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compaction_group_view& t, compaction_type_options::split opt) {
     if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
@@ -2300,8 +2316,7 @@ compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compac
     // We don't want to prevent split because compaction is temporarily disabled on a view only for synchronization,
     // which is unneeded against new sstables that aren't part of any set yet, so never use can_proceed(&t) here.
     if (is_disabled()) {
-        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(format("Cannot split {} because manager has compaction disabled, " \
-                                                                                         "reason might be out of space prevention", sst->get_filename()))));
+        co_return coroutine::exception(make_disabled_exception(t));
     }
     std::vector<sstables::shared_sstable> ret;
 
