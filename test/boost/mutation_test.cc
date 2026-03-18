@@ -2837,37 +2837,41 @@ SEASTAR_THREAD_TEST_CASE(test_collection_compaction) {
     auto value = data_value(to_bytes("value"));
 
     // No collection tombstone, row tombstone covers all cells
-    auto cmut = make_collection_mutation({}, key, make_collection_member(bytes_type, value));
+    auto cmut = make_collection_mutation({}, key, make_collection_member(bytes_type, value)).serialize();
     auto row_tomb = row_tombstone(tombstone { 1, gc_clock::time_point() });
-    auto res = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
-    BOOST_CHECK(!res.is_live());
-    BOOST_CHECK(!cmut.tomb);
-    BOOST_CHECK(cmut.cells.empty());
+    auto [out1, res1] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
+    BOOST_CHECK(!res1.is_live());
+    BOOST_CHECK(collection_mutation_view(out1).empty());
 
     // No collection tombstone, row tombstone doesn't cover anything
-    cmut = make_collection_mutation({}, key, make_collection_member(bytes_type, value));
+    cmut = make_collection_mutation({}, key, make_collection_member(bytes_type, value)).serialize();
     row_tomb = row_tombstone(tombstone { -1, gc_clock::time_point() });
-    res = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
-    BOOST_CHECK(res.is_live());
-    BOOST_CHECK(!cmut.tomb);
-    BOOST_CHECK_EQUAL(cmut.cells.size(), 1);
+    auto [out2, res2] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
+    BOOST_CHECK(res2.is_live());
+    {
+        collection_mutation_view v = out2;
+        BOOST_CHECK(!v.tomb());
+        BOOST_CHECK_EQUAL(v.size(), 1);
+    }
 
     // Collection tombstone covers everything
-    cmut = make_collection_mutation(tombstone { 2, gc_clock::time_point() }, key, make_collection_member(bytes_type, value));
+    cmut = make_collection_mutation(tombstone { 2, gc_clock::time_point() }, key, make_collection_member(bytes_type, value)).serialize();
     row_tomb = row_tombstone(tombstone { 1, gc_clock::time_point() });
-    res = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
-    BOOST_CHECK(!res.is_live());
-    BOOST_CHECK(cmut.tomb);
-    BOOST_CHECK_EQUAL(cmut.tomb.timestamp, 2);
-    BOOST_CHECK(cmut.cells.empty());
+    auto [out3, res3] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
+    BOOST_CHECK(!res3.is_live());
+    {
+        collection_mutation_view v = out3;
+        BOOST_CHECK(v.tomb());
+        BOOST_CHECK_EQUAL(v.tomb().timestamp, 2);
+        BOOST_CHECK_EQUAL(v.size(), 0);
+    }
 
     // Collection tombstone covered by row tombstone
-    cmut = make_collection_mutation(tombstone { 2, gc_clock::time_point() }, key, make_collection_member(bytes_type, value));
+    cmut = make_collection_mutation(tombstone { 2, gc_clock::time_point() }, key, make_collection_member(bytes_type, value)).serialize();
     row_tomb = row_tombstone(tombstone { 3, gc_clock::time_point() });
-    res = cmut.compact_and_expire(0, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point());
-    BOOST_CHECK(!res.is_live());
-    BOOST_CHECK(!cmut.tomb);
-    BOOST_CHECK(cmut.cells.empty());
+    auto [out4, res4] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
+    BOOST_CHECK(!res4.is_live());
+    BOOST_CHECK(collection_mutation_view(out4).empty());
 }
 
 namespace {

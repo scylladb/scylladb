@@ -40,11 +40,6 @@ struct collection_mutation_description {
     // a one-time-use forward iterator which returns the cells.
     utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
 
-    // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
-    // Removes cells covered by tomb or this->tomb.
-    compact_and_expire_result compact_and_expire(column_id id, row_tombstone tomb, gc_clock::time_point query_time,
-        can_gc_fn&, gc_clock::time_point gc_before, compaction_garbage_collector* collector = nullptr);
-
     // Packs the data to a serialized blob.
     collection_mutation serialize() const;
 };
@@ -224,6 +219,23 @@ public:
 
     collection_mutation finish() &&;
 };
+
+struct collection_mutation_compact_and_expire_result {
+    collection_mutation collection; // can be empty
+    compact_and_expire_result result;
+};
+
+// Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
+// Removes cells covered by base_tomb or cmv.tomb.
+collection_mutation_compact_and_expire_result compact_and_expire(
+        collection_mutation_view cmv,
+        column_id id,
+        const abstract_type& type,
+        row_tombstone base_tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before,
+        compaction_garbage_collector* collector);
 
 collection_mutation merge(const abstract_type&, collection_mutation_view, collection_mutation_view);
 
