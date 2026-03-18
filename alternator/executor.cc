@@ -1280,15 +1280,13 @@ regular_column_transformation::result extract_from_attrs_column_computation::com
         return regular_column_transformation::result();
     }
     collection_mutation_view cmv = attrs->as_collection_mutation();
-    return cmv.with_deserialized(*attrs_col->type, [this] (const collection_mutation_view_description& cmvd) {
-        for (auto&& [key, cell] : cmvd.cells) {
-            if (key == _attr_name) {
-                return regular_column_transformation::result(cell,
-                    std::bind(serialized_value_if_type, std::placeholders::_1, _desired_type));
-            }
+    for (auto&& [key, cell] : cmv) {
+        if (key == managed_bytes_view(_attr_name)) {
+            return regular_column_transformation::result(cell,
+                std::bind(serialized_value_if_type, std::placeholders::_1, _desired_type));
         }
-        return regular_column_transformation::result();
-    });
+    }
+    return regular_column_transformation::result();
 }
 
 // extract_from_attrs_column_computation needs the whole row to compute
