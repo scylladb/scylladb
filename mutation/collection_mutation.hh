@@ -130,6 +130,39 @@ public:
     operator collection_mutation_view() const;
 };
 
+class collection_mutation_writer {
+public:
+    using value_type = std::pair<managed_bytes_view, atomic_cell_view>;
+
+private:
+    bytes_ostream _out;
+    bytes::value_type* _size_buffer;
+
+    tombstone _tomb;
+    int32_t _size{0};
+public:
+    explicit collection_mutation_writer(tombstone tomb);
+
+    bool empty() const {
+        return !_tomb && _size == 0;
+    }
+
+    tombstone tombstone() const {
+        return _tomb;
+    }
+
+    void push_back(managed_bytes_view key, atomic_cell_view value);
+    void push_back(managed_bytes_view key, atomic_cell value) {
+        push_back(std::move(key), atomic_cell_view(value));
+    }
+
+    void push_back(value_type kv) {
+        push_back(std::move(kv.first), std::move(kv.second));
+    }
+
+    collection_mutation finish() &&;
+};
+
 collection_mutation merge(const abstract_type&, collection_mutation_view, collection_mutation_view);
 
 collection_mutation difference(const abstract_type&, collection_mutation_view, collection_mutation_view);
