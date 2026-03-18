@@ -23,57 +23,9 @@ class abstract_type;
 class compaction_garbage_collector;
 class row_tombstone;
 
-class collection_mutation;
-
 namespace ser {
 class collection_cell_view;
 }
-
-// An auxiliary struct used to (de)construct collection_mutations.
-// Unlike collection_mutation which is a serialized blob, this struct allows to inspect logical units of information
-// (tombstone and cells) inside the mutation easily.
-struct collection_mutation_description {
-    tombstone tomb;
-    // FIXME: use iterators?
-    // we never iterate over `cells` more than once, so there is no need to store them in memory.
-    // In some cases instead of constructing the `cells` vector, it would be more efficient to provide
-    // a one-time-use forward iterator which returns the cells.
-    utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
-
-    // Packs the data to a serialized blob.
-    collection_mutation serialize() const;
-};
-
-// Similar to collection_mutation_description, except that it doesn't store the cells' data, only observes it.
-struct collection_mutation_view_description {
-    tombstone tomb;
-    // FIXME: use iterators? See the fixme in collection_mutation_description; the same considerations apply here.
-    utils::chunked_vector<std::pair<bytes_view, atomic_cell_view>> cells;
-
-    // Copies the observed data, storing it in a collection_mutation_description.
-    collection_mutation_description materialize(const abstract_type&) const;
-
-    // Packs the data to a serialized blob.
-    collection_mutation serialize() const;
-};
-
-class collection_mutation_input_stream {
-    std::forward_list<bytes> _linearized;
-    managed_bytes_view _src;
-public:
-    collection_mutation_input_stream(const managed_bytes_view& src) : _src(src) {}
-    template <Trivial T>
-    T read_trivial() {
-        return ::read_simple<T>(_src);
-    }
-    bytes_view read_linearized(size_t n);
-    managed_bytes_view read_fragmented(size_t n);
-    bool empty() const;
-};
-
-// Given a collection_mutation_view, returns an auxiliary struct allowing the inspection of each cell.
-// The function needs to be given the type of stored data to reconstruct the structural information.
-collection_mutation_view_description deserialize_collection_mutation(const abstract_type&, collection_mutation_input_stream&);
 
 class collection_mutation_view {
 public:
@@ -89,14 +41,6 @@ public:
 
     // The maximum of timestamps of the mutation's cells and tombstone.
     api::timestamp_type last_update(const abstract_type&) const;
-
-    // Given a function that operates on a collection_mutation_view_description,
-    // calls it on the corresponding description of `this`.
-    template <typename F>
-    inline decltype(auto) with_deserialized(const abstract_type& type, F f) const {
-        collection_mutation_input_stream stream(data);
-        return f(deserialize_collection_mutation(type, stream));
-    }
 
     // Returns the collection-level tombstone, or an empty tombstone if none is present.
     tombstone tomb() const;

@@ -18,21 +18,6 @@
 
 #include "collection_mutation.hh"
 
-bytes_view collection_mutation_input_stream::read_linearized(size_t n) {
-    managed_bytes_view mbv = ::read_simple_bytes(_src, n);
-    if (mbv.is_linearized()) {
-        return mbv.current_fragment();
-    } else {
-        return _linearized.emplace_front(linearized(mbv));
-    }
-}
-managed_bytes_view collection_mutation_input_stream::read_fragmented(size_t n) {
-    return ::read_simple_bytes(_src, n);
-}
-bool collection_mutation_input_stream::empty() const {
-    return _src.empty();
-}
-
 collection_mutation::collection_mutation() : _data(managed_bytes::initialized_later{}, sizeof(uint8_t) + sizeof(int32_t)) {
     auto out = managed_bytes_mutable_view(_data);
     write<uint8_t>(out, uint8_t(false)); // No tombstone
@@ -181,37 +166,6 @@ auto fmt::formatter<collection_mutation_view::printer>::format(const collection_
     return fmt::format_to(out, "}}");
 }
 
-
-collection_mutation_description
-collection_mutation_view_description::materialize(const abstract_type& type) const {
-    collection_mutation_description m;
-    m.tomb = tomb;
-    m.cells.reserve(cells.size());
-
-    visit(type, make_visitor(
-    [&] (const collection_type_impl& ctype) {
-        auto& value_type = *ctype.value_comparator();
-        for (auto&& e : cells) {
-            m.cells.emplace_back(to_bytes(e.first), atomic_cell(value_type, e.second));
-        }
-    },
-    [&] (const user_type_impl& utype) {
-        for (auto&& e : cells) {
-            m.cells.emplace_back(to_bytes(e.first), atomic_cell(*utype.type(deserialize_field_index(e.first)), e.second));
-        }
-    },
-    [&] (const abstract_type& o) {
-        throw std::runtime_error(format("attempted to materialize collection_mutation_view_description with type {}", o.name()));
-    }
-    ));
-
-    return m;
-}
-
-namespace {
-struct atomic_cell_adaptor;
-}
-
 template <typename Adaptor, typename Iterator>
 static collection_mutation serialize_collection_mutation(const tombstone& tomb, std::ranges::subrange<Iterator> cells);
 
@@ -323,38 +277,6 @@ static collection_mutation serialize_collection_mutation(
         writev(kv);
     }
     return collection_mutation(std::move(ret));
-}
-
-namespace {
-
-/// A key-value pair where the key is bytes-like and the value is an atomic_cell-like type
-/// with a serialize() method returning managed_bytes_view.
-template <typename T>
-concept AtomicCellKV = requires(const T& kv) {
-    { kv.first.size() } -> std::convertible_to<size_t>;
-    { kv.second.serialize() } -> std::convertible_to<managed_bytes_view>;
-};
-
-struct atomic_cell_adaptor {
-    static size_t key_size(const AtomicCellKV auto& v) { return v.first.size(); }
-    static size_t value_size(const AtomicCellKV auto& v) { return v.second.serialize().size(); }
-
-    static void write_key(const AtomicCellKV auto& v, managed_bytes_mutable_view& out) {
-        write_fragmented(out, single_fragmented_view(v.first));
-    }
-    static void write_value(const AtomicCellKV auto& v, managed_bytes_mutable_view& out) {
-        write_fragmented(out, v.second.serialize());
-    }
-};
-
-}
-
-collection_mutation collection_mutation_description::serialize() const {
-    return serialize_collection_mutation<atomic_cell_adaptor>(tomb, std::ranges::subrange(cells.begin(), cells.end()));
-}
-
-collection_mutation collection_mutation_view_description::serialize() const {
-    return serialize_collection_mutation<atomic_cell_adaptor>(tomb, std::ranges::subrange(cells.begin(), cells.end()));
 }
 
 namespace {
@@ -576,58 +498,5 @@ collection_mutation difference(const abstract_type& type, collection_mutation_vi
         [] (const abstract_type& o) -> collection_mutation {
             throw std::runtime_error(format("collection_mutation difference: unknown type: {}", o.name()));
         }
-    ));
-}
-
-template <typename F>
-requires std::is_invocable_r_v<std::pair<bytes_view, atomic_cell_view>, F, collection_mutation_input_stream&>
-static collection_mutation_view_description
-deserialize_collection_mutation(collection_mutation_input_stream& in, F&& read_kv) {
-    collection_mutation_view_description ret;
-
-    auto has_tomb = in.read_trivial<uint8_t>();
-    if (has_tomb) {
-        auto ts = in.read_trivial<api::timestamp_type>();
-        auto ttl = in.read_trivial<gc_clock::duration::rep>();
-        ret.tomb = tombstone{ts, gc_clock::time_point(gc_clock::duration(ttl))};
-    }
-
-    auto nr = in.read_trivial<uint32_t>();
-    ret.cells.reserve(nr);
-    for (uint32_t i = 0; i != nr; ++i) {
-        ret.cells.push_back(read_kv(in));
-    }
-
-    SCYLLA_ASSERT(in.empty());
-    return ret;
-}
-
-collection_mutation_view_description
-deserialize_collection_mutation(const abstract_type& type, collection_mutation_input_stream& in) {
-    return visit(type, make_visitor(
-    [&] (const collection_type_impl& ctype) {
-        // value_comparator(), ugh
-        return deserialize_collection_mutation(in, [] (collection_mutation_input_stream& in) {
-            // FIXME: we could probably avoid the need for size
-            auto ksize = in.read_trivial<uint32_t>();
-            auto key = in.read_linearized(ksize);
-            auto vsize = in.read_trivial<uint32_t>();
-            auto value = atomic_cell_view::from_bytes(in.read_fragmented(vsize));
-            return std::make_pair(key, value);
-        });
-    },
-    [&] (const user_type_impl& utype) {
-        return deserialize_collection_mutation(in, [] (collection_mutation_input_stream& in) {
-            // FIXME: we could probably avoid the need for size
-            auto ksize = in.read_trivial<uint32_t>();
-            auto key = in.read_linearized(ksize);
-            auto vsize = in.read_trivial<uint32_t>();
-            auto value = atomic_cell_view::from_bytes(in.read_fragmented(vsize));
-            return std::make_pair(key, value);
-        });
-    },
-    [&] (const abstract_type& o) -> collection_mutation_view_description {
-        throw std::runtime_error(format("deserialize_collection_mutation: unknown type {}", o.name()));
-    }
     ));
 }
