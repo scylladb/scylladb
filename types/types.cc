@@ -3618,14 +3618,15 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
     return visit(*this, visitor{updated});
 }
 
-static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_mutation_view_description mut) {
+static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_mutation_view v) {
     bytes_ostream out;
     auto len_slot = out.write_place_holder(collection_size_len());
+    auto tomb = v.tomb();
     int elements = 0;
-    for (auto&& e : mut.cells) {
-        if (e.second.is_live(mut.tomb, false)) {
-            write_collection_value(out, atomic_cell_value_view(e.first));
-            write_collection_value(out, e.second.value());
+    for (auto&& [key, cell] : v) {
+        if (cell.is_live(tomb, false)) {
+            write_collection_value(out, atomic_cell_value_view(key));
+            write_collection_value(out, cell.value());
             elements += 1;
         }
     }
@@ -3633,13 +3634,14 @@ static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_muta
     return out;
 }
 
-static bytes_ostream serialize_for_cql_aux(const set_type_impl&, collection_mutation_view_description mut) {
+static bytes_ostream serialize_for_cql_aux(const set_type_impl&, collection_mutation_view v) {
     bytes_ostream out;
     auto len_slot = out.write_place_holder(collection_size_len());
+    auto tomb = v.tomb();
     int elements = 0;
-    for (auto&& e : mut.cells) {
-        if (e.second.is_live(mut.tomb, false)) {
-            write_collection_value(out, atomic_cell_value_view(e.first));
+    for (auto&& [key, cell] : v) {
+        if (cell.is_live(tomb, false)) {
+            write_collection_value(out, atomic_cell_value_view(key));
             elements += 1;
         }
     }
@@ -3647,13 +3649,14 @@ static bytes_ostream serialize_for_cql_aux(const set_type_impl&, collection_muta
     return out;
 }
 
-static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mutation_view_description mut) {
+static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mutation_view v) {
     bytes_ostream out;
     auto len_slot = out.write_place_holder(collection_size_len());
+    auto tomb = v.tomb();
     int elements = 0;
-    for (auto&& e : mut.cells) {
-        if (e.second.is_live(mut.tomb, false)) {
-            write_collection_value(out, e.second.value());
+    for (auto&& [key, cell] : v) {
+        if (cell.is_live(tomb, false)) {
+            write_collection_value(out, cell.value());
             elements += 1;
         }
     }
@@ -3661,15 +3664,15 @@ static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mut
     return out;
 }
 
-static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view_description mut) {
+static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view v) {
     SCYLLA_ASSERT(type.is_multi_cell());
-    SCYLLA_ASSERT(mut.cells.size() <= type.size());
 
     bytes_ostream out;
+    auto tomb = v.tomb();
 
     size_t curr_field_pos = 0;
-    for (auto&& e : mut.cells) {
-        auto field_pos = deserialize_field_index(e.first);
+    for (auto&& [key, cell] : v) {
+        auto field_pos = deserialize_field_index(key);
         SCYLLA_ASSERT(field_pos < type.size());
 
         // Some fields don't have corresponding cells -- these fields are null.
@@ -3678,8 +3681,8 @@ static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collectio
             ++curr_field_pos;
         }
 
-        if (e.second.is_live(mut.tomb, false)) {
-            auto value = e.second.value();
+        if (cell.is_live(tomb, false)) {
+            auto value = cell.value();
             write_simple<int32_t>(out, int32_t(value.size_bytes()));
             for (auto&& frag : fragment_range(value)) {
                 out.write(frag);
@@ -3702,31 +3705,22 @@ static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collectio
 bytes_ostream serialize_for_cql(const abstract_type& type, collection_mutation_view v) {
     throwing_assert(type.is_multi_cell());
 
-    return v.with_deserialized(type, [&] (collection_mutation_view_description mv) {
-        return visit(type, make_visitor(
-            [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv)); },
-            [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv)); },
-            [&] (const list_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv)); },
-            [&] (const user_type_impl& utype) { return serialize_for_cql_aux(utype, std::move(mv)); },
-            [&] (const abstract_type& o) -> bytes_ostream {
-                throw std::runtime_error(format("attempted to serialize a collection of cells with type: {}", o.name()));
-            }
-        ));
-    });
+    return visit(type, make_visitor(
+        [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, v); },
+        [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, v); },
+        [&] (const list_type_impl& ctype) { return serialize_for_cql_aux(ctype, v); },
+        [&] (const user_type_impl& utype) { return serialize_for_cql_aux(utype, v); },
+        [&] (const abstract_type& o) -> bytes_ostream {
+            throw std::runtime_error(format("attempted to serialize a collection of cells with type: {}", o.name()));
+        }
+    ));
 }
 
 bytes_ostream serialize_for_cql_with_timestamps(const abstract_type& type, collection_mutation_view v) {
     throwing_assert(type.is_multi_cell());
-    return v.with_deserialized(type, [&] (collection_mutation_view_description mv) -> bytes_ostream {
+
         // Step 1: produce regular CQL bytes (copy of mv is made inside serialize_for_cql_aux, mv is still valid after)
-        bytes_ostream cql = visit(type, make_visitor(
-            [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, mv); },
-            [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, mv); },
-            [&] (const user_type_impl& utype) { return serialize_for_cql_aux(utype, mv); },
-            [&] (const abstract_type& o) -> bytes_ostream {
-                throw std::runtime_error(format("serialize_for_cql_with_timestamps: unsupported type {}", o.name()));
-            }
-        ));
+        bytes_ostream cql = serialize_for_cql(type, v);
 
         // Step 2: build extended format:
         // [uint32: cql byte length][cql bytes]
@@ -3736,9 +3730,10 @@ bytes_ostream serialize_for_cql_with_timestamps(const abstract_type& type, colle
         out.append(cql);
         auto count_slot = out.write_place_holder(collection_size_len());
         int elements = 0;
-        for (auto&& e : mv.cells) {
-            if (e.second.is_live(mv.tomb, false)) {
-                bytes_view key = e.first;
+        const auto tomb = v.tomb();
+        for (auto&& e : v) {
+            if (e.second.is_live(tomb, false)) {
+                auto key = e.first;
                 write_simple<int32_t>(out, int32_t(key.size()));
                 out.write(key);
                 write_simple<int64_t>(out, e.second.timestamp());
@@ -3752,7 +3747,6 @@ bytes_ostream serialize_for_cql_with_timestamps(const abstract_type& type, colle
         }
         write_collection_size(count_slot, elements);
         return out;
-    });
 }
 
 bytes serialize_field_index(size_t idx) {
