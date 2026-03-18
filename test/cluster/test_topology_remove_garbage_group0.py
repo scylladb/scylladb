@@ -94,6 +94,8 @@ async def test_remove_garbage_group0_members(manager: ManagerClient):
     logging.info(f'stop {servers[1]}')
     await manager.server_stop_gracefully(servers[1].server_id)
 
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
+
     logging.info(f'removenode {servers[1]} using {servers[2]}')
     await manager.remove_node(servers[2].server_id, servers[1].server_id)
 
