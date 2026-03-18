@@ -36,11 +36,8 @@ release versions, run:
   curl -sSf get.scylladb.com/server | sudo bash -s -- --list-active-releases
 
 
-Versions 2025.1 and Later
-==============================
-
-Run the command with the ``--scylla-version`` option to specify the version
-you want to install.
+To install a non-default version, run the command with the ``--scylla-version``
+option to specify the version you want to install.
 
 **Example**
 
@@ -48,22 +45,6 @@ you want to install.
   :substitutions:
   
   curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-version |CURRENT_VERSION|
-
-
-Versions Earlier than 2025.1
-================================
-
-To install a supported version of *ScyllaDB Enterprise*, run the command with:
-
-* ``--scylla-product scylla-enterprise`` to specify that you want to install
-  ScyllaDB Entrprise.
-* ``--scylla-version`` to specify the version you want to install.
-
-For example:
-
-.. code:: console
-  
-  curl -sSf get.scylladb.com/server | sudo bash -s -- --scylla-product scylla-enterprise --scylla-version 2024.1
 
 
 .. include:: /getting-started/_common/setup-after-install.rst
