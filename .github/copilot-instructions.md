@@ -89,6 +89,14 @@ ninja build/<mode>/scylla
 - Question requests: don't blindly implement requests - evaluate trade-offs, identify issues, and suggest better alternatives when appropriate
 - Consider different approaches, weigh pros and cons, and recommend the best fit for the specific context
 
+## Code Review
+When assigned as a reviewer on a pull request, follow the detailed review guidelines in `.github/instructions/review.instructions.md`. Key principles:
+- Review for correctness, performance, and readability
+- Never approve code that uses hard assertions (`SCYLLA_ASSERT`, `abort()`) for conditions reachable in production
+- Verify commit messages explain "why", each commit is bisectable, and PR scope is focused
+- Check for unnecessary copies, missing `std::move()`, includes added to popular headers
+- Ensure tests are fast, stable, deterministic, and minimal in resource usage
+
 ## Test Philosophy
 - Performance matters. Tests should run as quickly as possible. Sleeps in the code are highly discouraged and should be avoided, to reduce run time and flakiness.
 - Stability matters. Tests should be stable. New tests should be executed 100 times at least to ensure they pass 100 out of 100 times. (use --repeat 100 --max-failures 1 when running it)
