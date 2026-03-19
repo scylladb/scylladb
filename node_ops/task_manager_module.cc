@@ -91,7 +91,13 @@ future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status_help
         .entity = "",
         .progress_units = "",
         .progress = tasks::task_manager::task::progress{},
+<<<<<<< HEAD
         .children = started ? co_await get_children(get_module(), id, [&gossiper = _ss.gossiper()] (gms::inet_address addr) { return gossiper.is_alive(addr); }) : std::vector<tasks::task_identity>{}
+||||||| parent of 41e2c2d1c4 (Merge 'tasks: do not fail the wait request if rpc fails' from Aleksandra Martyniuk)
+        .children = started ? co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper())) : utils::chunked_vector<tasks::task_identity>{}
+=======
+        .children = started ? co_await get_children(get_module(), id, _ss.get_token_metadata_ptr()) : utils::chunked_vector<tasks::task_identity>{}
+>>>>>>> 41e2c2d1c4 (Merge 'tasks: do not fail the wait request if rpc fails' from Aleksandra Martyniuk)
     };
 }
 
