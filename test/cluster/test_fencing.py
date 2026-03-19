@@ -414,15 +414,15 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
 
         logger.info("LWT workoad started")
         lwt_workload_task = asyncio.create_task(lwt_workload())
-        wait_for_some_lwts()
+        await wait_for_some_lwts()
 
         logger.info(f"Upgrading {servers[0].server_id}")
         await manager.server_change_version(servers[0].server_id, scylla_binary)
-        wait_for_some_lwts()
+        await wait_for_some_lwts()
 
         logger.info(f"Downgrading {servers[0].server_id}")
         await manager.server_change_version(servers[0].server_id, scylla_2025_1.path)
-        wait_for_some_lwts()
+        await wait_for_some_lwts()
 
         for s in servers:
             # Ensure all hosts are alive before restarting the last server,
@@ -441,7 +441,7 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
 
         logger.info("Done upgrading servers")
 
-        wait_for_some_lwts()
+        await wait_for_some_lwts()
 
         stop = True
         await lwt_workload_task
