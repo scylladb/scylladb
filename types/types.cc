@@ -715,15 +715,6 @@ void write_collection_value(bytes_ostream& out, atomic_cell_value_view val) {
     }
 }
 
-void write_fragmented(managed_bytes_mutable_view& out, std::string_view val) {
-    while (val.size() > 0) {
-        size_t current_n = std::min(val.size(), out.current_fragment().size());
-        memcpy(out.current_fragment().data(), val.data(), current_n);
-        val.remove_prefix(current_n);
-        out.remove_prefix(current_n);
-    }
-}
-
 template<std::integral T>
 void write_simple(managed_bytes_mutable_view& out, std::type_identity_t<T> val) {
     val = net::hton(val);

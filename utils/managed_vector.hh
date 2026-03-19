@@ -10,6 +10,7 @@
 
 #include <array>
 #include <type_traits>
+#include <algorithm>
 
 #include "utils/allocation_strategy.hh"
 
@@ -27,10 +28,8 @@ private:
         T _data[0];
 
         external(external&& other) noexcept : _backref(other._backref) {
-            for (unsigned i = 0; i < _backref->size(); i++) {
-                new (_data + i) T(std::move(other._data[i]));
-                other._data[i].~T();
-            }
+            std::uninitialized_move(other._data, other._data + other._backref->_size, _data);
+            std::destroy(other._data, other._data + other._backref->_size);
             _backref->_data = _data;
         }
         size_t storage_size() const noexcept {
