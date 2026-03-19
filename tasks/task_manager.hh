@@ -19,6 +19,7 @@
 #include "db_clock.hh"
 #include "utils/log.hh"
 #include "locator/host_id.hh"
+#include "locator/token_metadata_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "tasks/types.hh"
 #include "utils/chunked_vector.hh"
@@ -282,7 +283,7 @@ public:
             impl& operator=(impl&&) = delete;
             virtual ~impl() = default;
         protected:
-            static future<utils::chunked_vector<task_identity>> get_children(module_ptr module, task_id parent_id, std::function<bool(locator::host_id)> is_host_alive);
+            static future<utils::chunked_vector<task_identity>> get_children(module_ptr module, task_id parent_id, locator::token_metadata_ptr tmptr);
         public:
             virtual task_group get_group() const noexcept = 0;
             // Returns std::nullopt if an operation with task_id isn't tracked by this virtual_task.

@@ -103,7 +103,7 @@ future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status(task
         .entity = stats.entity,
         .progress_units = "",
         .progress = tasks::task_manager::task::progress{},
-        .children = co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper()))
+        .children = co_await get_children(get_module(), id, _ss.get_token_metadata_ptr())
     };
 }
 
