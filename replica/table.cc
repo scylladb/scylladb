@@ -3775,6 +3775,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
             }
 
             auto lister = directory_lister(snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>());
+            auto close_lister = deferred_close(lister);
             while (auto de = lister.get().get()) {
                 auto snapshot_name = de->name;
                 all_snapshots.emplace(snapshot_name, snapshot_details());
@@ -3782,6 +3783,9 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                 auto& sd = all_snapshots.at(snapshot_name);
                 sd.total += details.total;
                 sd.live += details.live;
+                utils::get_local_injector().inject("get_snapshot_details", [&] (auto& handler) -> future<> {
+                    throw std::runtime_error("Injected exception in get_snapshot_details");
+                }).get();
             }
         }
         return all_snapshots;
@@ -3801,53 +3805,66 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
     }
 
     auto lister = directory_lister(snapshot_directory, snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
-    while (auto de = co_await lister.get()) {
-        const auto& name = de->name;
-        future<stat_data> (&file_stat)(file& directory, std::string_view name, follow_symlink) noexcept = seastar::file_stat;
-        auto sd = co_await io_check(file_stat, snapshot_directory, name, follow_symlink::no);
-        auto size = sd.allocated_size;
+    std::exception_ptr ex;
+    try {
+        while (auto de = co_await lister.get()) {
+            const auto& name = de->name;
+            future<stat_data> (&file_stat)(file& directory, std::string_view name, follow_symlink) noexcept = seastar::file_stat;
+            auto sd = co_await io_check(file_stat, snapshot_directory, name, follow_symlink::no);
+            auto size = sd.allocated_size;
 
-        // The manifest and schema.sql files are the only files expected to be in this directory not belonging to the SSTable.
-        //
-        // All the others should just generate an exception: there is something wrong, so don't blindly
-        // add it to the size.
-        if (name != "manifest.json" && name != "schema.cql") {
-            details.total += size;
-            if (sd.number_of_links == 1) {
-                // File exists only in the snapshot directory.
-                details.live += size;
+            utils::get_local_injector().inject("per-snapshot-get_snapshot_details", [&] (auto& handler) -> future<> {
+                throw std::runtime_error("Injected exception in per-snapshot-get_snapshot_details");
+            }).get();
+
+            // The manifest and schema.cql files are the only files expected to be in this directory not belonging to the SSTable.
+            //
+            // All the others should just generate an exception: there is something wrong, so don't blindly
+            // add it to the size.
+            if (name != "manifest.json" && name != "schema.cql") {
+                details.total += size;
+                if (sd.number_of_links == 1) {
+                    // File exists only in the snapshot directory.
+                    details.live += size;
+                    continue;
+                }
+                // If the number of links is greater than 1, it is still possible that the file is linked to another snapshot
+                // So check the datadir for the file too.
+            } else {
                 continue;
             }
-            // If the number of links is greater than 1, it is still possible that the file is linked to another snapshot
-            // So check the datadir for the file too.
-        } else {
-            continue;
-        }
 
-        auto exists_in_dir = [&] (file& dir, const fs::path& path, std::string_view name) -> future<bool> {
-          try {
-            // File exists in the main SSTable directory. Snapshots are not contributing to size
-            auto psd = co_await io_check(file_stat, dir, name, follow_symlink::no);
-            // File in main SSTable directory must be hardlinked to the file in the snapshot dir with the same name.
-            if (psd.device_id != sd.device_id || psd.inode_number != sd.inode_number) {
-                dblog.warn("[{} device_id={} inode_number={} size={}] is not the same file as [{} device_id={} inode_number={} size={}]",
-                        (path / name).native(), psd.device_id, psd.inode_number, psd.size,
-                        (snapshot_dir / name).native(), sd.device_id, sd.inode_number, sd.size);
+            auto exists_in_dir = [&] (file& dir, const fs::path& path, std::string_view name) -> future<bool> {
+              try {
+                // File exists in the main SSTable directory. Snapshots are not contributing to size
+                auto psd = co_await io_check(file_stat, dir, name, follow_symlink::no);
+                // File in main SSTable directory must be hardlinked to the file in the snapshot dir with the same name.
+                if (psd.device_id != sd.device_id || psd.inode_number != sd.inode_number) {
+                    dblog.warn("[{} device_id={} inode_number={} size={}] is not the same file as [{} device_id={} inode_number={} size={}]",
+                            (path / name).native(), psd.device_id, psd.inode_number, psd.size,
+                            (snapshot_dir / name).native(), sd.device_id, sd.inode_number, sd.size);
+                    co_return false;
+                }
+                co_return true;
+              } catch (std::system_error& e) {
+                if (e.code() != std::error_code(ENOENT, std::system_category())) {
+                    throw;
+                }
                 co_return false;
+              }
+            };
+            // Check staging dir first, as files might be moved from there to the datadir concurrently to this check
+            if ((!staging_dir || !co_await exists_in_dir(staging_directory, *staging_dir, name)) &&
+                    !co_await exists_in_dir(data_directory, datadir, name)) {
+                details.live += size;
             }
-            co_return true;
-          } catch (std::system_error& e) {
-            if (e.code() != std::error_code(ENOENT, std::system_category())) {
-                throw;
-            }
-            co_return false;
-          }
-        };
-        // Check staging dir first, as files might be moved from there to the datadir concurrently to this check
-        if ((!staging_dir || !co_await exists_in_dir(staging_directory, *staging_dir, name)) &&
-                !co_await exists_in_dir(data_directory, datadir, name)) {
-            details.live += size;
         }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await lister.close();
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
     }
 
     co_return details;

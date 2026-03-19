@@ -1111,6 +1111,30 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
     });
 }
 
+SEASTAR_TEST_CASE(test_snapshot_ctl_details_exception_handling) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
+        sharded<db::snapshot_ctl> sc;
+        sc.start(std::ref(e.db()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
+        auto stop_sc = deferred_stop(sc);
+
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+        take_snapshot(e).get();
+
+        utils::get_local_injector().enable("get_snapshot_details", true);
+        BOOST_REQUIRE_THROW(cf.get_snapshot_details().get(), std::runtime_error);
+
+        utils::get_local_injector().enable("per-snapshot-get_snapshot_details", true);
+        BOOST_REQUIRE_THROW(cf.get_snapshot_details().get(), std::runtime_error);
+
+        auto details = cf.get_snapshot_details().get();
+        BOOST_REQUIRE_EQUAL(details.size(), 1);
+    });
+}
+
 // toppartitions_query caused a lw_shared_ptr to cross shards when moving results, #5104
 SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
     return do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
