@@ -289,7 +289,7 @@ Yes, but it will require running a full repair (or cleanup) to change the replic
 - If you're reducing the replication factor, run ``nodetool cleanup <updated Keyspace>`` on the keyspace you modified to remove surplus replicated data.
   Cleanup runs on a per-node basis.
 - If you're increasing the replication factor, refer to :doc:`How to Safely Increase the RF </kb/rf-increase>`
-- Note that you need to provide the keyspace namr. If you do not, the cleanup or repair operation runs on all keyspaces for the specific node.
+- Note that you need to provide the keyspace name. If you do not, the cleanup or repair operation runs on all keyspaces for the specific node.
 
 Why can't I set ``listen_address`` to listen to 0.0.0.0 (all my addresses)?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
