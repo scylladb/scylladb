@@ -53,9 +53,9 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
                     "     AND compaction = {'class': 'NullCompactionStrategy'}")
 
         for write_statement, delete_statement in statement_pairs:
-            execute_with_tracing(cql, write_statement.format(ks=ks), log = True)
+            execute_with_tracing(cql, SimpleStatement(write_statement.format(ks=ks), consistency_level=ConsistencyLevel.ALL), log = True)
             await manager.api.enable_injection(node3.ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": "tbl", "what": "throw"})
-            execute_with_tracing(cql, delete_statement.format(ks=ks), log = True)
+            execute_with_tracing(cql, SimpleStatement(delete_statement.format(ks=ks), consistency_level=ConsistencyLevel.LOCAL_QUORUM), log = True)
             await manager.api.disable_injection(node3.ip_addr, "database_apply")
 
         def check_data(host, data):
