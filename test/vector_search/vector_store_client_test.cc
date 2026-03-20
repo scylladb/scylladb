@@ -927,18 +927,20 @@ SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_request
 
                 // Verify backoff timing between status check connections.
                 // Skip the first connection (ANN request) and analyze status check intervals.
+                // Allow small tolerance for timer imprecision: measured intervals can be slightly shorter than the programmed sleep duration.
+                constexpr auto TIMER_TOLERANCE = std::chrono::milliseconds(10);
                 auto duration_between_1st_and_2nd_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
                         unavail_s->connections().at(2).timestamp - unavail_s->connections().at(1).timestamp);
-                BOOST_CHECK_GE(duration_between_1st_and_2nd_status_check, std::chrono::milliseconds(100));
+                BOOST_CHECK_GE(duration_between_1st_and_2nd_status_check, std::chrono::milliseconds(100) - TIMER_TOLERANCE);
                 BOOST_CHECK_LT(duration_between_1st_and_2nd_status_check, std::chrono::milliseconds(200));
                 auto duration_between_2nd_and_3rd_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
                         unavail_s->connections().at(3).timestamp - unavail_s->connections().at(2).timestamp);
                 // Max backoff time reached at 200ms, so subsequent status checks use fixed 200ms intervals.
-                BOOST_CHECK_GE(duration_between_2nd_and_3rd_status_check, std::chrono::milliseconds(200)); // 200ms = 100ms * 2
+                BOOST_CHECK_GE(duration_between_2nd_and_3rd_status_check, std::chrono::milliseconds(200) - TIMER_TOLERANCE); // 200ms = 100ms * 2
                 BOOST_CHECK_LT(duration_between_2nd_and_3rd_status_check, std::chrono::milliseconds(400));
                 auto duration_between_3rd_and_4th_status_check = std::chrono::duration_cast<std::chrono::milliseconds>(
                         unavail_s->connections().at(4).timestamp - unavail_s->connections().at(3).timestamp);
-                BOOST_CHECK_GE(duration_between_3rd_and_4th_status_check, std::chrono::milliseconds(200));
+                BOOST_CHECK_GE(duration_between_3rd_and_4th_status_check, std::chrono::milliseconds(200) - TIMER_TOLERANCE);
                 BOOST_CHECK_LT(duration_between_3rd_and_4th_status_check, std::chrono::milliseconds(400));
             },
             cfg)

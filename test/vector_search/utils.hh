@@ -155,11 +155,6 @@ struct unreachable_socket {
             conn.shutdown_output();
             co_await conn.wait_input_shutdown();
         }
-        // There is currently no effective way to abort an ongoing connect in Seastar.
-        // Timing out connect by with_timeout, remains pending coroutine in the reactor.
-        // To prevent resource leaks, we close the unreachable socket and sleep,
-        // allowing the pending connect coroutines to fail and release their resources.
-        co_await seastar::sleep(3s);
     }
 };
 
