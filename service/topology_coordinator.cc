@@ -2193,6 +2193,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 _tablet_allocator.set_load_stats(reconciled_stats);
             }
         }
+
+        // Wait for the background storage group merge to finish before releasing the state machine.
+        // Background merge holds the old erm, so a successful barrier joins with it.
+        // This guarantees that the background merge doesn't run concurrently with the next merge.
+        // Replica-side storage group merge takes compaction locks on the tablet's main compaction group, released
+        // by the background merge. If the next merge starts before the background merge finishes, it can cause a deadlock.
+        // The background merge fiber will try to stop a compaction group which is locked, and the lock is held
+        // by the background merge fiber.
+        tm = nullptr;
+        if (!guard) {
+            guard = co_await start_operation();
+        }
+        co_await global_tablet_token_metadata_barrier(std::move(guard));
     }
 
     future<> handle_truncate_table(group0_guard guard) {

@@ -944,6 +944,9 @@ public:
     future<bool> ongoing_rf_change(const group0_guard& guard, sstring ks) const;
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> initialize_done_topology_upgrade_state();
+    // Does the local part of global_token_metadata_barrier(), without a raft group0 barrier.
+    // In particular, waits for non-latest local erms to go die.
+    future<> local_topology_barrier();
 private:
      // State machine that is responsible for topology change
     topology_state_machine& _topology_state_machine;

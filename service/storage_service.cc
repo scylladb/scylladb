@@ -6156,6 +6156,57 @@ future<> storage_service::snitch_reconfigured() {
     }
 }
 
+future<> storage_service::local_topology_barrier() {
+    if (this_shard_id() != 0) {
+        co_await container().invoke_on(0, [] (storage_service& ss) {
+            return ss.local_topology_barrier();
+        });
+        co_return;
+    }
+
+    auto version = _topology_state_machine._topology.version;
+
+    utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail_before", [] {
+        throw std::runtime_error("raft_topology_barrier_and_drain_fail_before injected exception");
+    });
+
+    co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5)));
+    if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
+        for (auto& n : _topology_state_machine._topology.transition_nodes) {
+            if (!_address_map.find(locator::host_id{n.first.uuid()})) {
+                rtlogger.error("The topology transition is in a double write state but the IP of the node in transition is not known");
+                break;
+            }
+        }
+    }
+
+    co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
+        const auto current_version = ss._shared_token_metadata.get()->get_version();
+        rtlogger.info("Got raft_topology_cmd::barrier_and_drain, version {}, current version {}",
+                      version, current_version);
+
+        // This shouldn't happen under normal operation, it's only plausible
+        // if the topology change coordinator has
+        // moved to another node and managed to update the topology
+        // parallel to this method. The previous coordinator
+        // should be inactive now, so it won't observe this
+        // exception. By returning exception we aim
+        // to reveal any other conditions where this may arise.
+        if (current_version != version) {
+            co_await coroutine::return_exception(std::runtime_error(
+                    ::format("raft topology: command::barrier_and_drain, the version has changed, "
+                             "version {}, current_version {}, the topology change coordinator "
+                             " had probably migrated to another node",
+                             version, current_version)));
+        }
+
+        co_await ss._shared_token_metadata.stale_versions_in_use();
+        co_await get_topology_session_manager().drain_closing_sessions();
+
+        rtlogger.info("raft_topology_cmd::barrier_and_drain done");
+    });
+}
+
 future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
     raft_topology_cmd_result result;
     rtlogger.info("topology cmd rpc {} is called index={}", cmd.cmd, cmd_index);
@@ -6182,12 +6233,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             }
             state.last_index = cmd_index;
         }
-
-        // We capture the topology version right after the checks
-        // above, before any yields. This is crucial since _topology_state_machine._topology
-        // might be altered concurrently while this method is running,
-        // which can cause the fence command to apply an invalid fence version.
-        const auto version = _topology_state_machine._topology.version;
 
         switch (cmd.cmd) {
             case raft_topology_cmd::command::barrier: {
@@ -6227,43 +6272,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             }
             break;
             case raft_topology_cmd::command::barrier_and_drain: {
-                utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail_before", [] {
-                    throw std::runtime_error("raft_topology_barrier_and_drain_fail_before injected exception");
-                });
-                co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5)));
-                if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
-                    for (auto& n : _topology_state_machine._topology.transition_nodes) {
-                        if (!_address_map.find(locator::host_id{n.first.uuid()})) {
-                            rtlogger.error("The topology transition is in a double write state but the IP of the node in transition is not known");
-                            break;
-                        }
-                    }
-                }
-                co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
-                    const auto current_version = ss._shared_token_metadata.get()->get_version();
-                    rtlogger.info("Got raft_topology_cmd::barrier_and_drain, version {}, current version {}",
-                        version, current_version);
-
-                    // This shouldn't happen under normal operation, it's only plausible
-                    // if the topology change coordinator has
-                    // moved to another node and managed to update the topology
-                    // parallel to this method. The previous coordinator
-                    // should be inactive now, so it won't observe this
-                    // exception. By returning exception we aim
-                    // to reveal any other conditions where this may arise.
-                    if (current_version != version) {
-                        co_await coroutine::return_exception(std::runtime_error(
-                            ::format("raft topology: command::barrier_and_drain, the version has changed, "
-                                     "version {}, current_version {}, the topology change coordinator "
-                                     " had probably migrated to another node",
-                                version, current_version)));
-                    }
-
-                    co_await ss._shared_token_metadata.stale_versions_in_use();
-                    co_await get_topology_session_manager().drain_closing_sessions();
-
-                    rtlogger.info("raft_topology_cmd::barrier_and_drain done");
-                });
+                co_await local_topology_barrier();
 
                 co_await utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail", [this] (auto& handler) -> future<> {
                     auto ks = handler.get("keyspace");

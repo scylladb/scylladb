@@ -1608,6 +1608,29 @@ future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 }
 
 static
+future<group0_guard> save_token_metadata(cql_test_env& e, group0_guard guard) {
+    auto& stm = e.local_db().get_shared_token_metadata();
+    auto tm = stm.get();
+
+    e.get_topology_state_machine().local()._topology.version = tm->get_version();
+
+    co_await save_tablet_metadata(e.local_db(), tm->tablets(), guard.write_timestamp());
+    utils::chunked_vector<frozen_mutation> muts;
+    muts.push_back(freeze(topology_mutation_builder(guard.write_timestamp())
+                                  .set_version(tm->get_version())
+                                  .build().to_mutation(db::system_keyspace::topology())));
+    co_await e.local_db().apply(muts, db::no_timeout);
+    co_await e.get_storage_service().local().update_tablet_metadata({});
+
+    // Need a new guard to make sure later changes use later timestamp.
+    // Also, so that the table layer processes the changes we persisted, which is important for splits.
+    // Before we can finalize a split, the storage group needs to process the split by creating split-ready compaction groups.
+    release_guard(std::move(guard));
+    abort_source as;
+    co_return co_await e.get_raft_group0_client().start_operation(as);
+}
+
+static
 future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migration_plan& plan, shared_load_stats* load_stats) {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
@@ -1626,19 +1649,14 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
         co_await stm.mutate_token_metadata([table_id, &new_tmap, &changed] (token_metadata& tm) {
             changed = true;
             tm.tablets().set_tablet_map(table_id, std::move(new_tmap));
+            tm.set_version(tm.get_version() + 1);
             return make_ready_future<>();
         });
     }
 
     if (changed) {
         // Need to reload on each resize because table object expects tablet count to change by a factor of 2.
-        co_await save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp());
-        co_await e.get_storage_service().local().update_tablet_metadata({});
-
-        // Need a new guard to make sure later changes use later timestamp.
-        release_guard(std::move(guard));
-        abort_source as;
-        guard = co_await e.get_raft_group0_client().start_operation(as);
+        guard = co_await save_token_metadata(e, std::move(guard));
 
         if (load_stats) {
             auto new_tm = stm.get();
@@ -1647,6 +1665,11 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
                 load_stats->stats = *reconciled_stats;
             }
         }
+
+        testlog.debug("Calling local_topology_barrier()");
+        old_tm = nullptr;
+        co_await e.get_storage_service().local().local_topology_barrier();
+        testlog.debug("Finished local_topology_barrier()");
     }
 }
 
@@ -1750,12 +1773,21 @@ void do_rebalance_tablets(cql_test_env& e,
         }).get();
 
         if (auto_split && load_stats) {
+            bool reload = false;
             auto& tm = *stm.get();
             for (const auto& [table, tmap]: tm.tablets().all_tables_ungrouped()) {
                 if (std::holds_alternative<resize_decision::split>(tmap->resize_decision().way)) {
-                    testlog.debug("set_split_ready_seq_number({}, {})", table, tmap->resize_decision().sequence_number);
-                    load_stats->set_split_ready_seq_number(table, tmap->resize_decision().sequence_number);
+                    if (load_stats->stats.tables[table].split_ready_seq_number != tmap->resize_decision().sequence_number) {
+                        testlog.debug("set_split_ready_seq_number({}, {})", table, tmap->resize_decision().sequence_number);
+                        load_stats->set_split_ready_seq_number(table, tmap->resize_decision().sequence_number);
+                        reload = true;
+                    }
                 }
+            }
+
+            // Need to order split-ack before split finalization, storage_group assumes that.
+            if (reload) {
+                guard = save_token_metadata(e, std::move(guard)).get();
             }
         }
 

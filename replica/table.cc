@@ -711,7 +711,9 @@ public:
         return make_ready_future<>();
     }
 
-    void update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override {}
+    void update_effective_replication_map(const locator::effective_replication_map_ptr& old_erm,
+                                          const locator::effective_replication_map& erm,
+                                          noncopyable_function<void()> refresh_mutation_source) override {}
 
     compaction_group& compaction_group_for_token(dht::token token) const override {
         return get_compaction_group();
@@ -757,6 +759,11 @@ public:
     }
 };
 
+struct background_merge_guard {
+    compaction::compaction_reenabler compaction_guard;
+    locator::effective_replication_map_ptr erm_guard;
+};
+
 class tablet_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
     locator::host_id _my_host_id;
@@ -777,7 +784,7 @@ class tablet_storage_group_manager final : public storage_group_manager {
     utils::phased_barrier _merge_fiber_barrier;
     std::optional<utils::phased_barrier::operation> _pending_merge_fiber_work;
     // Holds compaction reenabler which disables compaction temporarily during tablet merge
-    std::vector<compaction::compaction_reenabler> _compaction_reenablers_for_merging;
+    std::vector<background_merge_guard> _compaction_reenablers_for_merging;
 private:
     const schema_ptr& schema() const {
         return _t.schema();
@@ -801,7 +808,8 @@ private:
     // Called when coordinator executes tablet merge. Tablet ids X and X+1 are merged into
     // the new tablet id (X >> 1). In practice, that means storage groups for X and X+1
     // are merged into a new storage group with id (X >> 1).
-    void handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+    void handle_tablet_merge_completion(locator::effective_replication_map_ptr old_erm,
+                                        const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
     // When merge completes, compaction groups of sibling tablets are added to same storage
     // group, but they're not merged yet into one, since the merge completion handler happens
@@ -895,7 +903,9 @@ public:
                 std::exchange(_stop_fut, make_ready_future())).discard_result();
     }
 
-    void update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override;
+    void update_effective_replication_map(const locator::effective_replication_map_ptr& old_erm,
+                                          const locator::effective_replication_map& erm,
+                                          noncopyable_function<void()> refresh_mutation_source) override;
 
     compaction_group& compaction_group_for_token(dht::token token) const override;
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override;
@@ -3160,7 +3170,9 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
     }
 }
 
-void tablet_storage_group_manager::handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+void tablet_storage_group_manager::handle_tablet_merge_completion(locator::effective_replication_map_ptr old_erm,
+                                                                  const locator::tablet_map& old_tmap,
+                                                                  const locator::tablet_map& new_tmap) {
     auto table_id = schema()->id();
     size_t old_tablet_count = old_tmap.tablet_count();
     size_t new_tablet_count = new_tmap.tablet_count();
@@ -3184,7 +3196,7 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
         auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_range, make_repair_sstable_classifier_func());
         for (auto& view : new_cg->all_views()) {
             auto cre = _t.get_compaction_manager().stop_and_disable_compaction_no_wait(*view, "tablet merging");
-            _compaction_reenablers_for_merging.push_back(std::move(cre));
+            _compaction_reenablers_for_merging.push_back(background_merge_guard{std::move(cre), old_erm});
         }
         auto new_sg = make_lw_shared<storage_group>(std::move(new_cg));
 
@@ -3217,7 +3229,11 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
     _merge_completion_event.signal();
 }
 
-void tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) {
+void tablet_storage_group_manager::update_effective_replication_map(
+        const locator::effective_replication_map_ptr& old_erm,
+        const locator::effective_replication_map& erm,
+        noncopyable_function<void()> refresh_mutation_source)
+{
     auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
 
@@ -3233,7 +3249,7 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
         if (utils::get_local_injector().is_enabled("tablet_force_tablet_count_decrease_once")) {
             utils::get_local_injector().disable("tablet_force_tablet_count_decrease");
         }
-        handle_tablet_merge_completion(*old_tablet_map, *new_tablet_map);
+        handle_tablet_merge_completion(old_erm, *old_tablet_map, *new_tablet_map);
     }
 
     // Allocate storage group if tablet is migrating in, or deallocate if it's migrating out.
@@ -3319,7 +3335,7 @@ void table::update_effective_replication_map(locator::effective_replication_map_
     };
 
     if (uses_tablets()) {
-        _sg_manager->update_effective_replication_map(*_erm, refresh_mutation_source);
+        _sg_manager->update_effective_replication_map(old_erm, *_erm, refresh_mutation_source);
     }
     if (old_erm) {
         old_erm->invalidate();

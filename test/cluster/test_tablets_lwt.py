@@ -978,7 +978,7 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient):
         await wait_for_tablet_count(manager, s0, ks, 'test', lambda c: c == 1, 1, timeout_s=15)
 
         logger.info("Ensure the guard decided to retain the erm")
-        await log0.wait_for("tablet_metadata_guard::check: retain the erm and abort the guard",
+        m, _ = await log0.wait_for("tablet_metadata_guard::check: retain the erm and abort the guard",
                             from_mark=m, timeout=10)
 
         tablets = await get_all_tablet_replicas(manager, s0, ks, 'test')
@@ -986,7 +986,11 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient):
         tablet = tablets[0]
         assert tablet.replicas == [(s0_host_id, 0)]
 
-        m = await log0.mark()
+        # Since merge now waits for erms before releasing the state machine,
+        # the migration initiated below will not start until paxos released the erm.
+        # The barrier which is blocked is the one in merge finalization.
+        # I keep the tablet movement as a guard against regressions in case the behavior changes.
+
         migration_task = asyncio.create_task(manager.api.move_tablet(s0.ip_addr, ks, "test",
                                                                      s0_host_id, 0,
                                                                      s0_host_id, 1,

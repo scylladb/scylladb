@@ -441,84 +441,6 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
 
     await check_logs("after merge completion")
 
-# Reproduces use-after-free when migration right after merge, but concurrently to background
-# merge completion handler.
-# See: https://github.com/scylladb/scylladb/issues/24045
-@pytest.mark.asyncio
-@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_migration_running_concurrently_to_merge_completion_handling(manager: ManagerClient):
-    cmdline = []
-    # Size based balancing can attempt to migrate the merged tablet as soon as the merge is complete
-    # because of a lower transient effective_capacity on the node with the merged tablet.
-    # This migration will timeout on cleanup because the compaction group still has an active task,
-    # which is held by the merge_completion_fiber injection, so the tablet's compaction group gate
-    # can not be closed, resulting in cleanup getting stuck. We force capacity based balancing to
-    # avoid this problem.
-    cfg = {'force_capacity_based_balancing': True}
-    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
-
-    await manager.disable_tablet_balancing()
-
-    cql = manager.get_cql()
-
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
-
-        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
-        assert tablet_count == 2
-
-        old_tablet_count = tablet_count
-
-        keys = range(100)
-        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
-
-        await cql.run_async(f"ALTER KEYSPACE {ks} WITH tablets = {{'initial': 1}};")
-
-        s0_log = await manager.server_open_log(servers[0].server_id)
-        s0_mark = await s0_log.mark()
-
-        await manager.api.enable_injection(servers[0].ip_addr, "merge_completion_fiber", one_shot=True)
-        await manager.api.enable_injection(servers[0].ip_addr, "replica_merge_completion_wait", one_shot=True)
-        await manager.enable_tablet_balancing()
-
-        servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
-        s1_host_id = await manager.get_host_id(servers[1].server_id)
-
-        async def finished_merging():
-            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
-            return tablet_count < old_tablet_count or None
-
-        await wait_for(finished_merging, time.time() + 120)
-
-        await manager.disable_tablet_balancing()
-        await manager.api.enable_injection(servers[0].ip_addr, "take_storage_snapshot", one_shot=True)
-
-        await s0_log.wait_for(f"merge_completion_fiber: waiting", from_mark=s0_mark)
-
-        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
-        assert tablet_count == 1
-
-        tablet_token = 0 # Doesn't matter since there is one tablet
-        replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
-
-        s0_host_id = await manager.get_host_id(servers[0].server_id)
-        src_shard = replica[1]
-        dst_shard = src_shard
-
-        migration = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], src_shard, s1_host_id, dst_shard, tablet_token))
-
-        await s0_log.wait_for(f"take_storage_snapshot: waiting", from_mark=s0_mark)
-
-        await manager.api.message_injection(servers[0].ip_addr, "merge_completion_fiber")
-        await s0_log.wait_for(f"Merge completion fiber finished", from_mark=s0_mark)
-
-        await manager.api.message_injection(servers[0].ip_addr, "take_storage_snapshot")
-
-        await migration
-
-        rows = await cql.run_async(f"SELECT * FROM {ks}.test;")
-        assert len(rows) == len(keys)
-
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_missing_data(manager: ManagerClient):
@@ -655,3 +577,77 @@ async def test_merge_with_drop(manager: ManagerClient):
         await asyncio.sleep(0.1)
         await manager.api.message_injection(server.ip_addr, "compaction_group_stop_wait")
         await drop_table_fut
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_background_merge_deadlock(manager: ManagerClient):
+    """
+    Reproducer for https://scylladb.atlassian.net/browse/SCYLLADB-928
+
+    Reproduces a deadlock in the background merge completion handler that can happen when multiple merges accumulate.
+    If we accumulate more than 1 merge cycle for the fiber, deadlock occurs due to compaction lock taken
+    on the main group (post-merge). The lock is held until compaction groups are precessed by the background merge
+    fiber
+
+    Example:
+
+    Initial state:
+
+      cg0: main,
+      cg1: main
+      cg2: main
+      cg3: main
+
+    After 1st merge:
+
+      cg0': main [locked], merging_groups=[cg0.main, cg1.main]
+      cg1': main [locked], merging_groups=[cg2.main, cg3.main]
+
+    After 2nd merge:
+
+      cg0'': main [locked], merging_groups=[cg0'.main [locked], cg0.main, cg1.main, cg1'.main [locked], cg2.main, cg3.main]
+
+    The test reproduces this by doing a tablet merge from 8 tablets to 1 (8 -> 4 -> 2 -> 1). The background merge fiber
+    is blocked until after the first merge (to 4), so that there is a higher chance of two merges queueing in the fiber.
+
+    If deadlock occurs, node shutdown will hang waiting for the background merge fiber. That's why the test
+    tries to stop the node at the end.
+    """
+
+    cmdline = [
+        '--logger-log-level', 'load_balancer=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+
+    servers = [await manager.server_add(cmdline=cmdline)]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+
+    # Create a table which will go through 3 merge cycles.
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) with tablets = {{'min_tablet_count': 8}};")
+
+    await manager.api.enable_injection(servers[0].ip_addr, "merge_completion_fiber", one_shot=True)
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    # Trigger tablet merging
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 1}};")
+
+    async def produced_one_merge():
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        return tablet_count == 4 or None
+    await wait_for(produced_one_merge, time.time() + 120)
+
+    mark, _ = await log.wait_for(f"merge_completion_fiber: waiting", from_mark=mark)
+    await manager.api.message_injection(servers[0].ip_addr, "merge_completion_fiber")
+    mark, _ = await log.wait_for(f"merge_completion_fiber: message received", from_mark=mark)
+
+    async def finished_merge():
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        return tablet_count == 1 or None
+
+    await wait_for(finished_merge, time.time() + 120)
+
+    await manager.server_stop(servers[0].server_id)
