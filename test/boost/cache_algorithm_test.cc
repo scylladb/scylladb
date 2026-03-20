@@ -62,7 +62,11 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
     // cfg.db_config->index_cache_fraction.set(1.0);
     return do_with_cql_env_thread([] (cql_test_env& e) {
         // We disable compactions because they cause confusing cache mispopulations.
-        e.execute_cql("CREATE TABLE ks.t(pk blob PRIMARY KEY) WITH compaction = { 'class' : 'NullCompactionStrategy' };").get();
+        // We disable compression because the sstable writer targets a specific
+        // (*compressed* data file size : summary file size) ratio,
+        // so the number of keys per index page becomes hard to control,
+        // and might be arbitrarily large.
+        e.execute_cql("CREATE TABLE ks.t(pk blob PRIMARY KEY) WITH compaction = { 'class' : 'NullCompactionStrategy' } AND compression = {'sstable_compression': ''};").get();
         auto insert_query = e.prepare("INSERT INTO ks.t(pk) VALUES (?)").get();
         auto select_query = e.prepare("SELECT * FROM t WHERE pk = ?").get();
 
@@ -154,7 +158,11 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
     // cfg.db_config->index_cache_fraction.set(0.0);
     return do_with_cql_env_thread([] (cql_test_env& e) {
         // We disable compactions because they cause confusing cache mispopulations.
-        e.execute_cql("CREATE TABLE ks.t(pk bigint, ck bigint, v blob, primary key (pk, ck)) WITH compaction = { 'class' : 'NullCompactionStrategy' };").get();
+        // We disable compression because the sstable writer targets a specific
+        // (*compressed* data file size : summary file size) ratio,
+        // so the number of keys per index page becomes hard to control,
+        // and might be arbitrarily large.
+        e.execute_cql("CREATE TABLE ks.t(pk bigint, ck bigint, v blob, primary key (pk, ck)) WITH compaction = { 'class' : 'NullCompactionStrategy' } AND compression = {'sstable_compression': ''};").get();
         auto insert_query = e.prepare("INSERT INTO ks.t(pk, ck, v) VALUES (?, ?, ?)").get();
         auto select_query = e.prepare("SELECT * FROM t WHERE pk = ? AND ck = ?").get();
 
