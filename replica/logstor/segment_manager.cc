@@ -1622,14 +1622,14 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     size_t next_file_id = 0;
     for (auto file_id : found_file_ids) {
         if (file_id != next_file_id) {
-            throw std::runtime_error(fmt::format("Missing log segment file(s) detected during recovery: file {} missing", _file_mgr.get_file_path(next_file_id)));
+            throw std::runtime_error(fmt::format("Missing log segment file(s) detected during recovery: file {} missing", _file_mgr.get_file_path(next_file_id).string()));
         }
         next_file_id++;
     }
 
     // populate index from all segments. keep the latest record for each key.
     for (auto file_id : found_file_ids) {
-        logstor_logger.info("Recovering segments from file {}: {}%", _file_mgr.get_file_path(file_id), (file_id + 1) * 100 / found_file_ids.size());
+        logstor_logger.info("Recovering segments from file {}: {}%", _file_mgr.get_file_path(file_id).string(), (file_id + 1) * 100 / found_file_ids.size());
         co_await max_concurrent_for_each(segments_in_file(file_id), 32,
             [this, &db] (log_segment_id seg_id) {
                 return recover_segment(db, seg_id);
