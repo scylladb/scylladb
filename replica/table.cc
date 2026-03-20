@@ -3213,7 +3213,7 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(locator::effec
 
             auto it = _storage_groups.find(group_id);
             if (it == _storage_groups.end()) {
-                throw std::runtime_error(format("Unable to find sibling tablet of id for table {}", group_id, table_id));
+                throw std::runtime_error(format("Unable to find sibling tablet of id {} for table {}", group_id, table_id));
             }
             auto& sg = it->second;
             sg->for_each_compaction_group([&new_sg, new_range, new_tid, group_id] (const compaction_group_ptr& cg) {
