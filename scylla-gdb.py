@@ -952,6 +952,8 @@ class sstring:
 
     @staticmethod
     def to_hex(data, size):
+        if size == 0:
+            return ''
         inf = gdb.selected_inferior()
         return bytes(inf.read_memory(data, size)).hex()
 
@@ -974,6 +976,8 @@ class sstring:
             return self.ref['u']['external']['str']
 
     def as_bytes(self):
+        if len(self) == 0:
+            return b''
         inf = gdb.selected_inferior()
         return bytes(inf.read_memory(self.data(), len(self)))
 
@@ -5636,6 +5640,8 @@ class scylla_sstable_summary(gdb.Command):
         self.inf = gdb.selected_inferior()
 
     def to_hex(self, data, size):
+        if size == 0:
+            return ''
         return bytes(self.inf.read_memory(data, size)).hex()
 
     def invoke(self, arg, for_tty):
@@ -5647,6 +5653,10 @@ class scylla_sstable_summary(gdb.Command):
             sst = seastar_lw_shared_ptr(arg).get().dereference()
         else:
             sst = arg
+        ms_version = int(gdb.parse_and_eval('sstables::sstable_version_types::ms'))
+        if int(sst['_version']) >= ms_version:
+            gdb.write("sstable uses ms format (trie-based index); summary is not populated.\n")
+            return
         summary = seastar_lw_shared_ptr(sst['_components']['_value']).get().dereference()['summary']
 
         gdb.write("header: {}\n".format(summary['header']))
