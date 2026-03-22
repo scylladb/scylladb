@@ -42,6 +42,10 @@ protected:
     static_assert(std::is_nothrow_constructible_v<lru_link_type, lru_link_type&&>);
 private:
     lru_link_type _lru_link;
+    // Stable key for frequency estimation in the Count-Min Sketch.
+    // Assigned when the entry is first added to the LRU, preserved across LSA
+    // compaction moves (which change the object address but preserve members).
+    uint32_t _frequency_hash = 0;
     lru_segment _segment = lru_segment::none;
 protected:
     // Prevent destruction via evictable pointer. LRU is not aware of allocation strategy.
@@ -65,6 +69,7 @@ public:
 
     void swap(evictable& o) noexcept {
         _lru_link.swap_nodes(o._lru_link);
+        std::swap(_frequency_hash, o._frequency_hash);
         std::swap(_segment, o._segment);
     }
 
@@ -131,6 +136,10 @@ private:
     size_t _probation_size = 0;
     size_t _protected_size = 0;
     size_t _sample_count = 0;
+    // Monotonic counter for assigning stable frequency hash keys.
+    // Using object addresses as sketch keys is incorrect because LSA
+    // relocates objects during compaction, changing their address.
+    uint32_t _next_hash = 0;
 
     size_t total_size() const noexcept {
         return _window_size + _probation_size + _protected_size;
@@ -145,44 +154,48 @@ private:
     }
 
     static uint64_t entry_key(const evictable& e) noexcept {
-        return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&e));
+        return e._frequency_hash;
+    }
+
+    void assign_frequency_hash(evictable& e) noexcept {
+        e._frequency_hash = ++_next_hash;
     }
 
     void record_access(const evictable& e) noexcept {
         _sketch.increment(entry_key(e));
         if (++_sample_count >= sample_threshold) {
-            _sketch.reset();
-            _sample_count = 0;
+            _sketch.decay();
+            _sample_count /= 2;
         }
     }
 
     lru_type& segment_list(lru_segment seg) noexcept {
         switch (seg) {
+            case lru_segment::none:
+                SCYLLA_ASSERT(false && "segment_list called with none");
+                __builtin_unreachable();
             case lru_segment::window: return _window;
             case lru_segment::probation: return _probation;
             case lru_segment::protected_: return _protected;
-            default: {
-                SCYLLA_ASSERT(false && "invalid segment");
-                __builtin_unreachable();
-            }
         }
+        __builtin_unreachable();
     }
 
     void increment_size(lru_segment seg) noexcept {
         switch (seg) {
+            case lru_segment::none: break;
             case lru_segment::window: ++_window_size; break;
             case lru_segment::probation: ++_probation_size; break;
             case lru_segment::protected_: ++_protected_size; break;
-            default: break;
         }
     }
 
     void decrement_size(lru_segment seg) noexcept {
         switch (seg) {
+            case lru_segment::none: break;
             case lru_segment::window: --_window_size; break;
             case lru_segment::probation: --_probation_size; break;
             case lru_segment::protected_: --_protected_size; break;
-            default: break;
         }
     }
 
@@ -200,12 +213,17 @@ private:
     }
 
     // Move excess protected entries to probation.
+    // Bounded to avoid reactor stalls when the protected segment is
+    // significantly oversized (e.g. after many promotions without eviction).
+    static constexpr size_t max_rebalance_per_call = 128;
     void rebalance_protected() noexcept {
         size_t max_prot = max_protected_size();
-        while (_protected_size > max_prot && !_protected.empty()) {
+        size_t moved = 0;
+        while (_protected_size > max_prot && !_protected.empty() && moved < max_rebalance_per_call) {
             evictable& victim = _protected.front();
             remove_from_segment(victim);
             add_to_segment(victim, lru_segment::probation);
+            ++moved;
         }
     }
 
@@ -312,6 +330,7 @@ public:
     }
 
     void add(evictable& e) noexcept {
+        assign_frequency_hash(e);
         record_access(e);
         add_to_segment(e, lru_segment::window);
         if (e.is_index()) {
@@ -321,6 +340,7 @@ public:
 
     // Like add(e) but makes sure that e is evicted right before "more_recent" in the absence of later touches.
     void add_before(evictable& more_recent, evictable& e) noexcept {
+        assign_frequency_hash(e);
         record_access(e);
         lru_segment seg = more_recent._segment;
         auto& list = segment_list(seg);
@@ -339,6 +359,7 @@ public:
 
         switch (e._segment) {
             case lru_segment::none:
+                assign_frequency_hash(e);
                 add_to_segment(e, lru_segment::window);
                 break;
             case lru_segment::window:

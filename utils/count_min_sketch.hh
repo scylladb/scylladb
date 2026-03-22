@@ -93,8 +93,10 @@ public:
         return min_val;
     }
 
-    /// Halve all counters (aging/decay).
-    void reset() noexcept {
+    /// Halve all counters (frequency decay / aging).
+    /// This is NOT a full clear — it preserves relative frequency ordering
+    /// while allowing the sketch to adapt to changing access patterns.
+    void decay() noexcept {
         for (auto& word : _table) {
             word = (word >> 1) & reset_mask;
         }

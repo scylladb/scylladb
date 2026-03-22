@@ -65,7 +65,7 @@ BOOST_AUTO_TEST_CASE(test_count_min_sketch_max_counter) {
     BOOST_REQUIRE_EQUAL(sketch.estimate(1), 15);
 }
 
-BOOST_AUTO_TEST_CASE(test_count_min_sketch_reset) {
+BOOST_AUTO_TEST_CASE(test_count_min_sketch_decay) {
     utils::count_min_sketch sketch(test_sketch_width_log2);
 
     sketch.increment(1);
@@ -74,13 +74,13 @@ BOOST_AUTO_TEST_CASE(test_count_min_sketch_reset) {
     sketch.increment(1); // freq = 4
     BOOST_REQUIRE_EQUAL(sketch.estimate(1), 4);
 
-    sketch.reset(); // halve → 2
+    sketch.decay(); // halve → 2
     BOOST_REQUIRE_EQUAL(sketch.estimate(1), 2);
 
-    sketch.reset(); // halve → 1
+    sketch.decay(); // halve → 1
     BOOST_REQUIRE_EQUAL(sketch.estimate(1), 1);
 
-    sketch.reset(); // halve → 0
+    sketch.decay(); // halve → 0
     BOOST_REQUIRE_EQUAL(sketch.estimate(1), 0);
 }
 
