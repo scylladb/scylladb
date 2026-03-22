@@ -352,9 +352,14 @@ async def test_node_operation_during_view_building(manager: ManagerClient, opera
         rack_layout = ["rack1", "rack2", "rack3"]
 
     property_file = [{"dc": "dc1", "rack": rack} for rack in rack_layout]
-    servers = await manager.servers_add(node_count, config={"enable_tablets": "true"},
-                                        cmdline=cmdline_loggers,
-                                        property_file=property_file)
+    servers = [
+        await manager.server_add(
+            config={"enable_tablets": "true"},
+            cmdline=cmdline_loggers,
+            property_file=server_property_file,
+        )
+        for server_property_file in property_file
+    ]
 
     cql, _ = await manager.get_ready_cql(servers)
     await manager.disable_tablet_balancing()
