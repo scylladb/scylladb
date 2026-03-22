@@ -81,11 +81,7 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Man
 
     for schema_kind in ["view", "index", "vector"]:
         # Create MV/index with RF=Racks - should always succeed
-        if rf_kind == "numeric" and schema_kind != "vector":
-            expected_warning = "requires the keyspace to remain RF-rack-valid"
-        else:
-            expected_warning = None
-        await test_create_mv_or_index_with_rf(cql, schema_kind, 3, expected_warning=expected_warning)
+        await test_create_mv_or_index_with_rf(cql, schema_kind, 3)
 
         # Create MV/index with RF!=Racks - should fail for numeric RF.
         # vector indexes are exempted from this restriction.
