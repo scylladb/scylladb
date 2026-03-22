@@ -158,7 +158,16 @@ private:
     }
 
     void assign_frequency_hash(evictable& e) noexcept {
-        e._frequency_hash = ++_next_hash;
+        // Only assign a new hash if the entry doesn't have one yet.
+        // Re-added entries (after remove()) keep their existing hash
+        // to preserve frequency tracking across remove/add cycles.
+        if (e._frequency_hash == 0) {
+            // Skip 0 on wrap-around to keep it as the "unassigned" sentinel.
+            if (++_next_hash == 0) {
+                ++_next_hash;
+            }
+            e._frequency_hash = _next_hash;
+        }
     }
 
     void record_access(const evictable& e) noexcept {
