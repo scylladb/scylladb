@@ -22,12 +22,12 @@ static logging::logger slogger("schema_registry");
 static thread_local schema_registry registry;
 
 schema_version_not_found::schema_version_not_found(table_schema_version v)
-        : std::runtime_error{format("Schema version {} not found", v)}
-{ }
+    : std::runtime_error{format("Schema version {} not found", v)} {
+}
 
 schema_version_loading_failed::schema_version_loading_failed(table_schema_version v)
-        : std::runtime_error{format("Failed to load schema version {}", v)}
-{ }
+    : std::runtime_error{format("Failed to load schema version {}", v)} {
+}
 
 schema_registry_entry::~schema_registry_entry() {
     if (_schema) {
@@ -39,8 +39,7 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
     : _state(state::INITIAL)
     , _version(v)
     , _registry(r)
-    , _sync_state(sync_state::NOT_SYNCED)
-{
+    , _sync_state(sync_state::NOT_SYNCED) {
     _erase_timer.set_callback([this] {
         slogger.debug("Dropping {}", _version);
         SCYLLA_ASSERT(!_schema);
@@ -71,8 +70,8 @@ void schema_registry::attach_table(schema_registry_entry& e) noexcept {
         e.set_table(table.weak_from_this());
     } catch (const replica::no_such_column_family&) {
         if (slogger.is_enabled(seastar::log_level::debug)) {
-            slogger.debug("No table for schema version {} of {}.{}: {}", e._version,
-                          e.get_schema()->ks_name(), e.get_schema()->cf_name(), seastar::current_backtrace());
+            slogger.debug("No table for schema version {} of {}.{}: {}", e._version, e.get_schema()->ks_name(), e.get_schema()->cf_name(),
+                    seastar::current_backtrace());
         }
         // ignore
     }
@@ -221,7 +220,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
     _state = state::LOADING;
     slogger.trace("Loading {}", _version);
     // Move to background.
-    (void)f.then_wrapped([self = shared_from_this(), this] (future<extended_frozen_schema>&& f) {
+    (void)f.then_wrapped([self = shared_from_this(), this](future<extended_frozen_schema>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
             slogger.trace("Loading of {} aborted", _version);
@@ -294,8 +293,8 @@ schema_registry& local_schema_registry() {
 }
 
 global_schema_ptr::global_schema_ptr(const global_schema_ptr& o)
-    : global_schema_ptr(o.get())
-{ }
+    : global_schema_ptr(o.get()) {
+}
 
 global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) noexcept {
     auto current = this_shard_id();
@@ -332,15 +331,15 @@ schema_ptr global_schema_ptr::get() const {
 }
 
 global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
-        : _cpu_of_origin(this_shard_id()) {
+    : _cpu_of_origin(this_shard_id()) {
     // _ptr must always have an associated registry entry,
     // if ptr doesn't, we need to load it into the registry.
-    auto ensure_registry_entry = [] (const schema_ptr& s) {
+    auto ensure_registry_entry = [](const schema_ptr& s) {
         schema_registry_entry* e = s->registry_entry();
         if (e) {
             return s;
         } else {
-            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) -> extended_frozen_schema {
+            return local_schema_registry().get_or_load(s->version(), [&s](table_schema_version) -> extended_frozen_schema {
                 return extended_frozen_schema(s);
             });
         }
