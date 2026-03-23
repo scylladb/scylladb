@@ -21,7 +21,6 @@ pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio
-@pytest.mark.enable_tablets(False)                       # uses lightweight transactions
 async def test_mutation_schema_change(manager, random_tables):
     """
         Cluster A, B, C
@@ -83,7 +82,6 @@ async def test_mutation_schema_change(manager, random_tables):
 
 
 @pytest.mark.asyncio
-@pytest.mark.enable_tablets(False)                       # uses lightweight transactions
 async def test_mutation_schema_change_restart(manager, random_tables):
     """
         Cluster A, B, C
