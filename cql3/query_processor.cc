@@ -48,13 +48,15 @@ const sstring query_processor::CQL_VERSION = "3.3.1";
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
 struct query_processor::remote {
-    remote(service::migration_manager& mm, service::mapreduce_service& fwd,
-           service::storage_service& ss, service::raft_group0_client& group0_client,
-           service::strong_consistency::coordinator& _sc_coordinator)
-            : mm(mm), mapreducer(fwd), ss(ss), group0_client(group0_client)
-            , sc_coordinator(_sc_coordinator)
-            , gate("query_processor::remote")
-    {}
+    remote(service::migration_manager& mm, service::mapreduce_service& fwd, service::storage_service& ss, service::raft_group0_client& group0_client,
+            service::strong_consistency::coordinator& _sc_coordinator)
+        : mm(mm)
+        , mapreducer(fwd)
+        , ss(ss)
+        , group0_client(group0_client)
+        , sc_coordinator(_sc_coordinator)
+        , gate("query_processor::remote") {
+    }
 
     service::migration_manager& mm;
     service::mapreduce_service& mapreducer;
@@ -77,24 +79,34 @@ static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
 }
 
-query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm)
-        : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
-        , _proxy(proxy)
-        , _db(db)
-        , _mnotifier(mn)
-        , _vector_store_client(vsc)
-        , _mcfg(mcfg)
-        , _cql_config(cql_cfg)
-        , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
-        , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
-        , _auth_prepared_cache_cfg_cb([this] (uint32_t) { (void) _authorized_prepared_cache_config_action.trigger_later(); })
-        , _authorized_prepared_cache_config_action([this] { update_authorized_prepared_cache_config(); return make_ready_future<>(); })
-        , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
-        , _authorized_prepared_cache_validity_in_ms_observer(_db.get_config().permissions_validity_in_ms.observe(_auth_prepared_cache_cfg_cb))
-        , _lang_manager(langm)
-        , _write_consistency_levels_warned_observer(_db.get_config().write_consistency_levels_warned.observe([this](const auto& v) { _write_consistency_levels_warned = to_consistency_level_set(v); }))
-        , _write_consistency_levels_disallowed_observer(_db.get_config().write_consistency_levels_disallowed.observe([this](const auto& v) { _write_consistency_levels_disallowed = to_consistency_level_set(v); }))
-        {
+query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn,
+        vector_search::vector_store_client& vsc, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg,
+        lang::manager& langm)
+    : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
+    , _proxy(proxy)
+    , _db(db)
+    , _mnotifier(mn)
+    , _vector_store_client(vsc)
+    , _mcfg(mcfg)
+    , _cql_config(cql_cfg)
+    , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
+    , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
+    , _auth_prepared_cache_cfg_cb([this](uint32_t) {
+        (void)_authorized_prepared_cache_config_action.trigger_later();
+    })
+    , _authorized_prepared_cache_config_action([this] {
+        update_authorized_prepared_cache_config();
+        return make_ready_future<>();
+    })
+    , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
+    , _authorized_prepared_cache_validity_in_ms_observer(_db.get_config().permissions_validity_in_ms.observe(_auth_prepared_cache_cfg_cb))
+    , _lang_manager(langm)
+    , _write_consistency_levels_warned_observer(_db.get_config().write_consistency_levels_warned.observe([this](const auto& v) {
+        _write_consistency_levels_warned = to_consistency_level_set(v);
+    }))
+    , _write_consistency_levels_disallowed_observer(_db.get_config().write_consistency_levels_disallowed.observe([this](const auto& v) {
+        _write_consistency_levels_disallowed = to_consistency_level_set(v);
+    })) {
     _write_consistency_levels_warned = to_consistency_level_set(_db.get_config().write_consistency_levels_warned());
     _write_consistency_levels_disallowed = to_consistency_level_set(_db.get_config().write_consistency_levels_disallowed());
     namespace sm = seastar::metrics;
@@ -102,7 +114,7 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
     using clevel = db::consistency_level;
     sm::label cl_label("consistency_level");
 
-    sm::label who_label("who");  // Who queried system tables
+    sm::label who_label("who"); // Who queried system tables
     const auto user_who_label_instance = who_label("user");
     const auto internal_who_label_instance = who_label("internal");
 
@@ -110,17 +122,11 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
     const auto system_ks_label_instance = ks_label("system");
 
     std::vector<sm::metric_definition> qp_group;
-    qp_group.push_back(sm::make_counter(
-        "statements_prepared",
-        _stats.prepare_invocations,
-        sm::description("Counts the total number of parsed CQL requests.")));
+    qp_group.push_back(sm::make_counter("statements_prepared", _stats.prepare_invocations, sm::description("Counts the total number of parsed CQL requests.")));
     for (auto cl = size_t(clevel::MIN_VALUE); cl <= size_t(clevel::MAX_VALUE); ++cl) {
-        qp_group.push_back(
-            sm::make_counter(
-                "queries",
-                _stats.queries_by_cl[cl],
-                sm::description("Counts queries by consistency level."),
-                {cl_label(clevel(cl)), basic_level}).set_skip_when_empty());
+        qp_group.push_back(sm::make_counter(
+                "queries", _stats.queries_by_cl[cl], sm::description("Counts queries by consistency level."), {cl_label(clevel(cl)), basic_level})
+                        .set_skip_when_empty());
     }
     _metrics.add_group("query_processor", qp_group);
 
@@ -521,29 +527,23 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
 
     std::vector<sm::metric_definition> cql_cl_group;
     for (auto cl = size_t(clevel::MIN_VALUE); cl <= size_t(clevel::MAX_VALUE); ++cl) {
-        cql_cl_group.push_back(
-            sm::make_counter(
-                "writes_per_consistency_level",
-                _cql_stats.writes_per_consistency_level[cl],
-                sm::description("Counts the number of writes for each consistency level."),
-                {cl_label(clevel(cl)), basic_level}).set_skip_when_empty());
+        cql_cl_group.push_back(sm::make_counter("writes_per_consistency_level", _cql_stats.writes_per_consistency_level[cl],
+                sm::description("Counts the number of writes for each consistency level."), {cl_label(clevel(cl)), basic_level})
+                        .set_skip_when_empty());
     }
     _metrics.add_group("cql", cql_cl_group);
 
-    _metrics.add_group("cql", {
-        sm::make_counter(
-            "write_consistency_levels_disallowed_violations",
-            _cql_stats.write_consistency_levels_disallowed_violations,
-            sm::description("Counts the number of write_consistency_levels_disallowed guardrail violations, "
-                            "i.e. attempts to write with a forbidden consistency level."),
-            {basic_level}),
-        sm::make_counter(
-            "write_consistency_levels_warned_violations",
-            _cql_stats.write_consistency_levels_warned_violations,
-            sm::description("Counts the number of write_consistency_levels_warned guardrail violations, "
-                            "i.e. attempts to write with a discouraged consistency level."),
-            {basic_level}),
-    });
+    _metrics.add_group(
+            "cql", {
+                           sm::make_counter("write_consistency_levels_disallowed_violations", _cql_stats.write_consistency_levels_disallowed_violations,
+                                   sm::description("Counts the number of write_consistency_levels_disallowed guardrail violations, "
+                                                   "i.e. attempts to write with a forbidden consistency level."),
+                                   {basic_level}),
+                           sm::make_counter("write_consistency_levels_warned_violations", _cql_stats.write_consistency_levels_warned_violations,
+                                   sm::description("Counts the number of write_consistency_levels_warned guardrail violations, "
+                                                   "i.e. attempts to write with a discouraged consistency level."),
+                                   {basic_level}),
+                   });
 
     _mnotifier.register_listener(_migration_subscriber.get());
 }
@@ -554,15 +554,13 @@ query_processor::~query_processor() {
     }
 }
 
-std::pair<std::reference_wrapper<service::strong_consistency::coordinator>, gate::holder>
-query_processor::acquire_strongly_consistent_coordinator() {
+std::pair<std::reference_wrapper<service::strong_consistency::coordinator>, gate::holder> query_processor::acquire_strongly_consistent_coordinator() {
     auto [remote_, holder] = remote();
     return {remote_.get().sc_coordinator, std::move(holder)};
 }
 
-void query_processor::start_remote(service::migration_manager& mm, service::mapreduce_service& mapreducer,
-                                   service::storage_service& ss, service::raft_group0_client& group0_client,
-                                   service::strong_consistency::coordinator& sc_coordinator) {
+void query_processor::start_remote(service::migration_manager& mm, service::mapreduce_service& mapreducer, service::storage_service& ss,
+        service::raft_group0_client& group0_client, service::strong_consistency::coordinator& sc_coordinator) {
     _remote = std::make_unique<struct remote>(mm, mapreducer, ss, group0_client, sc_coordinator);
 }
 
@@ -582,7 +580,9 @@ future<> query_processor::stop() {
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> query_processor::execute_with_guard(
-        std::function<future<::shared_ptr<cql_transport::messages::result_message>>(service::query_state&, ::shared_ptr<cql_statement>, const query_options&, std::optional<service::group0_guard>)> fn,
+        std::function<future<::shared_ptr<cql_transport::messages::result_message>>(
+                service::query_state&, ::shared_ptr<cql_statement>, const query_options&, std::optional<service::group0_guard>)>
+                fn,
         ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options) {
     // execute all statements that need group0 guard on shard0
     if (this_shard_id() != 0) {
@@ -591,13 +591,13 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
 
     auto [remote_, holder] = remote();
     size_t retries = remote_.get().mm.get_concurrent_ddl_retries();
-    while (true)  {
+    while (true) {
         try {
             auto guard = co_await remote_.get().mm.start_group0_operation();
             co_return co_await fn(query_state, statement, options, std::move(guard));
         } catch (const service::group0_concurrent_modification& ex) {
-            log.warn("Failed to execute statement \"{}\" due to guard conflict.{}.",
-                    statement->raw_cql_statement, retries ? " Retrying" : " Number of retries exceeded, giving up");
+            log.warn("Failed to execute statement \"{}\" due to guard conflict.{}.", statement->raw_cql_statement,
+                    retries ? " Retrying" : " Number of retries exceeded, giving up");
             if (retries--) {
                 continue;
             }
@@ -606,29 +606,30 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
     }
 }
 
-template<typename... Args>
-future<::shared_ptr<result_message>>
-query_processor::execute_maybe_with_guard(service::query_state& query_state, ::shared_ptr<cql_statement> statement, const query_options& options,
-    future<::shared_ptr<result_message>>(query_processor::*fn)(service::query_state&, ::shared_ptr<cql_statement>, const query_options&, std::optional<service::group0_guard>, Args...), Args... args) {
+template <typename... Args>
+future<::shared_ptr<result_message>> query_processor::execute_maybe_with_guard(service::query_state& query_state, ::shared_ptr<cql_statement> statement,
+        const query_options& options,
+        future<::shared_ptr<result_message>> (query_processor::*fn)(
+                service::query_state&, ::shared_ptr<cql_statement>, const query_options&, std::optional<service::group0_guard>, Args...),
+        Args... args) {
     if (!statement->needs_guard(*this, query_state)) {
         return (this->*fn)(query_state, std::move(statement), options, std::nullopt, std::forward<Args>(args)...);
     }
-    static auto exec = [fn] (query_processor& qp, Args... args, service::query_state& query_state, ::shared_ptr<cql_statement> statement, const query_options& options, std::optional<service::group0_guard> guard) {
+    static auto exec = [fn](query_processor& qp, Args... args, service::query_state& query_state, ::shared_ptr<cql_statement> statement,
+                               const query_options& options, std::optional<service::group0_guard> guard) {
         return (qp.*fn)(query_state, std::move(statement), options, std::move(guard), std::forward<Args>(args)...);
     };
     return execute_with_guard(std::bind_front(exec, std::ref(*this), std::forward<Args>(args)...), std::move(statement), query_state, options);
 }
 
-future<::shared_ptr<result_message>>
-query_processor::execute_direct_without_checking_exception_message(const std::string_view& query_string, service::query_state& query_state, dialect d, query_options& options) {
+future<::shared_ptr<result_message>> query_processor::execute_direct_without_checking_exception_message(
+        const std::string_view& query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state(), d);
     auto statement = p->statement;
     if (statement->get_bound_terms() != options.get_values_count()) {
-        const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",
-                statement->get_bound_terms(),
-                options.get_values_count());
+        const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}", statement->get_bound_terms(), options.get_values_count());
         throw exceptions::invalid_request_exception(msg);
     }
     options.prepare(p->bound_names);
@@ -639,17 +640,13 @@ query_processor::execute_direct_without_checking_exception_message(const std::st
             metrics.regularStatementsExecuted.inc();
 #endif
     auto user = query_state.get_client_state().user();
-    tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}", user ? (user->name ? *user->name : "anonymous") : "no user authenticated");
+    tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}",
+            user ? (user->name ? *user->name : "anonymous") : "no user authenticated");
     return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(p->warnings));
 }
 
-future<::shared_ptr<result_message>>
-query_processor::do_execute_direct(
-         service::query_state& query_state,
-        shared_ptr<cql_statement> statement,
-        const query_options& options,
-        std::optional<service::group0_guard> guard,
-        cql3::cql_warnings_vec warnings) {
+future<::shared_ptr<result_message>> query_processor::do_execute_direct(service::query_state& query_state, shared_ptr<cql_statement> statement,
+        const query_options& options, std::optional<service::group0_guard> guard, cql3::cql_warnings_vec warnings) {
     auto access_future = co_await coroutine::as_future(statement->check_access(*this, query_state.get_client_state()));
     if (access_future.failed()) {
         co_await audit::inspect(statement, query_state, options, true);
@@ -674,26 +671,16 @@ query_processor::do_execute_direct(
     co_return std::move(m);
 }
 
-future<::shared_ptr<result_message>>
-query_processor::execute_prepared_without_checking_exception_message(
-        service::query_state& query_state,
-        shared_ptr<cql_statement> statement,
-        const query_options& options,
-        statements::prepared_statement::checked_weak_ptr prepared,
-        cql3::prepared_cache_key_type cache_key,
-        bool needs_authorization) {
-    return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_prepared, std::move(prepared), std::move(cache_key), needs_authorization);
+future<::shared_ptr<result_message>> query_processor::execute_prepared_without_checking_exception_message(service::query_state& query_state,
+        shared_ptr<cql_statement> statement, const query_options& options, statements::prepared_statement::checked_weak_ptr prepared,
+        cql3::prepared_cache_key_type cache_key, bool needs_authorization) {
+    return execute_maybe_with_guard(
+            query_state, std::move(statement), options, &query_processor::do_execute_prepared, std::move(prepared), std::move(cache_key), needs_authorization);
 }
 
-future<::shared_ptr<result_message>>
-query_processor::do_execute_prepared(
-        service::query_state& query_state,
-        shared_ptr<cql_statement> statement,
-        const query_options& options,
-        std::optional<service::group0_guard> guard,
-        statements::prepared_statement::checked_weak_ptr prepared,
-        cql3::prepared_cache_key_type cache_key,
-        bool needs_authorization) {
+future<::shared_ptr<result_message>> query_processor::do_execute_prepared(service::query_state& query_state, shared_ptr<cql_statement> statement,
+        const query_options& options, std::optional<service::group0_guard> guard, statements::prepared_statement::checked_weak_ptr prepared,
+        cql3::prepared_cache_key_type cache_key, bool needs_authorization) {
     if (needs_authorization) {
         co_await statement->check_access(*this, query_state.get_client_state());
         try {
@@ -707,8 +694,8 @@ query_processor::do_execute_prepared(
     co_return co_await process_authorized_statement(std::move(statement), query_state, options, std::move(guard));
 }
 
-future<::shared_ptr<result_message>>
-query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard) {
+future<::shared_ptr<result_message>> query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> statement,
+        service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard) {
     auto& client_state = query_state.get_client_state();
 
     ++_stats.queries_by_cl[size_t(options.get_consistency())];
@@ -718,43 +705,39 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
     auto msg = co_await statement->execute_without_checking_exception_message(*this, query_state, options, std::move(guard));
 
     if (msg) {
-       co_return std::move(msg);
+        co_return std::move(msg);
     }
     co_return ::make_shared<result_message::void_message>();
 }
 
-future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::prepare(sstring query_string, service::query_state& query_state, cql3::dialect d) {
+future<::shared_ptr<cql_transport::messages::result_message::prepared>> query_processor::prepare(
+        sstring query_string, service::query_state& query_state, cql3::dialect d) {
     auto& client_state = query_state.get_client_state();
     return prepare(std::move(query_string), client_state, d);
 }
 
-future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::prepare(sstring query_string, const service::client_state& client_state, cql3::dialect d) {
+future<::shared_ptr<cql_transport::messages::result_message::prepared>> query_processor::prepare(
+        sstring query_string, const service::client_state& client_state, cql3::dialect d) {
     try {
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
         auto prep_entry = co_await _prepared_cache.get_pinned(key, [this, &query_string, &client_state, d] {
-                auto prepared = get_statement(query_string, client_state, d);
-                prepared->calculate_metadata_id();
-                auto bound_terms = prepared->statement->get_bound_terms();
-                if (bound_terms > std::numeric_limits<uint16_t>::max()) {
-                    throw exceptions::invalid_request_exception(
-                            format("Too many markers(?). {:d} markers exceed the allowed maximum of {:d}",
-                                bound_terms,
-                                std::numeric_limits<uint16_t>::max()));
-                }
-                throwing_assert(bound_terms == prepared->bound_names.size());
-                return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
-            });
+            auto prepared = get_statement(query_string, client_state, d);
+            prepared->calculate_metadata_id();
+            auto bound_terms = prepared->statement->get_bound_terms();
+            if (bound_terms > std::numeric_limits<uint16_t>::max()) {
+                throw exceptions::invalid_request_exception(
+                        format("Too many markers(?). {:d} markers exceed the allowed maximum of {:d}", bound_terms, std::numeric_limits<uint16_t>::max()));
+            }
+            throwing_assert(bound_terms == prepared->bound_names.size());
+            return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
+        });
 
-        co_await utils::get_local_injector().inject(
-                "query_processor_prepare_wait_after_cache_get",
-                utils::wait_for_message(std::chrono::seconds(60)));
-  
+        co_await utils::get_local_injector().inject("query_processor_prepare_wait_after_cache_get", utils::wait_for_message(std::chrono::seconds(60)));
+
         auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key), std::move(prep_entry),
-                    client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK));
+                client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK));
         co_return std::move(msg);
-    } catch(typename prepared_statements_cache::statement_is_too_big&) {
+    } catch (typename prepared_statements_cache::statement_is_too_big&) {
         throw prepared_statement_is_too_big(query_string);
     }
 }
@@ -765,15 +748,11 @@ static std::string hash_target(std::string_view query_string, std::string_view k
     return ret;
 }
 
-prepared_cache_key_type query_processor::compute_id(
-        std::string_view query_string,
-        std::string_view keyspace,
-        dialect d) {
+prepared_cache_key_type query_processor::compute_id(std::string_view query_string, std::string_view keyspace, dialect d) {
     return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace)), d);
 }
 
-std::unique_ptr<prepared_statement>
-query_processor::get_statement(const std::string_view& query, const service::client_state& client_state, dialect d) {
+std::unique_ptr<prepared_statement> query_processor::get_statement(const std::string_view& query, const service::client_state& client_state, dialect d) {
     // Measuring allocation cost requires that no yield points exist
     // between bytes_before and bytes_after. It needs fixing if this
     // function is ever futurized.
@@ -798,8 +777,7 @@ query_processor::get_statement(const std::string_view& query, const service::cli
     return p;
 }
 
-std::unique_ptr<raw::parsed_statement>
-query_processor::parse_statement(const std::string_view& query, dialect d) {
+std::unique_ptr<raw::parsed_statement> query_processor::parse_statement(const std::string_view& query, dialect d) {
     try {
         {
             const char* error_injection_key = "query_processor-parse_statement-test_failure";
@@ -824,8 +802,7 @@ query_processor::parse_statement(const std::string_view& query, dialect d) {
     }
 }
 
-std::vector<std::unique_ptr<raw::parsed_statement>>
-query_processor::parse_statements(std::string_view queries, dialect d) {
+std::vector<std::unique_ptr<raw::parsed_statement>> query_processor::parse_statements(std::string_view queries, dialect d) {
     try {
         auto statements = util::do_with_parser(queries, d, std::mem_fn(&cql3_parser::CqlParser::queries));
         if (statements.empty()) {
@@ -854,15 +831,10 @@ std::pair<std::reference_wrapper<struct query_processor::remote>, gate::holder> 
     on_internal_error(log, "attempted to perform distributed query when `query_processor::remote` is unavailable");
 }
 
-query_options query_processor::make_internal_options(
-        const statements::prepared_statement::checked_weak_ptr& p,
-        const std::vector<data_value_or_unset>& values,
-        db::consistency_level cl,
-        int32_t page_size,
-        service::node_local_only node_local_only) const {
+query_options query_processor::make_internal_options(const statements::prepared_statement::checked_weak_ptr& p, const std::vector<data_value_or_unset>& values,
+        db::consistency_level cl, int32_t page_size, service::node_local_only node_local_only) const {
     if (p->bound_names.size() != values.size()) {
-        throw std::invalid_argument(
-                format("Invalid number of values. Expecting {:d} but got {:d}", p->bound_names.size(), values.size()));
+        throw std::invalid_argument(format("Invalid number of values. Expecting {:d} but got {:d}", p->bound_names.size(), values.size()));
     }
     auto ni = p->bound_names.begin();
     raw_value_vector_with_unset bound_values;
@@ -870,32 +842,28 @@ query_options query_processor::make_internal_options(
     bound_values.unset.resize(values.size());
     for (auto& var : values) {
         auto& n = *ni;
-        std::visit(overloaded_functor {
-            [&] (const data_value& v) {
-                if (v.type() == bytes_type) {
-                    bound_values.values.emplace_back(cql3::raw_value::make_value(value_cast<bytes>(v)));
-                } else if (v.is_null()) {
-                    bound_values.values.emplace_back(cql3::raw_value::make_null());
-                } else {
-                    bound_values.values.emplace_back(cql3::raw_value::make_value(n->type->decompose(v)));
-                }
-            }, [&] (const unset_value&) {
-                bound_values.values.emplace_back(cql3::raw_value::make_null());
-                bound_values.unset[std::distance(p->bound_names.begin(), ni)] = true;
-            }
-        }, var);
+        std::visit(overloaded_functor{[&](const data_value& v) {
+                                          if (v.type() == bytes_type) {
+                                              bound_values.values.emplace_back(cql3::raw_value::make_value(value_cast<bytes>(v)));
+                                          } else if (v.is_null()) {
+                                              bound_values.values.emplace_back(cql3::raw_value::make_null());
+                                          } else {
+                                              bound_values.values.emplace_back(cql3::raw_value::make_value(n->type->decompose(v)));
+                                          }
+                                      },
+                           [&](const unset_value&) {
+                               bound_values.values.emplace_back(cql3::raw_value::make_null());
+                               bound_values.unset[std::distance(p->bound_names.begin(), ni)] = true;
+                           }},
+                var);
         ++ni;
     }
-    return query_options(
-            cl,
-            std::move(bound_values),
-            cql3::query_options::specific_options {
-                .page_size = page_size,
-                .state = {},
-                .serial_consistency = db::consistency_level::SERIAL,
-                .timestamp = api::missing_timestamp,
-                .node_local_only = node_local_only
-            });
+    return query_options(cl, std::move(bound_values),
+            cql3::query_options::specific_options{.page_size = page_size,
+                    .state = {},
+                    .serial_consistency = db::consistency_level::SERIAL,
+                    .timestamp = api::missing_timestamp,
+                    .node_local_only = node_local_only});
 }
 
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
@@ -917,11 +885,7 @@ struct internal_query_state {
 };
 
 internal_query_state query_processor::create_paged_state(
-        const sstring& query_string,
-        db::consistency_level cl,
-        const data_value_list& values,
-        int32_t page_size,
-        std::optional<service::query_state> qs) {
+        const sstring& query_string, db::consistency_level cl, const data_value_list& values, int32_t page_size, std::optional<service::query_state> qs) {
     auto p = prepare_internal(query_string);
     auto opts = make_internal_options(p, values, cl, page_size);
     if (!qs) {
@@ -935,8 +899,7 @@ bool query_processor::has_more_results(cql3::internal_query_state& state) const 
 }
 
 future<> query_processor::for_each_cql_result(
-        cql3::internal_query_state& state,
-        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)> f) {
+        cql3::internal_query_state& state, noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)> f) {
     do {
         auto msg = co_await execute_paged_internal(state);
         for (auto& row : *msg) {
@@ -947,17 +910,18 @@ future<> query_processor::for_each_cql_result(
     } while (has_more_results(state));
 }
 
-future<::shared_ptr<untyped_result_set>>
-query_processor::execute_paged_internal(internal_query_state& state) {
+future<::shared_ptr<untyped_result_set>> query_processor::execute_paged_internal(internal_query_state& state) {
     state.p->statement->validate(*this, service::client_state::for_internal_calls());
-    ::shared_ptr<cql_transport::messages::result_message> msg =
-      co_await state.p->statement->execute(*this, *state.qs, *state.opts, std::nullopt);
+    ::shared_ptr<cql_transport::messages::result_message> msg = co_await state.p->statement->execute(*this, *state.qs, *state.opts, std::nullopt);
 
     class visitor : public result_message::visitor_base {
         internal_query_state& _state;
         query_processor& _qp;
+
     public:
-        visitor(internal_query_state& state, query_processor& qp) : _state(state), _qp(qp) {
+        visitor(internal_query_state& state, query_processor& qp)
+            : _state(state)
+            , _qp(qp) {
         }
         virtual ~visitor() = default;
         void visit(const result_message::rows& rmrs) override {
@@ -986,23 +950,14 @@ query_processor::execute_paged_internal(internal_query_state& state) {
     co_return ::make_shared<untyped_result_set>(msg);
 }
 
-future<::shared_ptr<untyped_result_set>>
-query_processor::execute_internal(
-        const sstring& query_string,
-        db::consistency_level cl,
-        const data_value_list& values,
-        cache_internal cache) {
+future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
+        const sstring& query_string, db::consistency_level cl, const data_value_list& values, cache_internal cache) {
     auto qs = query_state_for_internal_call();
     co_return co_await execute_internal(query_string, cl, qs, values, cache);
 }
 
-future<::shared_ptr<untyped_result_set>>
-query_processor::execute_internal(
-        const sstring& query_string,
-        db::consistency_level cl,
-        service::query_state& query_state,
-        const data_value_list& values,
-        cache_internal cache) {
+future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
+        const sstring& query_string, db::consistency_level cl, service::query_state& query_state, const data_value_list& values, cache_internal cache) {
 
     if (log.is_enabled(logging::log_level::trace)) {
         log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, fmt::join(values, ", "));
@@ -1020,10 +975,7 @@ query_processor::execute_internal(
 }
 
 future<utils::chunked_vector<mutation>> query_processor::get_mutations_internal(
-        const sstring query_string,
-        service::query_state& query_state,
-        api::timestamp_type timestamp,
-        std::vector<data_value_or_unset> values) {
+        const sstring query_string, service::query_state& query_state, api::timestamp_type timestamp, std::vector<data_value_or_unset> values) {
     log.debug("get_mutations_internal: \"{}\" ({})", query_string, fmt::join(values, ", "));
     auto stmt = prepare_internal(query_string);
     auto mod_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(stmt->statement);
@@ -1041,12 +993,8 @@ future<utils::chunked_vector<mutation>> query_processor::get_mutations_internal(
     co_return co_await mod_stmt->get_mutations(*this, opts, timeout, true, timestamp, query_state, json_cache, std::move(keys));
 }
 
-future<::shared_ptr<untyped_result_set>>
-query_processor::execute_with_params(
-        statements::prepared_statement::checked_weak_ptr p,
-        db::consistency_level cl,
-        service::query_state& query_state,
-        const data_value_list& values) {
+future<::shared_ptr<untyped_result_set>> query_processor::execute_with_params(
+        statements::prepared_statement::checked_weak_ptr p, db::consistency_level cl, service::query_state& query_state, const data_value_list& values) {
     auto opts = make_internal_options(p, values, cl);
     auto statement = p->statement;
 
@@ -1054,30 +1002,24 @@ query_processor::execute_with_params(
     co_return ::make_shared<untyped_result_set>(msg);
 }
 
-future<::shared_ptr<result_message>>
-query_processor::do_execute_with_params(
-        service::query_state& query_state,
-        shared_ptr<cql_statement> statement,
-        const query_options& options, std::optional<service::group0_guard> guard) {
+future<::shared_ptr<result_message>> query_processor::do_execute_with_params(
+        service::query_state& query_state, shared_ptr<cql_statement> statement, const query_options& options, std::optional<service::group0_guard> guard) {
     statement->validate(*this, service::client_state::for_internal_calls());
     co_return co_await coroutine::try_future(statement->execute(*this, query_state, options, std::move(guard)));
 }
 
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-query_processor::execute_batch_without_checking_exception_message(
-        ::shared_ptr<statements::batch_statement> batch,
-        service::query_state& query_state,
-        query_options& options,
+future<::shared_ptr<cql_transport::messages::result_message>> query_processor::execute_batch_without_checking_exception_message(
+        ::shared_ptr<statements::batch_statement> batch, service::query_state& query_state, query_options& options,
         std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
     auto access_future = co_await coroutine::as_future(batch->check_access(*this, query_state.get_client_state()));
-    co_await coroutine::parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) -> future<> {
-            try {
-                co_await _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second));
-            } catch (...) {
-                log.error("failed to cache the entry: {}", std::current_exception());
-            }
-        });
+    co_await coroutine::parallel_for_each(pending_authorization_entries, [this, &query_state](auto& e) -> future<> {
+        try {
+            co_await _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second));
+        } catch (...) {
+            log.error("failed to cache the entry: {}", std::current_exception());
+        }
+    });
     bool failed = access_future.failed();
     co_await audit::inspect(batch, query_state, options, failed);
     if (access_future.failed()) {
@@ -1086,30 +1028,28 @@ query_processor::execute_batch_without_checking_exception_message(
     batch->validate();
     batch->validate(*this, query_state.get_client_state());
     _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
-   if (log.is_enabled(logging::log_level::trace)) {
+    if (log.is_enabled(logging::log_level::trace)) {
         std::ostringstream oss;
-        for (const auto& s: batch->get_statements()) {
-            oss << std::endl <<  s.statement->raw_cql_statement;
+        for (const auto& s : batch->get_statements()) {
+            oss << std::endl << s.statement->raw_cql_statement;
         }
         log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
     }
     co_return co_await batch->execute(*this, query_state, options, std::nullopt);
 }
 
-future<service::broadcast_tables::query_result>
-query_processor::execute_broadcast_table_query(const service::broadcast_tables::query& query) {
+future<service::broadcast_tables::query_result> query_processor::execute_broadcast_table_query(const service::broadcast_tables::query& query) {
     auto [remote_, holder] = remote();
     co_return co_await service::broadcast_tables::execute(remote_.get().group0_client, query);
 }
 
-future<query::mapreduce_result>
-query_processor::mapreduce(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
+future<query::mapreduce_result> query_processor::mapreduce(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
     auto [remote_, holder] = remote();
     co_return co_await remote_.get().mapreducer.dispatch(std::move(req), std::move(tr_state));
 }
 
-future<::shared_ptr<messages::result_message>>
-query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options, service::group0_batch& mc) {
+future<::shared_ptr<messages::result_message>> query_processor::execute_schema_statement(
+        const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options, service::group0_batch& mc) {
     if (this_shard_id() != 0) {
         on_internal_error(log, "DDL must be executed on shard 0");
     }
@@ -1163,7 +1103,8 @@ future<> query_processor::announce_schema_statement(const statements::schema_alt
     co_await remote_.get().mm.announce(std::move(m), std::move(guard), description);
 }
 
-query_processor::migration_subscriber::migration_subscriber(query_processor* qp) : _qp{qp} {
+query_processor::migration_subscriber::migration_subscriber(query_processor* qp)
+    : _qp{qp} {
 }
 
 void query_processor::migration_subscriber::on_create_keyspace(const sstring& ks_name) {
@@ -1189,10 +1130,7 @@ void query_processor::migration_subscriber::on_create_view(const sstring& ks_nam
 void query_processor::migration_subscriber::on_update_keyspace(const sstring& ks_name) {
 }
 
-void query_processor::migration_subscriber::on_update_column_family(
-        const sstring& ks_name,
-        const sstring& cf_name,
-        bool columns_changed) {
+void query_processor::migration_subscriber::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) {
     // #1255: Ignoring columns_changed deliberately.
     log.info("Column definitions for {}.{} changed, invalidating related prepared statements", ks_name, cf_name);
     remove_invalid_prepared_statements(ks_name, cf_name);
@@ -1207,9 +1145,7 @@ void query_processor::migration_subscriber::on_update_function(const sstring& ks
 void query_processor::migration_subscriber::on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) {
 }
 
-void query_processor::migration_subscriber::on_update_view(
-        const sstring& ks_name,
-        const sstring& view_name, bool columns_changed) {
+void query_processor::migration_subscriber::on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) {
     // scylladb/scylladb#16392 - Materialized views are also tables so we need at least handle
     // them as such when changed.
     on_update_column_family(ks_name, view_name, columns_changed);
@@ -1238,39 +1174,28 @@ void query_processor::migration_subscriber::on_drop_view(const sstring& ks_name,
     remove_invalid_prepared_statements(ks_name, view_name);
 }
 
-void query_processor::migration_subscriber::remove_invalid_prepared_statements(
-        sstring ks_name,
-        std::optional<sstring> cf_name) {
-    _qp->_prepared_cache.remove_if([&] (::shared_ptr<cql_statement> stmt) {
+void query_processor::migration_subscriber::remove_invalid_prepared_statements(sstring ks_name, std::optional<sstring> cf_name) {
+    _qp->_prepared_cache.remove_if([&](::shared_ptr<cql_statement> stmt) {
         return this->should_invalidate(ks_name, cf_name, stmt);
     });
 }
 
-bool query_processor::migration_subscriber::should_invalidate(
-        sstring ks_name,
-        std::optional<sstring> cf_name,
-        ::shared_ptr<cql_statement> statement) {
+bool query_processor::migration_subscriber::should_invalidate(sstring ks_name, std::optional<sstring> cf_name, ::shared_ptr<cql_statement> statement) {
     return statement->depends_on(ks_name, cf_name);
 }
 
-future<> query_processor::query_internal(
-        const sstring& query_string,
-        db::consistency_level cl,
-        const data_value_list& values,
-        int32_t page_size,
-        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
-        std::optional<service::query_state> qs) {
+future<> query_processor::query_internal(const sstring& query_string, db::consistency_level cl, const data_value_list& values, int32_t page_size,
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f, std::optional<service::query_state> qs) {
     auto query_state = create_paged_state(query_string, cl, values, page_size, std::move(qs));
     co_return co_await for_each_cql_result(query_state, std::move(f));
 }
 
-future<> query_processor::query_internal(
-        const sstring& query_string,
-        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
+future<> query_processor::query_internal(const sstring& query_string, noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
     return query_internal(query_string, db::consistency_level::ONE, {}, 1000, std::move(f));
 }
 
-shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls, bool track) {
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(
+        unsigned shard, cql3::computed_function_values cached_fn_calls, bool track) {
     if (track) {
         _proxy.get_stats().replica_cross_shard_ops++;
     }
@@ -1278,7 +1203,8 @@ shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_s
     return ::make_shared<cql_transport::messages::result_message::bounce>(my_host_id, shard, std::move(cached_fn_calls));
 }
 
-shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_node(locator::tablet_replica replica, cql3::computed_function_values cached_fn_calls, seastar::lowres_clock::time_point timeout, bool is_write) {
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_node(
+        locator::tablet_replica replica, cql3::computed_function_values cached_fn_calls, seastar::lowres_clock::time_point timeout, bool is_write) {
     get_cql_stats().forwarded_requests++;
     return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write);
 }
@@ -1295,7 +1221,7 @@ void query_processor::update_authorized_prepared_cache_config() {
     utils::loading_cache_config cfg;
     cfg.max_size = _mcfg.authorized_prepared_cache_size;
     cfg.expiry = std::min(std::chrono::milliseconds(_db.get_config().permissions_validity_in_ms()),
-                          std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry));
+            std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry));
     cfg.refresh = std::chrono::milliseconds(_db.get_config().permissions_update_interval_in_ms());
 
     if (!_authorized_prepared_cache.update_config(std::move(cfg))) {
@@ -1307,4 +1233,4 @@ void query_processor::reset_cache() {
     _authorized_prepared_cache.reset();
 }
 
-}
+} // namespace cql3
