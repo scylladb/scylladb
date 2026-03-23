@@ -92,6 +92,14 @@ struct object_storage_endpoint_param;
 
 }
 
+namespace audit {
+
+struct audit_rule;
+
+std::istream& operator>>(std::istream& is, audit_rule&);
+
+}
+
 template<>
 struct fmt::formatter<db::error_injection_at_startup> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
@@ -587,6 +595,7 @@ public:
     named_value<sstring> audit_keyspaces;
     named_value<sstring> audit_unix_socket_path;
     named_value<size_t> audit_syslog_write_buffer_size;
+    named_value<std::vector<audit::audit_rule>> audit_rules;
 
     named_value<sstring> ldap_url_template;
     named_value<sstring> ldap_attr_role;
@@ -723,6 +732,9 @@ namespace utils {
 template <>
 void config_file::named_value<db::config::seed_provider_type>::add_command_line_option(
         boost::program_options::options_description_easy_init&);
+template <>
+void config_file::named_value<std::vector<audit::audit_rule>>::add_command_line_option(
+        boost::program_options::options_description_easy_init&);
 
 } // namespace utils
 
@@ -751,3 +763,4 @@ extern template struct utils::config_file::named_value<std::vector<db::error_inj
 extern template struct utils::config_file::named_value<std::vector<std::unordered_map<sstring, sstring>>>;
 extern template struct utils::config_file::named_value<std::unordered_map<sstring, seastar::log_level>>;
 extern template struct utils::config_file::named_value<std::vector<db::object_storage_endpoint_param>>;
+extern template struct utils::config_file::named_value<std::vector<audit::audit_rule>>;

@@ -597,6 +597,39 @@ audit_categories: "DCL,DDL,AUTH,ADMIN"
 # All tables in those keyspaces will be audited
 # audit_keyspaces: "<keyspace_name>,<keyspace_name>"
 #
+# Granular audit rules for fine-grained, role-aware auditing.
+# Each rule is an object with four required fields:
+#   sinks: list of output targets ("table", "syslog")
+#   categories: list of statement categories to audit (QUERY, DML, DDL, DCL, AUTH, ADMIN)
+#   qualified_table_names: list of "keyspace.table" glob patterns (fnmatch with extended globs)
+#   roles: list of role name glob patterns (fnmatch with extended globs)
+# Note: an empty 'categories' or 'roles' list means the rule will never match
+# (it matches nothing, not everything).  An empty 'qualified_table_names' list
+# prevents matching for table-scoped categories (DML, DDL, QUERY), but has no
+# effect on table-independent categories (AUTH, ADMIN, DCL) — those bypass the
+# table filter entirely because they represent operations with no meaningful
+# keyspace/table context.
+# Rules can extend an audit configuration based on audit_categories,
+# audit_tables, or audit_keyspaces. They do not override those settings:
+# both mechanisms are evaluated independently, and the event is audited
+# if either one matches.
+# Prefer audit_rules for new configurations because they provide more
+# precise matching options, including table patterns and role patterns.
+# Each rule's sinks must be a subset of the global 'audit' config; a rule that
+# references a sink not enabled globally will log an error and events for that
+# sink will be silently dropped.
+# Requires 'audit' to be set to "table" or "syslog" (rules are ignored when audit="none").
+# Example:
+# audit_rules:
+#   - sinks: [table]
+#     categories: [DML, DDL]
+#     qualified_table_names: ["prod_ks.*"]
+#     roles: ["admin_*"]
+#   - sinks: [syslog]
+#     categories: [AUTH]
+#     qualified_table_names: []  # ignored for AUTH/ADMIN/DCL (table-independent)
+#     roles: ["*"]
+#
 # Overrides the Unix socket path used to connect to syslog. If left unset, it'll
 # use the default on the build system, which is usually "/dev/log"
 # audit_unix_socket_path: "/dev/log"
