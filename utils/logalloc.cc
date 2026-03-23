@@ -1583,7 +1583,7 @@ void reclaim_timer::report() const noexcept {
     if (_memory_released > 0) {
         auto bytes_per_second =
             static_cast<float>(_memory_released) / std::chrono::duration_cast<std::chrono::duration<float>>(_duration).count();
-        timing_logger.log(info_level, "- reclamation rate = {} MiB/s", format("{:.3f}", bytes_per_second / MiB));
+        timing_logger.log(info_level, "- reclamation rate = {:.3f} MiB/s", bytes_per_second / MiB);
     }
 
     if (_debug_enabled) {
