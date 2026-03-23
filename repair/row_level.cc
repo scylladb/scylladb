@@ -3253,10 +3253,13 @@ private:
             // sequentially because the rows from repair follower 1 to
             // repair master might reduce the amount of missing data
             // between repair master and repair follower 2.
-            repair_hash_set set_diff = get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes().get());
+            auto working_hashes = master.working_row_hashes().get();
+            repair_hash_set set_diff = get_set_diff(master.peer_row_hash_sets(node_idx), working_hashes);
             // Request missing sets from peer node
-            rlogger.debug("Before get_row_diff to node {}, local={}, peer={}, set_diff={}",
-                    node, master.working_row_hashes().get().size(), master.peer_row_hash_sets(node_idx).size(), set_diff.size());
+            if (rlogger.is_enabled(logging::log_level::debug)) {
+                rlogger.debug("Before get_row_diff to node {}, local={}, peer={}, set_diff={}",
+                        node, working_hashes.size(), master.peer_row_hash_sets(node_idx).size(), set_diff.size());
+            }
             // If we need to pull all rows from the peer. We can avoid
             // sending the row hashes on wire by setting needs_all_rows flag.
             auto needs_all_rows = repair_meta::needs_all_rows_t(set_diff.size() == master.peer_row_hash_sets(node_idx).size());
@@ -3269,7 +3272,9 @@ private:
                 master.get_row_diff(std::move(set_diff), needs_all_rows, node, node_idx, dst_cpu_id);
                 ns.state = repair_state::get_row_diff_finished;
             }
-            rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myhostid(), master.working_row_hashes().get().size());
+            if (rlogger.is_enabled(logging::log_level::debug)) {
+                rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myhostid(), master.working_row_hashes().get().size());
+            }
           } catch (...) {
             rlogger.warn("repair[{}]: get_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
                     _shard_task.global_repair_id.uuid(), node, _shard_task.get_keyspace(), _cf_name, _range, std::current_exception());
