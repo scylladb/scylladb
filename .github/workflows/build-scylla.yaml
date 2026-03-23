@@ -12,6 +12,9 @@ on:
         description: 'the md5sum for scylla executable'
         value: ${{ jobs.build.outputs.md5sum }}
 
+permissions:
+  contents: read
+
 jobs:
   read-toolchain:
     uses: ./.github/workflows/read-toolchain.yaml
