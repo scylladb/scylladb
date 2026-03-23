@@ -1413,6 +1413,15 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
     return _sg_manager->compaction_group_for_key(key, s);
 }
 
+static sstring sstable_desc(const sstables::shared_sstable& sst) {
+    auto& identifier_opt = sst->sstable_identifier();
+    auto& originating_host_id_opt = sst->get_stats_metadata().originating_host_id;
+    return format("{} (originated from {} with id {} on host {})",
+                  sst->get_filename(), sst->get_origin(),
+                  identifier_opt ? identifier_opt->to_sstring() : "unknown",
+                  originating_host_id_opt ? originating_host_id_opt->to_sstring() : "unknown");
+}
+
 compaction_group& tablet_storage_group_manager::compaction_group_for_token_range(sstring desc, dht::token first_token, dht::token last_token) const {
     auto first_id = storage_group_of(first_token);
     auto last_id = storage_group_of(last_token);
@@ -1445,15 +1454,6 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_token_range
 compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
     auto first_token = sst->get_first_decorated_key().token();
     auto last_token = sst->get_last_decorated_key().token();
-
-    auto sstable_desc = [] (const sstables::shared_sstable& sst) {
-        auto& identifier_opt = sst->sstable_identifier();
-        auto& originating_host_id_opt = sst->get_stats_metadata().originating_host_id;
-        return format("{} (originated from {} with id {} on host {})",
-                      sst->get_filename(), sst->get_origin(),
-                      identifier_opt ? identifier_opt->to_sstring() : "unknown",
-                      originating_host_id_opt ? originating_host_id_opt->to_sstring() : "unknown");
-    };
 
     return compaction_group_for_token_range(sstable_desc(sst), first_token, last_token);
 }
@@ -3445,8 +3445,8 @@ void tablet_storage_group_manager::handle_tablet_split_completion(const locator:
     for (auto& [id, sg] : _storage_groups) {
         if (!sg->split_unready_groups_are_empty()) {
             on_internal_error(tlogger, format("Found that storage of group {} for table {} wasn't split correctly, " \
-                                              "therefore groups cannot be remapped with the new tablet count.",
-                                              id, table_id));
+                                              "therefore groups cannot be remapped with the new tablet count.\nDiagnostics: {}",
+                                              id, table_id, *sg));
         }
         // Remove old empty groups, they're unused, but they need to be deregistered properly
       // FIXME: indent.
@@ -4525,6 +4525,10 @@ lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
 
 size_t compaction_group::memtable_count() const noexcept {
     return _memtables->size();
+}
+
+bool compaction_group::memtable_empty() const noexcept {
+    return _memtables->empty();
 }
 
 size_t storage_group::memtable_count() const {
@@ -5762,3 +5766,43 @@ tombstone_gc_state table::get_tombstone_gc_state() const {
 }
 
 } // namespace replica
+
+auto fmt::formatter<replica::compaction_group>::format(const replica::compaction_group& cg, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "[sstables=[");
+    bool first = true;
+    for (const auto& sst : cg.all_sstables()) {
+        if (!first) {
+            out = fmt::format_to(out, ", ");
+        }
+        out = fmt::format_to(out, "{}", replica::sstable_desc(sst));
+        first = false;
+    }
+    return fmt::format_to(out, "], memtable_empty={}, sstable_add_gate={}]",
+                          cg.memtable_empty(),
+                          cg.sstable_add_gate().get_count());
+}
+
+auto fmt::formatter<replica::storage_group>::format(const replica::storage_group& sg, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    out = fmt::format_to(out, "main={}", *sg.main_compaction_group());
+    out = fmt::format_to(out, ", merging=[");
+    bool first = true;
+    for (const auto& cg : sg.merging_groups()) {
+        if (!first) {
+            out = fmt::format_to(out, ", ");
+        }
+        out = fmt::format_to(out, "{}", *cg);
+        first = false;
+    }
+    out = fmt::format_to(out, "], split_ready=[");
+    first = true;
+    for (const auto& cg : sg.split_ready_compaction_groups()) {
+        if (!first) {
+            out = fmt::format_to(out, ", ");
+        }
+        out = fmt::format_to(out, "{}", *cg);
+        first = false;
+    }
+    return fmt::format_to(out, "]");
+}

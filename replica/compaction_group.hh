@@ -206,6 +206,7 @@ public:
 
     lw_shared_ptr<memtable_list>& memtables() noexcept;
     size_t memtable_count() const noexcept;
+    bool memtable_empty() const noexcept;
     // Returns minimum timestamp from memtable list
     api::timestamp_type min_memtable_timestamp() const;
     // Returns maximum timestamp from memtable list
@@ -287,6 +288,9 @@ public:
     }
 
     seastar::named_gate& sstable_add_gate() noexcept {
+        return _sstable_add_gate;
+    }
+    const seastar::named_gate& sstable_add_gate() const noexcept {
         return _sstable_add_gate;
     }
 
@@ -526,3 +530,13 @@ public:
 };
 
 }
+
+template <> struct fmt::formatter<replica::compaction_group> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const replica::compaction_group&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <> struct fmt::formatter<replica::storage_group> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const replica::storage_group&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
