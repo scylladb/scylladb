@@ -122,6 +122,18 @@ schema_ptr snapshot_sstables() {
                 .with_column("prefix", utf8_type)
                 // Flag if the SSTable was downloaded already
                 .with_column("downloaded", boolean_type)
+                // Node ID where sstable resides (optional)
+                .with_column("node", uuid_type)
+                // Tablet to which the sstable belonged at time of snapshot
+                .with_column("tablet", long_type)
+                // State - local, being_backed_up, remote_and_local, remote
+                .with_column("state", int32_type)
+                // Repair time
+                .with_column("repaired_at", long_type)
+                // Data size 
+                .with_column("data_size", long_type)
+                // Index size 
+                .with_column("index_size", long_type)
                 .with_hash_version()
                 .build();
     }();
@@ -442,9 +454,11 @@ snapshot_table_helper::snapshot_table_helper(cql3::query_processor& qp)
 
 future<> snapshot_table_helper::insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack
     , sstables::sstable_id sstable_id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix
+    , locator::host_id node, size_t tablet_id, snapshot_state state, int64_t repaired_at
+    , int64_t data_size, int64_t index_size
     , db::consistency_level cl) 
 {
-    static const sstring query = format("INSERT INTO {}.{} (snapshot_name, \"keyspace\", \"table\", datacenter, rack, first_token, sstable_id, last_token, toc_name, prefix) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) USING TTL {}"
+    static const sstring query = format("INSERT INTO {}.{} (snapshot_name, \"keyspace\", \"table\", datacenter, rack, first_token, sstable_id, last_token, toc_name, prefix, node, tablet, state, repaired_at, data_size, index_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) USING TTL {}"
         , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
         , snapshot_table_ttl_seconds
     );
@@ -454,7 +468,10 @@ future<> snapshot_table_helper::insert_snapshot_sstable(sstring snapshot_name, s
             cl,
             internal_distributed_query_state(),
             { std::move(snapshot_name), std::move(ks), std::move(table), std::move(dc), std::move(rack),
-              dht::token::to_int64(first_token), sstable_id.uuid(), dht::token::to_int64(last_token), std::move(toc_name), std::move(prefix) },
+              dht::token::to_int64(first_token), sstable_id.uuid(), dht::token::to_int64(last_token), std::move(toc_name), std::move(prefix),
+              node.uuid(), int64_t(tablet_id), int32_t(state), repaired_at,
+              data_size, index_size,
+            },
             cql3::query_processor::cache_internal::yes).discard_result();
 }
 
@@ -462,13 +479,25 @@ future<utils::chunked_vector<snapshot_sstable_entry>>
 snapshot_table_helper::get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl, std::optional<dht::token> start_token, std::optional<dht::token> end_token) const {
     utils::chunked_vector<snapshot_sstable_entry> sstables;
 
-    static const sstring base_query = format("SELECT toc_name, prefix, sstable_id, first_token, last_token, downloaded FROM {}.{}"
+    static const sstring base_query = format("SELECT toc_name, prefix, sstable_id, first_token, last_token, downloaded, node, tablet, state, repaired_at, data_size, index_size FROM {}.{}"
         " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?"
         , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
     );
 
     auto read_row = [&] (const cql3::untyped_result_set_row& row) {
-            sstables.emplace_back(sstables::sstable_id(row.get_as<utils::UUID>("sstable_id")), dht::token::from_int64(row.get_as<int64_t>("first_token")), dht::token::from_int64(row.get_as<int64_t>("last_token")), row.get_as<sstring>("toc_name"), row.get_as<sstring>("prefix"), is_downloaded(row.get_or<bool>("downloaded", false)));
+            sstables.emplace_back(sstables::sstable_id(row.get_as<utils::UUID>("sstable_id"))
+                , dht::token::from_int64(row.get_as<int64_t>("first_token"))
+                , dht::token::from_int64(row.get_as<int64_t>("last_token"))
+                , row.get_as<sstring>("toc_name")
+                , row.get_as<sstring>("prefix")
+                , is_downloaded(row.get_or<bool>("downloaded", false))
+                , locator::host_id(row.get_or<utils::UUID>("node", utils::UUID{}))
+                , row.get_or<int64_t>("tablet", 0)
+                , snapshot_state(row.get_or<int32_t>("state", 0))
+                , row.get_or<int64_t>("repaired_at", 0)
+                , row.get_or<int64_t>("data_size", 0)
+                , row.get_or<int64_t>("index_size", 0)
+            );
             return make_ready_future<stop_iteration>(stop_iteration::no);
     };
 

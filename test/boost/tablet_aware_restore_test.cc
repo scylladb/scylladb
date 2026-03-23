@@ -45,6 +45,7 @@ SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works) {
         auto dc = "dc1";
         auto rack = "r1";
         auto sstable_id = utils::UUID_gen::get_time_UUID();
+        auto host_id = locator::host_id::create_random_id();
         auto last_token = dht::token::from_int64(100);
         auto toc_name = "me-3gdq_0bki_2cvk01yl83nj0tp5gh-big-TOC.txt";
         auto prefix = "some/prefix";
@@ -58,6 +59,7 @@ SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works) {
             auto first_token = dht::token::from_int64(i);
             co_await sdk.insert_snapshot_sstable(snapshot_name, ks, table, dc, rack
                 , sstables::sstable_id(sstable_id), first_token, last_token, toc_name, prefix
+                , host_id, i, db::snapshot_state::local, 0, 0, 0
                 , cl);
         }
         // read it back and check if it is correct

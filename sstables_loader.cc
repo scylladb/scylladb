@@ -1129,11 +1129,16 @@ static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace,
         auto first_token = rjson::to_token(rjson::get(sstable_entry, "first_token"));
         auto last_token = rjson::to_token(rjson::get(sstable_entry, "last_token"));
         auto toc_name = rjson::to_sstring(rjson::get(sstable_entry, "toc_name"));
+        auto tablet_id = rjson::get<size_t>(sstable_entry, "tablet_id");
+        auto repaired_at = rjson::get<int64_t>(sstable_entry, "repaired_at");
+        auto data_size = rjson::get<int64_t>(sstable_entry, "data_size");
+        auto index_size = rjson::get<int64_t>(sstable_entry, "index_size");
         auto prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
         // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
         // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
         co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
-                                             toc_name, prefix, cl);
+                                             toc_name, prefix, locator::host_id::create_null_id(), tablet_id, db::snapshot_state::remote, 
+                                             repaired_at, data_size, index_size, cl);
     }
 
     co_return tablet_count;

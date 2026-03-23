@@ -117,7 +117,11 @@ public:
     /* Inserts a single SSTable entry for a given snapshot, keyspace, table, datacenter,
      * and rack. The row is written with the specified TTL (in seconds). Uses consistency
      * level `EACH_QUORUM` by default.*/
-    future<> insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, sstables::sstable_id sstable_id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<> insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack
+        , sstables::sstable_id sstable_id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix
+        , locator::host_id node, size_t tablet_id, snapshot_state, int64_t repaired_at = {}
+        , int64_t data_size = 0, int64_t index_size = 0
+        , db::consistency_level cl = db::consistency_level::EACH_QUORUM);
 
     /* Retrieves all SSTable entries for a given snapshot, keyspace, table, datacenter, and rack.
      * If `start_token` and `end_token` are provided, only entries whose `first_token` is in the range [`start_token`, `end_token`] will be returned.
