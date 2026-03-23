@@ -26,12 +26,16 @@
 
 struct node_printer {
     const locator::node* v;
-    node_printer(const locator::node* n) noexcept : v(n) {}
+    node_printer(const locator::node* n) noexcept
+        : v(n) {
+    }
 };
 
 template <>
 struct fmt::formatter<node_printer> {
-    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.begin();
+    }
     auto format(const node_printer& np, fmt::format_context& ctx) const {
         const locator::node* node = np.v;
         auto out = fmt::format_to(ctx.out(), "node={}", fmt::ptr(node));
@@ -43,7 +47,9 @@ struct fmt::formatter<node_printer> {
 };
 
 static auto lazy_backtrace() {
-    return seastar::value_of([] { return current_backtrace(); });
+    return seastar::value_of([] {
+        return current_backtrace();
+    });
 }
 
 namespace locator {
@@ -51,11 +57,12 @@ namespace locator {
 static logging::logger tlogger("topology");
 
 thread_local const endpoint_dc_rack endpoint_dc_rack::default_location = {
-    .dc = locator::production_snitch_base::default_dc,
-    .rack = locator::production_snitch_base::default_rack,
+        .dc = locator::production_snitch_base::default_dc,
+        .rack = locator::production_snitch_base::default_rack,
 };
 
-node::node(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, bool excluded, this_node is_this_node, node::idx_type idx, bool draining)
+node::node(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, bool excluded,
+        this_node is_this_node, node::idx_type idx, bool draining)
     : _topology(topology)
     , _host_id(id)
     , _dc_rack(std::move(dc_rack))
@@ -64,10 +71,11 @@ node::node(const locator::topology* topology, locator::host_id id, endpoint_dc_r
     , _excluded(excluded)
     , _draining(draining)
     , _is_this_node(is_this_node)
-    , _idx(idx)
-{}
+    , _idx(idx) {
+}
 
-node_holder node::make(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, bool excluded, node::this_node is_this_node, node::idx_type idx, bool draining) {
+node_holder node::make(const locator::topology* topology, locator::host_id id, endpoint_dc_rack dc_rack, state state, shard_id shard_count, bool excluded,
+        node::this_node is_this_node, node::idx_type idx, bool draining) {
     return std::make_unique<node>(topology, std::move(id), std::move(dc_rack), std::move(state), shard_count, excluded, is_this_node, idx, draining);
 }
 
@@ -77,14 +85,22 @@ node_holder node::clone() const {
 
 std::string node::to_string(node::state s) {
     switch (s) {
-    case state::none:           return "none";
-    case state::bootstrapping:  return "bootstrapping";
-    case state::replacing:      return "replacing";
-    case state::normal:         return "normal";
-    case state::being_decommissioned: return "being_decommissioned";
-    case state::being_removed:        return "being_removed";
-    case state::being_replaced:       return "being_replaced";
-    case state::left:           return "left";
+    case state::none:
+        return "none";
+    case state::bootstrapping:
+        return "bootstrapping";
+    case state::replacing:
+        return "replacing";
+    case state::normal:
+        return "normal";
+    case state::being_decommissioned:
+        return "being_decommissioned";
+    case state::being_removed:
+        return "being_removed";
+    case state::being_replaced:
+        return "being_replaced";
+    case state::left:
+        return "left";
     }
     __builtin_unreachable();
 }
@@ -101,21 +117,19 @@ future<> topology::clear_gently() noexcept {
 }
 
 topology::topology(shallow_copy, config cfg)
-        : _shard(this_shard_id())
-        , _cfg(cfg)
-        , _sort_by_proximity(true)
-{
+    : _shard(this_shard_id())
+    , _cfg(cfg)
+    , _sort_by_proximity(true) {
     // constructor for shallow copying of token_metadata_impl
 }
 
 topology::topology(config cfg)
-        : _shard(this_shard_id())
-        , _cfg(cfg)
-        , _sort_by_proximity(!cfg.disable_proximity_sorting)
-        , _random_engine(std::random_device{}())
-{
-    tlogger.trace("topology[{}]: constructing using config: endpoint={} id={} dc={} rack={}", fmt::ptr(this),
-            cfg.this_endpoint, cfg.this_host_id, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
+    : _shard(this_shard_id())
+    , _cfg(cfg)
+    , _sort_by_proximity(!cfg.disable_proximity_sorting)
+    , _random_engine(std::random_device{}()) {
+    tlogger.trace("topology[{}]: constructing using config: endpoint={} id={} dc={} rack={}", fmt::ptr(this), cfg.this_endpoint, cfg.this_host_id,
+            cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
     add_node(cfg.this_host_id, cfg.local_dc_rack, node::state::none);
 }
 
@@ -131,8 +145,7 @@ topology::topology(topology&& o) noexcept
     , _dc_racks(std::move(o._dc_racks))
     , _sort_by_proximity(o._sort_by_proximity)
     , _datacenters(std::move(o._datacenters))
-    , _random_engine(std::move(o._random_engine))
-{
+    , _random_engine(std::move(o._random_engine)) {
     SCYLLA_ASSERT(_shard == this_shard_id());
     tlogger.trace("topology[{}]: move from [{}]", fmt::ptr(this), fmt::ptr(&o));
 
@@ -153,16 +166,18 @@ topology& topology::operator=(topology&& o) noexcept {
 
 void topology::set_host_id_cfg(host_id this_host_id) {
     if (_cfg.this_host_id) {
-        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg can be caller only once current id {} new id {}",  fmt::ptr(this), _cfg.this_host_id, this_host_id));
+        on_internal_error(tlogger,
+                fmt::format("topology[{}] set_host_id_cfg can be caller only once current id {} new id {}", fmt::ptr(this), _cfg.this_host_id, this_host_id));
     }
     if (_nodes.size() != 1) {
-        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg called while nodes size is greater than 1",  fmt::ptr(this)));
+        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg called while nodes size is greater than 1", fmt::ptr(this)));
     }
     if (!_this_node) {
-        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg called while _this_nodes is null",  fmt::ptr(this)));
+        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg called while _this_nodes is null", fmt::ptr(this)));
     }
     if (_this_node->host_id()) {
-        on_internal_error(tlogger, fmt::format("topology[{}] set_host_id_cfg called while _this_nodes has non null id {}",  fmt::ptr(this), _this_node->host_id()));
+        on_internal_error(
+                tlogger, fmt::format("topology[{}] set_host_id_cfg called while _this_nodes has non null id {}", fmt::ptr(this), _this_node->host_id()));
     }
 
     remove_node(*_this_node);
@@ -203,7 +218,8 @@ const node& topology::add_node(node_holder nptr) {
 
     if (nptr->topology() != this) {
         if (nptr->topology()) {
-            on_fatal_internal_error(tlogger, seastar::format("topology[{}]: {} belongs to different topology={}", fmt::ptr(this), node_printer(node), fmt::ptr(node->topology())));
+            on_fatal_internal_error(tlogger,
+                    seastar::format("topology[{}]: {} belongs to different topology={}", fmt::ptr(this), node_printer(node), fmt::ptr(node->topology())));
         }
         nptr->set_topology(this);
     }
@@ -219,7 +235,8 @@ const node& topology::add_node(node_holder nptr) {
     try {
         if (is_configured_this_node(*node)) {
             if (_this_node) {
-                on_internal_error(tlogger, seastar::format("topology[{}]: {}: local node already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(this_node())));
+                on_internal_error(tlogger,
+                        seastar::format("topology[{}]: {}: local node already mapped to {}", fmt::ptr(this), node_printer(node), node_printer(this_node())));
             }
             locator::node& n = *_nodes.back();
             n._is_this_node = node::this_node::yes;
@@ -238,14 +255,25 @@ const node& topology::add_node(node_holder nptr) {
     return *node;
 }
 
-void topology::update_node(node& node, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> opt_shard_count) {
+void topology::update_node(node& node, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st,
+        std::optional<shard_id> opt_shard_count) {
     tlogger.debug("topology[{}]: update_node: {}: to: host_id={} dc={} rack={} state={} shard_count={}, at {}", fmt::ptr(this), node_printer(&node),
-        opt_id ? format("{}", *opt_id) : "unchanged",
-        opt_dr ? format("{}", opt_dr->dc) : "unchanged",
-        opt_dr ? format("{}", opt_dr->rack) : "unchanged",
-        opt_st ? format("{}", *opt_st) : "unchanged",
-        opt_shard_count ? format("{}", *opt_shard_count) : "unchanged",
-        lazy_backtrace());
+            seastar::value_of([&] {
+                return opt_id ? format("{}", *opt_id) : "unchanged";
+            }),
+            seastar::value_of([&] {
+                return opt_dr ? format("{}", opt_dr->dc) : "unchanged";
+            }),
+            seastar::value_of([&] {
+                return opt_dr ? format("{}", opt_dr->rack) : "unchanged";
+            }),
+            seastar::value_of([&] {
+                return opt_st ? format("{}", *opt_st) : "unchanged";
+            }),
+            seastar::value_of([&] {
+                return opt_shard_count ? format("{}", *opt_shard_count) : "unchanged";
+            }),
+            lazy_backtrace());
 
     bool changed = false;
     if (opt_id) {
@@ -257,7 +285,8 @@ void topology::update_node(node& node, std::optional<host_id> opt_id, std::optio
                 on_internal_error(tlogger, seastar::format("This node host_id is already set: {}: new host_id={}", node_printer(&node), *opt_id));
             }
             if (_nodes_by_host_id.contains(*opt_id)) {
-                on_internal_error(tlogger, seastar::format("Cannot update node host_id: {}: new host_id already exists: {}", node_printer(&node), node_printer(find_node(*opt_id))));
+                on_internal_error(tlogger, seastar::format("Cannot update node host_id: {}: new host_id already exists: {}", node_printer(&node),
+                                                   node_printer(find_node(*opt_id))));
             }
             changed = true;
         } else {
@@ -442,11 +471,11 @@ const node* topology::find_node(node::idx_type idx) const noexcept {
     return _nodes.at(idx).get();
 }
 
-const node& topology::add_or_update_endpoint(host_id id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
-{
-    tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this),
-        id, opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
-        lazy_backtrace());
+const node& topology::add_or_update_endpoint(
+        host_id id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count) {
+    tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} dc={} rack={} state={} shards={}, at {}", fmt::ptr(this), id,
+            opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
+            lazy_backtrace());
 
     auto* n = find_node(id);
     if (n) {
@@ -454,14 +483,10 @@ const node& topology::add_or_update_endpoint(host_id id, std::optional<endpoint_
         return *n;
     }
 
-    return add_node(id,
-                    opt_dr.value_or(endpoint_dc_rack::default_location),
-                    opt_st.value_or(node::state::none),
-                    shard_count.value_or(0));
+    return add_node(id, opt_dr.value_or(endpoint_dc_rack::default_location), opt_st.value_or(node::state::none), shard_count.value_or(0));
 }
 
-bool topology::remove_endpoint(locator::host_id host_id)
-{
+bool topology::remove_endpoint(locator::host_id host_id) {
     auto node = find_node(host_id);
     tlogger.debug("topology[{}]: remove_endpoint: host_id={}: {}", fmt::ptr(this), host_id, node_printer(node));
     // Do not allow removing yourself from the topology
@@ -502,7 +527,7 @@ void topology::do_sort_by_proximity(locator::host_id address, host_id_vector_rep
         locator::host_id id;
         int distance;
     };
-    auto host_infos = addresses | std::views::transform([&] (locator::host_id id) {
+    auto host_infos = addresses | std::views::transform([&](locator::host_id id) {
         const auto& loc1 = get_location(id);
         return info{id, distance(address, loc, id, loc1)};
     }) | std::ranges::to<utils::small_vector<info, host_id_vector_replica_set::internal_capacity()>>();
@@ -564,11 +589,12 @@ std::unordered_set<locator::host_id> topology::get_all_host_ids() const {
     return ids;
 }
 
-std::unordered_map<sstring, std::unordered_set<host_id>>
-topology::get_datacenter_host_ids() const {
+std::unordered_map<sstring, std::unordered_set<host_id>> topology::get_datacenter_host_ids() const {
     std::unordered_map<sstring, std::unordered_set<host_id>> ret;
     for (auto& [dc, nodes] : _dc_nodes) {
-        ret[dc] = nodes | std::views::transform([] (const node& n) { return n.host_id(); }) | std::ranges::to<std::unordered_set>();
+        ret[dc] = nodes | std::views::transform([](const node& n) {
+            return n.host_id();
+        }) | std::ranges::to<std::unordered_set>();
     }
     return ret;
 }
