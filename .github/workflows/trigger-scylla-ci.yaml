@@ -1,5 +1,8 @@
 name: Trigger Scylla CI Route
 
+permissions:
+  contents: read
+
 on:
   issue_comment:
     types: [created]
