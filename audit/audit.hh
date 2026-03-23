@@ -60,17 +60,6 @@ public:
     }
 };
 
-enum class statement_category {
-    QUERY, DML, DDL, DCL, AUTH, ADMIN
-};
-
-using category_set = enum_set<super_enum<statement_category, statement_category::QUERY,
-                                                             statement_category::DML,
-                                                             statement_category::DDL,
-                                                             statement_category::DCL,
-                                                             statement_category::AUTH,
-                                                             statement_category::ADMIN>>;
-
 // Holds the audit metadata for a single request: the operation category,
 // target keyspace/table, and the query string to be logged.
 class audit_info {

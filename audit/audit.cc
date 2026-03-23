@@ -69,19 +69,6 @@ static std::unique_ptr<storage_helper> create_storage_helper(const std::set<sstr
     return std::make_unique<audit_composite_storage_helper>(std::move(helpers));
 }
 
-static sstring category_to_string(statement_category category)
-{
-    switch (category) {
-        case statement_category::QUERY: return "QUERY";
-        case statement_category::DML: return "DML";
-        case statement_category::DDL: return "DDL";
-        case statement_category::DCL: return "DCL";
-        case statement_category::AUTH: return "AUTH";
-        case statement_category::ADMIN: return "ADMIN";
-    }
-    return "";
-}
-
 sstring audit_info::category_string() const {
     return category_to_string(_category);
 }
