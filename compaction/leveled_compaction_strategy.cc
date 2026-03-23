@@ -33,8 +33,10 @@ future<compaction_descriptor> leveled_compaction_strategy::get_sstables_for_comp
     auto candidate = manifest.get_compaction_candidates(*state->last_compacted_keys, state->compaction_counter);
 
     if (!candidate.sstables.empty()) {
-        auto main_set = co_await table_s.main_sstable_set();
-        leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), main_set->size());
+        if (leveled_manifest::logger.is_enabled(logging::log_level::debug)) {
+            auto main_set = co_await table_s.main_sstable_set();
+            leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), main_set->size());
+        }
         co_return candidate;
     }
 
