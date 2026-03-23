@@ -34,21 +34,107 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/boost/database_test.hh"
 
+using namespace std::string_literals;
+
+template <>
+struct fmt::formatter<db::snapshot_state> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_state& e, FormatContext& ctx) const {
+        switch (e) {
+        case db::snapshot_state::unknown: return formatter<string_view>::format("unknown", ctx);
+        case db::snapshot_state::local: return formatter<string_view>::format("local", ctx);
+        case db::snapshot_state::being_backed_up: return formatter<string_view>::format("being_backed_up", ctx);
+        case db::snapshot_state::remote_and_local: return formatter<string_view>::format("remote_and_local", ctx);
+        case db::snapshot_state::remote: return formatter<string_view>::format("remote", ctx);
+        default: throw std::invalid_argument(fmt::format("Unhandled snapshot_state {}", int(e)));
+        }
+    }
+};
+
+template <>
+struct fmt::formatter<db::snapshot_table_type> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_table_type& e, FormatContext& ctx) const {
+        switch (e) {
+        case db::snapshot_table_type::cql_table: return formatter<string_view>::format("cql_table", ctx);
+        case db::snapshot_table_type::cql_view: return formatter<string_view>::format("cql_view", ctx);
+        case db::snapshot_table_type::alternator_table: return formatter<string_view>::format("alternator_table", ctx);
+        default: throw std::invalid_argument(fmt::format("Unhandled snapshot_table_type {}", int(e)));
+        }
+    }
+};
+
+template <>
+struct fmt::formatter<db::snapshot_entry> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_entry& e, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), 
+            "{{ {}, {}, {}, {}, {} }}",
+            e.name, e.created_at, e.expires_at, 
+            e.namespace_version, e.manifest_version
+        );
+    }
+};
+
+template <>
+struct fmt::formatter<db::snapshot_remote_location_entry> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_remote_location_entry& e, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), 
+            "{{ {}, {}, {}, {}, {}, {} }}",
+            e.snapshot_name, e.datacenter, e.endpoint, e.bucket, e.prefix, e.state
+        );
+    }
+};
+
+template <>
+struct fmt::formatter<db::snapshot_keyspace_entry> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_keyspace_entry& e, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), 
+            "{{ {}, {}, {} }}",
+            e.snapshot_name, e.keyspace_name, e.keyspace_schema
+        );
+    }
+};
+
+template <>
+struct fmt::formatter<db::snapshot_table_entry> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_table_entry& e, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), 
+            "{{ {}, {}, {}, {}, {}, {}, {} }}",
+            e.snapshot_name, e.keyspace_name, e.table_name, e.table_id,
+            e.type, e.base_table_id, e.table_schema
+        );
+    }
+};
+
+template <>
+struct fmt::formatter<db::snapshot_node_entry> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_node_entry& e, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), 
+            "{{ {}, {}, {} }}",
+            e.datacenter, e.rack, e.node
+        );
+    }
+};
 
 SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works) {
     auto db_cfg_ptr = make_shared<db::config>();
 
     return do_with_cql_env([] (cql_test_env& env) -> future<> {
-        auto snapshot_name = "snapshot";
-        auto ks = "ks";
-        auto table = "cf";
-        auto dc = "dc1";
-        auto rack = "r1";
+        auto snapshot_name = "snapshot"s;
+        auto ks = "ks"s;
+        auto table = "cf"s;
+        auto dc = "dc1"s;
+        auto rack = "r1"s;
         auto sstable_id = utils::UUID_gen::get_time_UUID();
         auto host_id = locator::host_id::create_random_id();
         auto last_token = dht::token::from_int64(100);
-        auto toc_name = "me-3gdq_0bki_2cvk01yl83nj0tp5gh-big-TOC.txt";
-        auto prefix = "some/prefix";
+        auto toc_name = "me-3gdq_0bki_2cvk01yl83nj0tp5gh-big-TOC.txt"s;
+        auto prefix = "some/prefix"s;
         auto num_iter = 5;
 
         db::snapshot_table_helper sdk(env.qp().local());
@@ -93,6 +179,117 @@ SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works) {
             snapshot_name, ks, table, dc, rack, db::consistency_level::ONE,
             dht::token::from_int64(num_iter + 10), dht::token::from_int64(num_iter + 20));
         BOOST_CHECK_EQUAL(empty.size(), 0);
+
+        db::snapshot_entry sse {
+            .name = snapshot_name,
+            .created_at = db_clock::now(),
+            .expires_at = db_clock::now() + 10000s,
+            .namespace_version = "Moose and Bear",
+            .manifest_version = "Wingdings",
+        };
+
+        db::snapshot_remote_location_entry rle {
+            .snapshot_name = snapshot_name,
+            .datacenter = dc,
+            .endpoint = "The end of all things",
+            .bucket = "A_bucket_for_fun",
+            .prefix = prefix,
+            .state = db::snapshot_state::local,
+        };
+
+        co_await sdk.insert_snapshot(sse, cl);
+
+        auto q_sse = co_await sdk.get_snapshot(snapshot_name, cl);
+
+        BOOST_CHECK(bool(q_sse));
+        BOOST_CHECK_EQUAL(*q_sse, sse);
+
+        co_await sdk.insert_snapshot_remote_locations(std::span<const db::snapshot_remote_location_entry>({ rle }), cl);
+
+        auto q_rle = co_await sdk.get_snapshot_remote_locations(snapshot_name, cl);
+
+        BOOST_CHECK_EQUAL(q_rle.size(), 1);
+        BOOST_CHECK_EQUAL(q_rle[0], rle);
+
+        auto keyspaces = std::views::iota(1, 4) | std::views::transform([&](int i) {
+            auto name = fmt::format("{}_{}", ks, i);
+            return db::snapshot_keyspace_entry {
+                .snapshot_name = snapshot_name,
+                .keyspace_name = name,
+                .keyspace_schema = "CREATE KEYSPACE " + name,
+            };
+        }) | std::ranges::to<std::vector>();
+
+        co_await sdk.insert_snapshot_keyspaces(keyspaces, cl);
+        auto q_keyspaces = co_await sdk.get_snapshot_keyspaces(snapshot_name, cl);
+
+        std::ranges::sort(q_keyspaces, {}, &db::snapshot_keyspace_entry::keyspace_name);
+
+        BOOST_CHECK(std::ranges::equal(keyspaces, q_keyspaces));
+
+        auto ks_1 = ks + "_1";
+        auto tables = std::views::iota(1, 10) | std::views::transform([&](int i) {
+            auto name = fmt::format("{}_{}", table, i);
+            return db::snapshot_table_entry {
+                .snapshot_name = snapshot_name,
+                .keyspace_name = (i & 1) ? ks : ks_1,
+                .table_name = name,
+                .table_id = ::table_id::create_random_id(),
+                .type = db::snapshot_table_type::cql_table,
+            };
+        }) | std::ranges::to<std::vector>();
+
+        co_await sdk.insert_snapshot_tables(tables, cl);
+        auto q_tables1 = co_await sdk.get_snapshot_tables(snapshot_name, {}, {}, cl);
+
+        std::ranges::sort(q_tables1, {}, &db::snapshot_table_entry::table_name);
+
+        BOOST_CHECK(std::ranges::equal(tables, q_tables1));
+
+        for (auto k : { ks, ks_1 }) {
+            auto q_tables2 = co_await sdk.get_snapshot_tables(snapshot_name, k, {}, cl);
+            auto filtered = tables | std::views::filter([&](auto& e) {
+                return e.keyspace_name == k;
+            });
+
+            std::ranges::sort(q_tables2, {}, &db::snapshot_table_entry::table_name);
+
+            BOOST_CHECK(std::ranges::equal(filtered, q_tables2));
+        }
+
+        auto tablets = std::views::iota(1u, 100u) | std::views::transform([&](unsigned i) {
+            return db::snapshot_tablet_entry {
+                .tablet_id = i,
+                .first_token = dht::token::from_int64(i * 1000),
+                .last_token = dht::token::from_int64(i * 1000 + 999),
+                .repair_time = db_clock::now(),
+                .repaired_at = i
+            };
+        }) | std::ranges::to<std::vector>();
+
+        co_await sdk.insert_snapshot_tablets(snapshot_name, ks, table, dc, tablets, cl);
+        auto q_tablets = co_await sdk.get_snapshot_tablets(snapshot_name, ks, table, dc, cl);
+
+        std::ranges::sort(q_tablets, {}, &db::snapshot_tablet_entry::tablet_id);
+        BOOST_CHECK(std::ranges::equal(tablets, q_tablets));
+
+auto nodes = std::views::iota(1u, 20u) | std::views::transform([&](unsigned i) {
+            return db::snapshot_node_entry {
+                .datacenter = dc,
+                .rack = rack,
+                .node = locator::host_id::create_random_id()
+            };
+        }) | std::ranges::to<std::vector>();
+
+        co_await sdk.insert_snapshot_nodes(snapshot_name, nodes, cl);
+        auto q_nodes = co_await sdk.get_snapshot_nodes(snapshot_name, dc, rack, cl);
+
+        BOOST_TEST_MESSAGE(fmt::format("Baba {} | {}", nodes, q_nodes));
+        std::ranges::sort(nodes, {}, &db::snapshot_node_entry::node);
+        std::ranges::sort(q_nodes, {}, &db::snapshot_node_entry::node);
+
+        BOOST_CHECK(std::ranges::equal(nodes, q_nodes));
+
     }, db_cfg_ptr);
 }
 

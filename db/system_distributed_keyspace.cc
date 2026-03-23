@@ -96,6 +96,135 @@ schema_ptr cdc_timestamps() {
 
 static const sstring CDC_TIMESTAMPS_KEY = "timestamps";
 
+schema_ptr snapshots() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOTS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOTS, std::make_optional(id))
+                // Name of the snapshot
+                .with_column("name", utf8_type, column_kind::partition_key)
+                // When snapshot was created
+                .with_column("created_at", timestamp_type)
+                // When snapshot expires
+                .with_column("expires_at", timestamp_type)
+                .with_column("namespace_version", utf8_type)
+                .with_column("manifest_version", utf8_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr snapshot_remote_locations() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS, std::make_optional(id))
+                // Name of the snapshot
+                .with_column("snapshot_name", utf8_type, column_kind::partition_key)
+                // The datacenter for which the location is used
+                .with_column("datacenter", utf8_type, column_kind::clustering_key)
+                // The endpoint of the location 
+                .with_column("endpoint", utf8_type)
+                // Storage bucket
+                .with_column("bucket", utf8_type)
+                // Storage prefix
+                .with_column("prefix", utf8_type)
+                // State - local, being_backed_up, remote_and_local, remote
+                .with_column("state", int32_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr snapshot_keyspaces() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_KEYSPACES);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_KEYSPACES, std::make_optional(id))
+                // Name of the snapshot
+                .with_column("snapshot_name", utf8_type, column_kind::partition_key)
+                // The name of keyspace
+                .with_column("keyspace_name", utf8_type, column_kind::clustering_key)
+                // Keyspace schema
+                .with_column("keyspace_schema", utf8_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr snapshot_tables() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLES);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLES, std::make_optional(id))
+                // Name of the snapshot
+                .with_column("snapshot_name", utf8_type, column_kind::partition_key)
+                // The name of keyspace
+                .with_column("keyspace_name", utf8_type, column_kind::clustering_key)
+                // The name of table
+                .with_column("table_name", utf8_type, column_kind::clustering_key)
+                // Table ID
+                .with_column("table_id", uuid_type)
+                // Table type
+                .with_column("type", int32_type)
+                // Optional base table
+                .with_column("base_table_id", uuid_type)
+                // Table schema
+                .with_column("table_schema", utf8_type)
+                .with_column("tablet_layout", utf8_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+
+schema_ptr snapshot_tablets() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLETS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLETS, std::make_optional(id))
+                // Name of the snapshot
+                .with_column("snapshot_name", utf8_type, column_kind::partition_key)
+                // The name of keyspace
+                .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+                // The name of table
+                .with_column("table_name", utf8_type, column_kind::partition_key)
+                // The datacenter for which the tablet mapping was active
+                .with_column("datacenter", utf8_type, column_kind::partition_key)
+                // First token in the token range covered by this tablet
+                .with_column("first_token", long_type, column_kind::clustering_key)
+                // Tablet ID
+                .with_column("tablet_id", long_type)
+                // Last token in the token range covered by this tablet
+                .with_column("last_token", long_type)
+                // Repair time
+                .with_column("repair_time", timestamp_type)
+                // Repaired at
+                .with_column("repaired_at", long_type)
+
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr snapshot_nodes() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_NODES);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_NODES, std::make_optional(id))
+                // Name of the snapshot
+                .with_column("snapshot_name", utf8_type, column_kind::partition_key)
+                // Datacenter of the node (at snapshot)
+                .with_column("datacenter", utf8_type, column_kind::clustering_key)
+                // The rack of the node (at snapshot)
+                .with_column("rack", utf8_type, column_kind::clustering_key)
+                // Actual node
+                .with_column("node", uuid_type, column_kind::clustering_key)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 schema_ptr snapshot_sstables() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES);
@@ -155,12 +284,26 @@ static std::vector<schema_ptr> ensured_tables() {
         view_build_status(),
         cdc_desc(),
         cdc_timestamps(),
+        snapshots(),
+        snapshot_remote_locations(),
+        snapshot_keyspaces(),
+        snapshot_tables(),
+        snapshot_tablets(),
+        snapshot_nodes(),
         snapshot_sstables(),
     };
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
-    return {view_build_status(), cdc_desc(), cdc_timestamps(), snapshot_sstables()};
+    return {view_build_status(), cdc_desc(), cdc_timestamps(),
+        snapshots(),
+        snapshot_remote_locations(),
+        snapshot_keyspaces(),
+        snapshot_tables(),
+        snapshot_tablets(),
+        snapshot_nodes(),
+        snapshot_sstables()
+    };
 }
 
 system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& qp, service::migration_manager& mm, service::storage_proxy& sp)
@@ -552,6 +695,368 @@ future<> snapshot_table_helper::update_sstable_download_status(sstring snapshot_
                                   internal_distributed_query_state(),
                                   {downloaded == is_downloaded::yes ? true : false, snapshot_name, ks, table, dc, rack, dht::token::to_int64(start_token), sstable_id.uuid()},
                                   cql3::query_processor::cache_internal::no);
+}
+
+/**
+* Inserts a snapshot into system.dist table
+*/
+future<> snapshot_table_helper::insert_snapshot(const snapshot_entry& e, db::consistency_level cl) {
+    static const sstring query = format(
+        R"foo(INSERT INTO {}.{} (
+            name, created_at, expires_at, namespace_version, manifest_version
+        ) VALUES (
+            ?, ?, ?, ?, ?
+        ) USING TTL {})foo", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOTS, snapshot_table_ttl_seconds
+        );
+
+    return _qp.execute_internal(
+            query,
+            cl,
+            internal_distributed_query_state(),
+            { e.name, e.created_at, e.expires_at, e.namespace_version, e.manifest_version },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+/**
+* Find a snapshot entry. 
+*/
+future<std::optional<snapshot_entry>> snapshot_table_helper::get_snapshot(std::string_view snapshot_name, db::consistency_level cl) {
+    std::optional<snapshot_entry> res;
+
+    static const sstring query = format(R"foo(SELECT 
+        name, created_at, expires_at, namespace_version, manifest_version
+        FROM {}.{} 
+        WHERE name = ?
+        )foo", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOTS
+    );
+
+    co_await _qp.query_internal(query, cl,
+        { snapshot_name },
+        10, [&](const cql3::untyped_result_set_row& row) {
+            res = snapshot_entry {
+                .name = row.get_as<sstring>("name"),
+                .created_at = row.get_as<db_clock::time_point>("created_at"), 
+                .expires_at = row.get_as<db_clock::time_point>("expires_at"), 
+                .namespace_version = row.get_as<sstring>("namespace_version"), 
+                .manifest_version = row.get_as<sstring>("manifest_version"), 
+            };
+            return make_ready_future<stop_iteration>(stop_iteration::yes);
+        }
+    );
+    co_return res;
+}
+
+static constexpr size_t snapshot_max_parallel = 10;
+
+/**
+* Add remote locations to a snapshot
+*/
+future<> snapshot_table_helper::insert_snapshot_remote_locations(std::span<const snapshot_remote_location_entry> locations, db::consistency_level cl) {
+    static const sstring query = format(
+        R"foo(INSERT INTO {}.{} (
+            snapshot_name, datacenter, endpoint, bucket, prefix, state
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?
+        ) USING TTL {})foo", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS, snapshot_table_ttl_seconds
+        );
+
+    for (auto chunk : locations | std::views::chunk(snapshot_max_parallel)) {
+        co_await coroutine::parallel_for_each(chunk.begin(), chunk.end(), [&](const snapshot_remote_location_entry& e) {
+            return _qp.execute_internal(
+                        query, cl,
+                        internal_distributed_query_state(),
+                        { e.snapshot_name, e.datacenter, e.endpoint, e.bucket, e.prefix, int32_t(e.state) },
+                        cql3::query_processor::cache_internal::yes).discard_result();
+        });
+    }
+}
+
+/**
+* Get all remote locations in snapshot
+*/
+future<utils::chunked_vector<snapshot_remote_location_entry>> 
+snapshot_table_helper::get_snapshot_remote_locations(std::string_view snapshot_name, db::consistency_level cl) {
+    utils::chunked_vector<snapshot_remote_location_entry> entries;
+
+    static const sstring query = format("SELECT snapshot_name, datacenter, endpoint, bucket, prefix, state FROM {}.{}"
+        " WHERE snapshot_name = ?", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS
+    );
+
+    co_await _qp.query_internal(
+        query, cl,
+        { snapshot_name },
+        1000, [&] (const cql3::untyped_result_set_row& row) {
+            entries.emplace_back(row.get_as<sstring>("snapshot_name")
+                , row.get_as<sstring>("datacenter")
+                , row.get_as<sstring>("endpoint")
+                , row.get_as<sstring>("bucket")
+                , row.get_as<sstring>("prefix")
+                , snapshot_state(row.get_as<int32_t>("state")) 
+            );
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+    );
+
+    co_return entries;
+}
+
+/**
+* Add keyspaces to a snapshot
+*/
+future<> snapshot_table_helper::insert_snapshot_keyspaces(std::span<const snapshot_keyspace_entry> keyspaces, db::consistency_level cl) {
+    static const sstring query = format(
+        R"foo(INSERT INTO {}.{} (
+            snapshot_name, keyspace_name, keyspace_schema
+        ) VALUES (
+            ?, ?, ?
+        ) USING TTL {})foo", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_KEYSPACES, snapshot_table_ttl_seconds
+        );
+
+    for (auto chunk : keyspaces | std::views::chunk(snapshot_max_parallel)) {
+        co_await coroutine::parallel_for_each(chunk.begin(), chunk.end(), [&](const snapshot_keyspace_entry& e) {
+            return _qp.execute_internal(
+                        query, cl,
+                        internal_distributed_query_state(),
+                        { e.snapshot_name, e.keyspace_name, e.keyspace_schema },
+                        cql3::query_processor::cache_internal::yes).discard_result();
+        });
+    }
+}
+
+/**
+* Get all keyspaces in snapshot
+*/
+future<utils::chunked_vector<snapshot_keyspace_entry>> 
+snapshot_table_helper::get_snapshot_keyspaces(std::string_view snapshot_name, db::consistency_level cl) {
+    utils::chunked_vector<snapshot_keyspace_entry> entries;
+
+    static const sstring query = format("SELECT snapshot_name, keyspace_name, keyspace_schema FROM {}.{}"
+        " WHERE snapshot_name = ?", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_KEYSPACES
+    );
+
+    co_await _qp.query_internal(
+        query, cl,
+        { snapshot_name },
+        1000, [&] (const cql3::untyped_result_set_row& row) {
+            entries.emplace_back(row.get_as<sstring>("snapshot_name")
+                , row.get_as<sstring>("keyspace_name")
+                , row.get_as<sstring>("keyspace_schema")
+            );
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+    );
+
+    co_return entries;
+}
+
+/**
+* Add tables to a snapshot
+*/
+future<> snapshot_table_helper::insert_snapshot_tables(std::span<const snapshot_table_entry> tables, db::consistency_level cl) {
+    static const sstring query = format(
+        R"foo(INSERT INTO {}.{} (
+            snapshot_name, keyspace_name, table_name, table_id, type, base_table_id, table_schema, tablet_layout
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?
+        ) USING TTL {})foo", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLES, snapshot_table_ttl_seconds
+        );
+
+    for (auto chunk : tables | std::views::chunk(snapshot_max_parallel)) {
+        co_await coroutine::parallel_for_each(chunk.begin(), chunk.end(), [&](const snapshot_table_entry& e) {
+            return _qp.execute_internal(
+                        query, cl,
+                        internal_distributed_query_state(),
+                        { 
+                            e.snapshot_name, e.keyspace_name, e.table_name, e.table_id.uuid(),
+                            int32_t(e.type), e.base_table_id.uuid(), e.table_schema, e.tablet_layout
+                        },
+                        cql3::query_processor::cache_internal::yes).discard_result();
+        });
+    }
+}
+
+
+/**
+* Get all tables in snapshot, optionally restricted by keyspace
+*/
+future<utils::chunked_vector<snapshot_table_entry>> 
+snapshot_table_helper::get_snapshot_tables(std::string_view snapshot_name, std::string_view keyspace, std::string_view table, db::consistency_level cl) {
+    utils::chunked_vector<snapshot_table_entry> entries;
+
+    static const sstring base_query = format(R"foo(SELECT 
+        snapshot_name, keyspace_name, table_name, table_id, type, base_table_id, table_schema, tablet_layout
+        FROM {}.{} WHERE snapshot_name = ?)foo", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLES
+    );
+
+    auto read_row = [&] (const cql3::untyped_result_set_row& row) {
+        entries.emplace_back(row.get_as<sstring>("snapshot_name")
+            , row.get_as<sstring>("keyspace_name")
+            , row.get_as<sstring>("table_name")
+            , table_id(row.get_as<utils::UUID>("table_id"))
+            , snapshot_table_type(row.get_as<int32_t>("type"))
+            , table_id(row.get_as<utils::UUID>("base_table_id"))
+            , row.get_as<sstring>("table_schema")
+            , row.get_as<sstring>("tablet_layout")
+        );
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    };
+
+    auto query = base_query;
+    query_data_vector params = {
+        sstring(snapshot_name)
+    };
+
+    if (!keyspace.empty()) {
+        query += " AND keyspace_name = ?";
+        params.emplace_back(keyspace);
+    }
+    if (!table.empty()) {
+        query += " AND table_name = ?";
+        params.emplace_back(table);
+    }
+    co_await _qp.query_internal(query, cl, params, 1000, read_row);
+    co_return entries;
+}
+
+/**
+ * Add tablets to a snapshot
+ */
+future<> snapshot_table_helper::insert_snapshot_tablets(std::string_view snapshot_name
+        , std::string_view keyspace, std::string_view table, std::string_view datacenter
+        , std::span<const snapshot_tablet_entry> tablets, db::consistency_level cl
+    ) 
+{
+    static const sstring query = format(
+        R"foo(INSERT INTO {}.{} (
+            snapshot_name, keyspace_name, table_name, datacenter, first_token, tablet_id, last_token, repair_time, repaired_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ) USING TTL {})foo", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLETS, snapshot_table_ttl_seconds
+        );
+
+    for (auto chunk : tablets | std::views::chunk(snapshot_max_parallel)) {
+        co_await coroutine::parallel_for_each(chunk.begin(), chunk.end(), [&](const snapshot_tablet_entry& e) {
+            return _qp.execute_internal(
+                        query, cl,
+                        internal_distributed_query_state(),
+                        { 
+                            sstring(snapshot_name), sstring(keyspace), sstring(table), sstring(datacenter), 
+                            dht::token::to_int64(e.first_token), int64_t(e.tablet_id), dht::token::to_int64(e.last_token),
+                            e.repair_time, e.repaired_at
+                        },
+                        cql3::query_processor::cache_internal::yes).discard_result();
+        });
+    }
+}
+
+
+/**
+* Get all tables in snapshot, optionally restricted by keyspace
+*/
+future<utils::chunked_vector<snapshot_tablet_entry>> snapshot_table_helper::get_snapshot_tablets(std::string_view snapshot_name
+        , std::string_view keyspace, std::string_view table, std::string_view datacenter
+        , db::consistency_level cl
+    ) 
+{
+    utils::chunked_vector<snapshot_tablet_entry> entries;
+
+    static const sstring query = format(R"foo(SELECT 
+        first_token, tablet_id, last_token, repair_time, repaired_at 
+        FROM {}.{} WHERE snapshot_name = ? AND keyspace_name = ? AND table_name = ? AND datacenter = ?)foo", 
+        system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLETS
+    );
+
+    co_await _qp.query_internal(
+        query, cl,
+        { sstring(snapshot_name), sstring(keyspace), sstring(table), sstring(datacenter) },
+        1000, [&] (const cql3::untyped_result_set_row& row) {
+            entries.emplace_back(row.get_as<int64_t>("tablet_id")
+                , dht::token::from_int64(row.get_as<int64_t>("first_token"))
+                , dht::token::from_int64(row.get_as<int64_t>("last_token"))
+                , row.get_as<db_clock::time_point>("repair_time")
+                , row.get_as<int64_t>("repaired_at")
+            );
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+    );
+
+    co_return entries;
+}
+
+/**
+ * Add nodes to a snapshot
+ */
+future<> snapshot_table_helper::insert_snapshot_nodes(std::string_view snapshot_name
+    , std::span<const snapshot_node_entry> nodes
+    , db::consistency_level cl
+)
+{
+    static const sstring query = format(
+        R"foo(INSERT INTO {}.{} (
+            snapshot_name, datacenter, rack, node
+        ) VALUES (
+            ?, ?, ?, ?
+        ) USING TTL {})foo", system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_NODES, snapshot_table_ttl_seconds
+        );
+
+    for (auto chunk : nodes | std::views::chunk(snapshot_max_parallel)) {
+        co_await coroutine::parallel_for_each(chunk.begin(), chunk.end(), [&](const snapshot_node_entry& e) {
+            return _qp.execute_internal(
+                        query, cl,
+                        internal_distributed_query_state(),
+                        { 
+                            sstring(snapshot_name), sstring(e.datacenter), sstring(e.rack), e.node.uuid()
+                        },
+                        cql3::query_processor::cache_internal::yes).discard_result();
+        });
+    }
+}
+
+/**
+ * Get all nodes in snapshot for a given datacenter and optionally rack
+ */
+future<utils::chunked_vector<snapshot_node_entry>> snapshot_table_helper::get_snapshot_nodes(std::string_view snapshot_name
+    , std::string_view datacenter
+    , std::string_view rack
+    , db::consistency_level cl
+)
+{
+    utils::chunked_vector<snapshot_node_entry> entries;
+
+    static const sstring base_query = format(R"foo(SELECT 
+        datacenter, rack, node 
+        FROM {}.{} WHERE snapshot_name = ?)foo", 
+        system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_NODES
+    );
+
+    auto query = base_query;
+    query_data_vector params = {
+        sstring(snapshot_name)
+    };
+
+    if (!datacenter.empty()) {
+        query += " AND datacenter = ?";
+        params.emplace_back(sstring(datacenter));
+    }
+
+    if (!rack.empty()) {
+        query += " AND rack = ?";
+        params.emplace_back(sstring(rack));
+    }
+
+    co_await _qp.query_internal(
+        query, cl,
+        params,
+        1000, [&] (const cql3::untyped_result_set_row& row) {
+            entries.emplace_back(row.get_as<sstring>("datacenter"), row.get_as<sstring>("rack")
+                , locator::host_id(row.get_as<utils::UUID>("node"))
+            );
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+    );
+
+    co_return entries;
+
 }
 
 } // namespace db
