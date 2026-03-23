@@ -491,3 +491,248 @@ def test_batch_write_item_with_true_values(test_table, cql):
     }, ReturnConsumedCapacity='TOTAL')
     cql.execute("UPDATE system.config set value = 'false' WHERE name = 'alternator_force_read_before_write'")
     assert response['ConsumedCapacity'][0]["CapacityUnits"] == 4
+
+# Test that a Query operation with ReturnConsumedCapacity='TOTAL' returns
+# the correct ConsumedCapacity field in the response
+@pytest.mark.xfail(reason="issue #5027 - Query doesn't report consumed capacity")
+@pytest.mark.parametrize("consistent_read", [True, False])
+def test_query_consumed_capacity(test_table_ss, consistent_read):
+    p = random_string()
+    c = random_string()
+    test_table_ss.put_item(Item={'p': p, 'c': c})
+    response = test_table_ss.query(
+        KeyConditionExpression='p = :pk',
+        ExpressionAttributeValues={':pk': p},
+        ConsistentRead=consistent_read,
+        ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 'TableName' in response['ConsumedCapacity']
+    assert response['ConsumedCapacity']['TableName'] == test_table_ss.name
+    # This is just a tiny item, so it should consume 1 RCU for a consistent
+    # read, 0.5 RCU for an eventually consistent read
+    expected_rcu = 1 if consistent_read else 0.5
+    assert expected_rcu == response['ConsumedCapacity']['CapacityUnits']
+
+# Test that a Scan operation with ReturnConsumedCapacity='TOTAL' returns
+# the correct ConsumedCapacity field in the response.
+@pytest.mark.xfail(reason="issue #5027 - Scan doesn't report consumed capacity")
+def test_scan_consumed_capacity(dynamodb):
+    # For Scan to report a known consumed capacity, we unfortunately
+    # can't use a shared table filled with data by other tests, and need
+    # to create a new table for this test.
+    with new_test_table(dynamodb,
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+            ) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'animal': 'cat'})
+        for consistent_read in [True, False]:
+            response = table.scan(
+                ConsistentRead=consistent_read,
+                ReturnConsumedCapacity='TOTAL')
+            assert response['Count'] == 1
+            assert 'ConsumedCapacity' in response
+            assert 'TableName' in response['ConsumedCapacity']
+            assert response['ConsumedCapacity']['TableName'] == table.name
+            # With just one tiny item, we would have expected to get 1 RCU for
+            # a consistent read, 0.5 RCU for an eventually consistent read.
+            # However, it turns out that for an unknown reason, DynamoDB's
+            # implementation actually returns 4 RCU for consistent read, 2 for
+            # eventually consistent read, and nobody knows why (see discussion
+            # in https://stackoverflow.com/questions/70121087). We may want to
+            # deviate from DynamoDB here and return the expected 1/0.5 RCU,
+            # but for now, this test expects the DynamoDB behavior.
+            expected_rcu = 4.0 if consistent_read else 2.0
+            assert expected_rcu == response['ConsumedCapacity']['CapacityUnits']
+
+# Test that for a table that does not have GSI or LSI, setting
+# ReturnConsumedCapacity to INDEXES is allowed and is almost the same as
+# setting it to TOTAL, except we also get another copy of the consumed
+# capacity in a "Table" field.
+# This test doesn't check again what the ConsumedCapacity value is, just that
+# the request succeeds and sets ConsumedCapacity for the total and the table
+# and doesn't set it for any index.
+@pytest.mark.xfail(reason="issue #29138 - ReturnConsumedCapacity=INDEXES not supported")
+def test_return_consumed_capacity_indexes_no_indexes(test_table_s):
+    p = random_string()
+    def check_consumed_capacity(consumed_capacity):
+        assert 'TableName' in consumed_capacity
+        assert consumed_capacity['TableName'] == test_table_s.name
+        capacity = consumed_capacity['CapacityUnits']
+        assert capacity > 0
+        # With "INDEXES", we expect to see in "Table" another copy of the total
+        # capacity, and since there are no indexes, we don't expect to see
+        # "GlobalSecondaryIndexes" or "LocalSecondaryIndexes" in the response.
+        assert 'Table' in consumed_capacity
+        assert 'CapacityUnits' in consumed_capacity['Table']
+        assert capacity == consumed_capacity['Table']['CapacityUnits']
+        assert 'GlobalSecondaryIndexes' not in consumed_capacity
+        assert 'LocalSecondaryIndexes' not in consumed_capacity
+    # GetItem
+    response = test_table_s.get_item(Key={'p': p}, ReturnConsumedCapacity='INDEXES')
+    check_consumed_capacity(response['ConsumedCapacity'])
+    # PutItem
+    response = test_table_s.put_item(Item={'p': p}, ReturnConsumedCapacity='INDEXES')
+    check_consumed_capacity(response['ConsumedCapacity'])
+    # UpdateItem
+    response = test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :val',
+        ExpressionAttributeValues={':val': 'hi'}, ReturnConsumedCapacity='INDEXES')
+    check_consumed_capacity(response['ConsumedCapacity'])
+    # DeleteItem
+    response = test_table_s.delete_item(Key={'p': p}, ReturnConsumedCapacity='INDEXES')
+    check_consumed_capacity(response['ConsumedCapacity'])
+    # Query
+    response = test_table_s.query(KeyConditionExpression='p = :pk',
+        ExpressionAttributeValues={':pk': p}, ReturnConsumedCapacity='INDEXES')
+    check_consumed_capacity(response['ConsumedCapacity'])
+    # Scan
+    response = test_table_s.scan(ReturnConsumedCapacity='INDEXES')
+    check_consumed_capacity(response['ConsumedCapacity'])
+
+    # Batches may read or write to multiples tables, so they always return a
+    # list of ConsumedCapacity, one per table, instead of a single
+    # ConsumedCapacity. Hence the "[0]" to access the first table's consumed
+    # capacity.
+
+    # BatchGetItem
+    response = test_table_s.meta.client.batch_get_item(RequestItems = {
+        test_table_s.name: {'Keys': [{'p': p}]}}, ReturnConsumedCapacity='INDEXES')
+    assert len(response['ConsumedCapacity']) == 1
+    check_consumed_capacity(response['ConsumedCapacity'][0])
+    # BatchWriteItem
+    response = test_table_s.meta.client.batch_write_item(RequestItems = {
+        test_table_s.name: [{'PutRequest': {'Item': {'p': p, 'a': 'hi'}}}]}, ReturnConsumedCapacity='INDEXES')
+    assert len(response['ConsumedCapacity']) == 1
+    check_consumed_capacity(response['ConsumedCapacity'][0])
+
+# This is a complete test for ReturnConsumedCapacity=INDEXES, in a table with
+# indexes (GSI and LSI). It is supposed to set consumed capacity per-index in
+# addition to the table and total capacity. But there are different operations
+# that set different combinations of table/index capacity, and we want to make
+# sure that each operation sets the right ones. In this test we just check
+# that the right fields are set in the response, and that the total capacity is
+# the sum of the table and index capacities, without checking the actual values
+@pytest.mark.xfail(reason="issue #29138 - ReturnConsumedCapacity=INDEXES not supported")
+def test_return_consumed_capacity_indexes_with_indexes(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+                {'AttributeName': 'c', 'KeyType': 'RANGE'},
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'c', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'},
+            ],
+            GlobalSecondaryIndexes=[
+                {
+                    'IndexName': 'gsi',
+                    'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': 'ALL'},
+                }
+            ],
+            LocalSecondaryIndexes=[
+                {
+                    'IndexName': 'lsi',
+                    'KeySchema': [
+                        {'AttributeName': 'p', 'KeyType': 'HASH'},
+                        {'AttributeName': 'x', 'KeyType': 'RANGE'},
+                    ],
+                    'Projection': {'ProjectionType': 'ALL'},
+                }
+            ],
+    ) as table:
+        p = random_string()
+        c = random_string()
+        x = random_string()
+
+        def check_consumed_capacity(consumed_capacity, uses_indexes, only_gsi=False, only_lsi=False):
+            assert 'TableName' in consumed_capacity
+            assert consumed_capacity['TableName'] == table.name
+            total = consumed_capacity['CapacityUnits']
+            assert total > 0
+            # The 'Table' field should reflect the base table's own portion
+            table_cap = 0
+            if not only_gsi and not only_lsi:
+                assert 'Table' in consumed_capacity
+                table_cap = consumed_capacity['Table']['CapacityUnits']
+                assert table_cap > 0
+            gsi_cap = 0
+            lsi_cap = 0
+            if uses_indexes:
+                # The GSI should appear in GlobalSecondaryIndexes
+                if not only_lsi:
+                    assert 'GlobalSecondaryIndexes' in consumed_capacity
+                    gsi_cap = consumed_capacity['GlobalSecondaryIndexes']['gsi']['CapacityUnits']
+                    assert gsi_cap > 0
+                # The LSI should appear in LocalSecondaryIndexes
+                if not only_gsi:
+                    assert 'LocalSecondaryIndexes' in consumed_capacity
+                    lsi_cap = consumed_capacity['LocalSecondaryIndexes']['lsi']['CapacityUnits']
+                    assert lsi_cap > 0
+            # The total should equal the sum of table + GSI + LSI capacities
+            assert total == table_cap + gsi_cap + lsi_cap
+
+        # GetItem (doesn't use index capacity)
+        response = table.get_item(Key={'p': p, 'c': c}, ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=False)
+        # PutItem (uses index capacity)
+        response = table.put_item(Item={'p': p, 'c': c, 'x': x}, ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=True)
+        # UpdateItem (uses index capacity)
+        response = table.update_item(Key={'p': p, 'c': c}, UpdateExpression='SET a = :val',
+            ExpressionAttributeValues={':val': 'hi'}, ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=True)
+        # DeleteItem (uses index capacity)
+        response = table.delete_item(Key={'p': p, 'c': c}, ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=True)
+        # Query (doesn't use index capacity)
+        response = table.query(KeyConditionExpression='p = :pk and c = :ck',
+            ExpressionAttributeValues={':pk': p, ':ck': c}, ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=False)
+        # Scan (doesn't use index capacity)
+        response = table.scan(ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=False)
+
+        # Batches may read or write to multiples tables, so they always return a
+        # list of ConsumedCapacity, one per table, instead of a single
+        # ConsumedCapacity. Hence the "[0]" to access the first table's consumed
+        # capacity.
+
+        # BatchGetItem (doesn't use index capacity)
+        response = table.meta.client.batch_get_item(RequestItems = {
+            table.name: {'Keys': [{'p': p, 'c': c}]}}, ReturnConsumedCapacity='INDEXES')
+        assert len(response['ConsumedCapacity']) == 1
+        check_consumed_capacity(response['ConsumedCapacity'][0], uses_indexes=False)
+        # BatchWriteItem (uses index capacity)
+        response = table.meta.client.batch_write_item(RequestItems = {
+            table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'x': x, 'a': 'hi'}}}]}, ReturnConsumedCapacity='INDEXES')
+        assert len(response['ConsumedCapacity']) == 1
+        check_consumed_capacity(response['ConsumedCapacity'][0], uses_indexes=True)
+
+        # In the special case of a Query from an index, we only get index capacity,
+        # not table capacity. Try read from both GSI and LSI.
+        response = table.query(IndexName='gsi',
+            KeyConditionExpression='x = :x',
+            ExpressionAttributeValues={':x': x}, ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=True, only_gsi=True)
+        response = table.query(IndexName='lsi',
+            KeyConditionExpression='p = :p and x = :x',
+            ExpressionAttributeValues={':p': p, ':x': x}, ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=True, only_lsi=True)
+
+        # There is a special case for writes where the index's key attribute (in
+        # test, "x" is in the key of both indexes) is missing from the item, the
+        # indexes' capacity is not used at all). However, this depends strongly on
+        # the situation: PutItem of a new item that didn't exist, without an "x"
+        # attribute, doesn't use index capacity, but if the item did already exist
+        # then PutItem will need to delete the old item from the index, so does
+        # use Index capacity!
+        # case 1: old item with p,c,x already exists so needs to be deleted from
+        # the index, so uses_indexes=True
+        response = table.put_item(Item={'p': p, 'c': c}, ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=True)
+        # case 2: old item now doesn't have a "x" value, and new one doesn't
+        # either, so no need to update the index, so uses_indexes=False
+        response = table.put_item(Item={'p': p, 'c': c, 'animal': 'dog'}, ReturnConsumedCapacity='INDEXES')
+        check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=False)
