@@ -350,7 +350,6 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                     co_await authorize(req, scope);
                 }
                 auto content = co_await util::read_entire_stream_contiguous(_in);
-                auto error_msg = get_gcp_error_message(std::string_view(content));
                 gcp_storage.debug("Got unexpected response status: {}, content: {}", rep._status, content);
                 co_await coroutine::return_exception_ptr(std::make_exception_ptr(httpd::unexpected_status_error(rep._status)));
                 }
@@ -629,7 +628,7 @@ future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
         co_return;
     }
 
-    gcp_storage.debug("Removing incomplete upload {}:{} ()", _bucket, _object_name, _session_path);
+    gcp_storage.debug("Removing incomplete upload {}:{} ({})", _bucket, _object_name, _session_path);
 
     auto res = co_await _impl->send_with_retry(_session_path
         , GCP_OBJECT_SCOPE_READ_WRITE
