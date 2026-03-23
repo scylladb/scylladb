@@ -946,7 +946,7 @@ sstables::shared_sstable sstables_task_executor::consume_sstable() {
     auto sst = _sstables.back();
     _sstables.pop_back();
     --_cm._stats.pending_tasks; // from this point on, switch_state(pending|active) works the same way as any other task
-    cmlog.debug("{}", format("consumed {}", sst->get_filename()));
+    cmlog.debug("consumed {}", sst->get_filename());
     return sst;
 }
 
@@ -1208,7 +1208,6 @@ future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_
 
 std::vector<shared_ptr<compaction_task_executor>>
 compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt) noexcept {
-    auto ongoing_compactions = get_compactions(filter).size();
     auto tasks = _tasks
             | std::views::filter([&filter, type_opt] (const auto& task) {
                 return filter(task.compacting_table()) && (!type_opt || task.compaction_type() == *type_opt);
@@ -1217,6 +1216,7 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bo
             | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
     logging::log_level level = tasks.empty() ? log_level::debug : log_level::info;
     if (cmlog.is_enabled(level)) {
+        auto ongoing_compactions = get_compactions(filter).size();
         std::string scope = "";
         if (!tasks.empty()) {
             const compaction_group_view* t = tasks.front()->compacting_table();
@@ -1426,11 +1426,17 @@ protected:
             compaction_strategy cs = t.get_compaction_strategy();
             compaction_descriptor descriptor = co_await cs.get_sstables_for_compaction(t, _cm.get_strategy_control());
             int weight = calculate_weight(descriptor);
-            cmlog.debug("Started minor compaction sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
-                    descriptor.sstables, compacting_table()->get_sstables_repaired_at(),
-                    compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
+            bool debug_enabled = cmlog.is_enabled(log_level::debug);
+            if (debug_enabled) {
+                cmlog.debug("Started minor compaction sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
+                        descriptor.sstables, compacting_table()->get_sstables_repaired_at(),
+                        compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
+            }
 
-            auto old_sstables = ::format("{}", descriptor.sstables);
+            sstring old_sstables;
+            if (debug_enabled) {
+                old_sstables = ::format("{}", descriptor.sstables);
+            }
 
             if (descriptor.sstables.empty() || !can_proceed() || t.is_auto_compaction_disabled_by_user()) {
                 cmlog.debug("{}: sstables={} can_proceed={} auto_compaction={}", *this, descriptor.sstables.size(), can_proceed(), t.is_auto_compaction_disabled_by_user());
@@ -1460,8 +1466,10 @@ protected:
             try {
                 bool should_update_history = this->should_update_history(descriptor.options.type());
                 compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace);
-                cmlog.debug("Finished minor compaction old_sstables={} new_sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
-                        old_sstables, res.new_sstables, compacting_table()->get_sstables_repaired_at(), compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
+                if (debug_enabled) {
+                    cmlog.debug("Finished minor compaction old_sstables={} new_sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
+                            old_sstables, res.new_sstables, compacting_table()->get_sstables_repaired_at(), compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
+                }
                 finish_compaction();
                 if (should_update_history) {
                     // update_history can take a long time compared to
