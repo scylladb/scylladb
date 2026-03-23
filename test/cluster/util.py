@@ -165,7 +165,7 @@ async def wait_for_cdc_generations_publishing(cql: Session, hosts: list[Host], d
             unpublished_generations = topo_res[0].unpublished_cdc_generations
             return unpublished_generations is None or len(unpublished_generations) == 0 or None
 
-        await wait_for(all_generations_published, deadline=deadline, period=1.0)
+        await wait_for(all_generations_published, deadline=deadline)
 
 
 async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, live_hosts: list[Host], cqls: Optional[list[Session]] = None, ignored_hosts: list[Host] = []):

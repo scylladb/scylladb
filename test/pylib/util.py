@@ -56,15 +56,25 @@ def unique_name(unique_name_prefix = 'test_'):
 async def wait_for(
         pred: Callable[[], Awaitable[Optional[T]]],
         deadline: float,
-        period: float = 1,
+        period: float = 0.1,
         before_retry: Optional[Callable[[], Any]] = None,
-        backoff_factor: float = 1,
-        max_period: float = None) -> T:
+        backoff_factor: float = 1.5,
+        max_period: float = 1.0,
+        label: Optional[str] = None) -> T:
+    tag = label or getattr(pred, '__name__', 'unlabeled')
+    start = time.time()
+    retries = 0
     while True:
-        assert(time.time() < deadline), "Deadline exceeded, failing test."
+        elapsed = time.time() - start
+        assert time.time() < deadline, \
+            f"wait_for({tag}) timed out after {elapsed:.2f}s ({retries} retries)"
         res = await pred()
         if res is not None:
+            if retries > 0:
+                logger.debug(f"wait_for({tag}) completed "
+                            f"in {elapsed:.2f}s ({retries} retries)")
             return res
+        retries += 1
         await asyncio.sleep(period)
         period *= backoff_factor
         if max_period is not None:
@@ -273,14 +283,14 @@ async def wait_for_view_v1(cql: Session, name: str, node_count: int, timeout: in
         done = await cql.run_async(f"SELECT COUNT(*) FROM system_distributed.view_build_status WHERE status = 'SUCCESS' AND view_name = '{name}' ALLOW FILTERING")
         return done[0][0] == node_count or None
     deadline = time.time() + timeout
-    await wait_for(view_is_built, deadline)
+    await wait_for(view_is_built, deadline, label=f"view_v1_{name}")
 
 async def wait_for_view(cql: Session, name: str, node_count: int, timeout: int = 120):
     async def view_is_built():
         done = await cql.run_async(f"SELECT COUNT(*) FROM system.view_build_status_v2 WHERE status = 'SUCCESS' AND view_name = '{name}' ALLOW FILTERING")
         return done[0][0] == node_count or None
     deadline = time.time() + timeout
-    await wait_for(view_is_built, deadline)
+    await wait_for(view_is_built, deadline, label=f"view_{name}")
 
 
 async def wait_for_first_completed(coros: list[Coroutine], timeout: int|None = None):

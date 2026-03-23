@@ -196,7 +196,7 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
             tombstone_mark = datetime.now(timezone.utc)
 
             # test #2: the tombstones are not cleaned up when one node is down
-            with pytest.raises(AssertionError, match="Deadline exceeded"):
+            with pytest.raises(AssertionError, match="timed out"):
                 # waiting for shorter time (5s normally enough for a successful case, we expect the timeout here)
                 await verify_tombstone_gc(tombstone_mark, timeout=5)
 
@@ -249,7 +249,7 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
             await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
             # test #4a: the tombstones are not cleaned up after both live nodes join the new group0
-            with pytest.raises(AssertionError, match="Deadline exceeded"):
+            with pytest.raises(AssertionError, match="timed out"):
                 await verify_tombstone_gc(tombstone_mark, timeout=5)
 
             await manager.remove_node(servers[0].server_id, down_server.server_id)
