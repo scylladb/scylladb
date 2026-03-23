@@ -11,6 +11,10 @@ add_scylla_test(alternator_unit_test
   LIBRARIES alternator)
 add_scylla_test(anchorless_list_test
   KIND BOOST)
+add_scylla_test(audit_rule_test
+  KIND SEASTAR
+  LIBRARIES audit)
+
 add_scylla_test(auth_passwords_test
   KIND SEASTAR
   LIBRARIES auth)
