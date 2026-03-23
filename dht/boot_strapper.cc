@@ -29,8 +29,8 @@ static logging::logger blogger("boot_strapper");
 
 namespace dht {
 
-future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard topo_guard,
-                                  locator::host_id replace_address) {
+future<> boot_strapper::bootstrap(
+        streaming::stream_reason reason, gms::gossiper& gossiper, service::frozen_topology_guard topo_guard, locator::host_id replace_address) {
     blogger.debug("Beginning bootstrap process: sorted_tokens={}", get_token_metadata().sorted_tokens());
     sstring description;
     if (reason == streaming::stream_reason::bootstrap) {
@@ -41,7 +41,8 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
         throw std::runtime_error("Wrong stream_reason provided: it can only be replace or bootstrap");
     }
     try {
-        auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason, topo_guard);
+        auto streamer = make_lw_shared<range_streamer>(
+                _db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason, topo_guard);
         auto nodes_to_filter = gossiper.get_unreachable_members();
         if (reason == streaming::stream_reason::replace) {
             nodes_to_filter.insert(std::move(replace_address));
@@ -71,7 +72,8 @@ std::unordered_set<token> boot_strapper::get_random_bootstrap_tokens(const token
     }
 
     if (num_tokens == 1) {
-        blogger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
+        blogger.warn(
+                "Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
     }
 
     auto tokens = get_random_tokens(std::move(tmptr), num_tokens);
@@ -86,7 +88,8 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata_ptr
     return get_bootstrap_tokens(std::move(tmptr), cfg.initial_token(), cfg.num_tokens(), check);
 }
 
-std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, sstring tokens_string, uint32_t num_tokens, check_token_endpoint check) {
+std::unordered_set<token> boot_strapper::get_bootstrap_tokens(
+        const token_metadata_ptr tmptr, sstring tokens_string, uint32_t num_tokens, check_token_endpoint check) {
     std::unordered_set<sstring> initial_tokens;
     try {
         boost::split(initial_tokens, tokens_string, boost::is_any_of(sstring(", ")));
@@ -102,7 +105,8 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metada
         for (auto& token_string : initial_tokens) {
             auto token = dht::token::from_sstring(token_string);
             if (check && tmptr->get_endpoint(token)) {
-                throw std::runtime_error(format("Bootstrapping to existing token {} is not allowed (decommission/removenode the old node first).", token_string));
+                throw std::runtime_error(
+                        format("Bootstrapping to existing token {} is not allowed (decommission/removenode the old node first).", token_string));
             }
             tokens.insert(token);
         }
