@@ -12,6 +12,7 @@
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <seastar/core/rwlock.hh>
+#include <seastar/util/lazy.hh>
 #include "db/view/view.hh"
 #include "locator/network_topology_strategy.hh"
 #include "locator/tablets.hh"
@@ -102,16 +103,14 @@ namespace replica {
 // dirty_memory manager in that case.
 thread_local dirty_memory_manager default_dirty_memory_manager;
 
-inline
-flush_controller
-make_flush_controller(const db::config& cfg, const database_config& dbcfg, std::function<double()> fn) {
+inline flush_controller make_flush_controller(const db::config& cfg, const database_config& dbcfg, std::function<double()> fn) {
     return flush_controller(dbcfg.memtable_scheduling_group, cfg.memtable_flush_static_shares(), 50ms, cfg.unspooled_dirty_soft_limit(), std::move(fn));
 }
 
 keyspace::keyspace(config cfg, locator::effective_replication_map_factory& erm_factory)
     : _config(std::move(cfg))
-    , _erm_factory(erm_factory)
-{}
+    , _erm_factory(erm_factory) {
+}
 
 future<> keyspace::shutdown() noexcept {
     update_static_effective_replication_map({});
@@ -122,8 +121,7 @@ lw_shared_ptr<keyspace_metadata> keyspace::metadata() const {
     return _metadata;
 }
 
-data_dictionary::keyspace
-keyspace::as_data_dictionary() const {
+data_dictionary::keyspace keyspace::as_data_dictionary() const {
     static constinit data_dictionary_impl _impl;
     return _impl.wrap(*this);
 }
@@ -153,29 +151,31 @@ class memory_diagnostics_line_writer {
     memory::memory_diagnostics_writer _wr;
 
 public:
-    memory_diagnostics_line_writer(memory::memory_diagnostics_writer wr) : _wr(std::move(wr)) { }
-    void operator() (const char* fmt) {
+    memory_diagnostics_line_writer(memory::memory_diagnostics_writer wr)
+        : _wr(std::move(wr)) {
+    }
+    void operator()(const char* fmt) {
         _wr(fmt);
     }
-    void operator() (const char* fmt, const auto& param1, const auto&... params) {
+    void operator()(const char* fmt, const auto& param1, const auto&... params) {
         const auto begin = _line_buf.begin();
         auto it = fmt::format_to(begin, fmt::runtime(fmt), param1, params...);
         _wr(std::string_view(begin, it - begin));
     }
 };
 
-const boost::container::static_vector<std::pair<size_t, boost::container::static_vector<table*, 16>>, 10>
-phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, std::function<size_t(table&)> op_count_getter) {
+const boost::container::static_vector<std::pair<size_t, boost::container::static_vector<table*, 16>>, 10> phased_barrier_top_10_counts(
+        const database::tables_metadata& tables_metadata, std::function<size_t(table&)> op_count_getter) {
     using table_list = boost::container::static_vector<table*, 16>;
     using count_and_tables = std::pair<size_t, table_list>;
-    const auto less = [] (const count_and_tables& a, const count_and_tables& b) {
+    const auto less = [](const count_and_tables& a, const count_and_tables& b) {
         return a.first < b.first;
     };
 
     boost::container::static_vector<count_and_tables, 10> res;
     count_and_tables* min_element = nullptr;
 
-    tables_metadata.for_each_table([&] (table_id tid, lw_shared_ptr<table> table) {
+    tables_metadata.for_each_table([&](table_id tid, lw_shared_ptr<table> table) {
         const auto count = op_count_getter(*table);
         if (!count) {
             return;
@@ -191,7 +191,7 @@ phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, s
             return;
         }
 
-        auto it = std::ranges::find_if(res, [count] (const count_and_tables& x) {
+        auto it = std::ranges::find_if(res, [count](const count_and_tables& x) {
             return x.first == count;
         });
         if (it != res.end()) {
@@ -212,7 +212,7 @@ phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, s
 } // anonymous namespace
 
 void database::setup_scylla_memory_diagnostics_producer() {
-    memory::set_additional_diagnostics_producer([this] (memory::memory_diagnostics_writer wr) {
+    memory::set_additional_diagnostics_producer([this](memory::memory_diagnostics_writer wr) {
         auto writeln = memory_diagnostics_line_writer(std::move(wr));
 
         const auto lsa_occupancy_stats = logalloc::shard_tracker().global_occupancy();
@@ -241,34 +241,26 @@ void database::setup_scylla_memory_diagnostics_producer() {
 
         writeln("  Read Concurrency Semaphores:\n");
 
-        auto semaphore_dump = [&writeln] (const sstring& name, const reader_concurrency_semaphore& sem) {
+        auto semaphore_dump = [&writeln](const sstring& name, const reader_concurrency_semaphore& sem) {
             const auto initial_res = sem.initial_resources();
             const auto available_res = sem.available_resources();
             if (sem.is_unlimited()) {
-                writeln("    {}: {}/unlimited, {}/unlimited\n",
-                        name,
-                        initial_res.count - available_res.count,
-                        utils::to_hr_size(initial_res.memory - available_res.memory),
-                        sem.get_stats().waiters);
+                writeln("    {}: {}/unlimited, {}/unlimited\n", name, initial_res.count - available_res.count,
+                        utils::to_hr_size(initial_res.memory - available_res.memory), sem.get_stats().waiters);
             } else {
-                writeln("    {}: {}/{}, {}/{}, queued: {}\n",
-                        name,
-                        initial_res.count - available_res.count,
-                        initial_res.count,
-                        utils::to_hr_size(initial_res.memory - available_res.memory),
-                        utils::to_hr_size(initial_res.memory),
-                        sem.get_stats().waiters);
+                writeln("    {}: {}/{}, {}/{}, queued: {}\n", name, initial_res.count - available_res.count, initial_res.count,
+                        utils::to_hr_size(initial_res.memory - available_res.memory), utils::to_hr_size(initial_res.memory), sem.get_stats().waiters);
             }
         };
 
         semaphore_dump("streaming", _streaming_concurrency_sem);
         semaphore_dump("system", _system_read_concurrency_sem);
         semaphore_dump("compaction", _compaction_concurrency_sem);
-        _reader_concurrency_semaphores_group.foreach_semaphore([&semaphore_dump] (scheduling_group sg, reader_concurrency_semaphore& sem) {
-             semaphore_dump(sg.name(), sem);
+        _reader_concurrency_semaphores_group.foreach_semaphore([&semaphore_dump](scheduling_group sg, reader_concurrency_semaphore& sem) {
+            semaphore_dump(sg.name(), sem);
         });
-        _view_update_read_concurrency_semaphores_group.foreach_semaphore([&semaphore_dump] (scheduling_group sg, reader_concurrency_semaphore& sem) {
-             semaphore_dump(sg.name(), sem);
+        _view_update_read_concurrency_semaphores_group.foreach_semaphore([&semaphore_dump](scheduling_group sg, reader_concurrency_semaphore& sem) {
+            semaphore_dump(sg.name(), sem);
         });
 
         writeln("  Execution Stages:\n");
@@ -278,7 +270,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
         for (const auto& [name, exec_stage_summary] : execution_stage_summaries) {
             writeln("    {}:\n", name);
             size_t total = 0;
-            for (const auto& [sg, stats ] : exec_stage_summary) {
+            for (const auto& [sg, stats] : exec_stage_summary) {
                 const auto count = stats.function_calls_enqueued - stats.function_calls_executed;
                 if (!count) {
                     continue;
@@ -319,8 +311,11 @@ void database::setup_scylla_memory_diagnostics_producer() {
 
 class db_user_types_storage : public data_dictionary::dummy_user_types_storage {
     const replica::database* _db = nullptr;
+
 public:
-    db_user_types_storage(const database& db) noexcept : _db(&db) {}
+    db_user_types_storage(const database& db) noexcept
+        : _db(&db) {
+    }
 
     virtual const user_types_metadata& get(const sstring& ks) const override {
         if (_db == nullptr) {
@@ -335,8 +330,7 @@ public:
     }
 };
 
-reader_concurrency_semaphore&
-database::read_concurrency_sem() {
+reader_concurrency_semaphore& database::read_concurrency_sem() {
     reader_concurrency_semaphore* sem = _reader_concurrency_semaphores_group.get_or_null(current_scheduling_group());
     if (!sem) {
         // this line is commented out, however we shouldn't get here because it means that a user query or even worse,
@@ -346,7 +340,8 @@ database::read_concurrency_sem() {
         // 2. So the series containing those changes will be backportable without causing too harsh regressions (aborts) on one hand and without forcing
         //    extensive changes on the other hand.
         // Follow Up: uncomment this line and run extensive testing. Handle every case of abort.
-        // seastar::on_internal_error(dblog, format("Tried to run a user query in a wrong scheduling group (scheduling group: '{}')", current_scheduling_group().name()));
+        // seastar::on_internal_error(dblog, format("Tried to run a user query in a wrong scheduling group (scheduling group: '{}')",
+        // current_scheduling_group().name()));
         sem = _reader_concurrency_semaphores_group.get_or_null(_default_read_concurrency_group);
         if (!sem) {
             // If we got here - the initialization went very wrong and we can't do anything about it.
@@ -359,34 +354,35 @@ database::read_concurrency_sem() {
 }
 
 // With same concerns as read_concurrency_sem().
-reader_concurrency_semaphore&
-database::view_update_read_concurrency_sem() {
+reader_concurrency_semaphore& database::view_update_read_concurrency_sem() {
     reader_concurrency_semaphore* sem = _view_update_read_concurrency_semaphores_group.get_or_null(current_scheduling_group());
     if (!sem) {
         sem = _view_update_read_concurrency_semaphores_group.get_or_null(_default_read_concurrency_group);
         if (!sem) {
-            seastar::on_internal_error(dblog, "Default view update read concurrency semaphore wasn't found, something probably went wrong during database::start");
+            seastar::on_internal_error(
+                    dblog, "Default view update read concurrency semaphore wasn't found, something probably went wrong during database::start");
         }
     }
     return *sem;
 }
 
 static auto configure_sstables_manager(const db::config& cfg, const database_config& db_cfg) {
-    return sstables::sstables_manager::config {
-        .available_memory = db_cfg.available_memory,
-        .enable_sstable_key_validation = cfg.enable_sstable_key_validation(),
-        .enable_data_integrity_check = cfg.enable_sstable_data_integrity_check(),
-        .sstable_summary_ratio = cfg.sstable_summary_ratio(),
-        .column_index_size = cfg.column_index_size_in_kb() * 1024,
-        .column_index_auto_scale_threshold_in_kb = cfg.column_index_auto_scale_threshold_in_kb,
-        .memory_reclaim_threshold = cfg.components_memory_reclaim_threshold,
-        .data_file_directories = cfg.data_file_directories(),
-        .format = cfg.sstable_format,
+    return sstables::sstables_manager::config{
+            .available_memory = db_cfg.available_memory,
+            .enable_sstable_key_validation = cfg.enable_sstable_key_validation(),
+            .enable_data_integrity_check = cfg.enable_sstable_data_integrity_check(),
+            .sstable_summary_ratio = cfg.sstable_summary_ratio(),
+            .column_index_size = cfg.column_index_size_in_kb() * 1024,
+            .column_index_auto_scale_threshold_in_kb = cfg.column_index_auto_scale_threshold_in_kb,
+            .memory_reclaim_threshold = cfg.components_memory_reclaim_threshold,
+            .data_file_directories = cfg.data_file_directories(),
+            .format = cfg.sstable_format,
     };
 }
 
-database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
-        compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, const abort_source& abort, utils::cross_shard_barrier barrier)
+database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat,
+        locator::shared_token_metadata& stm, compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm,
+        sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, const abort_source& abort, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
     , _cl_stats(std::make_unique<cell_locker_stats>())
@@ -402,66 +398,58 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
         }
     })
     , _dbcfg(dbcfg)
-    , _memtable_controller(make_flush_controller(_cfg, _dbcfg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
-        auto backlog = (_dirty_memory_manager.unspooled_dirty_memory()) / limit;
-        if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
-            backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
-        }
-        return backlog;
-    }))
+    , _memtable_controller(make_flush_controller(_cfg, _dbcfg,
+              [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
+                  auto backlog = (_dirty_memory_manager.unspooled_dirty_memory()) / limit;
+                  if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
+                      backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
+                  }
+                  return backlog;
+              }))
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
-    , _streaming_concurrency_sem(
-            _cfg.maintenance_reader_concurrency_semaphore_count_limit,
-            max_memory_streaming_concurrent_reads(),
-            "streaming",
-            std::numeric_limits<size_t>::max(),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(uint32_t(1)),
-            utils::updateable_value(0.0f),
-            reader_concurrency_semaphore::register_metrics::yes)
+    , _streaming_concurrency_sem(_cfg.maintenance_reader_concurrency_semaphore_count_limit, max_memory_streaming_concurrent_reads(), "streaming",
+              std::numeric_limits<size_t>::max(), utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+              utils::updateable_value(std::numeric_limits<uint32_t>::max()), utils::updateable_value(uint32_t(1)), utils::updateable_value(0.0f),
+              reader_concurrency_semaphore::register_metrics::yes)
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction", reader_concurrency_semaphore::register_metrics::no)
     , _system_read_concurrency_sem(
-            // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
-            max_count_concurrent_reads,
-            max_memory_system_concurrent_reads(),
-            "system",
-            std::numeric_limits<size_t>::max(),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(uint32_t(1)),
-            utils::updateable_value(0.0f),
-            reader_concurrency_semaphore::register_metrics::yes)
-    , _view_update_read_concurrency_semaphores_group(
-            max_memory_concurrent_view_update_reads(),
-            utils::updateable_value<int>(max_count_concurrent_view_update_reads),
-            std::numeric_limits<size_t>::max(),
-            _cfg.view_update_reader_concurrency_semaphore_serialize_limit_multiplier,
-            _cfg.view_update_reader_concurrency_semaphore_kill_limit_multiplier,
-            _cfg.view_update_reader_concurrency_semaphore_cpu_concurrency,
-            utils::updateable_value(0.0f),
-            "view_update")
+              // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
+              max_count_concurrent_reads, max_memory_system_concurrent_reads(), "system", std::numeric_limits<size_t>::max(),
+              utils::updateable_value(std::numeric_limits<uint32_t>::max()), utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+              utils::updateable_value(uint32_t(1)), utils::updateable_value(0.0f), reader_concurrency_semaphore::register_metrics::yes)
+    , _view_update_read_concurrency_semaphores_group(max_memory_concurrent_view_update_reads(),
+              utils::updateable_value<int>(max_count_concurrent_view_update_reads), std::numeric_limits<size_t>::max(),
+              _cfg.view_update_reader_concurrency_semaphore_serialize_limit_multiplier, _cfg.view_update_reader_concurrency_semaphore_kill_limit_multiplier,
+              _cfg.view_update_reader_concurrency_semaphore_cpu_concurrency, utils::updateable_value(0.0f), "view_update")
     , _row_cache_tracker(_cfg.index_cache_fraction.operator utils::updateable_value<double>(), cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
     , _compaction_manager(cm)
     , _enable_incremental_backups(cfg.incremental_backups())
-    , _querier_cache([this] (const reader_concurrency_semaphore& s) {
+    , _querier_cache([this](const reader_concurrency_semaphore& s) {
         return this->is_user_semaphore(s);
     })
-    , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(feat,
-              _cfg.compaction_large_partition_warning_threshold_mb,
-              _cfg.compaction_large_row_warning_threshold_mb,
-              _cfg.compaction_large_cell_warning_threshold_mb,
-              _cfg.compaction_rows_count_warning_threshold,
+    , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(feat, _cfg.compaction_large_partition_warning_threshold_mb,
+              _cfg.compaction_large_row_warning_threshold_mb, _cfg.compaction_large_cell_warning_threshold_mb, _cfg.compaction_rows_count_warning_threshold,
               _cfg.compaction_collection_elements_count_warning_threshold))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
-    , _corrupt_data_handler(std::make_unique<db::system_table_corrupt_data_handler>(db::system_table_corrupt_data_handler::config{.entry_ttl = std::chrono::days(10)}, db::corrupt_data_handler::register_metrics::yes))
+    , _corrupt_data_handler(std::make_unique<db::system_table_corrupt_data_handler>(
+              db::system_table_corrupt_data_handler::config{.entry_ttl = std::chrono::days(10)}, db::corrupt_data_handler::register_metrics::yes))
     , _nop_corrupt_data_handler(std::make_unique<db::nop_corrupt_data_handler>(db::corrupt_data_handler::register_metrics::no))
-    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, *_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.streaming_scheduling_group, &sstm))
-    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, *_nop_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.streaming_scheduling_group))
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(
+              "user", *_large_data_handler, *_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem,
+              [&stm] {
+                  return stm.get()->get_my_id();
+              },
+              scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.streaming_scheduling_group, &sstm))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(
+              "system", *_nop_large_data_handler, *_nop_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem,
+              [&stm] {
+                  return stm.get()->get_my_id();
+              },
+              scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.streaming_scheduling_group))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _mnotifier(mn)
@@ -469,14 +457,13 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _shared_token_metadata(stm)
     , _lang_manager(langm)
     , _reader_concurrency_semaphores_group(max_memory_concurrent_reads(), max_count_concurrent_reads, max_inactive_queue_length(),
-        _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
-        _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
-        _cfg.reader_concurrency_semaphore_cpu_concurrency,
-        _cfg.reader_concurrency_semaphore_preemptive_abort_factor)
+              _cfg.reader_concurrency_semaphore_serialize_limit_multiplier, _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
+              _cfg.reader_concurrency_semaphore_cpu_concurrency, _cfg.reader_concurrency_semaphore_preemptive_abort_factor)
     , _stop_barrier(std::move(barrier))
-    , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
-    , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))
-{
+    , _update_memtable_flush_static_shares_action([this, &cfg] {
+        return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares());
+    })
+    , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer())) {
     SCYLLA_ASSERT(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 
     local_schema_registry().init(*this); // TODO: we're never unbound.
@@ -532,14 +519,14 @@ void backlog_controller::adjust() {
 
     control_point& cp = _control_points[idx];
     control_point& last = _control_points[idx - 1];
-    float result = last.output + (backlog - last.input) * (cp.output - last.output)/(cp.input - last.input);
+    float result = last.output + (backlog - last.input) * (cp.output - last.output) / (cp.input - last.input);
     update_controller(result);
 }
 
 float backlog_controller::backlog_of_shares(float shares) const {
     size_t idx = 1;
     if (_control_points.size() == 0) {
-            return 1.0f;
+        return 1.0f;
     }
     while ((idx < _control_points.size() - 1) && (_control_points[idx].output < shares)) {
         idx++;
@@ -564,8 +551,8 @@ void compaction_controller::set_max_shares(float max_shares) {
     // should only cap the output of the last control point (i.e. the max shares).
     float minimum_max_shares = (_control_points.rbegin() + 1)->output;
     if (max_shares < minimum_max_shares) {
-        dblog.warn("The maximum compaction shares of {} is too low and can degrade performance. Increasing it to the minimum {}",
-                   max_shares, minimum_max_shares);
+        dblog.warn(
+                "The maximum compaction shares of {} is too low and can degrade performance. Increasing it to the minimum {}", max_shares, minimum_max_shares);
         max_shares = minimum_max_shares;
     }
     _control_points.back().output = max_shares;
@@ -576,178 +563,226 @@ namespace replica {
 static const metrics::label class_label("class");
 
 
-auto
-database::sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaphore::stats&> auto stats_member) {
-    return _reader_concurrency_semaphores_group.sum_read_concurrency_sem_var([&] (reader_concurrency_semaphore& rcs) { return std::invoke(stats_member, rcs.get_stats()); });
+auto database::sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaphore::stats&> auto stats_member) {
+    return _reader_concurrency_semaphores_group.sum_read_concurrency_sem_var([&](reader_concurrency_semaphore& rcs) {
+        return std::invoke(stats_member, rcs.get_stats());
+    });
 }
 
-void
-database::setup_metrics() {
+void database::setup_metrics() {
     _dirty_memory_manager.setup_collectd("regular");
     _system_dirty_memory_manager.setup_collectd("system");
 
     namespace sm = seastar::metrics;
 
-    _metrics.add_group("memory", {
-        sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory(); },
-                       sm::description("Holds the current size of all (\"regular\" and \"system\") non-free memory in bytes: used memory + released memory that hasn't been returned to a free memory pool yet. "
-                                       "Total memory size minus this value represents the amount of available memory. "
-                                       "If this value minus unspooled_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
+    _metrics.add_group("memory",
+            {
+                    sm::make_gauge(
+                            "dirty_bytes",
+                            [this] {
+                                return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory();
+                            },
+                            sm::description(
+                                    "Holds the current size of all (\"regular\" and \"system\") non-free memory in bytes: used memory + released memory that "
+                                    "hasn't been returned to a free memory pool yet. "
+                                    "Total memory size minus this value represents the amount of available memory. "
+                                    "If this value minus unspooled_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
 
-        sm::make_gauge("unspooled_dirty_bytes", [this] { return _dirty_memory_manager.unspooled_dirty_memory() + _system_dirty_memory_manager.unspooled_dirty_memory(); },
-                       sm::description("Holds the size of all (\"regular\" and \"system\") used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
-    });
+                    sm::make_gauge(
+                            "unspooled_dirty_bytes",
+                            [this] {
+                                return _dirty_memory_manager.unspooled_dirty_memory() + _system_dirty_memory_manager.unspooled_dirty_memory();
+                            },
+                            sm::description("Holds the size of all (\"regular\" and \"system\") used memory in bytes. Compare it to \"dirty_bytes\" to see how "
+                                            "many memory is wasted (neither used nor available).")),
+            });
 
-    _metrics.add_group("memtables", {
-        sm::make_gauge("pending_flushes", _cf_stats.pending_memtables_flushes_count,
-                       sm::description("Holds the current number of memtables that are currently being flushed to sstables. "
-                                       "High value in this metric may be an indication of storage being a bottleneck.")),
+    _metrics.add_group(
+            "memtables", {
+                                 sm::make_gauge("pending_flushes", _cf_stats.pending_memtables_flushes_count,
+                                         sm::description("Holds the current number of memtables that are currently being flushed to sstables. "
+                                                         "High value in this metric may be an indication of storage being a bottleneck.")),
 
-        sm::make_gauge("pending_flushes_bytes", _cf_stats.pending_memtables_flushes_bytes,
-                       sm::description("Holds the current number of bytes in memtables that are currently being flushed to sstables. "
-                                       "High value in this metric may be an indication of storage being a bottleneck.")),
-        sm::make_gauge("failed_flushes", _cf_stats.failed_memtables_flushes_count,
-                       sm::description("Holds the number of failed memtable flushes. "
-                                       "High value in this metric may indicate a permanent failure to flush a memtable.")),
-    });
+                                 sm::make_gauge("pending_flushes_bytes", _cf_stats.pending_memtables_flushes_bytes,
+                                         sm::description("Holds the current number of bytes in memtables that are currently being flushed to sstables. "
+                                                         "High value in this metric may be an indication of storage being a bottleneck.")),
+                                 sm::make_gauge("failed_flushes", _cf_stats.failed_memtables_flushes_count,
+                                         sm::description("Holds the number of failed memtable flushes. "
+                                                         "High value in this metric may indicate a permanent failure to flush a memtable.")),
+                         });
 
-    _metrics.add_group("database", {
-        sm::make_gauge("requests_blocked_memory_current", [this] { return _dirty_memory_manager.region_group().blocked_requests(); },
-                       sm::description(
-                           seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
-                                           "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold())))(basic_level),
+    _metrics.add_group("database",
+            {
+                    sm::make_gauge(
+                            "requests_blocked_memory_current",
+                            [this] {
+                                return _dirty_memory_manager.region_group().blocked_requests();
+                            },
+                            sm::description(seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
+                                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota "
+                                                            "allocated for the \"database\" component.",
+                                    _dirty_memory_manager.throttle_threshold())))(basic_level),
 
-        sm::make_counter("requests_blocked_memory", [this] { return _dirty_memory_manager.region_group().blocked_requests_counter(); },
-                       sm::description(seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
-                                       "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold())))(basic_level),
+                    sm::make_counter(
+                            "requests_blocked_memory",
+                            [this] {
+                                return _dirty_memory_manager.region_group().blocked_requests_counter();
+                            },
+                            sm::description(seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
+                                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota "
+                                                            "allocated for the \"database\" component.",
+                                    _dirty_memory_manager.throttle_threshold())))(basic_level),
 
-        sm::make_counter("clustering_filter_count", _cf_stats.clustering_filter_count,
-                       sm::description("Counts bloom filter invocations.")),
+                    sm::make_counter("clustering_filter_count", _cf_stats.clustering_filter_count, sm::description("Counts bloom filter invocations.")),
 
-        sm::make_counter("clustering_filter_sstables_checked", _cf_stats.sstables_checked_by_clustering_filter,
-                       sm::description("Counts sstables checked after applying the bloom filter. "
-                                       "High value indicates that bloom filter is not very efficient.")),
+                    sm::make_counter("clustering_filter_sstables_checked", _cf_stats.sstables_checked_by_clustering_filter,
+                            sm::description("Counts sstables checked after applying the bloom filter. "
+                                            "High value indicates that bloom filter is not very efficient.")),
 
-        sm::make_counter("clustering_filter_fast_path_count", _cf_stats.clustering_filter_fast_path_count,
-                       sm::description("Counts number of times bloom filtering short cut to include all sstables when only one full range was specified.")),
+                    sm::make_counter("clustering_filter_fast_path_count", _cf_stats.clustering_filter_fast_path_count,
+                            sm::description(
+                                    "Counts number of times bloom filtering short cut to include all sstables when only one full range was specified.")),
 
-        sm::make_counter("clustering_filter_surviving_sstables", _cf_stats.surviving_sstables_after_clustering_filter,
-                       sm::description("Counts sstables that survived the clustering key filtering. "
-                                       "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
+                    sm::make_counter("clustering_filter_surviving_sstables", _cf_stats.surviving_sstables_after_clustering_filter,
+                            sm::description(
+                                    "Counts sstables that survived the clustering key filtering. "
+                                    "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
 
-        sm::make_counter("dropped_view_updates", _cf_stats.dropped_view_updates,
-                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. "))(basic_level),
+                    sm::make_counter("dropped_view_updates", _cf_stats.dropped_view_updates,
+                            sm::description("Counts the number of view updates that have been dropped due to cluster overload. "))(basic_level),
 
-       sm::make_counter("view_building_paused", _cf_stats.view_building_paused,
-                      sm::description("Counts the number of times view building process was paused (e.g. due to node unavailability). ")),
+                    sm::make_counter("view_building_paused", _cf_stats.view_building_paused,
+                            sm::description("Counts the number of times view building process was paused (e.g. due to node unavailability). ")),
 
-        sm::make_counter("total_writes", _stats->total_writes,
-                       sm::description("Counts the total number of successful write operations performed by this shard."))(basic_level),
+                    sm::make_counter("total_writes", _stats->total_writes,
+                            sm::description("Counts the total number of successful write operations performed by this shard."))(basic_level),
 
-        sm::make_counter("total_writes_failed", _stats->total_writes_failed,
-                       sm::description("Counts the total number of failed write operations. "
-                                       "A sum of this value plus total_writes represents a total amount of writes attempted on this shard."))(basic_level),
+                    sm::make_counter("total_writes_failed", _stats->total_writes_failed,
+                            sm::description("Counts the total number of failed write operations. "
+                                            "A sum of this value plus total_writes represents a total amount of writes attempted on this shard."))(basic_level),
 
-        sm::make_counter("total_writes_timedout", _stats->total_writes_timedout,
-                       sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded."))(basic_level),
+                    sm::make_counter("total_writes_timedout", _stats->total_writes_timedout,
+                            sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded."))(
+                            basic_level),
 
-        sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
-                       sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached."))(basic_level),
+                    sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
+                            sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached."))(
+                            basic_level),
 
-        sm::make_counter("total_writes_rejected_due_to_out_of_space_prevention", _stats->total_writes_rejected_due_to_out_of_space_prevention,
-                       sm::description("Counts write operations which were rejected due to disabled user tables writes."))(basic_level),
+                    sm::make_counter("total_writes_rejected_due_to_out_of_space_prevention", _stats->total_writes_rejected_due_to_out_of_space_prevention,
+                            sm::description("Counts write operations which were rejected due to disabled user tables writes."))(basic_level),
 
-        sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
-                       sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
+                    sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
+                            sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
-        sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().get_current_bytes(); },
-                       sm::description("Holds the current size in bytes of the pending view updates for all tables"))(basic_level),
+                    sm::make_current_bytes(
+                            "view_update_backlog",
+                            [this] {
+                                return get_view_update_backlog().get_current_bytes();
+                            },
+                            sm::description("Holds the current size in bytes of the pending view updates for all tables"))(basic_level),
 
-        sm::make_counter("querier_cache_lookups", _querier_cache.get_stats().lookups,
-                       sm::description("Counts querier cache lookups (paging queries)")),
+                    sm::make_counter(
+                            "querier_cache_lookups", _querier_cache.get_stats().lookups, sm::description("Counts querier cache lookups (paging queries)")),
 
-        sm::make_counter("querier_cache_misses", _querier_cache.get_stats().misses,
-                       sm::description("Counts querier cache lookups that failed to find a cached querier")),
+                    sm::make_counter("querier_cache_misses", _querier_cache.get_stats().misses,
+                            sm::description("Counts querier cache lookups that failed to find a cached querier")),
 
-        sm::make_counter("querier_cache_drops", _querier_cache.get_stats().drops,
-                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it")),
+                    sm::make_counter("querier_cache_drops", _querier_cache.get_stats().drops,
+                            sm::description("Counts querier cache lookups that found a cached querier but had to drop it")),
 
-        sm::make_counter("querier_cache_scheduling_group_mismatches", _querier_cache.get_stats().scheduling_group_mismatches,
-                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to scheduling group mismatch")),
+                    sm::make_counter("querier_cache_scheduling_group_mismatches", _querier_cache.get_stats().scheduling_group_mismatches,
+                            sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to scheduling group mismatch")),
 
-        sm::make_counter("querier_cache_time_based_evictions", _querier_cache.get_stats().time_based_evictions,
-                       sm::description("Counts querier cache entries that timed out and were evicted.")),
+                    sm::make_counter("querier_cache_time_based_evictions", _querier_cache.get_stats().time_based_evictions,
+                            sm::description("Counts querier cache entries that timed out and were evicted.")),
 
-        sm::make_counter("querier_cache_resource_based_evictions", _querier_cache.get_stats().resource_based_evictions,
-                       sm::description("Counts querier cache entries that were evicted to free up resources "
-                                       "(limited by reader concurrency limits) necessary to create new readers.")),
+                    sm::make_counter("querier_cache_resource_based_evictions", _querier_cache.get_stats().resource_based_evictions,
+                            sm::description("Counts querier cache entries that were evicted to free up resources "
+                                            "(limited by reader concurrency limits) necessary to create new readers.")),
 
-        sm::make_gauge("querier_cache_population", _querier_cache.get_stats().population,
-                       sm::description("The number of entries currently in the querier cache.")),
+                    sm::make_gauge("querier_cache_population", _querier_cache.get_stats().population,
+                            sm::description("The number of entries currently in the querier cache.")),
 
-    });
+            });
 
     // Registering all the metrics with a single call causes the stack size to blow up.
-    _metrics.add_group("database", {
-        sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
-                       sm::description("Holds the current amount of memory used for results.")),
+    _metrics.add_group("database",
+            {
+                    sm::make_gauge(
+                            "total_result_bytes",
+                            [this] {
+                                return get_result_memory_limiter().total_used_memory();
+                            },
+                            sm::description("Holds the current amount of memory used for results.")),
 
-        sm::make_counter("short_data_queries", _stats->short_data_queries,
-                       sm::description("The rate of data queries (data or digest reads) that returned less rows than requested due to result size limiting.")),
+                    sm::make_counter("short_data_queries", _stats->short_data_queries,
+                            sm::description(
+                                    "The rate of data queries (data or digest reads) that returned less rows than requested due to result size limiting.")),
 
-        sm::make_counter("short_mutation_queries", _stats->short_mutation_queries,
-                       sm::description("The rate of mutation queries that returned less rows than requested due to result size limiting.")),
+                    sm::make_counter("short_mutation_queries", _stats->short_mutation_queries,
+                            sm::description("The rate of mutation queries that returned less rows than requested due to result size limiting.")),
 
-        sm::make_counter("multishard_query_unpopped_fragments", _stats->multishard_query_unpopped_fragments,
-                       sm::description("The total number of fragments that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
+                    sm::make_counter("multishard_query_unpopped_fragments", _stats->multishard_query_unpopped_fragments,
+                            sm::description("The total number of fragments that were extracted from the shard reader but were unconsumed by the query and "
+                                            "moved back into the reader.")),
 
-        sm::make_counter("multishard_query_unpopped_bytes", _stats->multishard_query_unpopped_bytes,
-                       sm::description("The total number of bytes that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
+                    sm::make_counter("multishard_query_unpopped_bytes", _stats->multishard_query_unpopped_bytes,
+                            sm::description("The total number of bytes that were extracted from the shard reader but were unconsumed by the query and moved "
+                                            "back into the reader.")),
 
-        sm::make_counter("multishard_query_failed_reader_stops", _stats->multishard_query_failed_reader_stops,
-                       sm::description("The number of times the stopping of a shard reader failed.")),
+                    sm::make_counter("multishard_query_failed_reader_stops", _stats->multishard_query_failed_reader_stops,
+                            sm::description("The number of times the stopping of a shard reader failed.")),
 
-        sm::make_counter("multishard_query_failed_reader_saves", _stats->multishard_query_failed_reader_saves,
-                       sm::description("The number of times the saving of a shard reader failed.")),
+                    sm::make_counter("multishard_query_failed_reader_saves", _stats->multishard_query_failed_reader_saves,
+                            sm::description("The number of times the saving of a shard reader failed.")),
 
-        sm::make_total_operations("counter_cell_lock_acquisition", _cl_stats->lock_acquisitions,
-                                 sm::description("The number of acquired counter cell locks.")),
+                    sm::make_total_operations(
+                            "counter_cell_lock_acquisition", _cl_stats->lock_acquisitions, sm::description("The number of acquired counter cell locks.")),
 
-        sm::make_queue_length("counter_cell_lock_pending", _cl_stats->operations_waiting_for_lock,
-                             sm::description("The number of counter updates waiting for a lock.")),
+                    sm::make_queue_length("counter_cell_lock_pending", _cl_stats->operations_waiting_for_lock,
+                            sm::description("The number of counter updates waiting for a lock.")),
 
-        sm::make_counter("large_partition_exceeding_threshold", [this] { return _large_data_handler->stats().partitions_bigger_than_threshold; },
-            sm::description("Number of large partitions exceeding compaction_large_partition_warning_threshold_mb. "
-                "Large partitions have performance impact and should be avoided, check the documentation for details.")),
+                    sm::make_counter(
+                            "large_partition_exceeding_threshold",
+                            [this] {
+                                return _large_data_handler->stats().partitions_bigger_than_threshold;
+                            },
+                            sm::description("Number of large partitions exceeding compaction_large_partition_warning_threshold_mb. "
+                                            "Large partitions have performance impact and should be avoided, check the documentation for details.")),
 
-        sm::make_total_operations("total_view_updates_pushed_local", _cf_stats.total_view_updates_pushed_local,
-                sm::description("Total number of view updates generated for tables and applied locally."))(basic_level),
+                    sm::make_total_operations("total_view_updates_pushed_local", _cf_stats.total_view_updates_pushed_local,
+                            sm::description("Total number of view updates generated for tables and applied locally."))(basic_level),
 
-        sm::make_total_operations("total_view_updates_pushed_remote", _cf_stats.total_view_updates_pushed_remote,
-                sm::description("Total number of view updates generated for tables and sent to remote replicas."))(basic_level),
+                    sm::make_total_operations("total_view_updates_pushed_remote", _cf_stats.total_view_updates_pushed_remote,
+                            sm::description("Total number of view updates generated for tables and sent to remote replicas."))(basic_level),
 
-        sm::make_total_operations("total_view_updates_failed_local", _cf_stats.total_view_updates_failed_local,
-                sm::description("Total number of view updates generated for tables and failed to be applied locally.")),
+                    sm::make_total_operations("total_view_updates_failed_local", _cf_stats.total_view_updates_failed_local,
+                            sm::description("Total number of view updates generated for tables and failed to be applied locally.")),
 
-        sm::make_total_operations("total_view_updates_failed_remote", _cf_stats.total_view_updates_failed_remote,
-                sm::description("Total number of view updates generated for tables and failed to be sent to remote replicas.")),
+                    sm::make_total_operations("total_view_updates_failed_remote", _cf_stats.total_view_updates_failed_remote,
+                            sm::description("Total number of view updates generated for tables and failed to be sent to remote replicas.")),
 
-        sm::make_total_operations("total_view_updates_on_wrong_node", _cf_stats.total_view_updates_on_wrong_node,
-                sm::description("Total number of view updates which are computed on the wrong node.")).set_skip_when_empty(),
+                    sm::make_total_operations("total_view_updates_on_wrong_node", _cf_stats.total_view_updates_on_wrong_node,
+                            sm::description("Total number of view updates which are computed on the wrong node."))
+                            .set_skip_when_empty(),
 
-        sm::make_total_operations("total_view_updates_failed_pairing", _cf_stats.total_view_updates_failed_pairing,
-                sm::description("Total number of view updates for which we failed base/view pairing.")).set_skip_when_empty(),
+                    sm::make_total_operations("total_view_updates_failed_pairing", _cf_stats.total_view_updates_failed_pairing,
+                            sm::description("Total number of view updates for which we failed base/view pairing."))
+                            .set_skip_when_empty(),
 
-        sm::make_total_operations("total_view_updates_due_to_replica_count_mismatch", _cf_stats.total_view_updates_due_to_replica_count_mismatch,
-                sm::description("Total number of view updates for which there were more view replicas than base replicas "
-                    "and we had to generate an extra view update because the additional view replica wouldn't get paired with any base replica."
-                    "Should only increase during RF change. Should stop increasing shortly after finishing the RF change.")).set_skip_when_empty(),
-    });
+                    sm::make_total_operations("total_view_updates_due_to_replica_count_mismatch", _cf_stats.total_view_updates_due_to_replica_count_mismatch,
+                            sm::description(
+                                    "Total number of view updates for which there were more view replicas than base replicas "
+                                    "and we had to generate an extra view update because the additional view replica wouldn't get paired with any base replica."
+                                    "Should only increase during RF change. Should stop increasing shortly after finishing the RF change."))
+                            .set_skip_when_empty(),
+            });
     if (this_shard_id() == 0) {
-        _metrics.add_group("database", {
-                sm::make_counter("schema_changed", _schema_change_count,
-                        sm::description("The number of times the schema changed"))(basic_level),
-        });
+        _metrics.add_group("database",
+                {
+                        sm::make_counter("schema_changed", _schema_change_count, sm::description("The number of times the schema changed"))(basic_level),
+                });
     }
 }
 
@@ -767,8 +802,8 @@ const table_schema_version& database::get_version() const {
     return _version.get();
 }
 
-static future<>
-do_parse_schema_tables(sharded<service::storage_proxy>& proxy, const sstring cf_name, std::function<future<> (db::schema_tables::schema_result_value_type&)> func) {
+static future<> do_parse_schema_tables(
+        sharded<service::storage_proxy>& proxy, const sstring cf_name, std::function<future<>(db::schema_tables::schema_result_value_type&)> func) {
     using namespace db::schema_tables;
 
     auto rs = co_await db::system_keyspace::query(proxy.local().get_db(), db::schema_tables::NAME, cf_name);
@@ -777,7 +812,7 @@ do_parse_schema_tables(sharded<service::storage_proxy>& proxy, const sstring cf_
         auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
         names.emplace(keyspace_name);
     }
-    co_await coroutine::parallel_for_each(names, [&] (sstring name) mutable -> future<> {
+    co_await coroutine::parallel_for_each(names, [&](sstring name) mutable -> future<> {
         if (is_system_keyspace(name)) {
             co_return;
         }
@@ -792,12 +827,12 @@ do_parse_schema_tables(sharded<service::storage_proxy>& proxy, const sstring cf_
 }
 
 future<> database::set_in_critical_disk_utilization_mode(sharded<database>& sharded_db, bool enabled) {
-    return sharded_db.invoke_on_all([enabled] (replica::database& db) {
+    return sharded_db.invoke_on_all([enabled](replica::database& db) {
         dblog.debug("Asked to set critical disk utilization mode: {}", enabled);
         db._critical_disk_utilization_mode_count += enabled ? 1 : -1;
         if (!enabled && db._critical_disk_utilization_mode_count > 0) {
-            dblog.debug("Database is still in critical disk utilization mode, requires {} more call(s) to disable it",
-                        db._critical_disk_utilization_mode_count);
+            dblog.debug(
+                    "Database is still in critical disk utilization mode, requires {} more call(s) to disable it", db._critical_disk_utilization_mode_count);
         }
         dblog.info("Set critical disk utilization mode: {}", db._critical_disk_utilization_mode_count > 0);
     });
@@ -813,7 +848,7 @@ bool database::is_in_critical_disk_utilization_mode() const {
 
 future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
     using namespace db::schema_tables;
-    co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
+    co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&](schema_result_value_type& v) -> future<> {
         auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = co_await create_keyspace_metadata(v, scylla_specific_rs);
         auto token_metadata = get_shared_token_metadata().get();
@@ -821,7 +856,7 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
         insert_keyspace(std::move(ks));
         co_return;
     }));
-    co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
+    co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&](schema_result_value_type& v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
         auto&& user_types = co_await create_types_from_schema_partition(*ks.metadata(), v.second);
         for (auto&& type : user_types) {
@@ -830,14 +865,14 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
         co_return;
     }));
     cql3::functions::change_batch batch;
-    co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, coroutine::lambda([&] (schema_result_value_type& v) -> future<> {
+    co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, coroutine::lambda([&](schema_result_value_type& v) -> future<> {
         auto&& user_functions = co_await create_functions_from_schema_partition(*this, v.second);
         for (auto&& func : user_functions) {
             batch.add_function(func);
         }
         co_return;
     }));
-    co_await do_parse_schema_tables(proxy, db::schema_tables::AGGREGATES, coroutine::lambda([&] (schema_result_value_type& v) -> future<> {
+    co_await do_parse_schema_tables(proxy, db::schema_tables::AGGREGATES, coroutine::lambda([&](schema_result_value_type& v) -> future<> {
         auto v2 = co_await read_schema_partition_for_keyspace(proxy, db::schema_tables::SCYLLA_AGGREGATES, v.first);
         auto&& user_aggregates = create_aggregates_from_schema_partition(*this, v.second, v2.second, batch);
         for (auto&& agg : user_aggregates) {
@@ -846,9 +881,9 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
         co_return;
     }));
     batch.commit();
-    co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
+    co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&](schema_result_value_type& v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
-        co_await coroutine::parallel_for_each(tables, [&] (auto& t) -> future<> {
+        co_await coroutine::parallel_for_each(tables, [&](auto& t) -> future<> {
             co_await this->add_column_family_and_make_directory(t.second, replica::database::is_new_cf::no);
             auto s = t.second;
             // Recreate missing column mapping entries in case
@@ -860,9 +895,9 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
             co_return co_await db::schema_tables::store_column_mapping(proxy, s, false);
         });
     }));
-    co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
+    co_await do_parse_schema_tables(proxy, db::schema_tables::VIEWS, coroutine::lambda([&](schema_result_value_type& v) -> future<> {
         std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
-        co_await coroutine::parallel_for_each(views, [&] (auto&& v) -> future<> {
+        co_await coroutine::parallel_for_each(views, [&](auto&& v) -> future<> {
             check_no_legacy_secondary_index_mv_schema(*this, v, nullptr);
             co_await this->add_column_family_and_make_directory(v, replica::database::is_new_cf::no);
         });
@@ -878,8 +913,7 @@ static auto add_fragmented_listeners(const gms::feature& f, db::commitlog& cl) {
     });
 }
 
-future<>
-database::init_commitlog() {
+future<> database::init_commitlog() {
     if (_commitlog) {
         return make_ready_future<>();
     }
@@ -898,15 +932,17 @@ database::init_commitlog() {
 
         auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_commitlog);
 
-        _commitlog->add_flush_handler([this, reg = std::move(reg)](db::cf_id_type id, db::replay_position pos) {
-            if (!_tables_metadata.contains(id)) {
-                // the CF has been removed.
-                _commitlog->discard_completed_segments(id);
-                return;
-            }
-            // Initiate a background flush. Waited upon in `stop()`.
-            (void)_tables_metadata.get_table(id).flush(pos);
-        }).release(); // we have longer life time than CL. Ignore reg anchor
+        _commitlog
+                ->add_flush_handler([this, reg = std::move(reg)](db::cf_id_type id, db::replay_position pos) {
+                    if (!_tables_metadata.contains(id)) {
+                        // the CF has been removed.
+                        _commitlog->discard_completed_segments(id);
+                        return;
+                    }
+                    // Initiate a background flush. Waited upon in `stop()`.
+                    (void)_tables_metadata.get_table(id).flush(pos);
+                })
+                .release(); // we have longer life time than CL. Ignore reg anchor
 
         _cfg.commitlog_max_data_lifetime_in_seconds.observe([this](uint32_t max_time) {
             _commitlog->update_max_data_lifetime(max_time == 0 ? std::nullopt : std::make_optional(uint64_t(max_time)));
@@ -914,22 +950,22 @@ database::init_commitlog() {
     });
 }
 
-future<>
-database::init_logstor() {
+future<> database::init_logstor() {
     dblog.info("Initializing logstor");
 
     auto cfg = logstor::logstor_config{
-        .segment_manager_cfg = {
-            .base_dir = std::filesystem::path(_cfg.logstor_directory()),
-            .file_size = _cfg.logstor_file_size_in_mb() * 1024ull * 1024ull,
-            .disk_size = _cfg.logstor_disk_size_in_mb() * 1024ull * 1024ull,
-            .compaction_sg = _dbcfg.compaction_scheduling_group,
-            .compaction_static_shares = _cfg.compaction_static_shares,
-            .separator_sg = _dbcfg.memtable_scheduling_group,
-            .separator_delay_limit_ms = _cfg.logstor_separator_delay_limit_ms(),
-            .max_separator_memory = _cfg.logstor_separator_max_memory_in_mb() * 1024ull * 1024ull,
-        },
-        .flush_sg = _dbcfg.commitlog_scheduling_group,
+            .segment_manager_cfg =
+                    {
+                            .base_dir = std::filesystem::path(_cfg.logstor_directory()),
+                            .file_size = _cfg.logstor_file_size_in_mb() * 1024ull * 1024ull,
+                            .disk_size = _cfg.logstor_disk_size_in_mb() * 1024ull * 1024ull,
+                            .compaction_sg = _dbcfg.compaction_scheduling_group,
+                            .compaction_static_shares = _cfg.compaction_static_shares,
+                            .separator_sg = _dbcfg.memtable_scheduling_group,
+                            .separator_delay_limit_ms = _cfg.logstor_separator_delay_limit_ms(),
+                            .max_separator_memory = _cfg.logstor_separator_max_memory_in_mb() * 1024ull * 1024ull,
+                    },
+            .flush_sg = _dbcfg.commitlog_scheduling_group,
     };
     _logstor = std::make_unique<logstor::logstor>(std::move(cfg));
 
@@ -937,7 +973,7 @@ database::init_logstor() {
         trigger_logstor_compaction(false);
     });
 
-    _logstor->set_trigger_separator_flush_hook([this] (size_t seq_num) {
+    _logstor->set_trigger_separator_flush_hook([this](size_t seq_num) {
         (void)flush_logstor_separator(seq_num);
     });
 
@@ -945,8 +981,7 @@ database::init_logstor() {
     co_return;
 }
 
-future<>
-database::recover_logstor() {
+future<> database::recover_logstor() {
     if (!_logstor) {
         co_return;
     }
@@ -964,21 +999,22 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
     // with a new e_r_m instance.
     SCYLLA_ASSERT(this_shard_id() == 0);
     co_await func(sharded_db.local());
-    co_await sharded_db.invoke_on_others([&] (replica::database& db) {
+    co_await sharded_db.invoke_on_others([&](replica::database& db) {
         return func(db);
     });
 }
 
-future<keyspace_change> database::prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata, const locator::token_metadata_ptr& token_metadata) const {
+future<keyspace_change> database::prepare_update_keyspace(
+        const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata, const locator::token_metadata_ptr& token_metadata) const {
     auto strategy = keyspace::create_replication_strategy(metadata, get_token_metadata().get_topology());
     locator::static_effective_replication_map_ptr erm = nullptr;
     if (!strategy->is_per_table()) {
         erm = co_await ks.create_static_effective_replication_map(strategy, token_metadata);
     }
     co_return keyspace_change{
-        .metadata = metadata,
-        .strategy = std::move(strategy),
-        .erm = std::move(erm),
+            .metadata = metadata,
+            .strategy = std::move(strategy),
+            .erm = std::move(erm),
     };
 }
 
@@ -995,12 +1031,14 @@ void database::update_keyspace(std::unique_ptr<keyspace_change> change) {
     ks.apply(*change);
 }
 
-future<database::keyspace_change_per_shard> database::prepare_update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm, const locator::pending_token_metadata& pending_token_metadata) {
+future<database::keyspace_change_per_shard> database::prepare_update_keyspace_on_all_shards(
+        sharded<database>& sharded_db, const keyspace_metadata& ksm, const locator::pending_token_metadata& pending_token_metadata) {
     keyspace_change_per_shard changes(smp::count);
-    co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
+    co_await modify_keyspace_on_all_shards(sharded_db, [&](replica::database& db) -> future<> {
         auto& ks = db.find_keyspace(ksm.name());
-        auto new_ksm = ::make_lw_shared<keyspace_metadata>(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option(), ksm.durable_writes(),
-                ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>(), ks.metadata()->user_types(), ksm.get_storage_options());
+        auto new_ksm = ::make_lw_shared<keyspace_metadata>(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(),
+                ksm.consistency_option(), ksm.durable_writes(), ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>(),
+                ks.metadata()->user_types(), ksm.get_storage_options());
 
         auto change = co_await db.prepare_update_keyspace(ks, new_ksm, pending_token_metadata.local());
         changes[this_shard_id()] = make_foreign(std::make_unique<keyspace_change>(std::move(change)));
@@ -1015,9 +1053,7 @@ void database::drop_keyspace(const sstring& name) {
 
 static bool is_system_table(const schema& s) {
     auto& k = s.ks_name();
-    return k == db::system_keyspace::NAME ||
-        k == db::system_distributed_keyspace::NAME ||
-        k == db::system_distributed_keyspace::NAME_EVERYWHERE;
+    return k == db::system_keyspace::NAME || k == db::system_distributed_keyspace::NAME || k == db::system_distributed_keyspace::NAME_EVERYWHERE;
 }
 
 sstables::sstables_manager& database::get_sstables_manager(const schema& s) const {
@@ -1046,19 +1082,21 @@ void database::init_schema_commitlog() {
 
     auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_schema_commitlog);
 
-    _schema_commitlog->add_flush_handler([this, reg = std::move(reg)] (db::cf_id_type id, db::replay_position pos) {
-        if (!_tables_metadata.contains(id)) {
-            // the CF has been removed.
-            _schema_commitlog->discard_completed_segments(id);
-            return;
-        }
-        // Initiate a background flush. Waited upon in `stop()`.
-        (void)_tables_metadata.get_table(id).flush(pos);
-    }).release();
+    _schema_commitlog
+            ->add_flush_handler([this, reg = std::move(reg)](db::cf_id_type id, db::replay_position pos) {
+                if (!_tables_metadata.contains(id)) {
+                    // the CF has been removed.
+                    _schema_commitlog->discard_completed_segments(id);
+                    return;
+                }
+                // Initiate a background flush. Waited upon in `stop()`.
+                (void)_tables_metadata.get_table(id).flush(pos);
+            })
+            .release();
 }
 
 std::optional<table_id> database::get_base_table_for_tablet_colocation(const schema& s, const std::unordered_map<table_id, schema_ptr>& new_cfms) {
-    auto find_schema_from_db_or_new = [this, &new_cfms] (table_id table_id) -> schema_ptr {
+    auto find_schema_from_db_or_new = [this, &new_cfms](table_id table_id) -> schema_ptr {
         auto it = new_cfms.find(table_id);
         if (it != new_cfms.end()) {
             return it->second;
@@ -1066,8 +1104,8 @@ std::optional<table_id> database::get_base_table_for_tablet_colocation(const sch
         return find_schema(table_id);
     };
 
-    auto table_id_by_name = [this, &new_cfms, &s] (std::string_view cf_name) {
-        const auto it = std::ranges::find_if(new_cfms, [&s, cf_name] (const auto& p) {
+    auto table_id_by_name = [this, &new_cfms, &s](std::string_view cf_name) {
+        const auto it = std::ranges::find_if(new_cfms, [&s, cf_name](const auto& p) {
             return p.second->ks_name() == s.ks_name() && p.second->cf_name() == cf_name;
         });
         return it == new_cfms.end() ? find_uuid(s.ks_name(), cf_name) : it->second->id();
@@ -1089,7 +1127,7 @@ std::optional<table_id> database::get_base_table_for_tablet_colocation(const sch
 
         auto&& view_pk = s.partition_key_columns();
         auto&& base_pk = base_schema_ptr->partition_key_columns();
-        for (const auto& [a,b] : std::views::zip(view_pk, base_pk)) {
+        for (const auto& [a, b] : std::views::zip(view_pk, base_pk)) {
             if (a.name() != b.name()) {
                 return false;
             }
@@ -1112,18 +1150,12 @@ std::optional<table_id> database::get_base_table_for_tablet_colocation(const sch
     return std::nullopt;
 }
 
-future<> database::create_local_system_table(
-        schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
+future<> database::create_local_system_table(schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
     auto ks_name = table->ks_name();
     if (!has_keyspace(ks_name)) {
         bool durable = _cfg.data_file_directories().size() > 0;
-        auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
-                "org.apache.cassandra.locator.LocalStrategy",
-                locator::replication_strategy_config_options{},
-                std::nullopt,
-                std::nullopt,
-                durable
-                );
+        auto ksm = make_lw_shared<keyspace_metadata>(
+                ks_name, "org.apache.cassandra.locator.LocalStrategy", locator::replication_strategy_config_options{}, std::nullopt, std::nullopt, durable);
         auto token_metadata = get_shared_token_metadata().get();
         auto ks = co_await create_keyspace(ksm, erm_factory, token_metadata, replica::database::system_keyspace::yes);
         insert_keyspace(std::move(ks));
@@ -1151,12 +1183,11 @@ future<> database::create_local_system_table(
 }
 
 db::commitlog* database::commitlog_for(const schema_ptr& schema) {
-    return schema->static_props().use_schema_commitlog
-        ? _schema_commitlog.get()
-        : _commitlog.get();
+    return schema->static_props().use_schema_commitlog ? _schema_commitlog.get() : _commitlog.get();
 }
 
-void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
+void database::add_column_family(
+        keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
@@ -1172,7 +1203,8 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     }
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
+    auto cf = make_lw_shared<column_family>(
+            schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     if (is_new) {
@@ -1182,7 +1214,8 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
     if (schema->logstor_enabled()) {
         if (!_cfg.enable_logstor()) {
-            throw std::runtime_error(fmt::format("The table {}.{} is using logstor storage but logstor is not enabled in the configuration", schema->ks_name(), schema->cf_name()));
+            throw std::runtime_error(fmt::format(
+                    "The table {}.{} is using logstor storage but logstor is not enabled in the configuration", schema->ks_name(), schema->cf_name()));
         }
         if (!_logstor) {
             on_internal_error(dblog, "The table is using logstor but logstor is not initialized");
@@ -1269,12 +1302,15 @@ void global_table_ptr::assign(database& db, table_id uuid) {
     }
 
     _p[this_shard_id()] = make_foreign(t.shared_from_this());
-    _views[this_shard_id()] = make_foreign(
-            std::make_unique<std::vector<lw_shared_ptr<table>>>(std::move(views)));
+    _views[this_shard_id()] = make_foreign(std::make_unique<std::vector<lw_shared_ptr<table>>>(std::move(views)));
 }
 
-table* global_table_ptr::operator->() const noexcept { return &*_p[this_shard_id()]; }
-table& global_table_ptr::operator*() const noexcept { return *_p[this_shard_id()]; }
+table* global_table_ptr::operator->() const noexcept {
+    return &*_p[this_shard_id()];
+}
+table& global_table_ptr::operator*() const noexcept {
+    return *_p[this_shard_id()];
+}
 
 void global_table_ptr::clear_views() noexcept {
     _views[this_shard_id()]->clear();
@@ -1284,9 +1320,9 @@ std::vector<lw_shared_ptr<table>>& global_table_ptr::views() const noexcept {
     return *_views[this_shard_id()];
 }
 
- table& global_table_ptr::base() const noexcept {
+table& global_table_ptr::base() const noexcept {
     return *_base[this_shard_id()];
- }
+}
 
 void tables_metadata_lock_on_all_shards::assign_lock(seastar::rwlock::holder&& h) {
     _holders[this_shard_id()] = make_foreign(std::make_unique<seastar::rwlock::holder>(std::move(h)));
@@ -1299,7 +1335,7 @@ future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, 
 
 future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
     global_table_ptr table_shards;
-    co_await sharded_db.invoke_on_all([&] (auto& db) {
+    co_await sharded_db.invoke_on_all([&](auto& db) {
         try {
             table_shards.assign(db, uuid);
         } catch (const no_such_column_family& err) {
@@ -1311,18 +1347,18 @@ future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, 
 
 future<tables_metadata_lock_on_all_shards> database::lock_tables_metadata(sharded<database>& sharded_db) {
     tables_metadata_lock_on_all_shards locks;
-    co_await sharded_db.invoke_on_all([&] (auto& db) -> future<> {
+    co_await sharded_db.invoke_on_all([&](auto& db) -> future<> {
         locks.assign_lock(co_await db.get_tables_metadata().hold_write_lock());
     });
     co_return locks;
 }
 
 future<global_table_ptr> database::prepare_drop_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
-    co_return co_await get_table_on_all_shards(sharded_db, uuid);;
+    co_return co_await get_table_on_all_shards(sharded_db, uuid);
+    ;
 }
 
-void database::drop_table(sharded<database>& sharded_db,
-        sstring ks_name, sstring cf_name, bool with_snapshot, global_table_ptr& table_shards) {
+void database::drop_table(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, bool with_snapshot, global_table_ptr& table_shards) {
     auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
     dblog.info("Dropping {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
     auto& cf = *table_shards;
@@ -1331,13 +1367,13 @@ void database::drop_table(sharded<database>& sharded_db,
     cf.clear_views();
 }
 
-future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        bool with_snapshot, global_table_ptr& table_shards) {
-    co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
+future<> database::cleanup_drop_table_on_all_shards(
+        sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks, bool with_snapshot, global_table_ptr& table_shards) {
+    co_await sharded_db.invoke_on_all([&](database& db) -> future<> {
         auto& cf = *table_shards;
         auto uuid = cf.schema()->id();
         co_await cf.await_pending_ops();
-        co_await db.foreach_reader_concurrency_semaphore([uuid] (reader_concurrency_semaphore& sem) -> future<> {
+        co_await db.foreach_reader_concurrency_semaphore([uuid](reader_concurrency_semaphore& sem) -> future<> {
             co_await sem.evict_inactive_reads_for_table(uuid);
         });
     });
@@ -1349,7 +1385,8 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
     }
-    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
+    auto f = co_await coroutine::as_future(
+            truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
     co_await smp::invoke_on_all([&] {
         return table_shards->stop();
     });
@@ -1358,12 +1395,12 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
     co_await table_shards->destroy_storage();
 }
 
-future<> database::legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        sstring ks_name, sstring cf_name, bool with_snapshot) {
+future<> database::legacy_drop_table_on_all_shards(
+        sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, bool with_snapshot) {
     auto locks = co_await lock_tables_metadata(sharded_db);
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     auto table_shards = co_await prepare_drop_table_on_all_shards(sharded_db, uuid);
-    co_await sharded_db.invoke_on_all([&] (database& db) {
+    co_await sharded_db.invoke_on_all([&](database& db) {
         return db.drop_table(sharded_db, ks_name, cf_name, with_snapshot, table_shards);
     });
     co_await cleanup_drop_table_on_all_shards(sharded_db, sys_ks, with_snapshot, table_shards);
@@ -1401,9 +1438,9 @@ bool database::has_keyspace(std::string_view name) const {
     return _keyspaces.contains(name);
 }
 
-std::vector<sstring>  database::get_non_system_keyspaces() const {
+std::vector<sstring> database::get_non_system_keyspaces() const {
     std::vector<sstring> res;
-    for (auto const &i : _keyspaces) {
+    for (auto const& i : _keyspaces) {
         if (!is_system_keyspace(i.first)) {
             res.push_back(i.first);
         }
@@ -1478,9 +1515,10 @@ std::vector<sstring> database::get_tablets_keyspaces() const {
 }
 
 std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
-    return get_tables_metadata().filter([] (auto uuid_and_cf) {
-            return !is_system_keyspace(uuid_and_cf.second->schema()->ks_name());
-        }) | std::views::values | std::ranges::to<std::vector>();
+    return get_tables_metadata().filter([](auto uuid_and_cf) {
+        return !is_system_keyspace(uuid_and_cf.second->schema()->ks_name());
+    }) | std::views::values |
+           std::ranges::to<std::vector>();
 }
 
 column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) {
@@ -1521,26 +1559,23 @@ bool database::column_family_exists(const table_id& uuid) const {
     return _tables_metadata.contains(uuid);
 }
 
-locator::replication_strategy_ptr
-keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata, const locator::topology& topology) {
+locator::replication_strategy_ptr keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata, const locator::topology& topology) {
     using namespace locator;
     replication_strategy_params params(metadata->strategy_options(), metadata->initial_tablets(), metadata->consistency_option());
-    rslogger.debug("replication strategy for keyspace {} is {}, opts={}",
-            metadata->name(), metadata->strategy_name(), metadata->strategy_options());
+    rslogger.debug("replication strategy for keyspace {} is {}, opts={}", metadata->name(), metadata->strategy_name(), metadata->strategy_options());
     return abstract_replication_strategy::create_replication_strategy(metadata->strategy_name(), params, topology);
 }
 
-future<locator::static_effective_replication_map_ptr> keyspace::create_static_effective_replication_map(locator::replication_strategy_ptr strategy, const locator::token_metadata_ptr& tm) const {
+future<locator::static_effective_replication_map_ptr> keyspace::create_static_effective_replication_map(
+        locator::replication_strategy_ptr strategy, const locator::token_metadata_ptr& tm) const {
     co_return co_await _erm_factory.create_static_effective_replication_map(strategy, tm);
 }
 
-void
-keyspace::update_static_effective_replication_map(locator::static_effective_replication_map_ptr erm) {
+void keyspace::update_static_effective_replication_map(locator::static_effective_replication_map_ptr erm) {
     _effective_replication_map = std::move(erm);
 }
 
-const locator::abstract_replication_strategy&
-keyspace::get_replication_strategy() const {
+const locator::abstract_replication_strategy& keyspace::get_replication_strategy() const {
     return *_replication_strategy;
 }
 
@@ -1550,8 +1585,7 @@ void keyspace::apply(keyspace_change kc) {
     _effective_replication_map = std::move(kc.erm);
 }
 
-column_family::config
-keyspace::make_column_family_config(const schema& s, const database& db) const {
+column_family::config keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
     const db::config& db_config = db.get_config();
 
@@ -1630,12 +1664,15 @@ bool database::has_schema(std::string_view ks_name, std::string_view cf_name) co
 }
 
 std::vector<view_ptr> database::get_views() const {
-    return std::ranges::to<std::vector<view_ptr>>(get_non_system_column_families()
-            | std::views::filter([] (auto& cf) { return cf->schema()->is_view(); })
-            | std::views::transform([] (auto& cf) { return view_ptr(cf->schema()); }));
+    return std::ranges::to<std::vector<view_ptr>>(get_non_system_column_families() | std::views::filter([](auto& cf) {
+        return cf->schema()->is_view();
+    }) | std::views::transform([](auto& cf) {
+        return view_ptr(cf->schema());
+    }));
 }
 
-future<std::unique_ptr<keyspace>> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system) {
+future<std::unique_ptr<keyspace>> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm,
+        locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system) {
     auto kscfg = make_keyspace_config(*ksm, system);
     auto ks(std::make_unique<keyspace>(std::move(kscfg), erm_factory));
     auto change = co_await prepare_update_keyspace(*ks, ksm, token_metadata);
@@ -1643,8 +1680,8 @@ future<std::unique_ptr<keyspace>> database::create_in_memory_keyspace(const lw_s
     co_return ks;
 }
 
-future<std::unique_ptr<keyspace>>
-database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system) {
+future<std::unique_ptr<keyspace>> database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm,
+        locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system) {
     co_await get_sstables_manager(system).init_keyspace_storage(ksm->get_storage_options(), ksm->name());
     co_return co_await create_in_memory_keyspace(ksm, erm_factory, token_metadata, system);
 }
@@ -1657,9 +1694,10 @@ void database::insert_keyspace(std::unique_ptr<keyspace> ks) {
     _keyspaces.emplace(name, std::move(*ks));
 }
 
-future<database::created_keyspace_per_shard> database::prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata, const locator::pending_token_metadata& pending_token_metadata) {
+future<database::created_keyspace_per_shard> database::prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db,
+        sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata, const locator::pending_token_metadata& pending_token_metadata) {
     created_keyspace_per_shard created(smp::count);
-    co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
+    co_await modify_keyspace_on_all_shards(sharded_db, [&](replica::database& db) -> future<> {
         auto ksm = keyspace_metadata::new_keyspace(ks_metadata);
         auto ks = co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), pending_token_metadata.local(), system_keyspace::no);
         created[this_shard_id()] = make_foreign(std::move(ks));
@@ -1667,8 +1705,7 @@ future<database::created_keyspace_per_shard> database::prepare_create_keyspace_o
     co_return created;
 }
 
-future<>
-database::drop_caches() const {
+future<> database::drop_caches() const {
     std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_tables_metadata().get_column_families_copy();
     for (auto&& e : tables) {
         table& t = *e.second;
@@ -1681,8 +1718,7 @@ database::drop_caches() const {
     co_return;
 }
 
-std::set<sstring>
-database::existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude) const {
+std::set<sstring> database::existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude) const {
     return secondary_index::existing_index_names(find_keyspace(ks_name).metadata()->tables(), cf_to_exclude);
 }
 
@@ -1700,19 +1736,16 @@ request_class classify_request(const database_config& _dbcfg) {
     // Everything running in the statement group is considered a user request
     if (current_group == _dbcfg.statement_scheduling_group) {
         return request_class::user;
-    // System requests run in the default (main) scheduling group
-    // All requests executed on behalf of internal work also uses the system semaphore
-    } else if (current_group == default_scheduling_group()
-            || current_group == _dbcfg.compaction_scheduling_group
-            || current_group == _dbcfg.gossip_scheduling_group
-            || current_group == _dbcfg.memory_compaction_scheduling_group
-            || current_group == _dbcfg.memtable_scheduling_group
-            || current_group == _dbcfg.memtable_to_cache_scheduling_group) {
+        // System requests run in the default (main) scheduling group
+        // All requests executed on behalf of internal work also uses the system semaphore
+    } else if (current_group == default_scheduling_group() || current_group == _dbcfg.compaction_scheduling_group ||
+               current_group == _dbcfg.gossip_scheduling_group || current_group == _dbcfg.memory_compaction_scheduling_group ||
+               current_group == _dbcfg.memtable_scheduling_group || current_group == _dbcfg.memtable_to_cache_scheduling_group) {
         return request_class::system;
-    // Requests done on behalf of view update generation run in the streaming group
+        // Requests done on behalf of view update generation run in the streaming group
     } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
         return request_class::maintenance;
-    // Everything else is considered a user request
+        // Everything else is considered a user request
     } else {
         return request_class::user;
     }
@@ -1721,8 +1754,7 @@ request_class classify_request(const database_config& _dbcfg) {
 } // anonymous namespace
 
 static bool can_apply_per_partition_rate_limit(const schema& s, const database_config& dbcfg, db::operation_type op_type) {
-    return s.per_partition_rate_limit_options().get_max_ops_per_second(op_type).has_value()
-            && classify_request(dbcfg) == request_class::user;
+    return s.per_partition_rate_limit_options().get_max_ops_per_second(op_type).has_value() && classify_request(dbcfg) == request_class::user;
 }
 
 bool database::can_apply_per_partition_rate_limit(const schema& s, db::operation_type op_type) const {
@@ -1733,20 +1765,16 @@ bool database::is_internal_query() const {
     return classify_request(_dbcfg) != request_class::user;
 }
 
-std::optional<db::rate_limiter::can_proceed> database::account_coordinator_operation_to_rate_limit(table& tbl, const dht::token& token,
-        db::per_partition_rate_limit::account_and_enforce account_and_enforce_info,
-        db::operation_type op_type) {
+std::optional<db::rate_limiter::can_proceed> database::account_coordinator_operation_to_rate_limit(
+        table& tbl, const dht::token& token, db::per_partition_rate_limit::account_and_enforce account_and_enforce_info, db::operation_type op_type) {
 
     std::optional<uint32_t> table_limit = tbl.schema()->per_partition_rate_limit_options().get_max_ops_per_second(op_type);
     db::rate_limiter::label& lbl = tbl.get_rate_limiter_label_for_op_type(op_type);
     return _rate_limiter.account_operation(lbl, dht::token::to_int64(token), *table_limit, account_and_enforce_info);
 }
 
-static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
-        db::rate_limiter& limiter, column_family& cf,
-        const dht::partition_range_vector& ranges,
-        const database_config& dbcfg,
-        db::per_partition_rate_limit::info rate_limit_info) {
+static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(db::rate_limiter& limiter, column_family& cf,
+        const dht::partition_range_vector& ranges, const database_config& dbcfg, db::per_partition_rate_limit::info rate_limit_info) {
     using can_proceed = db::rate_limiter::can_proceed;
 
     if (std::holds_alternative<std::monostate>(rate_limit_info) || !can_apply_per_partition_rate_limit(*cf.schema(), dbcfg, db::operation_type::read)) {
@@ -1772,9 +1800,9 @@ static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
     return ret;
 }
 
-future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
-database::query(schema_ptr query_schema, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
-                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> database::query(schema_ptr query_schema, const query::read_command& cmd,
+        query::result_options opts, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout,
+        db::per_partition_rate_limit::info rate_limit_info) {
     column_family& cf = find_column_family(cmd.cf_id);
 
     if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
@@ -1793,13 +1821,13 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
         querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *query_schema, ranges.front(), cmd.slice, semaphore, trace_state, timeout);
     }
 
-    auto read_func = [&, this] (reader_permit permit) {
+    auto read_func = [&, this](reader_permit permit) {
         reader_permit::need_cpu_guard ncpu_guard{permit};
         permit.set_max_result_size(max_result_size);
-        return cf.query(std::move(query_schema), std::move(permit), cmd, opts, ranges, trace_state, get_result_memory_limiter(),
-                timeout, &querier_opt).then([&result, ncpu_guard = std::move(ncpu_guard)] (lw_shared_ptr<query::result> res) {
-            result = std::move(res);
-        });
+        return cf.query(std::move(query_schema), std::move(permit), cmd, opts, ranges, trace_state, get_result_memory_limiter(), timeout, &querier_opt)
+                .then([&result, ncpu_guard = std::move(ncpu_guard)](lw_shared_ptr<query::result> res) {
+                    result = std::move(res);
+                });
     };
 
     try {
@@ -1811,8 +1839,8 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
             f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
         } else {
             reader_permit_opt permit_holder;
-            f = co_await coroutine::as_future(semaphore.with_permit(query_schema, "data-query", cf.estimate_read_memory_cost(), timeout,
-                        trace_state, permit_holder, read_func));
+            f = co_await coroutine::as_future(
+                    semaphore.with_permit(query_schema, "data-query", cf.estimate_read_memory_cost(), timeout, trace_state, permit_holder, read_func));
         }
 
         if (!f.failed()) {
@@ -1840,9 +1868,8 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
     co_return std::tuple(std::move(result), hit_rate);
 }
 
-future<std::tuple<reconcilable_result, cache_temperature>>
-database::query_mutations(schema_ptr query_schema, const query::read_command& cmd, const dht::partition_range& range,
-                          tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, bool tombstone_gc_enabled) {
+future<std::tuple<reconcilable_result, cache_temperature>> database::query_mutations(schema_ptr query_schema, const query::read_command& cmd,
+        const dht::partition_range& range, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, bool tombstone_gc_enabled) {
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size();
@@ -1857,14 +1884,15 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
         querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *query_schema, range, cmd.slice, semaphore, trace_state, timeout);
     }
 
-    auto read_func = [&] (reader_permit permit) {
+    auto read_func = [&](reader_permit permit) {
         reader_permit::need_cpu_guard ncpu_guard{permit};
         permit.set_max_result_size(max_result_size);
-        return cf.mutation_query(std::move(query_schema), std::move(permit), cmd, range,
-                std::move(trace_state), std::move(accounter), timeout, tombstone_gc_enabled, &querier_opt)
-        .then([&result, ncpu_guard = std::move(ncpu_guard)] (reconcilable_result res) {
-            result = std::move(res);
-        });
+        return cf
+                .mutation_query(std::move(query_schema), std::move(permit), cmd, range, std::move(trace_state), std::move(accounter), timeout,
+                        tombstone_gc_enabled, &querier_opt)
+                .then([&result, ncpu_guard = std::move(ncpu_guard)](reconcilable_result res) {
+                    result = std::move(res);
+                });
     };
 
     try {
@@ -1876,8 +1904,8 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
             f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
         } else {
             reader_permit_opt permit_holder;
-            f = co_await coroutine::as_future(semaphore.with_permit(query_schema, "mutation-query", cf.estimate_read_memory_cost(), timeout,
-                        trace_state, permit_holder, read_func));
+            f = co_await coroutine::as_future(
+                    semaphore.with_permit(query_schema, "mutation-query", cf.estimate_read_memory_cost(), timeout, trace_state, permit_holder, read_func));
         }
 
         if (!f.failed()) {
@@ -1908,22 +1936,26 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
 
 query::max_result_size database::get_query_max_result_size() const {
     switch (classify_request(_dbcfg)) {
-        case request_class::user:
-            return query::max_result_size(_cfg.max_memory_for_unlimited_query_soft_limit(), _cfg.max_memory_for_unlimited_query_hard_limit(),
-                    _cfg.query_page_size_in_bytes());
-        case request_class::system: [[fallthrough]];
-        case request_class::maintenance:
-            return query::max_result_size(query::result_memory_limiter::unlimited_result_size, query::result_memory_limiter::unlimited_result_size,
-                    query::result_memory_limiter::maximum_result_size);
+    case request_class::user:
+        return query::max_result_size(
+                _cfg.max_memory_for_unlimited_query_soft_limit(), _cfg.max_memory_for_unlimited_query_hard_limit(), _cfg.query_page_size_in_bytes());
+    case request_class::system:
+        [[fallthrough]];
+    case request_class::maintenance:
+        return query::max_result_size(query::result_memory_limiter::unlimited_result_size, query::result_memory_limiter::unlimited_result_size,
+                query::result_memory_limiter::maximum_result_size);
     }
     std::abort();
 }
 
 reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
     switch (classify_request(_dbcfg)) {
-        case request_class::user: return read_concurrency_sem();
-        case request_class::system: return _system_read_concurrency_sem;
-        case request_class::maintenance: return _streaming_concurrency_sem;
+    case request_class::user:
+        return read_concurrency_sem();
+    case request_class::system:
+        return _system_read_concurrency_sem;
+    case request_class::maintenance:
+        return _streaming_concurrency_sem;
     }
     std::abort();
 }
@@ -1941,23 +1973,23 @@ db::timeout_semaphore& database::get_view_update_concurrency_sem() {
     return sem_it->second;
 }
 
-future<reader_permit> database::obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+future<reader_permit> database::obtain_reader_permit(
+        table& tbl, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
     return get_reader_concurrency_semaphore().obtain_permit(tbl.schema(), op_name, tbl.estimate_read_memory_cost(), timeout, std::move(trace_ptr));
 }
 
-future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+future<reader_permit> database::obtain_reader_permit(
+        schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
     return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout, std::move(trace_ptr));
 }
 
 bool database::is_user_semaphore(const reader_concurrency_semaphore& semaphore) const {
-    return &semaphore != &_streaming_concurrency_sem
-        && &semaphore != &_compaction_concurrency_sem
-        && &semaphore != &_system_read_concurrency_sem;
+    return &semaphore != &_streaming_concurrency_sem && &semaphore != &_compaction_concurrency_sem && &semaphore != &_system_read_concurrency_sem;
 }
 
 future<> database::clear_inactive_reads_for_tablet(table_id table, dht::token_range tablet_range) {
     const auto partition_range = dht::to_partition_range(tablet_range);
-    co_await foreach_reader_concurrency_semaphore([table, &partition_range] (reader_concurrency_semaphore& sem) -> future<> {
+    co_await foreach_reader_concurrency_semaphore([table, &partition_range](reader_concurrency_semaphore& sem) -> future<> {
         co_await sem.evict_inactive_reads_for_table(table, &partition_range);
     });
 }
@@ -1966,10 +1998,10 @@ future<> database::foreach_reader_concurrency_semaphore(std::function<future<>(r
     for (auto* sem : {&_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
         co_await func(*sem);
     }
-    co_await _reader_concurrency_semaphores_group.foreach_semaphore_async([&] (scheduling_group sg, reader_concurrency_semaphore& sem) -> future<> {
+    co_await _reader_concurrency_semaphores_group.foreach_semaphore_async([&](scheduling_group sg, reader_concurrency_semaphore& sem) -> future<> {
         co_await func(sem);
     });
-    co_await _view_update_read_concurrency_semaphores_group.foreach_semaphore_async([&] (scheduling_group sg, reader_concurrency_semaphore& sem) -> future<> {
+    co_await _view_update_read_concurrency_semaphores_group.foreach_semaphore_async([&](scheduling_group sg, reader_concurrency_semaphore& sem) -> future<> {
         co_await func(sem);
     });
 }
@@ -1981,7 +2013,7 @@ std::ostream& operator<<(std::ostream& out, const column_family& cf) {
 
 std::ostream& operator<<(std::ostream& out, const database& db) {
     out << "{\n";
-    db._tables_metadata.for_each_table([&] (table_id id, const lw_shared_ptr<table> tp) {
+    db._tables_metadata.for_each_table([&](table_id id, const lw_shared_ptr<table> tp) {
         auto&& cf = *tp;
         out << "(" << id.to_sstring() << ", " << cf.schema()->cf_name() << ", " << cf.schema()->ks_name() << "): " << cf << "\n";
     });
@@ -1992,7 +2024,7 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
 static query::partition_slice partition_slice_for_counter_update(const mutation& m) {
     query::column_id_vector static_columns;
     static_columns.reserve(m.partition().static_row().size());
-    m.partition().static_row().for_each_cell([&] (auto id, auto&&) {
+    m.partition().static_row().for_each_cell([&](auto id, auto&&) {
         static_columns.emplace_back(id);
     });
 
@@ -2003,20 +2035,19 @@ static query::partition_slice partition_slice_for_counter_update(const mutation&
 
     for (auto&& cr : m.partition().clustered_rows()) {
         cr_ranges.emplace_back(query::clustering_range::make_singular(cr.key()));
-        cr.row().cells().for_each_cell([&] (auto id, auto&&) {
+        cr.row().cells().for_each_cell([&](auto id, auto&&) {
             regular_columns.emplace_back(id);
         });
     }
 
     std::ranges::sort(regular_columns);
-    regular_columns.erase(std::unique(regular_columns.begin(), regular_columns.end()),
-                          regular_columns.end());
+    regular_columns.erase(std::unique(regular_columns.begin(), regular_columns.end()), regular_columns.end());
 
-    return query::partition_slice(std::move(cr_ranges), std::move(static_columns),
-        std::move(regular_columns), { }, { }, query::max_rows);
+    return query::partition_slice(std::move(cr_ranges), std::move(static_columns), std::move(regular_columns), {}, {}, query::max_rows);
 }
 
-future<mutation> database::read_and_transform_counter_mutation_to_shards(mutation m, column_family& cf, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
+future<mutation> database::read_and_transform_counter_mutation_to_shards(
+        mutation m, column_family& cf, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     // Before counter update is applied it needs to be transformed from
     // deltas to counter shards. To do that, we need to read the current
     // counter state for each modified cell...
@@ -2039,11 +2070,11 @@ future<mutation> database::read_and_transform_counter_mutation_to_shards(mutatio
 }
 
 max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept {
-    const auto get_min_ts = [is] (const memtable& mt) {
+    const auto get_min_ts = [is](const memtable& mt) {
         // see get_max_purgeable_timestamp() in compaction.cc for comments on choosing min timestamp
         return is ? mt.get_min_live_row_marker_timestamp() : mt.get_min_live_timestamp();
     };
-    const auto get_expiry_treshold = [s = _current_schema(), &dk] (const memtable& mt) -> max_purgeable::expiry_threshold_opt {
+    const auto get_expiry_treshold = [s = _current_schema(), &dk](const memtable& mt) -> max_purgeable::expiry_threshold_opt {
         if (auto* snapshot = mt.get_tombstone_gc_state_snapshot(); snapshot) {
             return snapshot->get_gc_before_for_key(s, dk, false);
         }
@@ -2083,12 +2114,14 @@ future<> memtable_list::flush() {
         promise<> flushed;
         future<> ret = _flush_coalescing.emplace(flushed.get_future());
         _dirty_memory_manager->start_extraneous_flush();
-        _dirty_memory_manager->get_flush_permit().then([this] (auto permit) {
-            _flush_coalescing.reset();
-            return _dirty_memory_manager->flush_one(*this, std::move(permit)).finally([this] {
-                _dirty_memory_manager->finish_extraneous_flush();
-            });
-        }).forward_to(std::move(flushed));
+        _dirty_memory_manager->get_flush_permit()
+                .then([this](auto permit) {
+                    _flush_coalescing.reset();
+                    return _dirty_memory_manager->flush_one(*this, std::move(permit)).finally([this] {
+                        _dirty_memory_manager->finish_extraneous_flush();
+                    });
+                })
+                .forward_to(std::move(flushed));
         return ret;
     } else {
         return *_flush_coalescing;
@@ -2096,9 +2129,8 @@ future<> memtable_list::flush() {
 }
 
 lw_shared_ptr<memtable> memtable_list::new_memtable() {
-    return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager,
-            _table_shared_data,
-            _table_stats, this, _compaction_scheduling_group, _shared_gc_state);
+    return make_lw_shared<memtable>(
+            _current_schema(), *_dirty_memory_manager, _table_shared_data, _table_stats, this, _compaction_scheduling_group, _shared_gc_state);
 }
 
 // Synchronously swaps the active memtable with a new, empty one,
@@ -2115,9 +2147,9 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
 
     data_listeners().on_write(m_schema, m);
 
-    if (m.representation().size() > 128*1024) {
-        return unfreeze_gently(m, std::move(m_schema)).then([&cf, h = std::move(h), timeout] (auto m) mutable {
-            return do_with(std::move(m), [&cf, h = std::move(h), timeout] (auto& m) mutable {
+    if (m.representation().size() > 128 * 1024) {
+        return unfreeze_gently(m, std::move(m_schema)).then([&cf, h = std::move(h), timeout](auto m) mutable {
+            return do_with(std::move(m), [&cf, h = std::move(h), timeout](auto& m) mutable {
                 return cf.apply(m, std::move(h), timeout);
             });
         });
@@ -2130,7 +2162,8 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
     return cf.apply(m, std::move(h), timeout);
 }
 
-future<counter_update_guard> database::acquire_counter_locks(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+future<counter_update_guard> database::acquire_counter_locks(
+        schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
     auto& cf = find_column_family(fm.column_family_id());
 
     auto m = fm.unfreeze(s);
@@ -2140,16 +2173,17 @@ future<counter_update_guard> database::acquire_counter_locks(schema_ptr s, const
 
     tracing::trace(trace_state, "Acquiring counter locks");
 
-    return do_with(std::move(m), [this, &cf, op = std::move(op), timeout] (mutation& m) mutable {
+    return do_with(std::move(m), [this, &cf, op = std::move(op), timeout](mutation& m) mutable {
         return update_write_metrics_if_failed([&m, &cf, op = std::move(op), timeout] mutable -> future<counter_update_guard> {
-            return cf.lock_counter_cells(m, timeout).then([op = std::move(op)] (std::vector<locked_cell> locks) mutable {
+            return cf.lock_counter_cells(m, timeout).then([op = std::move(op)](std::vector<locked_cell> locks) mutable {
                 return counter_update_guard{std::move(op), std::move(locks)};
             });
         }());
     });
 }
 
-future<mutation> database::prepare_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+future<mutation> database::prepare_counter_update(
+        schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
     if (timeout <= db::timeout_clock::now() || utils::get_local_injector().is_enabled("database_apply_counter_update_force_timeout")) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
@@ -2164,8 +2198,7 @@ future<mutation> database::prepare_counter_update(schema_ptr s, const frozen_mut
     auto m = fm.unfreeze(s);
     m.upgrade(cf.schema());
 
-    return update_write_metrics_if_failed(
-        read_and_transform_counter_mutation_to_shards(std::move(m), cf, std::move(trace_state), timeout));
+    return update_write_metrics_if_failed(read_and_transform_counter_mutation_to_shards(std::move(m), cf, std::move(trace_state), timeout));
 }
 
 future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
@@ -2177,8 +2210,7 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
     tracing::trace(trace_state, "Applying counter update");
     co_await coroutine::try_future(update_write_metrics(seastar::futurize_invoke([&] {
         if (!s->is_synced()) {
-            throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
-                                            s->ks_name(), s->cf_name(), s->version()));
+            throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
         }
         try {
             return apply_with_commitlog(cf, m, timeout);
@@ -2203,10 +2235,11 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
 class wrapped_timed_out_error : public timed_out_error {
 private:
     sstring _msg;
+
 public:
     wrapped_timed_out_error(sstring msg)
-        : _msg(std::move(msg))
-    {}
+        : _msg(std::move(msg)) {
+    }
     const char* what() const noexcept override {
         return _msg.c_str();
     }
@@ -2283,9 +2316,8 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
             cl = cf.commitlog();
         } else if (cl != cf.commitlog()) {
             auto&& first_cf = find_column_family(muts[0].column_family_id());
-            on_internal_error(dblog, format("Cannot apply atomically across commitlog domains: {}.{}, {}.{}",
-                              cf.schema()->ks_name(), cf.schema()->cf_name(),
-                              first_cf.schema()->ks_name(), first_cf.schema()->cf_name()));
+            on_internal_error(dblog, format("Cannot apply atomically across commitlog domains: {}.{}, {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name(),
+                                             first_cf.schema()->ks_name(), first_cf.schema()->cf_name()));
         }
 
         auto m_shards = cf.shard_for_writes(dht::get_token(*s, muts[i].key()));
@@ -2310,12 +2342,15 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
     }
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info) {
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout,
+        db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info) {
     ++_stats->total_writes;
     // assume failure until proven otherwise
-    auto update_writes_failed = defer([&] { ++_stats->total_writes_failed; });
+    auto update_writes_failed = defer([&] {
+        ++_stats->total_writes_failed;
+    });
 
-    co_await utils::get_local_injector().inject("database_apply", [&s] (auto& handler) -> future<> {
+    co_await utils::get_local_injector().inject("database_apply", [&s](auto& handler) -> future<> {
         if (s->ks_name() != handler.get("ks_name") || s->cf_name() != handler.get("cf_name")) {
             co_return;
         }
@@ -2361,7 +2396,8 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
             co_await coroutine::return_exception(std::runtime_error("view update generator not plugged to push updates"));
         }
 
-        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), view_update_read_concurrency_sem()));
+        auto lock_f = co_await coroutine::as_future(
+                cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), view_update_read_concurrency_sem()));
         if (lock_f.failed()) {
             auto ex = lock_f.get_exception();
             if (is_timeout_exception(ex)) {
@@ -2399,23 +2435,23 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     }
     auto f = co_await coroutine::as_future(this->apply_in_memory(m, s, std::move(h), timeout));
     if (f.failed()) {
-      auto ex = f.get_exception();
-      if (try_catch<mutation_reordered_with_truncate_exception>(ex)) {
-        // This mutation raced with a truncate, so we can just drop it.
-        dblog.debug("replay_position reordering detected");
-        co_return;
-      } else if (is_timeout_exception(ex)) {
-        ++_stats->total_writes_timedout;
-      }
-      co_await coroutine::return_exception_ptr(std::move(ex));
+        auto ex = f.get_exception();
+        if (try_catch<mutation_reordered_with_truncate_exception>(ex)) {
+            // This mutation raced with a truncate, so we can just drop it.
+            dblog.debug("replay_position reordering detected");
+            co_return;
+        } else if (is_timeout_exception(ex)) {
+            ++_stats->total_writes_timedout;
+        }
+        co_await coroutine::return_exception_ptr(std::move(ex));
     }
     // Success, prevent incrementing failure counter
     update_writes_failed.cancel();
 }
 
-template<typename Future>
+template <typename Future>
 Future database::update_write_metrics(Future&& f) {
-    return f.then_wrapped([s = _stats] (auto f) {
+    return f.then_wrapped([s = _stats](auto f) {
         if (f.failed()) {
             ++s->total_writes_failed;
             auto ep = f.get_exception();
@@ -2431,9 +2467,9 @@ Future database::update_write_metrics(Future&& f) {
     });
 }
 
-template<typename Future>
+template <typename Future>
 Future database::update_write_metrics_if_failed(Future&& f) {
-    return f.then_wrapped([s = _stats] (auto f) {
+    return f.then_wrapped([s = _stats](auto f) {
         if (f.failed()) {
             ++s->total_writes;
             ++s->total_writes_failed;
@@ -2461,7 +2497,8 @@ void database::update_write_metrics_for_rejected_writes() {
     ++_stats->total_writes_rejected_due_to_out_of_space_prevention;
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync,
+        db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
@@ -2485,8 +2522,7 @@ future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::t
     return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no, std::monostate{});
 }
 
-keyspace::config
-database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system) {
+keyspace::config database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system) {
     keyspace::config cfg;
     if (is_system == system_keyspace::yes) {
         cfg.enable_disk_reads = cfg.enable_disk_writes = cfg.enable_commitlog = !_cfg.volatile_system_keyspace_for_testing();
@@ -2527,12 +2563,10 @@ database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_
 
 } // namespace replica
 
-auto fmt::formatter<db::write_type>::format(db::write_type t,
-                                            fmt::format_context& ctx) const
-        -> decltype(ctx.out()) {
+auto fmt::formatter<db::write_type>::format(db::write_type t, fmt::format_context& ctx) const -> decltype(ctx.out()) {
     std::string_view name;
     switch (t) {
-    using enum db::write_type;
+        using enum db::write_type;
     case SIMPLE:
         name = "SIMPLE";
         break;
@@ -2560,8 +2594,10 @@ auto fmt::formatter<db::write_type>::format(db::write_type t,
 
 auto fmt::formatter<db::operation_type>::format(db::operation_type op_type, fmt::format_context& ctx) const -> decltype(ctx.out()) {
     switch (op_type) {
-    case operation_type::read: return fmt::format_to(ctx.out(), "read");
-    case operation_type::write: return fmt::format_to(ctx.out(), "write");
+    case operation_type::read:
+        return fmt::format_to(ctx.out(), "read");
+    case operation_type::write:
+        return fmt::format_to(ctx.out(), "write");
     }
     abort();
 }
@@ -2569,7 +2605,7 @@ auto fmt::formatter<db::operation_type>::format(db::operation_type op_type, fmt:
 
 std::string_view fmt::formatter<db::consistency_level>::to_string(db::consistency_level cl) {
     switch (cl) {
-    using enum db::consistency_level;
+        using enum db::consistency_level;
     case ANY:
         return "ANY";
     case ONE:
@@ -2599,11 +2635,11 @@ std::string_view fmt::formatter<db::consistency_level>::to_string(db::consistenc
 
 namespace replica {
 
-sstring database::get_available_index_name(const sstring &ks_name, const sstring &cf_name,
-                                           std::optional<sstring> index_name_root) const
-{
-    return secondary_index::get_available_index_name(ks_name, cf_name, index_name_root, existing_index_names(ks_name),
-            [this] (std::string_view ks, std::string_view cf) { return has_schema(ks, cf); });
+sstring database::get_available_index_name(const sstring& ks_name, const sstring& cf_name, std::optional<sstring> index_name_root) const {
+    return secondary_index::get_available_index_name(
+            ks_name, cf_name, index_name_root, existing_index_names(ks_name), [this](std::string_view ks, std::string_view cf) {
+                return has_schema(ks, cf);
+            });
 }
 
 schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& index_name) const {
@@ -2616,8 +2652,10 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 }
 
 future<> database::close_tables(table_kind kind_to_close) {
-    auto b = defer([this] { _stop_barrier.abort(); });
-    co_await _tables_metadata.parallel_for_each_table(coroutine::lambda([this, kind_to_close] (table_id, lw_shared_ptr<table> table) -> future<> {
+    auto b = defer([this] {
+        _stop_barrier.abort();
+    });
+    co_await _tables_metadata.parallel_for_each_table(coroutine::lambda([this, kind_to_close](table_id, lw_shared_ptr<table> table) -> future<> {
         auto& s = table->schema();
         table_kind k = is_system_table(*s) || _cfg.extensions().is_extension_internal_keyspace(s->ks_name()) ? table_kind::system : table_kind::user;
         if (k == kind_to_close) {
@@ -2630,12 +2668,13 @@ future<> database::close_tables(table_kind kind_to_close) {
 
 void database::revert_initial_system_read_concurrency_boost() {
     _system_read_concurrency_sem.set_resources({database::max_count_system_concurrent_reads, max_memory_system_concurrent_reads()});
-    dblog.debug("Reverted system read concurrency from initial {} to normal {}", database::max_count_concurrent_reads, database::max_count_system_concurrent_reads);
+    dblog.debug(
+            "Reverted system read concurrency from initial {} to normal {}", database::max_count_concurrent_reads, database::max_count_system_concurrent_reads);
 }
 
 future<> database::start(sharded<qos::service_level_controller>& sl_controller, utils::disk_space_monitor* dsm) {
     sl_controller.local().register_subscriber(this);
-    _unsubscribe_qos_configuration_change = [this, &sl_controller] () {
+    _unsubscribe_qos_configuration_change = [this, &sl_controller]() {
         return sl_controller.local().unregister_subscriber(this);
     };
     qos::service_level default_service_level = sl_controller.local().get_service_level(qos::service_level_controller::default_service_level_name);
@@ -2647,8 +2686,8 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
     }
 
     if (dsm && (this_shard_id() == 0)) {
-        _out_of_space_subscription = dsm->subscribe(_cfg.critical_disk_utilization_level, [this] (auto threshold_reached) {
-        return set_in_critical_disk_utilization_mode(container(), bool(threshold_reached));
+        _out_of_space_subscription = dsm->subscribe(_cfg.critical_disk_utilization_level, [this](auto threshold_reached) {
+            return set_in_critical_disk_utilization_mode(container(), bool(threshold_reached));
         });
     }
 
@@ -2707,7 +2746,9 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
 
 future<> database::shutdown() {
     _shutdown = true;
-    auto b = defer([this] { _stop_barrier.abort(); });
+    auto b = defer([this] {
+        _stop_barrier.abort();
+    });
     co_await _stop_barrier.arrive_and_wait();
     b.cancel();
 
@@ -2786,7 +2827,7 @@ future<> database::stop() {
 }
 
 future<> database::flush_all_memtables() {
-    return _tables_metadata.parallel_for_each_table([] (table_id, lw_shared_ptr<table> table) {
+    return _tables_metadata.parallel_for_each_table([](table_id, lw_shared_ptr<table> table) {
         return table->flush();
     });
 }
@@ -2797,7 +2838,7 @@ future<> database::flush(const sstring& ksname, const sstring& cfname) {
 }
 
 future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, table_id id) {
-    return sharded_db.invoke_on_all([id] (replica::database& db) {
+    return sharded_db.invoke_on_all([id](replica::database& db) {
         if (db.column_family_exists(id)) {
             return db.find_column_family(id).flush();
         }
@@ -2806,7 +2847,7 @@ future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, tabl
 }
 
 future<> database::drop_cache_for_table_on_all_shards(sharded<database>& sharded_db, table_id id) {
-    return sharded_db.invoke_on_all([id] (replica::database& db) {
+    return sharded_db.invoke_on_all([id](replica::database& db) {
         return db.find_column_family(id).get_row_cache().invalidate(row_cache::external_updater([] {}));
     });
 }
@@ -2824,42 +2865,46 @@ static future<> force_new_commitlog_segments(std::unique_ptr<db::commitlog>& cl1
 
 future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::vector<table_info> tables) {
     /**
-     * #14870 
+     * #14870
      * To ensure tests which use nodetool flush to force data
      * to sstables and do things post this get what they expect,
      * we do an extra call here and below, asking commitlog
-     * to discard the currently active segment, This ensures we get 
+     * to discard the currently active segment, This ensures we get
      * as sstable-ish a universe as we can, as soon as we can.
-    */
+     */
     if (utils::get_local_injector().enter("flush_tables_on_all_shards_table_drop")) {
         tables.push_back(table_info{});
     }
-    return sharded_db.invoke_on_all([] (replica::database& db) {
-        return force_new_commitlog_segments(db._commitlog, db._schema_commitlog);
-    }).then([&, tables = std::move(tables)] {
-        return parallel_for_each(tables, [&] (const auto& ti) {
-            return flush_table_on_all_shards(sharded_db, ti.id);
-        });
-    });
+    return sharded_db
+            .invoke_on_all([](replica::database& db) {
+                return force_new_commitlog_segments(db._commitlog, db._schema_commitlog);
+            })
+            .then([&, tables = std::move(tables)] {
+                return parallel_for_each(tables, [&](const auto& ti) {
+                    return flush_table_on_all_shards(sharded_db, ti.id);
+                });
+            });
 }
 
 future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name) {
     // see above
-    return sharded_db.invoke_on_all([] (replica::database& db) {
-        return force_new_commitlog_segments(db._commitlog, db._schema_commitlog);
-    }).then([&, ks_name] {
-        auto& ks = sharded_db.local().find_keyspace(ks_name);
-        return parallel_for_each(ks.metadata()->cf_meta_data(), [&] (auto& pair) {
-            return flush_table_on_all_shards(sharded_db, pair.second->id());
-        });
-    });
+    return sharded_db
+            .invoke_on_all([](replica::database& db) {
+                return force_new_commitlog_segments(db._commitlog, db._schema_commitlog);
+            })
+            .then([&, ks_name] {
+                auto& ks = sharded_db.local().find_keyspace(ks_name);
+                return parallel_for_each(ks.metadata()->cf_meta_data(), [&](auto& pair) {
+                    return flush_table_on_all_shards(sharded_db, pair.second->id());
+                });
+            });
 }
 
 future<> database::flush_all_tables() {
     // see above
     dblog.info("Forcing new commitlog segment and flushing all tables");
     co_await _commitlog->force_new_active_segment();
-    co_await get_tables_metadata().parallel_for_each_table([] (table_id, lw_shared_ptr<table> t) {
+    co_await get_tables_metadata().parallel_for_each_table([](table_id, lw_shared_ptr<table> t) {
         return t->flush();
     });
     _all_tables_flushed_at = db_clock::now();
@@ -2868,28 +2913,31 @@ future<> database::flush_all_tables() {
 }
 
 future<db_clock::time_point> database::get_all_tables_flushed_at(sharded<database>& sharded_db) {
-    return sharded_db.map_reduce0([&] (const database& db) {
-        return db._all_tables_flushed_at;
-    }, db_clock::now(), [] (db_clock::time_point l, db_clock::time_point r) {
-        return std::min(l, r);
-    });
+    return sharded_db.map_reduce0(
+            [&](const database& db) {
+                return db._all_tables_flushed_at;
+            },
+            db_clock::now(),
+            [](db_clock::time_point l, db_clock::time_point r) {
+                return std::min(l, r);
+            });
 }
 
 future<> database::drop_cache_for_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name) {
     auto& ks = sharded_db.local().find_keyspace(ks_name);
-    return parallel_for_each(ks.metadata()->cf_meta_data(), [&] (auto& pair) {
+    return parallel_for_each(ks.metadata()->cf_meta_data(), [&](auto& pair) {
         return drop_cache_for_table_on_all_shards(sharded_db, pair.second->id());
     });
 }
 
 future<> database::trigger_logstor_compaction_on_all_shards(sharded<database>& sharded_db, bool major) {
-    return sharded_db.invoke_on_all([major] (replica::database& db) {
+    return sharded_db.invoke_on_all([major](replica::database& db) {
         return db.trigger_logstor_compaction(major);
     });
 }
 
 void database::trigger_logstor_compaction(bool major) {
-    _tables_metadata.for_each_table([&] (table_id id, const lw_shared_ptr<table> tp) {
+    _tables_metadata.for_each_table([&](table_id id, const lw_shared_ptr<table> tp) {
         if (tp->uses_logstor()) {
             tp->trigger_logstor_compaction();
         }
@@ -2897,13 +2945,13 @@ void database::trigger_logstor_compaction(bool major) {
 }
 
 future<> database::flush_logstor_separator_on_all_shards(sharded<database>& sharded_db) {
-    return sharded_db.invoke_on_all([] (replica::database& db) {
+    return sharded_db.invoke_on_all([](replica::database& db) {
         return db.flush_logstor_separator();
     });
 }
 
 future<> database::flush_logstor_separator(std::optional<size_t> seq_num) {
-    return _tables_metadata.parallel_for_each_table([seq_num] (table_id, lw_shared_ptr<table> table) {
+    return _tables_metadata.parallel_for_each_table([seq_num](table_id, lw_shared_ptr<table> table) {
         return table->flush_separator(seq_num);
     });
 }
@@ -2920,7 +2968,7 @@ size_t database::get_logstor_memory_usage() const {
 
     m += _logstor->get_memory_usage();
 
-    get_tables_metadata().for_each_table([&m] (table_id, lw_shared_ptr<replica::table> table) {
+    get_tables_metadata().for_each_table([&m](table_id, lw_shared_ptr<replica::table> table) {
         if (table->uses_logstor()) {
             m += table->get_logstor_memory_usage();
         }
@@ -2937,8 +2985,9 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, t
     co_await snapshot_table_on_all_shards(sharded_db, table_shards, tag, opts);
 }
 
-future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, db::snapshot_options opts) {
-    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), opts] (auto& table_name) {
+future<> database::snapshot_tables_on_all_shards(
+        sharded<database>& sharded_db, std::string_view ks_name, std::vector<sstring> table_names, sstring tag, db::snapshot_options opts) {
+    return parallel_for_each(table_names, [&sharded_db, ks_name, tag = std::move(tag), opts](auto& table_name) {
         auto uuid = sharded_db.local().find_uuid(ks_name, table_name);
         return snapshot_table_on_all_shards(sharded_db, uuid, tag, opts);
     });
@@ -2946,14 +2995,14 @@ future<> database::snapshot_tables_on_all_shards(sharded<database>& sharded_db, 
 
 future<> database::snapshot_keyspace_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, sstring tag, db::snapshot_options opts) {
     auto& ks = sharded_db.local().find_keyspace(ks_name);
-    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [&, tag = std::move(tag), opts] (const auto& pair) -> future<> {
+    co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data(), [&, tag = std::move(tag), opts](const auto& pair) -> future<> {
         auto uuid = pair.second->id();
         co_await snapshot_table_on_all_shards(sharded_db, uuid, tag, opts);
     });
 }
 
-future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name,
+        std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
     co_return co_await truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at_opt, with_snapshot, std::move(snapshot_name_opt));
@@ -2968,8 +3017,8 @@ struct database::table_truncate_state {
     bool did_flush;
 };
 
-future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr& table_shards,
+        std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     auto& cf = *table_shards;
     auto s = cf.schema();
 
@@ -2993,8 +3042,8 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     std::vector<foreign_ptr<std::unique_ptr<table_truncate_state>>> table_states;
     table_states.resize(smp::count);
 
-    co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&] (unsigned shard) -> future<> {
-        table_states[shard] = co_await smp::submit_to(shard, [&] () -> future<foreign_ptr<std::unique_ptr<table_truncate_state>>> {
+    co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&](unsigned shard) -> future<> {
+        table_states[shard] = co_await smp::submit_to(shard, [&]() -> future<foreign_ptr<std::unique_ptr<table_truncate_state>>> {
             auto& cf = *table_shards;
             auto& views = table_shards.views();
             auto st = std::make_unique<table_truncate_state>();
@@ -3004,11 +3053,11 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
             st->cres.reserve(1 + views.size());
             auto& db = sharded_db.local();
             auto& cm = db.get_compaction_manager();
-            co_await cf.parallel_foreach_compaction_group_view([&cm, &st] (compaction::compaction_group_view& ts) -> future<> {
+            co_await cf.parallel_foreach_compaction_group_view([&cm, &st](compaction::compaction_group_view& ts) -> future<> {
                 st->cres.emplace_back(co_await cm.stop_and_disable_compaction("truncate", ts));
             });
-            co_await coroutine::parallel_for_each(views, [&] (lw_shared_ptr<replica::table> v) -> future<> {
-                co_await v->parallel_foreach_compaction_group_view([&cm, &st] (compaction::compaction_group_view& ts) -> future<> {
+            co_await coroutine::parallel_for_each(views, [&](lw_shared_ptr<replica::table> v) -> future<> {
+                co_await v->parallel_foreach_compaction_group_view([&cm, &st](compaction::compaction_group_view& ts) -> future<> {
                     st->cres.emplace_back(co_await cm.stop_and_disable_compaction("truncate", ts));
                 });
             });
@@ -3017,22 +3066,25 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         });
     });
 
-    co_await utils::get_local_injector().inject("truncate_compaction_disabled_wait", [] (auto& handler) -> future<> {
-        dblog.info("truncate_compaction_disabled_wait: wait");
-        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-        dblog.info("truncate_compaction_disabled_wait: done");
-    }, false);
+    co_await utils::get_local_injector().inject(
+            "truncate_compaction_disabled_wait",
+            [](auto& handler) -> future<> {
+                dblog.info("truncate_compaction_disabled_wait: wait");
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                dblog.info("truncate_compaction_disabled_wait: done");
+            },
+            false);
 
     const auto should_flush = with_snapshot;
     dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
-    auto flush_or_clear = [should_flush] (replica::table& cf) {
-            if (should_flush && cf.can_flush()) {
-                return cf.flush();
-            } else {
-                return cf.clear();
-            }
-        };
-    co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
+    auto flush_or_clear = [should_flush](replica::table& cf) {
+        if (should_flush && cf.can_flush()) {
+            return cf.flush();
+        } else {
+            return cf.clear();
+        }
+    };
+    co_await sharded_db.invoke_on_all([&](replica::database& db) -> future<> {
         unsigned shard = this_shard_id();
         auto& cf = *table_shards;
         auto& views = table_shards.views();
@@ -3046,7 +3098,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         st.low_mark = cf.set_low_replay_position_mark();
 
         co_await flush_or_clear(cf);
-        co_await coroutine::parallel_for_each(views, [&] (lw_shared_ptr<replica::table> v) -> future<> {
+        co_await coroutine::parallel_for_each(views, [&](lw_shared_ptr<replica::table> v) -> future<> {
             co_await flush_or_clear(*v);
         });
         co_await cf.flush_separator();
@@ -3066,12 +3118,11 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
 
     if (with_snapshot) {
         auto truncated_at = truncated_at_opt.value_or(db_clock::now());
-        auto name = snapshot_name_opt.value_or(
-            format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
+        auto name = snapshot_name_opt.value_or(format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
         co_await snapshot_table_on_all_shards(sharded_db, table_shards, name, db::snapshot_options{});
     }
 
-    co_await sharded_db.invoke_on_all([&] (database& db) {
+    co_await sharded_db.invoke_on_all([&](database& db) {
         auto shard = this_shard_id();
         auto& cf = *table_shards;
         auto& views = table_shards.views();
@@ -3097,9 +3148,9 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, std:
     // TODO: indexes.
     // Note: since discard_sstables was changed to only count tables owned by this shard,
     // we can get zero rp back. Changed SCYLLA_ASSERT, and ensure we save at least low_mark.
-    // #6995 - the SCYLLA_ASSERT below was broken in c2c6c71 and remained so for many years. 
+    // #6995 - the SCYLLA_ASSERT below was broken in c2c6c71 and remained so for many years.
     // We nowadays do not flush tables with sstables but autosnapshot=false. This means
-    // the low_mark assertion does not hold, because we maybe/probably never got around to 
+    // the low_mark assertion does not hold, because we maybe/probably never got around to
     // creating the sstables that would create them.
     //
     // What we want to assert is that only data generated until truncation time was included,
@@ -3107,7 +3158,7 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, std:
     // in the truncation table.
     if (st.did_flush && rp != db::replay_position() && st.low_mark < rp) {
         dblog.warn("Data in table {}.{} is written after truncation time and was incorrectly truncated. truncated_at: {} low_mark: {} rp: {}",
-                    cf.schema()->ks_name(), cf.schema()->cf_name(), truncated_at, st.low_mark, rp);
+                cf.schema()->ks_name(), cf.schema()->cf_name(), truncated_at, st.low_mark, rp);
     }
     if (rp == db::replay_position()) {
         // If this shard had no mutations, st.low_mark will be an empty, default constructed
@@ -3123,9 +3174,9 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, std:
             rp = st.low_mark;
         }
     }
-    co_await coroutine::parallel_for_each(views, [&sys_ks, truncated_at] (lw_shared_ptr<replica::table> v) -> future<> {
-            db::replay_position rp = co_await v->discard_sstables(truncated_at);
-            co_await sys_ks.save_truncation_record(*v, truncated_at, rp);
+    co_await coroutine::parallel_for_each(views, [&sys_ks, truncated_at](lw_shared_ptr<replica::table> v) -> future<> {
+        db::replay_position rp = co_await v->discard_sstables(truncated_at);
+        co_await sys_ks.save_truncation_record(*v, truncated_at, rp);
     });
     // save_truncation_record() may actually fail after we cached the truncation time
     // but this is not be worse that if failing without caching: at least the correct time
@@ -3169,29 +3220,33 @@ future<std::unordered_map<sstring, database::snapshot_details>> database::get_sn
     std::unordered_map<sstring, snapshot_details> details;
 
     for (auto& datadir : data_dirs) {
-        co_await lister::scan_dir(fs::path{datadir}, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details] (fs::path parent_dir, directory_entry de) -> future<> {
-            // KS directory
-            sstring ks_name = de.name;
+        co_await lister::scan_dir(fs::path{datadir}, lister::dir_entry_types::of<directory_entry_type::directory>(),
+                [&details](fs::path parent_dir, directory_entry de) -> future<> {
+                    // KS directory
+                    sstring ks_name = de.name;
 
-            co_return co_await lister::scan_dir(parent_dir / de.name, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
-                // CF directory
-                auto cf_dir = parent_dir / de.name;
+                    co_return co_await lister::scan_dir(parent_dir / de.name, lister::dir_entry_types::of<directory_entry_type::directory>(),
+                            [&details, ks_name = std::move(ks_name)](fs::path parent_dir, directory_entry de) -> future<> {
+                                // CF directory
+                                auto cf_dir = parent_dir / de.name;
 
-                // Skip tables with no snapshots.
-                // Also, skips non-keyspace parent_dir (e.g. commitlog or view_hints directories)
-                // that may also be present under the data directory alongside keyspaces
-                if (!co_await file_exists((cf_dir / sstables::snapshots_dir).native())) {
-                    co_return;
-                }
+                                // Skip tables with no snapshots.
+                                // Also, skips non-keyspace parent_dir (e.g. commitlog or view_hints directories)
+                                // that may also be present under the data directory alongside keyspaces
+                                if (!co_await file_exists((cf_dir / sstables::snapshots_dir).native())) {
+                                    co_return;
+                                }
 
-                auto cf_name_and_uuid = parse_table_directory_name(de.name);
-                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
-                    auto snapshot_name = de.name;
-                    auto cf_details = co_await table::get_snapshot_details(parent_dir / snapshot_name, cf_dir);
-                    details[snapshot_name].emplace_back(ks_name, cf_name, std::move(cf_details));
+                                auto cf_name_and_uuid = parse_table_directory_name(de.name);
+                                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir,
+                                        lister::dir_entry_types::of<directory_entry_type::directory>(),
+                                        [&details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir](fs::path parent_dir, directory_entry de) -> future<> {
+                                            auto snapshot_name = de.name;
+                                            auto cf_details = co_await table::get_snapshot_details(parent_dir / snapshot_name, cf_dir);
+                                            details[snapshot_name].emplace_back(ks_name, cf_name, std::move(cf_details));
+                                        });
+                            });
                 });
-            });
-        });
     }
 
     co_return details;
@@ -3205,20 +3260,24 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
     auto table_name_param = table_name;
 
     // if specific keyspaces names were given - filter only these keyspaces directories
-    auto filter = ks_names_set.empty()
-            ? lister::filter_type([] (const fs::path&, const directory_entry&) { return true; })
-            : lister::filter_type([&] (const fs::path&, const directory_entry& dir_entry) {
-                return ks_names_set.contains(dir_entry.name);
-            });
+    auto filter = ks_names_set.empty() ? lister::filter_type([](const fs::path&, const directory_entry&) {
+        return true;
+    })
+                                       : lister::filter_type([&](const fs::path&, const directory_entry& dir_entry) {
+                                             return ks_names_set.contains(dir_entry.name);
+                                         });
 
     // if specific table name was given - filter only these table directories
-    auto table_filter = table_name.empty()
-            ? lister::filter_type([] (const fs::path&, const directory_entry& dir_entry) { return true; })
-            : lister::filter_type([table_name = get_snapshot_table_dir_prefix(table_name)] (const fs::path&, const directory_entry& dir_entry) {
-                return dir_entry.name.find(table_name) == 0;
-            });
+    auto table_filter =
+            table_name.empty()
+                    ? lister::filter_type([](const fs::path&, const directory_entry& dir_entry) {
+                          return true;
+                      })
+                    : lister::filter_type([table_name = get_snapshot_table_dir_prefix(table_name)](const fs::path&, const directory_entry& dir_entry) {
+                          return dir_entry.name.find(table_name) == 0;
+                      });
 
-    co_await coroutine::parallel_for_each(data_dirs, [&, this] (const sstring& parent_dir) {
+    co_await coroutine::parallel_for_each(data_dirs, [&, this](const sstring& parent_dir) {
         return async([&] {
             //
             // The keyspace data directories and their snapshots are arranged as follows:
@@ -3241,13 +3300,16 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
             auto data_dir = fs::path(parent_dir);
             auto data_dir_lister = directory_lister(data_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), filter);
             auto close_data_dir_lister = deferred_close(data_dir_lister);
-            dblog.debug("clear_snapshot: listing data dir {} with filter={}", data_dir, ks_names_set.empty() ? "none" : fmt::format("{}", ks_names_set));
+            dblog.debug("clear_snapshot: listing data dir {} with filter={}", data_dir, seastar::value_of([&] {
+                return ks_names_set.empty() ? "none" : fmt::format("{}", ks_names_set);
+            }));
             while (auto ks_ent = data_dir_lister.get().get()) {
                 auto ks_name = ks_ent->name;
                 auto ks_dir = data_dir / ks_name;
                 auto ks_dir_lister = directory_lister(ks_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), table_filter);
                 auto close_ks_dir_lister = deferred_close(ks_dir_lister);
-                dblog.debug("clear_snapshot: listing keyspace dir {} with filter={}", ks_dir, table_name_param.empty() ? "none" : fmt::format("{}", table_name_param));
+                dblog.debug("clear_snapshot: listing keyspace dir {} with filter={}", ks_dir,
+                        table_name_param.empty() ? "none" : fmt::format("{}", table_name_param));
                 while (auto table_ent = ks_dir_lister.get().get()) {
                     auto table_dir = ks_dir / table_ent->name;
                     auto snapshots_dir = table_dir / sstables::snapshots_dir;
@@ -3262,7 +3324,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                             auto snapshots_dir_lister = directory_lister(snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>());
                             auto close_snapshots_dir_lister = deferred_close(snapshots_dir_lister);
                             dblog.debug("clear_snapshot: listing snapshots dir {} with filter={}", snapshots_dir, tag);
-                            has_snapshots = false;  // unless other snapshots are found
+                            has_snapshots = false; // unless other snapshots are found
                             while (auto snapshot_ent = snapshots_dir_lister.get().get()) {
                                 if (snapshot_ent->name == tag) {
                                     auto snapshot_dir = snapshots_dir / snapshot_ent->name;
@@ -3294,7 +3356,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
 }
 
 future<> database::flush_non_system_column_families() {
-    auto non_system_cfs = get_tables_metadata().filter([this] (auto uuid_and_cf) {
+    auto non_system_cfs = get_tables_metadata().filter([this](auto uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         auto& ks = cf->schema()->ks_name();
         return !is_system_keyspace(ks) && !_cfg.extensions().is_extension_internal_keyspace(ks);
@@ -3305,7 +3367,7 @@ future<> database::flush_non_system_column_families() {
     _drain_progress.remaining_cfs = total_cfs;
     // flush
     dblog.info("Flushing non-system tables");
-    return parallel_for_each(non_system_cfs, [this] (auto&& uuid_and_cf) {
+    return parallel_for_each(non_system_cfs, [this](auto&& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         return cf->flush().then([this] {
             _drain_progress.remaining_cfs--;
@@ -3316,13 +3378,13 @@ future<> database::flush_non_system_column_families() {
 }
 
 future<> database::flush_system_column_families() {
-    auto system_cfs = get_tables_metadata().filter([this] (auto uuid_and_cf) {
+    auto system_cfs = get_tables_metadata().filter([this](auto uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         auto& ks = cf->schema()->ks_name();
         return is_system_keyspace(ks) || _cfg.extensions().is_extension_internal_keyspace(ks);
     });
     dblog.info("Flushing system tables");
-    return parallel_for_each(system_cfs, [] (auto&& uuid_and_cf) {
+    return parallel_for_each(system_cfs, [](auto&& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         return cf->flush();
     }).finally([] {
@@ -3331,7 +3393,9 @@ future<> database::flush_system_column_families() {
 }
 
 future<> database::drain() {
-    auto b = defer([this] { _stop_barrier.abort(); });
+    auto b = defer([this] {
+        _stop_barrier.abort();
+    });
     // Interrupt on going compaction and shutdown to prevent further compaction
     co_await _compaction_manager.drain();
 
@@ -3353,30 +3417,31 @@ void database::tables_metadata::add_table_helper(database& db, keyspace& ks, tab
     // A table needs to be added atomically.
     auto id = s->id();
     ks.add_or_update_column_family(s);
-    auto remove_cf1 = defer([&] () noexcept { ks.metadata()->remove_column_family(s); });
+    auto remove_cf1 = defer([&]() noexcept {
+        ks.metadata()->remove_column_family(s);
+    });
     // A table will be removed via weak pointer and destructors.
     s->registry_entry()->set_table(cf.weak_from_this());
 
     _column_families.emplace(id, s->table().shared_from_this());
-    auto remove_cf2 = defer([&] () noexcept {
+    auto remove_cf2 = defer([&]() noexcept {
         _column_families.erase(s->id());
     });
     _ks_cf_to_uuid.emplace(std::make_pair(s->ks_name(), s->cf_name()), id);
-    auto remove_cf3 = defer([&] () noexcept {
+    auto remove_cf3 = defer([&]() noexcept {
         _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
     });
 
     // MVs/SIs, CDC Log table - are located in the same keyspace as the associated user table
     // audit - is not an internal keyspace in the sens of data_dictionary::keyspace::is_internal
     // cql tracing - is part of system_traces that is an internal keyspace but we want to reject
-    const bool eligible = !ks.as_data_dictionary().is_internal()
-                          || ks.metadata()->name() == tracing::trace_keyspace_helper::KEYSPACE_NAME;
+    const bool eligible = !ks.as_data_dictionary().is_internal() || ks.metadata()->name() == tracing::trace_keyspace_helper::KEYSPACE_NAME;
     cf.set_eligible_to_write_rejection_on_critical_disk_utilization(eligible);
 
     if (s->is_view()) {
         db.find_column_family(s->view_info()->base_id()).add_or_update_view(view_ptr(s));
     }
-    auto remove_view = defer([&] () noexcept {
+    auto remove_view = defer([&]() noexcept {
         if (s->is_view()) {
             try {
                 db.find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
@@ -3461,27 +3526,27 @@ bool database::tables_metadata::contains(std::pair<std::string_view, std::string
 }
 
 void database::tables_metadata::for_each_table(std::function<void(table_id, lw_shared_ptr<table>)> f) const {
-    for (auto& [id, table]: _column_families) {
+    for (auto& [id, table] : _column_families) {
         f(id, table);
     }
 }
 
 void database::tables_metadata::for_each_table_id(std::function<void(const ks_cf_t&, table_id)> f) const {
-    for (auto& [kscf, id]: _ks_cf_to_uuid) {
+    for (auto& [kscf, id] : _ks_cf_to_uuid) {
         f(kscf, id);
     }
 }
 
 future<> database::tables_metadata::for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<table>)> f) {
     auto holder = co_await _cf_lock.hold_read_lock();
-    for (auto& [id, table]: _column_families) {
+    for (auto& [id, table] : _column_families) {
         co_await f(id, table);
     }
 }
 
 future<> database::tables_metadata::parallel_for_each_table(std::function<future<>(table_id, lw_shared_ptr<table>)> f) {
     auto holder = co_await _cf_lock.hold_read_lock();
-    co_await coroutine::parallel_for_each(_column_families, [f = std::move(f)] (auto& table) {
+    co_await coroutine::parallel_for_each(_column_families, [f = std::move(f)](auto& table) {
         return f(table.first, table.second);
     });
 }
@@ -3490,8 +3555,7 @@ const std::unordered_map<table_id, lw_shared_ptr<table>> database::tables_metada
     return _column_families;
 }
 
-data_dictionary::database
-database::as_data_dictionary() const {
+data_dictionary::database database::as_data_dictionary() const {
     static constinit data_dictionary_impl _impl;
     return _impl.wrap(*this);
 }
@@ -3520,91 +3584,70 @@ void database::unplug_view_update_generator() noexcept {
 
 } // namespace replica
 
-mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db,
-        schema_ptr schema, reader_permit permit,
-        std::function<std::optional<dht::partition_range>()> range_generator,
-        gc_clock::time_point compaction_time,
-        std::optional<size_t> multishard_reader_buffer_size,
-        read_ahead read_ahead) {
+mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db, schema_ptr schema, reader_permit permit,
+        std::function<std::optional<dht::partition_range>()> range_generator, gc_clock::time_point compaction_time,
+        std::optional<size_t> multishard_reader_buffer_size, read_ahead read_ahead) {
 
     auto& table = db.local().find_column_family(schema);
     auto erm = table.get_effective_replication_map();
-    auto ms = mutation_source([&db, erm, compaction_time, multishard_reader_buffer_size, read_ahead] (schema_ptr s,
-            reader_permit permit,
-            const dht::partition_range& pr,
-            const query::partition_slice& ps,
-            tracing::trace_state_ptr trace_state,
-            streamed_mutation::forwarding,
-            mutation_reader::forwarding fwd_mr) {
-        auto table_id = s->id();
-        const auto buffer_hint = multishard_reader_buffer_hint(multishard_reader_buffer_size.has_value());
-        auto rd = make_multishard_combining_reader(seastar::make_shared<streaming_reader_lifecycle_policy>(db, table_id, compaction_time),
-                std::move(s), erm, std::move(permit), pr, ps, std::move(trace_state), fwd_mr, buffer_hint, read_ahead);
-        if (multishard_reader_buffer_size) {
-            rd.set_max_buffer_size(*multishard_reader_buffer_size);
-        }
-        return rd;
-    });
+    auto ms = mutation_source(
+            [&db, erm, compaction_time, multishard_reader_buffer_size, read_ahead](schema_ptr s, reader_permit permit, const dht::partition_range& pr,
+                    const query::partition_slice& ps, tracing::trace_state_ptr trace_state, streamed_mutation::forwarding, mutation_reader::forwarding fwd_mr) {
+                auto table_id = s->id();
+                const auto buffer_hint = multishard_reader_buffer_hint(multishard_reader_buffer_size.has_value());
+                auto rd = make_multishard_combining_reader(seastar::make_shared<streaming_reader_lifecycle_policy>(db, table_id, compaction_time), std::move(s),
+                        erm, std::move(permit), pr, ps, std::move(trace_state), fwd_mr, buffer_hint, read_ahead);
+                if (multishard_reader_buffer_size) {
+                    rd.set_max_buffer_size(*multishard_reader_buffer_size);
+                }
+                return rd;
+            });
     auto&& full_slice = schema->full_slice();
-    return make_multi_range_reader(schema, std::move(permit), std::move(ms),
-            std::move(range_generator), std::move(full_slice), {}, mutation_reader::forwarding::no);
+    return make_multi_range_reader(
+            schema, std::move(permit), std::move(ms), std::move(range_generator), std::move(full_slice), {}, mutation_reader::forwarding::no);
 }
 
-mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db,
-        schema_ptr schema,
-        reader_permit permit,
-        const dht::partition_range& range,
-        gc_clock::time_point compaction_time,
-        std::optional<size_t> multishard_reader_buffer_size,
-        read_ahead read_ahead)
-{
+mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db, schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+        gc_clock::time_point compaction_time, std::optional<size_t> multishard_reader_buffer_size, read_ahead read_ahead) {
     const auto table_id = schema->id();
     const auto& full_slice = schema->full_slice();
     auto erm = db.local().find_column_family(schema).get_effective_replication_map();
-    auto rd = make_multishard_combining_reader(
-        seastar::make_shared<streaming_reader_lifecycle_policy>(db, table_id, compaction_time),
-        std::move(schema),
-        std::move(erm),
-        std::move(permit),
-        range,
-        full_slice,
-        {},
-        mutation_reader::forwarding::no,
-        multishard_reader_buffer_hint(multishard_reader_buffer_size.has_value()),
-        read_ahead);
+    auto rd = make_multishard_combining_reader(seastar::make_shared<streaming_reader_lifecycle_policy>(db, table_id, compaction_time), std::move(schema),
+            std::move(erm), std::move(permit), range, full_slice, {}, mutation_reader::forwarding::no,
+            multishard_reader_buffer_hint(multishard_reader_buffer_size.has_value()), read_ahead);
     if (multishard_reader_buffer_size) {
         rd.set_max_buffer_size(*multishard_reader_buffer_size);
     }
     return rd;
 }
 
-auto fmt::formatter<gc_clock::time_point>::format(gc_clock::time_point tp, fmt::format_context& ctx) const
-    -> decltype(ctx.out()) {
+auto fmt::formatter<gc_clock::time_point>::format(gc_clock::time_point tp, fmt::format_context& ctx) const -> decltype(ctx.out()) {
     auto sec = std::chrono::duration_cast<std::chrono::seconds>(tp.time_since_epoch()).count();
     return fmt::format_to(ctx.out(), "{:>12}", sec);
 }
 
 const timeout_config infinite_timeout_config = {
         // not really infinite, but long enough
-        1h, 1h, 1h, 1h, 1h, 1h, 1h,
+        1h,
+        1h,
+        1h,
+        1h,
+        1h,
+        1h,
+        1h,
 };
 
 namespace replica {
 
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
-        sharded<database>& db,
-        schema_ptr s,
-        const dht::partition_range& pr,
-        const query::partition_slice& ps,
-        db::timeout_clock::time_point timeout,
-        bool tombstone_gc_enabled) {
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(sharded<database>& db, schema_ptr s, const dht::partition_range& pr,
+        const query::partition_slice& ps, db::timeout_clock::time_point timeout, bool tombstone_gc_enabled) {
     auto max_res_size = db.local().get_query_max_result_size();
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
-        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout, tombstone_gc_enabled] (replica::database& db) mutable {
-            return db.query_mutations(gs, cmd, pr, {}, timeout, tombstone_gc_enabled).then([] (std::tuple<reconcilable_result, cache_temperature>&& res) {
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout, tombstone_gc_enabled](replica::database& db) mutable {
+            return db.query_mutations(gs, cmd, pr, {}, timeout, tombstone_gc_enabled).then([](std::tuple<reconcilable_result, cache_temperature>&& res) {
                 return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
             });
         });
@@ -3616,11 +3659,7 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
-        sharded<database>& db,
-        schema_ptr s,
-        const dht::partition_range& pr,
-        const query::partition_slice& ps,
-        db::timeout_clock::time_point timeout) {
+        sharded<database>& db, schema_ptr s, const dht::partition_range& pr, const query::partition_slice& ps, db::timeout_clock::time_point timeout) {
     auto max_res_size = db.local().get_query_max_result_size();
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
     auto prs = dht::partition_range_vector{pr};
@@ -3628,8 +3667,8 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
-        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable {
-            return db.query(gs, cmd, opts, prs, {}, timeout).then([] (std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& res) {
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout](replica::database& db) mutable {
+            return db.query(gs, cmd, opts, prs, {}, timeout).then([](std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& res) {
                 return make_foreign(std::move(std::get<0>(res)));
             });
         });
@@ -3665,8 +3704,8 @@ future<> database::on_after_service_level_remove(qos::service_level_info sl_info
     }
 }
 /** This callback is going to be called just before the service level is changed **/
-future<> database::on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after,
-        qos::service_level_info sl_info) {
+future<> database::on_before_service_level_change(
+        qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) {
     if (auto shares_p = std::get_if<int32_t>(&slo_after.shares)) {
         _reader_concurrency_semaphores_group.add_or_update(sl_info.sg, *shares_p);
         _view_update_read_concurrency_semaphores_group.add_or_update(sl_info.sg, *shares_p);
@@ -3677,8 +3716,7 @@ future<> database::on_before_service_level_change(qos::service_level_options slo
     }
 }
 
-future<>
-database::on_effective_service_levels_cache_reloaded() {
+future<> database::on_effective_service_levels_cache_reloaded() {
     co_return;
 }
 
@@ -3705,15 +3743,14 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     if (invalid_keyspaces.size() == 0) {
         dblog.info("All keyspaces are RF-rack-valid");
     } else {
-        const auto ks_list = invalid_keyspaces
-                | std::views::join_with(std::string_view(", "))
-                | std::ranges::to<std::string>();
+        const auto ks_list = invalid_keyspaces | std::views::join_with(std::string_view(", ")) | std::ranges::to<std::string>();
 
         dblog.warn("Some existing keyspaces are not RF-rack-valid, i.e. the replication factor "
-                "does not match the number of racks in one of the datacenters. That may reduce "
-                "availability in case of a failure (cf. "
-                "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
-                "Those keyspaces are: {}", ks_list);
+                   "does not match the number of racks in one of the datacenters. That may reduce "
+                   "availability in case of a failure (cf. "
+                   "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
+                   "Those keyspaces are: {}",
+                ks_list);
     }
 }
 
@@ -3742,22 +3779,22 @@ bool database::check_rf_rack_validity_with_topology_change(locator::token_metada
     }
 
     if (invalid_keyspaces.size() != 0) {
-        const auto ks_list = invalid_keyspaces
-                | std::views::join_with(std::string_view(", "))
-                | std::ranges::to<std::string>();
+        const auto ks_list = invalid_keyspaces | std::views::join_with(std::string_view(", ")) | std::ranges::to<std::string>();
 
         auto op_str = [&] {
             switch (change.tag) {
-                case locator::rf_rack_topology_operation::type::add: return "joining";
-                case locator::rf_rack_topology_operation::type::remove: return "removed";
+            case locator::rf_rack_topology_operation::type::add:
+                return "joining";
+            case locator::rf_rack_topology_operation::type::remove:
+                return "removed";
             }
         }();
 
         dblog.warn("The {} node with DC='{}' and rack='{}' makes some existing keyspaces RF-rack-invalid, i.e. the replication factor "
-                "does not match the number of racks in one of the datacenters. That may reduce "
-                "availability in case of a failure (cf. "
-                "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
-                "Those keyspaces are: {}",
+                   "does not match the number of racks in one of the datacenters. That may reduce "
+                   "availability in case of a failure (cf. "
+                   "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
+                   "Those keyspaces are: {}",
                 op_str, change.dc, change.rack, ks_list);
     }
 
@@ -3771,9 +3808,10 @@ void database::check_rack_list_everywhere(const bool enforce_rack_list) const {
     for (const auto& [name, info] : keyspaces) {
         if (info.uses_tablets() && !locator::uses_rack_list_exclusively(info.get_replication_strategy().get_config_options())) {
             if (enforce_rack_list) {
-                throw std::invalid_argument(std::format(
-                    "The option `enforce_rack_list` is enabled. It requires that all tablet keyspaces use rack lists exclusively. "
-                    "That condition is violated for keyspace '{}'", name.c_str()));
+                throw std::invalid_argument(
+                        std::format("The option `enforce_rack_list` is enabled. It requires that all tablet keyspaces use rack lists exclusively. "
+                                    "That condition is violated for keyspace '{}'",
+                                name.c_str()));
             }
 
             invalid_keyspaces.push_back(std::string_view(name));
@@ -3783,9 +3821,7 @@ void database::check_rack_list_everywhere(const bool enforce_rack_list) const {
     if (invalid_keyspaces.empty()) {
         dblog.info("All tablet keyspaces use rack lists exclusively");
     } else {
-        const auto ks_list = invalid_keyspaces
-                | std::views::join_with(std::string_view(", "))
-                | std::ranges::to<std::string>();
+        const auto ks_list = invalid_keyspaces | std::views::join_with(std::string_view(", ")) | std::ranges::to<std::string>();
 
         dblog.warn("Some existing tablet keyspaces ({}) use numeric replication factors.", ks_list);
     }
@@ -3808,11 +3844,7 @@ utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, u
 // and we "address" each chunk by its offset in this list.
 // Then, we randomly select `n_chunks` of those chunks,
 // and we let each shard fulfill the choices which belong to its files.
-future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_files(
-    table_id id,
-    uint64_t chunk_size,
-    uint64_t n_chunks
-) {
+future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_files(table_id id, uint64_t chunk_size, uint64_t n_chunks) {
     // If the volume of samples is bigger than the semaphore allows,
     // we still want to let the request in, so we clip the number of units to the semaphore's capacity.
     auto memory_consumption = std::min(chunk_size * n_chunks, _memory_for_data_file_samples);
@@ -3845,29 +3877,28 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
         std::vector<uint64_t> global_offset(smp::count + 1);
 
         // Watch out: static lambda. Don't add captures to it.
-        static auto size_in_chunks = [] (const sstables::shared_sstable& sst, uint64_t chunk_size) {
+        static auto size_in_chunks = [](const sstables::shared_sstable& sst, uint64_t chunk_size) {
             return sst->data_size() / chunk_size;
         };
 
         // Initialize `state` and `global_offset`.
-        co_await container().invoke_on_all(coroutine::lambda([&global_offset, id, chunk_size] (
-            replica::database& local_db,
-            state_by_shard& local_state
-        ) -> future<> {
-            auto t = local_db.get_tables_metadata().get_table_if_exists(id);
-            if (!t) {
-                throw std::runtime_error(fmt::format("sample_data_files: table {} does not exist", id));
-            }
+        co_await container().invoke_on_all(
+                coroutine::lambda([&global_offset, id, chunk_size](replica::database& local_db, state_by_shard& local_state) -> future<> {
+                    auto t = local_db.get_tables_metadata().get_table_if_exists(id);
+                    if (!t) {
+                        throw std::runtime_error(fmt::format("sample_data_files: table {} does not exist", id));
+                    }
 
-            local_state.schema = t->schema();
-            local_state.snapshot = co_await t->take_sstable_set_snapshot();
+                    local_state.schema = t->schema();
+                    local_state.snapshot = co_await t->take_sstable_set_snapshot();
 
-            uint64_t my_total_chunks = 0;
-            for (const auto& sst : local_state.snapshot) {
-                my_total_chunks += size_in_chunks(sst, chunk_size);
-            }
-            global_offset[this_shard_id()] = my_total_chunks;
-        }), std::ref(state));
+                    uint64_t my_total_chunks = 0;
+                    for (const auto& sst : local_state.snapshot) {
+                        my_total_chunks += size_in_chunks(sst, chunk_size);
+                    }
+                    global_offset[this_shard_id()] = my_total_chunks;
+                }),
+                std::ref(state));
 
         // [1, 2, 3, 0] --> [0, 1, 3, 6]
         std::exclusive_scan(global_offset.begin(), global_offset.end(), global_offset.begin(), uint64_t(0), std::plus());
@@ -3889,17 +3920,12 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
         for (uint64_t i = 0; i < chosen_chunks.size(); ++i) {
             // Attach semaphore units to each sample.
             auto buf = temporary_buffer<char>(chunk_size);
-            buf = temporary_buffer<char>(buf.get_write(), buf.size(),
-                                         make_object_deleter(buf.release(), memory_units.split(chunk_size)));
+            buf = temporary_buffer<char>(buf.get_write(), buf.size(), make_object_deleter(buf.release(), memory_units.split(chunk_size)));
             result.push_back(std::move(buf));
         }
 
-        auto sample_one_shard = [
-            &chosen_chunks = std::as_const(chosen_chunks),
-            &global_offset = std::as_const(global_offset),
-            &result,
-            chunk_size
-        ] (database& local_db, state_by_shard& local_state) -> future<> {
+        auto sample_one_shard = [&chosen_chunks = std::as_const(chosen_chunks), &global_offset = std::as_const(global_offset), &result, chunk_size](
+                                        database& local_db, state_by_shard& local_state) -> future<> {
             auto ticket = co_await get_units(local_db._sample_data_files_local_concurrency_limiter, 1);
 
             // In `chosen_chunks`, the sorted array of chosen chunk offsets (in the "global chunk list"),
@@ -3918,12 +3944,11 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
             auto sst_it = local_state.snapshot.begin();
             const auto sst_end = local_state.snapshot.end();
             uint64_t current_sst_beg = my_offset;
-            uint64_t current_sst_end = current_sst_beg
-                + (sst_it != sst_end ? size_in_chunks(*sst_it, chunk_size) : 0);
+            uint64_t current_sst_end = current_sst_beg + (sst_it != sst_end ? size_in_chunks(*sst_it, chunk_size) : 0);
 
             // Chooses the the next sample to be read.
             // Returns a pointer to the sstable and the offset of the sample *in bytes*.
-            auto get_next_chunk = [&] () -> std::pair<sstables::shared_sstable, uint64_t> {
+            auto get_next_chunk = [&]() -> std::pair<sstables::shared_sstable, uint64_t> {
                 SCYLLA_ASSERT(sst_it != sst_end);
                 while (*choices_it >= current_sst_end) {
                     ++sst_it;
@@ -3938,13 +3963,9 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
 
             // An arbitrary limit.
             int concurrency_limit = 10;
-            co_await max_concurrent_for_each(
-                std::views::iota(uint64_t(0), n_chunks_to_read),
-                concurrency_limit,
-                coroutine::lambda([&] (int) -> future<>
-            {
-                auto permit = co_await local_db._system_read_concurrency_sem.obtain_permit(
-                    local_state.schema, "sample_data_files", chunk_size, no_timeout, nullptr);
+            co_await max_concurrent_for_each(std::views::iota(uint64_t(0), n_chunks_to_read), concurrency_limit, coroutine::lambda([&](int) -> future<> {
+                auto permit =
+                        co_await local_db._system_read_concurrency_sem.obtain_permit(local_state.schema, "sample_data_files", chunk_size, no_timeout, nullptr);
                 auto [sst, offset] = get_next_chunk();
                 auto sample = co_await sst->data_read(offset, chunk_size, permit);
                 auto& out_buf = *out_it++;
