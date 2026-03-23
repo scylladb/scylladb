@@ -727,7 +727,12 @@ public:
 
         // now we need one page more to be able to save one for next lap
         auto fill_size = align_up(buf1.size(), block_size) + block_size - buf1.size();
-        auto buf2 = co_await _input.read_exactly(fill_size);
+        // If the underlying stream is already at EOF (e.g. buf1 came from
+        // cached _next while the previous read_exactly drained the source),
+        // skip the read_exactly call — it would return empty anyway.
+        auto buf2 = _input.eof()
+            ? temporary_buffer<char>()
+            : co_await _input.read_exactly(fill_size);
 
         temporary_buffer<char> output(buf1.size() + buf2.size());
 

@@ -23,7 +23,10 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/exception_utils.hh"
+#include "utils/limiting_data_source.hh"
 #include "utils/io-wrappers.hh"
+
+#include <seastar/util/memory-data-source.hh>
 
 using namespace encryption;
 
@@ -593,6 +596,113 @@ static future<> test_random_data_source(std::vector<size_t> sizes) {
 SEASTAR_TEST_CASE(test_encrypted_data_source_simple) {
     std::vector<size_t> sizes({3200, 13086, 12065, 200, 11959, 12159, 12852});
     co_await test_random_data_source(sizes);
+}
+
+// Reproduces the production deadlock where encrypted SSTable component downloads
+// got stuck during restore. The encrypted_data_source::get() caches a block in
+// _next, then on the next call bypasses input_stream::read()'s _eof check and
+// calls input_stream::read_exactly() — which does NOT check _eof when _buf is
+// empty. This causes a second get() on the underlying source after EOS.
+//
+// In production the underlying source was chunked_download_source whose get()
+// hung forever. Here we simulate it with a strict source that fails the test.
+//
+// The fix belongs in seastar's input_stream::read_exactly(): check _eof before
+// calling _fd.get(), consistent with read(), read_up_to(), and consume().
+static future<> test_encrypted_source_copy(size_t plaintext_size) {
+    testlog.info("test_encrypted_source_copy: plaintext_size={}", plaintext_size);
+
+    key_info info{"AES/CBC", 256};
+    auto k = ::make_shared<symmetric_key>(info);
+
+    // Step 1: Encrypt the plaintext into memory buffers
+    auto plaintext = generate_random<char>(plaintext_size);
+    std::vector<temporary_buffer<char>> encrypted_bufs;
+    {
+        data_sink sink(make_encrypted_sink(create_memory_sink(encrypted_bufs), k));
+        co_await sink.put(plaintext.clone());
+        co_await sink.close();
+    }
+
+    // Flatten encrypted buffers into a single contiguous buffer
+    size_t encrypted_total = 0;
+    for (const auto& b : encrypted_bufs) {
+        encrypted_total += b.size();
+    }
+    temporary_buffer<char> encrypted(encrypted_total);
+    size_t pos = 0;
+    for (const auto& b : encrypted_bufs) {
+        std::copy(b.begin(), b.end(), encrypted.get_write() + pos);
+        pos += b.size();
+    }
+
+    // Step 2: Create a data source from the encrypted data that fails on
+    // post-EOS get() — simulating a source like chunked_download_source
+    // that would hang forever in this situation.
+    class strict_memory_source final : public limiting_data_source_impl {
+        bool _eof = false;
+    public:
+        strict_memory_source(temporary_buffer<char> data, size_t chunk_size)
+            : limiting_data_source_impl(
+                data_source(std::make_unique<util::temporary_buffer_data_source>(std::move(data))),
+                [chunk_size] { return chunk_size; }) {}
+
+        future<temporary_buffer<char>> get() override {
+            BOOST_REQUIRE_MESSAGE(!_eof,
+                "get() called on source after it already returned EOS — "
+                "this is the production deadlock: read_exactly() does not "
+                "check _eof before calling _fd.get()");
+            auto buf = co_await limiting_data_source_impl::get();
+            _eof = buf.empty();
+            co_return buf;
+        }
+    };
+
+    // Step 3: Wrap in encrypted_data_source and drain via consume() —
+    // the exact code path used by seastar::copy() which is what
+    // sstables_loader_helpers::download_sstable() calls.
+    // Try multiple chunk sizes to hit different alignment scenarios.
+    for (size_t chunk_size : {1ul, 7ul, 4096ul, 8192ul, encrypted_total, encrypted_total + 1}) {
+        if (chunk_size == 0) continue;
+        auto src = data_source(make_encrypted_source(
+            data_source(std::make_unique<strict_memory_source>(encrypted.clone(), chunk_size)), k));
+        auto in = input_stream<char>(std::move(src));
+
+        // consume() is what seastar::copy() uses internally. It calls
+        // encrypted_data_source::get() via _fd.get() until EOF.
+        size_t total_decrypted = 0;
+        co_await in.consume([&total_decrypted](temporary_buffer<char> buf) {
+            total_decrypted += buf.size();
+            return make_ready_future<consumption_result<char>>(continue_consuming{});
+        });
+        co_await in.close();
+
+        BOOST_REQUIRE_EQUAL(total_decrypted, plaintext_size);
+    }
+}
+
+SEASTAR_TEST_CASE(test_encrypted_source_copy_8k) {
+    co_await test_encrypted_source_copy(8192);
+}
+
+SEASTAR_TEST_CASE(test_encrypted_source_copy_4k) {
+    co_await test_encrypted_source_copy(4096);
+}
+
+SEASTAR_TEST_CASE(test_encrypted_source_copy_small) {
+    co_await test_encrypted_source_copy(100);
+}
+
+SEASTAR_TEST_CASE(test_encrypted_source_copy_12k) {
+    co_await test_encrypted_source_copy(12288);
+}
+
+SEASTAR_TEST_CASE(test_encrypted_source_copy_unaligned) {
+    co_await test_encrypted_source_copy(8193);
+}
+
+SEASTAR_TEST_CASE(test_encrypted_source_copy_1byte) {
+    co_await test_encrypted_source_copy(1);
 }
 
 
