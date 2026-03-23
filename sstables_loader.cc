@@ -1223,7 +1223,8 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     auto datacenter = _db.local().get_token_metadata().get_topology().get_datacenter();
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
-    co_await sth.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix);
+    // TODO: update state when all restored...
+    co_await sth.insert_snapshot_remote_location(snap_name, datacenter, endpoint, bucket, prefix, db::snapshot_state::remote);
 
     co_await container().invoke_on(0, [tid, tablet_count] (auto& sl) -> future<> {
         co_await sl._ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);

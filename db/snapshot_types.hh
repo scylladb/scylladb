@@ -46,10 +46,84 @@ struct snapshot_sstable_entry {
     int64_t index_size;
 };
 
+// A single cluster level snapshot
+struct snapshot_entry {
+    std::string name;
+
+    db_clock::time_point created_at;
+    db_clock::time_point expires_at;
+
+    std::string namespace_version;
+    std::string manifest_version;
+
+    constexpr bool operator==(const snapshot_entry& o) const noexcept = default;
+};
+
+// Backup location for a snapshot for a given dc
 struct snapshot_remote_location_entry {
-    sstring endpoint;
-    sstring bucket;
-    sstring prefix;
+    std::string snapshot_name;
+    std::string datacenter;
+
+    // reference to named endpoint in scylla conf.
+    // note: need to be consistent across creation
+    // and usage of this info. 
+    std::string endpoint;
+    std::string bucket;
+    std::string prefix;
+
+    snapshot_state state;
+
+    constexpr bool operator==(const snapshot_remote_location_entry& o) const noexcept = default;
+};
+
+// Keyspace as of the time of snapshot
+struct snapshot_keyspace_entry {
+    std::string snapshot_name;
+    std::string keyspace_name;
+    std::string keyspace_schema;
+
+    constexpr bool operator==(const snapshot_keyspace_entry& o) const noexcept = default;
+};
+
+// Table as of the time of snapshot
+struct snapshot_table_entry {
+    std::string snapshot_name;
+    std::string keyspace_name;
+    std::string table_name;
+
+    ::table_id table_id;
+    snapshot_table_type type;
+
+    ::table_id base_table_id;
+
+    std::string table_schema;
+
+    std::string tablet_layout;
+
+    constexpr bool operator==(const snapshot_table_entry& o) const noexcept = default;
+};
+
+// Tablet as of the time of snapshot
+struct snapshot_tablet_entry {
+    size_t tablet_id;
+
+    // Token range of tablet, equivalent
+    // to tablet_manager::get_first_token/get_last_token
+    dht::token first_token;
+    dht::token last_token;
+    db_clock::time_point repair_time;
+    int64_t repaired_at;
+
+    constexpr bool operator==(const snapshot_tablet_entry& o) const noexcept = default;
+};
+
+// Node as of the time of snapshot
+struct snapshot_node_entry {
+    std::string datacenter;
+    std::string rack;
+    locator::host_id node;
+
+    constexpr bool operator==(const snapshot_node_entry& o) const noexcept = default;
 };
 
 } // namespace db
