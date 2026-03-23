@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: '10 8 * * *' # Runs daily at 8 AM
 
+permissions:
+  issues: write
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
