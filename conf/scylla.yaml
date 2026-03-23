@@ -583,8 +583,7 @@ sstable_format: ms
 audit: "table"
 #
 # List of statement categories that should be audited.
-# Possible categories are: QUERY, DML, DCL, DDL, AUTH, ADMIN
-audit_categories: "DCL,AUTH,ADMIN"
+audit_categories: "DCL,DDL,AUTH,ADMIN"
 #
 # List of tables that should be audited.
 # audit_tables: "<keyspace_name>.<table_name>,<keyspace_name>.<table_name>"
