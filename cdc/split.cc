@@ -76,14 +76,14 @@ struct partition_deletion {
 
 using clustered_column_set = std::map<clustering_key, cdc::one_kind_column_set, clustering_key::less_compare>;
 
-template<typename Container>
+template <typename Container>
 concept EntryContainer = requires(Container& container) {
     // Parenthesized due to https://bugs.llvm.org/show_bug.cgi?id=45088
     { (container.atomic_entries) } -> std::same_as<std::vector<atomic_column_update>&>;
     { (container.nonatomic_entries) } -> std::same_as<std::vector<nonatomic_column_update>&>;
 };
 
-template<EntryContainer Container>
+template <EntryContainer Container>
 static void add_columns_affected_by_entries(cdc::one_kind_column_set& cset, const Container& cont) {
     for (const auto& entry : cont.atomic_entries) {
         cset.set(entry.id);
@@ -134,7 +134,7 @@ struct batch {
             ret.emplace(clustering_key::make_empty(), all_columns);
         }
 
-        auto process_change_type = [&] (const auto& changes) {
+        auto process_change_type = [&](const auto& changes) {
             for (const auto& change : changes) {
                 auto& cset = ret[change.key];
                 cset.resize(s.regular_columns_count());
@@ -211,7 +211,9 @@ private:
 
 public:
     extract_collection_visitor(column_id id, std::map<change_key_t, row_update>& updates)
-        : _id(id), _updates(updates) {}
+        : _id(id)
+        , _updates(updates) {
+    }
 
     void collection_tombstone(const tombstone& t) {
         auto& entry = get_or_append_entry(t.timestamp + 1, gc_clock::duration(0));
@@ -226,7 +228,9 @@ public:
         cell(key, c);
     }
 
-    constexpr bool finished() const { return false; }
+    constexpr bool finished() const {
+        return false;
+    }
 };
 
 /* Visits all cells and tombstones in a row, putting the encountered changes into buckets
@@ -249,41 +253,46 @@ struct extract_row_visitor {
 
     void collection_column(const column_definition& cdef, auto&& visit_collection) {
         visit(*cdef.type, make_visitor(
-        [&] (const collection_type_impl& ctype) {
-            struct collection_visitor : public extract_collection_visitor<collection_visitor> {
-                data_type _value_type;
+                                  [&](const collection_type_impl& ctype) {
+                                      struct collection_visitor : public extract_collection_visitor<collection_visitor> {
+                                          data_type _value_type;
 
-                collection_visitor(column_id id, std::map<change_key_t, row_update>& updates, const collection_type_impl& ctype)
-                    : extract_collection_visitor<collection_visitor>(id, updates), _value_type(ctype.value_comparator()) {}
+                                          collection_visitor(column_id id, std::map<change_key_t, row_update>& updates, const collection_type_impl& ctype)
+                                              : extract_collection_visitor<collection_visitor>(id, updates)
+                                              , _value_type(ctype.value_comparator()) {
+                                          }
 
-                data_type get_value_type(bytes_view) {
-                    return _value_type;
-                }
-            } v(cdef.id, _updates, ctype);
+                                          data_type get_value_type(bytes_view) {
+                                              return _value_type;
+                                          }
+                                      } v(cdef.id, _updates, ctype);
 
-            visit_collection(v);
-        },
-        [&] (const user_type_impl& utype) {
-            struct udt_visitor : public extract_collection_visitor<udt_visitor> {
-                const user_type_impl& _utype;
+                                      visit_collection(v);
+                                  },
+                                  [&](const user_type_impl& utype) {
+                                      struct udt_visitor : public extract_collection_visitor<udt_visitor> {
+                                          const user_type_impl& _utype;
 
-                udt_visitor(column_id id, std::map<change_key_t, row_update>& updates, const user_type_impl& utype)
-                    : extract_collection_visitor<udt_visitor>(id, updates), _utype(utype) {}
+                                          udt_visitor(column_id id, std::map<change_key_t, row_update>& updates, const user_type_impl& utype)
+                                              : extract_collection_visitor<udt_visitor>(id, updates)
+                                              , _utype(utype) {
+                                          }
 
-                data_type get_value_type(bytes_view key) {
-                    return _utype.type(deserialize_field_index(key));
-                }
-            } v(cdef.id, _updates, utype);
+                                          data_type get_value_type(bytes_view key) {
+                                              return _utype.type(deserialize_field_index(key));
+                                          }
+                                      } v(cdef.id, _updates, utype);
 
-            visit_collection(v);
-        },
-        [&] (const abstract_type& o) {
-            throw std::runtime_error(format("extract_changes: unknown collection type:", o.name()));
-        }
-        ));
+                                      visit_collection(v);
+                                  },
+                                  [&](const abstract_type& o) {
+                                      throw std::runtime_error(format("extract_changes: unknown collection type:", o.name()));
+                                  }));
     }
 
-    constexpr bool finished() const { return false; }
+    constexpr bool finished() const {
+        return false;
+    }
 };
 
 struct extract_changes_visitor {
@@ -293,12 +302,8 @@ struct extract_changes_visitor {
         extract_row_visitor v;
         visit_row_cells(v);
 
-        for (auto& [ts_ttl, row_update]: v._updates) {
-            _result[ts_ttl.first].static_updates.push_back({
-                ts_ttl.second,
-                std::move(row_update.atomic_entries),
-                std::move(row_update.nonatomic_entries)
-            });
+        for (auto& [ts_ttl, row_update] : v._updates) {
+            _result[ts_ttl.first].static_updates.push_back({ts_ttl.second, std::move(row_update.atomic_entries), std::move(row_update.nonatomic_entries)});
         }
     }
 
@@ -319,24 +324,18 @@ struct extract_changes_visitor {
         } v;
         visit_row_cells(v);
 
-        for (auto& [ts_ttl, row_update]: v._updates) {
+        for (auto& [ts_ttl, row_update] : v._updates) {
             // It is important that changes in the resulting `set_of_changes` are listed
             // in increasing TTL order. The reason is explained in a comment in cdc/log.cc,
             // search for "#6070".
             auto [ts, ttl] = ts_ttl;
 
             if (v._marker && ts == v._marker_ts && ttl == v._marker_ttl) {
-                _result[ts].clustered_inserts.push_back({
-                        ttl,
-                        ckey,
-                        *v._marker,
-                        std::move(row_update.atomic_entries),
-                        {}
-                    });
+                _result[ts].clustered_inserts.push_back({ttl, ckey, *v._marker, std::move(row_update.atomic_entries), {}});
 
                 auto& cr_insert = _result[ts].clustered_inserts.back();
                 bool clustered_update_exists = false;
-                for (auto& nonatomic_up: row_update.nonatomic_entries) {
+                for (auto& nonatomic_up : row_update.nonatomic_entries) {
                     // Updating a collection column with an INSERT statement implies inserting a tombstone.
                     //
                     // For example, suppose that we have:
@@ -362,12 +361,7 @@ struct extract_changes_visitor {
                         cr_insert.nonatomic_entries.push_back(std::move(nonatomic_up));
                     } else {
                         if (!clustered_update_exists) {
-                            _result[ts].clustered_updates.push_back({
-                                ttl,
-                                ckey,
-                                {},
-                                {}
-                            });
+                            _result[ts].clustered_updates.push_back({ttl, ckey, {}, {}});
 
                             // Multiple iterations of this `for` loop (for different collection columns)
                             // might want to put their `nonatomic_up`s into an UPDATE change;
@@ -390,12 +384,7 @@ struct extract_changes_visitor {
                     }
                 }
             } else {
-                _result[ts].clustered_updates.push_back({
-                        ttl,
-                        ckey,
-                        std::move(row_update.atomic_entries),
-                        std::move(row_update.nonatomic_entries)
-                    });
+                _result[ts].clustered_updates.push_back({ttl, ckey, std::move(row_update.atomic_entries), std::move(row_update.nonatomic_entries)});
             }
         }
     }
@@ -412,7 +401,9 @@ struct extract_changes_visitor {
         _result[t.timestamp].partition_deletions = partition_deletion{t};
     }
 
-    constexpr bool finished() const { return false; }
+    constexpr bool finished() const {
+        return false;
+    }
 };
 
 set_of_changes extract_changes(const mutation& m) {
@@ -426,13 +417,23 @@ namespace cdc {
 struct find_timestamp_visitor {
     api::timestamp_type _ts = api::missing_timestamp;
 
-    bool finished() const { return _ts != api::missing_timestamp; }
+    bool finished() const {
+        return _ts != api::missing_timestamp;
+    }
 
-    void visit(api::timestamp_type ts) { _ts = ts; }
-    void visit(const atomic_cell_view& cell) { visit(cell.timestamp()); }
+    void visit(api::timestamp_type ts) {
+        _ts = ts;
+    }
+    void visit(const atomic_cell_view& cell) {
+        visit(cell.timestamp());
+    }
 
-    void live_atomic_cell(const column_definition&, const atomic_cell_view& cell) { visit(cell); }
-    void dead_atomic_cell(const column_definition&, const atomic_cell_view& cell) { visit(cell); }
+    void live_atomic_cell(const column_definition&, const atomic_cell_view& cell) {
+        visit(cell);
+    }
+    void dead_atomic_cell(const column_definition&, const atomic_cell_view& cell) {
+        visit(cell);
+    }
     void collection_tombstone(const tombstone& t) {
         // A collection tombstone with timestamp T can be created with:
         // UPDATE ks.t USING TIMESTAMP T + 1 SET X = null WHERE ...
@@ -441,15 +442,33 @@ struct find_timestamp_visitor {
         // with cdc$time using timestamp T + 1 instead of T.
         visit(t.timestamp + 1);
     }
-    void live_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
-    void dead_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
-    void collection_column(const column_definition&, auto&& visit_collection) { visit_collection(*this); }
-    void marker(const row_marker& rm) { visit(rm.timestamp()); }
-    void static_row_cells(auto&& visit_row_cells) { visit_row_cells(*this); }
-    void clustered_row_cells(const clustering_key&, auto&& visit_row_cells) { visit_row_cells(*this); }
-    void clustered_row_delete(const clustering_key&, const tombstone& t) { visit(t.timestamp); }
-    void range_delete(const range_tombstone& t) { visit(t.tomb.timestamp); }
-    void partition_delete(const tombstone& t) { visit(t.timestamp); }
+    void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
+        visit(cell);
+    }
+    void dead_collection_cell(bytes_view, const atomic_cell_view& cell) {
+        visit(cell);
+    }
+    void collection_column(const column_definition&, auto&& visit_collection) {
+        visit_collection(*this);
+    }
+    void marker(const row_marker& rm) {
+        visit(rm.timestamp());
+    }
+    void static_row_cells(auto&& visit_row_cells) {
+        visit_row_cells(*this);
+    }
+    void clustered_row_cells(const clustering_key&, auto&& visit_row_cells) {
+        visit_row_cells(*this);
+    }
+    void clustered_row_delete(const clustering_key&, const tombstone& t) {
+        visit(t.timestamp);
+    }
+    void range_delete(const range_tombstone& t) {
+        visit(t.tomb.timestamp);
+    }
+    void partition_delete(const tombstone& t) {
+        visit(t.timestamp);
+    }
 };
 
 /* Find some timestamp inside the given mutation.
@@ -505,8 +524,12 @@ struct should_split_visitor {
 
     virtual ~should_split_visitor() = default;
 
-    inline bool finished() const { return _result; }
-    inline void stop() { _result = true; }
+    inline bool finished() const {
+        return _result;
+    }
+    inline void stop() {
+        _result = true;
+    }
 
     void visit(api::timestamp_type ts, gc_clock::duration ttl = gc_clock::duration(0)) {
         if (_ts != api::missing_timestamp && _ts != ts) {
@@ -517,15 +540,23 @@ struct should_split_visitor {
         if (_ttl && *_ttl != ttl) {
             return stop();
         }
-        _ttl = { ttl };
+        _ttl = {ttl};
     }
 
-    void visit(const atomic_cell_view& cell) { visit(cell.timestamp(), get_ttl(cell)); }
+    void visit(const atomic_cell_view& cell) {
+        visit(cell.timestamp(), get_ttl(cell));
+    }
 
-    void live_atomic_cell(const column_definition&, const atomic_cell_view& cell) { visit(cell); }
-    void dead_atomic_cell(const column_definition&, const atomic_cell_view& cell) { visit(cell); }
+    void live_atomic_cell(const column_definition&, const atomic_cell_view& cell) {
+        visit(cell);
+    }
+    void dead_atomic_cell(const column_definition&, const atomic_cell_view& cell) {
+        visit(cell);
+    }
 
-    void collection_tombstone(const tombstone& t) { visit(t.timestamp + 1); }
+    void collection_tombstone(const tombstone& t) {
+        visit(t.timestamp + 1);
+    }
 
     virtual void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
         if (_had_row_marker) {
@@ -534,8 +565,12 @@ struct should_split_visitor {
         }
         visit(cell);
     }
-    void dead_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
-    void collection_column(const column_definition&, auto&& visit_collection) { visit_collection(*this); }
+    void dead_collection_cell(bytes_view, const atomic_cell_view& cell) {
+        visit(cell);
+    }
+    void collection_column(const column_definition&, auto&& visit_collection) {
+        visit_collection(*this);
+    }
 
     virtual void marker(const row_marker& rm) {
         _had_row_marker = true;
@@ -606,8 +641,8 @@ bool should_split(const mutation& m, const per_request_options& options) {
     cdc::inspect_mutation(m, v);
 
     return v._result
-    // A mutation with no timestamp will be split into 0 mutations:
-        || v._ts == api::missing_timestamp;
+           // A mutation with no timestamp will be split into 0 mutations:
+           || v._ts == api::missing_timestamp;
 }
 
 // Returns true if the row state and the atomic and nonatomic entries represent
@@ -642,7 +677,7 @@ static bool entries_match_row_state(const schema_ptr& base_schema, const cell_ma
         if (current_values.size() != update.cells.size()) {
             return false;
         }
-        
+
         std::unordered_map<sstring_view, bytes> current_values_map;
         for (const auto& entry : current_values) {
             const auto attr_name = std::string_view(value_cast<sstring>(entry.first));
@@ -711,8 +746,8 @@ bool should_skip(batch& changes, const mutation& base_mutation, change_processor
     return true;
 }
 
-void process_changes_with_splitting(const mutation& base_mutation, change_processor& processor,
-        bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility) {
+void process_changes_with_splitting(
+        const mutation& base_mutation, change_processor& processor, bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility) {
     const auto base_schema = base_mutation.schema();
     auto changes = extract_changes(base_mutation);
     auto pk = base_mutation.key();
@@ -824,8 +859,8 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
     }
 }
 
-void process_changes_without_splitting(const mutation& base_mutation, change_processor& processor,
-        bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility) {
+void process_changes_without_splitting(
+        const mutation& base_mutation, change_processor& processor, bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility) {
     if (alternator_strict_compatibility) {
         auto changes = extract_changes(base_mutation);
         if (should_skip(changes.begin()->second, base_mutation, processor)) {
@@ -842,7 +877,7 @@ void process_changes_without_splitting(const mutation& base_mutation, change_pro
 
         one_kind_column_set columns{base_schema->static_columns_count()};
         if (!p.static_row().empty()) {
-            p.static_row().get().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            p.static_row().get().for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
                 columns.set(id);
             });
             processor.produce_preimage(nullptr, columns);
@@ -855,7 +890,7 @@ void process_changes_without_splitting(const mutation& base_mutation, change_pro
                 // Row deleted - include all columns in preimage
                 columns.set(0, base_schema->regular_columns_count(), true);
             } else {
-                cr.row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+                cr.row().cells().for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
                     columns.set(id);
                 });
             }
