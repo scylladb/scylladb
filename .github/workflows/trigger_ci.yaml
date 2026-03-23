@@ -5,9 +5,14 @@ on:
     types: [opened, reopened, synchronize]
   issue_comment:
     types: [created]
-    
+
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   trigger-ci:
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - name: Dump GitHub context
@@ -15,35 +20,46 @@ jobs:
           GITHUB_CONTEXT: ${{ toJson(github) }}
         run: echo "$GITHUB_CONTEXT"
       - name: Checkout PR code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Needed to access full history
-          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Fetch before commit if needed
+        if: github.event.action == 'synchronize'
+        env:
+          BEFORE_COMMIT: ${{ github.event.before }}
         run: |
-          if ! git cat-file -e ${{ github.event.before }} 2>/dev/null; then
-            echo "Fetching before commit ${{ github.event.before }}"
-            git fetch --depth=1 origin ${{ github.event.before }}
+          if ! git cat-file -e "$BEFORE_COMMIT" 2>/dev/null; then
+            echo "Fetching before commit $BEFORE_COMMIT"
+            git fetch --depth=1 origin "$BEFORE_COMMIT"
           fi
 
       - name: Compare commits for file changes
-        if: github.action == 'synchronize'
+        if: github.event.action == 'synchronize'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BEFORE_COMMIT: ${{ github.event.before }}
+          AFTER_COMMIT: ${{ github.event.after }}
         run: |
-          echo "Base: ${{ github.event.before }}"
-          echo "Head: ${{ github.event.after }}"
+          echo "Base: $BEFORE_COMMIT"
+          echo "Head: $AFTER_COMMIT"
 
-          TREE_BEFORE=$(git show -s --format=%T ${{ github.event.before }})
-          TREE_AFTER=$(git show -s --format=%T ${{ github.event.after }})
+          TREE_BEFORE=$(git show -s --format=%T "$BEFORE_COMMIT")
+          TREE_AFTER=$(git show -s --format=%T "$AFTER_COMMIT")
           
           echo "TREE_BEFORE=$TREE_BEFORE" >> $GITHUB_ENV
           echo "TREE_AFTER=$TREE_AFTER" >> $GITHUB_ENV
 
       - name: Check if last push has file changes
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
         run: |
-          if [[ "${{ env.TREE_BEFORE }}" == "${{ env.TREE_AFTER }}" ]]; then
+          if [[ "$EVENT_ACTION" != "synchronize" ]]; then
+            echo "Event is $EVENT_ACTION (not synchronize) - assuming file changes."
+            echo "has_file_changes=true" >> $GITHUB_ENV
+          elif [[ "$TREE_BEFORE" == "$TREE_AFTER" ]]; then
             echo "No file changes detected in the last push, only commit message edit."
             echo "has_file_changes=false" >> $GITHUB_ENV
           else
@@ -52,42 +68,45 @@ jobs:
           fi
 
       - name: Rule 1 - Check PR draft or conflict status
+        env:
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels) }}
         run: |
-          # Check if PR is in draft mode
-          IS_DRAFT="${{ github.event.pull_request.draft }}"
-          
           # Check if PR has 'conflict' label
           HAS_CONFLICT_LABEL="false"
-          LABELS='${{ toJson(github.event.pull_request.labels) }}'
-          if echo "$LABELS" | jq -r '.[].name' | grep -q "^conflict$"; then
+          if echo "$PR_LABELS" | jq -r '.[].name' | grep -q "^conflict$"; then
             HAS_CONFLICT_LABEL="true"
           fi
           
           # Set draft_or_conflict variable
           if [[ "$IS_DRAFT" == "true" || "$HAS_CONFLICT_LABEL" == "true" ]]; then
             echo "draft_or_conflict=true" >> $GITHUB_ENV
-            echo "✅ Rule 1: PR is in draft mode or has conflict label - setting draft_or_conflict=true"
+            echo "Rule 1: PR is in draft mode or has conflict label - setting draft_or_conflict=true"
           else
             echo "draft_or_conflict=false" >> $GITHUB_ENV
-            echo "✅ Rule 1: PR is ready and has no conflict label - setting draft_or_conflict=false"
+            echo "Rule 1: PR is ready and has no conflict label - setting draft_or_conflict=false"
           fi
           
           echo "Draft status: $IS_DRAFT"
           echo "Has conflict label: $HAS_CONFLICT_LABEL"
-          echo "Result: draft_or_conflict = $draft_or_conflict"
 
       - name: Rule 2 - Check labels
+        env:
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels) }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Check if PR has P0 or P1 labels
           HAS_P0_P1_LABEL="false"
-          LABELS='${{ toJson(github.event.pull_request.labels) }}'
-          if echo "$LABELS" | jq -r '.[].name' | grep -E "^(P0|P1)$" > /dev/null; then
+          if echo "$PR_LABELS" | jq -r '.[].name' | grep -E "^(P0|P1)$" > /dev/null; then
             HAS_P0_P1_LABEL="true"
           fi
           
           # Check if PR already has force_on_cloud label
+          HAS_FORCE_ON_CLOUD_LABEL="false"
           echo "HAS_FORCE_ON_CLOUD_LABEL=false" >> $GITHUB_ENV
-          if echo "$LABELS" | jq -r '.[].name' | grep -q "^force_on_cloud$"; then
+          if echo "$PR_LABELS" | jq -r '.[].name' | grep -q "^force_on_cloud$"; then
             HAS_FORCE_ON_CLOUD_LABEL="true"
             echo "HAS_FORCE_ON_CLOUD_LABEL=true" >> $GITHUB_ENV
           fi
@@ -97,28 +116,31 @@ jobs:
           
           # Add force_on_cloud label if PR has P0/P1 and doesn't already have force_on_cloud
           if [[ "$HAS_P0_P1_LABEL" == "true" && "$HAS_FORCE_ON_CLOUD_LABEL" == "false" ]]; then
-            echo "✅ Rule 2: PR has P0 or P1 label - adding force_on_cloud label"
+            echo "Rule 2: PR has P0 or P1 label - adding force_on_cloud label"
             curl -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels" \
+              "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/labels" \
               -d '{"labels":["force_on_cloud"]}'
           elif [[ "$HAS_P0_P1_LABEL" == "true" && "$HAS_FORCE_ON_CLOUD_LABEL" == "true" ]]; then
-            echo "✅ Rule 2: PR has P0 or P1 label and already has force_on_cloud label - no action needed"
+            echo "Rule 2: PR has P0 or P1 label and already has force_on_cloud label - no action needed"
           else
-            echo "✅ Rule 2: PR does not have P0 or P1 label - no force_on_cloud label needed"
+            echo "Rule 2: PR does not have P0 or P1 label - no force_on_cloud label needed"
           fi
 
           SKIP_UNIT_TEST_CUSTOM="false"
-          if echo "$LABELS" | jq -r '.[].name' | grep -q "^ci/skip_unit-tests_custom$"; then
+          if echo "$PR_LABELS" | jq -r '.[].name' | grep -q "^ci/skip_unit-tests_custom$"; then
             SKIP_UNIT_TEST_CUSTOM="true"
           fi
           echo "SKIP_UNIT_TEST_CUSTOM=$SKIP_UNIT_TEST_CUSTOM" >> $GITHUB_ENV
 
       - name: Rule 3 - Analyze changed files and set build requirements
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # Get list of changed files
-          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }})
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
           echo "Changed files:"
           echo "$CHANGED_FILES"
           echo ""
@@ -188,55 +210,87 @@ jobs:
           echo "Scylla GDB required: $REQUIRE_SCYLLA_GDB"
 
       - name: Determine Jenkins Job Name
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.ref_name }}" == "next" ]]; then
+          if [[ "$REF_NAME" == "next" ]]; then
             FOLDER_NAME="scylla-master"
-          elif [[ "${{ github.ref_name }}" == "next-enterprise" ]]; then
+          elif [[ "$REF_NAME" == "next-enterprise" ]]; then
             FOLDER_NAME="scylla-enterprise"
           else
-            VERSION=$(echo "${{ github.ref_name }}" | awk -F'-' '{print $2}')
+            VERSION=$(echo "$REF_NAME" | awk -F'-' '{print $2}')
             if [[ "$VERSION" =~ ^202[0-4]\.[0-9]+$ ]]; then
               FOLDER_NAME="enterprise-$VERSION"
             elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
               FOLDER_NAME="scylla-$VERSION"
             fi
           fi
+          if [[ -z "$FOLDER_NAME" ]]; then
+            echo "::error::Could not determine Jenkins folder from branch '$REF_NAME'"
+            exit 1
+          fi
           echo "JOB_NAME=${FOLDER_NAME}/job/scylla-ci" >> $GITHUB_ENV
 
       - name: Trigger Jenkins Job
-        if: env.draft_or_conflict == 'false' && env.has_file_changes == 'true' && github.action == 'opened' || github.action == 'reopened'
+        if: env.draft_or_conflict == 'false' && env.has_file_changes == 'true'
         env:
           JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
           JENKINS_URL: "https://jenkins.scylladb.com"
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_REPO_NAME: ${{ github.event.repository.full_name }}
         run: |
-          PR_NUMBER=${{ github.event.issue.number }}
-          PR_REPO_NAME=${{ github.event.repository.full_name }}
           echo "Triggering Jenkins Job: $JOB_NAME"
-          curl -X POST \
-            "$JENKINS_URL/job/$JOB_NAME/buildWithParameters? \
-            PR_NUMBER=$PR_NUMBER& \
-            RUN_DTEST=$REQUIRE_DTEST& \
-            RUN_ONLY_SCYLLA_GDB=$REQUIRE_SCYLLA_GDB& \
-            RUN_UNIT_TEST=$REQUIRE_UNITTEST& \
-            FORCE_ON_CLOUD=$HAS_FORCE_ON_CLOUD_LABEL& \
-            SKIP_UNIT_TEST_CUSTOM=$SKIP_UNIT_TEST_CUSTOM& \
-            RUN_ARTIFACT_TESTS=$REQUIRE_ARTIFACTS" \
+          BUILD_URL="$JENKINS_URL/job/$JOB_NAME/buildWithParameters?PR_NUMBER=$PR_NUMBER&RUN_DTEST=$requireDtest&RUN_ONLY_SCYLLA_GDB=$requireScyllaGdb&RUN_UNIT_TEST=$requireUnittest&FORCE_ON_CLOUD=$HAS_FORCE_ON_CLOUD_LABEL&SKIP_UNIT_TEST_CUSTOM=$SKIP_UNIT_TEST_CUSTOM&RUN_ARTIFACT_TESTS=$requireArtifacts"
+          curl -X POST "$BUILD_URL" \
             --fail \
             --user "$JENKINS_USER:$JENKINS_API_TOKEN" \
-            -i -v
+            --silent --show-error
   trigger-ci-via-comment:
-    if: github.event.comment.user.login != 'scylladbbot' && contains(github.event.comment.body, '@scylladbbot') && contains(github.event.comment.body, 'trigger-ci')
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.comment.user.login != 'scylladbbot' &&
+      contains(github.event.comment.body, '@scylladbbot') &&
+      contains(github.event.comment.body, 'trigger-ci') &&
+      github.event.issue.pull_request != null &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
     runs-on: ubuntu-latest
     steps:
+      - name: Determine Jenkins Job Name
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          REF_NAME=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+          echo "Resolved PR base branch: $REF_NAME"
+          if [[ "$REF_NAME" == "next" ]]; then
+            FOLDER_NAME="scylla-master"
+          elif [[ "$REF_NAME" == "next-enterprise" ]]; then
+            FOLDER_NAME="scylla-enterprise"
+          else
+            VERSION=$(echo "$REF_NAME" | awk -F'-' '{print $2}')
+            if [[ "$VERSION" =~ ^202[0-4]\.[0-9]+$ ]]; then
+              FOLDER_NAME="enterprise-$VERSION"
+            elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
+              FOLDER_NAME="scylla-$VERSION"
+            fi
+          fi
+          if [[ -z "$FOLDER_NAME" ]]; then
+            echo "::error::Could not determine Jenkins folder from base branch '$REF_NAME'"
+            exit 1
+          fi
+          echo "JOB_NAME=${FOLDER_NAME}/job/scylla-ci" >> $GITHUB_ENV
       - name: Trigger Scylla-CI Jenkins Job
         env:
           JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
           JENKINS_URL: "https://jenkins.scylladb.com"
+          PR_NUMBER: ${{ github.event.issue.number }}
+          PR_REPO_NAME: ${{ github.event.repository.full_name }}
         run: |
-          PR_NUMBER=${{ github.event.issue.number }}
-          PR_REPO_NAME=${{ github.event.repository.full_name }}
           curl -X POST "$JENKINS_URL/job/$JOB_NAME/buildWithParameters?PR_NUMBER=$PR_NUMBER" \
-          --user "$JENKINS_USER:$JENKINS_API_TOKEN" --fail -i -v
+            --user "$JENKINS_USER:$JENKINS_API_TOKEN" \
+            --fail \
+            --silent --show-error
