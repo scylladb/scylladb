@@ -4001,6 +4001,7 @@ struct manifest_json : public json::json_base {
         json::json_element<int64_t> first_token;
         json::json_element<int64_t> last_token;
         json::json_element<uint64_t> tablet_id;
+        json::json_element<int64_t> repaired_at;
 
         sstable_info() {
             register_params();
@@ -4013,6 +4014,7 @@ struct manifest_json : public json::json_base {
             index_size = e.index_size;
             first_token = e.first_token;
             last_token = e.last_token;
+            repaired_at = e.repaired_at;
             if (e.tablet_id) {
                 tablet_id = *e.tablet_id;
             }
@@ -4026,6 +4028,7 @@ struct manifest_json : public json::json_base {
             first_token = e.first_token;
             last_token = e.last_token;
             tablet_id = e.tablet_id;
+            repaired_at = e.repaired_at;
         }
         sstable_info(sstable_info&& e) {
             register_params();
@@ -4036,6 +4039,7 @@ struct manifest_json : public json::json_base {
             first_token = e.first_token;
             last_token = e.last_token;
             tablet_id = e.tablet_id;
+            repaired_at = e.repaired_at;
         }
         sstable_info& operator=(sstable_info&& e) {
             id = e.id;
@@ -4045,6 +4049,7 @@ struct manifest_json : public json::json_base {
             first_token = e.first_token;
             last_token = e.last_token;
             tablet_id = e.tablet_id;
+            repaired_at = e.repaired_at;
             return *this;
         }
     private:
@@ -4056,6 +4061,7 @@ struct manifest_json : public json::json_base {
             add(&first_token, "first_token");
             add(&last_token, "last_token");
             add(&tablet_id, "tablet_id");
+            add(&repaired_at, "repaired_at");
         }
     };
 
