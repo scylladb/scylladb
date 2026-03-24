@@ -86,6 +86,12 @@ class DockerizedServer:
                                 print(f'Got fail message: {line}')
                                 failed = True
                                 break
+                    if not done and not failed:
+                        # Yield to the event loop so that the asyncio.timeout()
+                        # above can fire if the deadline is reached. Without this,
+                        # the loop body is entirely synchronous and the event loop
+                        # is never resumed, causing the timeout to never trigger.
+                        await asyncio.sleep(0.1)
 
             if failed:
                 self.logfile.close()

@@ -198,6 +198,8 @@ class GSServer(GSFront):
                 os.environ[k] = val
 
     def unpublish(self):
+        if not self.oldvars:
+            return
         for k in self.vars:
             v = self.oldvars[k]
             if v:
