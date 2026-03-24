@@ -11,7 +11,6 @@ from test.cluster.util import check_token_ring_and_group0_consistency, new_test_
 import pytest
 import asyncio
 import logging
-import time
 
 logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
@@ -53,7 +52,7 @@ async def test_cleanup_stop(manager: ManagerClient):
         await s0_log.wait_for('sstable_cleanup_wait: waiting', from_mark=s0_mark)
 
         stop_cleanup = asyncio.create_task(manager.api.stop_compaction(servers[0].ip_addr, "CLEANUP"))
-        time.sleep(1)
+        await asyncio.sleep(1)
 
         await manager.api.message_injection(servers[0].ip_addr, "sstable_cleanup_wait")
         await stop_cleanup
