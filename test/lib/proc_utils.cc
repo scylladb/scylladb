@@ -271,10 +271,21 @@ future<std::tuple<tests::proc::process_fixture, int>> tests::proc::start_docker_
             // arbitrary timeout of 120s for the server to make some output. Very generous.
             // but since we (maybe) run docker, and might need to pull image, this can take
             // some time if we're unlucky.
-            co_await with_timeout(std::chrono::steady_clock::now() + 120s, when_all(std::move(out_fut), std::move(err_fut)));
-        } catch (in_use&) {
-            retry = true;
-            p = std::current_exception();
+            auto [f1, f2] = co_await with_timeout(std::chrono::steady_clock::now() + 120s, when_all(std::move(out_fut), std::move(err_fut)));
+            for (auto* f : {&f1, &f2}) {
+                if (f->failed()) {
+                    try {
+                        f->get();
+                    } catch (in_use&) {
+                        retry = true;
+                        p = std::current_exception();
+                    } catch (...) {
+                        if (!p) {
+                            p = std::current_exception();
+                        }
+                    }
+                }
+            }
         } catch (...) {
             p = std::current_exception();
         }
