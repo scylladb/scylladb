@@ -177,7 +177,7 @@ async def _smoke_test(manager: ManagerClient, key_provider: KeyProviderFactory,
             # restart the cluster
             if restart:
                 await restart(manager, servers, cfs)
-                await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+                cql, _ = await manager.get_ready_cql(servers)
             else:
                 await manager.rolling_restart(servers)
             for table_name in cfs:
