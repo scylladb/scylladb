@@ -433,10 +433,21 @@ system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
     co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
 }
 
-future<> system_distributed_keyspace::insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, sstables::sstable_id sstable_id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix, db::consistency_level cl) {
-    // Not inserting the downloaded column so that re-populating on restore
-    // retry doesn't overwrite downloaded=true set by a previous attempt
-    static const sstring query = format("INSERT INTO {}.{} (snapshot_name, \"keyspace\", \"table\", datacenter, rack, first_token, sstable_id, last_token, toc_name, prefix) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) USING TTL {}", NAME, SNAPSHOT_SSTABLES, SNAPSHOT_SSTABLES_TTL_SECONDS);
+// TODO: this is very hardcoded.
+static constexpr uint64_t snapshot_table_ttl_seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(3)).count();
+
+snapshot_table_helper::snapshot_table_helper(cql3::query_processor& qp)
+    : _qp(qp)
+{}
+
+future<> snapshot_table_helper::insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack
+    , sstables::sstable_id sstable_id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix
+    , db::consistency_level cl) 
+{
+    static const sstring query = format("INSERT INTO {}.{} (snapshot_name, \"keyspace\", \"table\", datacenter, rack, first_token, sstable_id, last_token, toc_name, prefix) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) USING TTL {}"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
+        , snapshot_table_ttl_seconds
+    );
 
     return _qp.execute_internal(
             query,
@@ -448,11 +459,13 @@ future<> system_distributed_keyspace::insert_snapshot_sstable(sstring snapshot_n
 }
 
 future<utils::chunked_vector<snapshot_sstable_entry>>
-system_distributed_keyspace::get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl, std::optional<dht::token> start_token, std::optional<dht::token> end_token) const {
+snapshot_table_helper::get_snapshot_sstables(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl, std::optional<dht::token> start_token, std::optional<dht::token> end_token) const {
     utils::chunked_vector<snapshot_sstable_entry> sstables;
 
     static const sstring base_query = format("SELECT toc_name, prefix, sstable_id, first_token, last_token, downloaded FROM {}.{}"
-        " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?", NAME, SNAPSHOT_SSTABLES);
+        " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
+    );
 
     auto read_row = [&] (const cql3::untyped_result_set_row& row) {
             sstables.emplace_back(sstables::sstable_id(row.get_as<utils::UUID>("sstable_id")), dht::token::from_int64(row.get_as<int64_t>("first_token")), dht::token::from_int64(row.get_as<int64_t>("last_token")), row.get_as<sstring>("toc_name"), row.get_as<sstring>("prefix"), is_downloaded(row.get_or<bool>("downloaded", false)));
@@ -492,19 +505,19 @@ system_distributed_keyspace::get_snapshot_sstables(sstring snapshot_name, sstrin
     co_return sstables;
 }
 
-future<> system_distributed_keyspace::update_sstable_download_status(sstring snapshot_name,
-                                                                     sstring ks,
-                                                                     sstring table,
-                                                                     sstring dc,
-                                                                     sstring rack,
-                                                                     sstables::sstable_id sstable_id,
-                                                                     dht::token start_token,
-                                                                     is_downloaded downloaded) const {
+future<> snapshot_table_helper::update_sstable_download_status(sstring snapshot_name,
+                                                               sstring ks,
+                                                               sstring table,
+                                                               sstring dc,
+                                                               sstring rack,
+                                                               sstables::sstable_id sstable_id,
+                                                               dht::token start_token,
+                                                               is_downloaded downloaded) const {
     static const sstring update_query = format("UPDATE {}.{} USING TTL {} SET downloaded = ? WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND "
                                                "datacenter = ? AND rack = ? AND first_token = ? AND sstable_id = ?",
-                                               NAME,
-                                               SNAPSHOT_SSTABLES,
-                                               SNAPSHOT_SSTABLES_TTL_SECONDS);
+                                               system_distributed_keyspace::NAME,
+                                               system_distributed_keyspace::SNAPSHOT_SSTABLES,
+                                               snapshot_table_ttl_seconds);
     co_await _qp.execute_internal(update_query,
                                   consistency_level::ONE,
                                   internal_distributed_query_state(),

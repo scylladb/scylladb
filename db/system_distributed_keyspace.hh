@@ -78,6 +78,10 @@ public:
         /* How many different token owners (endpoints) are there in the token ring? */
         size_t num_token_owners;
     };
+
+    cql3::query_processor& qp() const {
+        return _qp;
+    }
 private:
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
@@ -111,6 +115,15 @@ public:
     // NOTE: currently used only by alternator
     future<db_clock::time_point> cdc_current_generation_timestamp(context);
 
+private:
+    future<> create_tables(std::vector<schema_ptr> tables);
+};
+
+class snapshot_table_helper {
+    cql3::query_processor& _qp;
+public:
+    snapshot_table_helper(cql3::query_processor&);
+
     /* Inserts a single SSTable entry for a given snapshot, keyspace, table, datacenter,
      * and rack. The row is written with the specified TTL (in seconds). Uses consistency
      * level `EACH_QUORUM` by default.*/
@@ -130,9 +143,6 @@ public:
                                             sstables::sstable_id sstable_id,
                                             dht::token start_token,
                                             is_downloaded downloaded) const;
-
-private:
-    future<> create_tables(std::vector<schema_ptr> tables);
 };
 
 }
