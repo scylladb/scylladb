@@ -355,7 +355,7 @@ future<> gossiper::handle_ack_msg(locator::host_id id, gossip_digest_ack ack_msg
                 logger.debug("Handle queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
                         from, p.ack_msg_digest, p.pending);
                 ack_msg_digest = std::move(p.ack_msg_digest.value());
-                p.ack_msg_digest= {};
+                p.ack_msg_digest = {};
                 continue;
             } else {
                 // No more pending ack msg digests to process
@@ -400,9 +400,15 @@ future<> gossiper::do_send_ack2_msg(locator::host_id from, utils::chunked_vector
         }
     }
     gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
-    logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
+    sstring ack2_msg_str;
+    if (logger.is_enabled(logging::log_level::debug)) {
+        ack2_msg_str = fmt::format("{}", ack2_msg);
+        logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg_str);
+    }
     co_await ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, std::move(ack2_msg));
-    logger.debug("finished do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
+    if (logger.is_enabled(logging::log_level::debug)) {
+        logger.debug("finished do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg_str);
+    }
 }
 
 // Depends on
