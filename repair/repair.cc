@@ -36,6 +36,7 @@
 
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/util/lazy.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
@@ -1113,12 +1114,12 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
             }
             rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
                 global_repair_id.uuid(),
-                rs.get_metrics().bootstrap_finished_percentage(),
-                rs.get_metrics().replace_finished_percentage(),
-                rs.get_metrics().rebuild_finished_percentage(),
-                rs.get_metrics().decommission_finished_percentage(),
-                rs.get_metrics().removenode_finished_percentage(),
-                rs.get_metrics().repair_finished_percentage());
+                seastar::value_of([&] { return rs.get_metrics().bootstrap_finished_percentage(); }),
+                seastar::value_of([&] { return rs.get_metrics().replace_finished_percentage(); }),
+                seastar::value_of([&] { return rs.get_metrics().rebuild_finished_percentage(); }),
+                seastar::value_of([&] { return rs.get_metrics().decommission_finished_percentage(); }),
+                seastar::value_of([&] { return rs.get_metrics().removenode_finished_percentage(); }),
+                seastar::value_of([&] { return rs.get_metrics().repair_finished_percentage(); }));
         });
 
         if (_reason != streaming::stream_reason::repair) {
