@@ -12,6 +12,7 @@
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <seastar/core/rwlock.hh>
+#include <seastar/util/lazy.hh>
 #include "db/view/view.hh"
 #include "locator/network_topology_strategy.hh"
 #include "locator/tablets.hh"
@@ -3255,7 +3256,9 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
             auto data_dir = fs::path(parent_dir);
             auto data_dir_lister = directory_lister(data_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), filter);
             auto close_data_dir_lister = deferred_close(data_dir_lister);
-            dblog.debug("clear_snapshot: listing data dir {} with filter={}", data_dir, ks_names_set.empty() ? "none" : fmt::format("{}", ks_names_set));
+            dblog.debug("clear_snapshot: listing data dir {} with filter={}", data_dir, seastar::value_of([&] {
+                return ks_names_set.empty() ? "none" : fmt::format("{}", ks_names_set);
+            }));
             while (auto ks_ent = data_dir_lister.get().get()) {
                 auto ks_name = ks_ent->name;
                 auto ks_dir = data_dir / ks_name;
