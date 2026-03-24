@@ -11,6 +11,7 @@
 #include "utils/assert.hh"
 #include "utils/exception_container.hh"
 #include "utils/fragmented_temporary_buffer.hh"
+#include "utils/managed_bytes.hh"
 #include "utils/result.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/memory.hh>
@@ -122,6 +123,22 @@ protected:
             dst = std::copy(fragment.begin(), fragment.end(), dst);
         }
         return {out, bo.size()};
+    }
+
+    // Returns a linearized view onto the provided managed_bytes_view.
+    // If the input view is already linearized (single fragment), it is returned as-is.
+    // Otherwise the contents are copied to the reusable buffer
+    // and a view into the buffer is returned.
+    bytes_view get_linearized_view(managed_bytes_view mbv) & {
+        if (mbv.is_linearized()) {
+            return mbv.current_fragment();
+        }
+        const auto out = get_temporary_buffer(mbv.size_bytes()).data();
+        auto dst = out;
+        for (bytes_view fragment : fragment_range(mbv)) {
+            dst = std::copy(fragment.begin(), fragment.end(), dst);
+        }
+        return {out, mbv.size_bytes()};
     }
 
     // Provides a contiguous buffer of size `maximum_length` to `fn`.
@@ -330,6 +347,13 @@ public:
     bytes_view get_linearized_view(bytes_ostream& bo) & {
         mark_used();
         return _buf.get_linearized_view(bo);
+    }
+
+    // The result mustn't outlive `this`.
+    // No method of `this` may be called again.
+    bytes_view get_linearized_view(managed_bytes_view mbv) & {
+        mark_used();
+        return _buf.get_linearized_view(mbv);
     }
 
     // The result mustn't outlive `this`.
