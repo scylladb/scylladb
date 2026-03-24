@@ -39,7 +39,7 @@
 #include "test/boost/database_test.hh"
 
 
-SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works) {
     auto db_cfg_ptr = make_shared<db::config>();
 
     return do_with_cql_env([] (cql_test_env& env) -> future<> {
@@ -54,13 +54,18 @@ SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works, *boost::unit_test::pr
         auto prefix = "some/prefix";
         auto num_iter = 5;
 
+        db::snapshot_table_helper sdk(env.qp().local());
+        constexpr auto cl = db::consistency_level::ONE;
+
         for (int i = num_iter - 1; i >= 0; --i) {
             // insert some test data into snapshot_sstables table
             auto first_token = dht::token::from_int64(i);
-            co_await env.get_system_distributed_keyspace().local().insert_snapshot_sstable(snapshot_name, ks, table, dc, rack, sstables::sstable_id(sstable_id), first_token, last_token, toc_name, prefix, db::consistency_level::ONE);
+            co_await sdk.insert_snapshot_sstable(snapshot_name, ks, table, dc, rack
+                , sstables::sstable_id(sstable_id), first_token, last_token, toc_name, prefix
+                , cl);
         }
         // read it back and check if it is correct
-        auto sstables = co_await env.get_system_distributed_keyspace().local().get_snapshot_sstables(snapshot_name, ks, table, dc, rack, db::consistency_level::ONE);
+        auto sstables = co_await sdk.get_snapshot_sstables(snapshot_name, ks, table, dc, rack, cl);
 
         BOOST_CHECK_EQUAL(sstables.size(), num_iter);
 
@@ -74,19 +79,19 @@ SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works, *boost::unit_test::pr
         }
 
         // test token range filtering: matching range should return the sstable
-        auto filtered = co_await env.get_system_distributed_keyspace().local().get_snapshot_sstables(
+        auto filtered = co_await sdk.get_snapshot_sstables(
             snapshot_name, ks, table, dc, rack, db::consistency_level::ONE,
             dht::token::from_int64(-10), dht::token::from_int64(num_iter + 1));
         BOOST_CHECK_EQUAL(filtered.size(), num_iter);
 
         // test token range filtering: the interval is inclusive, if start and end are equal to first_token, it should return one sstable 
-        filtered = co_await env.get_system_distributed_keyspace().local().get_snapshot_sstables(
+        filtered = co_await sdk.get_snapshot_sstables(
             snapshot_name, ks, table, dc, rack, db::consistency_level::ONE,
             dht::token::from_int64(0), dht::token::from_int64(0));
         BOOST_CHECK_EQUAL(filtered.size(), 1);
 
         // test token range filtering: non-matching range should return nothing
-        auto empty = co_await env.get_system_distributed_keyspace().local().get_snapshot_sstables(
+        auto empty = co_await sdk.get_snapshot_sstables(
             snapshot_name, ks, table, dc, rack, db::consistency_level::ONE,
             dht::token::from_int64(num_iter + 10), dht::token::from_int64(num_iter + 20));
         BOOST_CHECK_EQUAL(empty.size(), 0);
@@ -113,7 +118,9 @@ future<> check_snapshot_sstables(cql_test_env& env) {
     auto& topology = env.get_storage_proxy().local().get_token_metadata_ptr()->get_topology();
     auto dc = topology.get_datacenter();
     auto rack = topology.get_rack();
-    auto sstables = co_await env.get_system_distributed_keyspace().local().get_snapshot_sstables("snapshot", "ks", "cf", dc, rack, db::consistency_level::ONE);
+
+    db::snapshot_table_helper sth(env.local_qp());
+    auto sstables = co_await sth.get_snapshot_sstables("snapshot", "ks", "cf", dc, rack, db::consistency_level::ONE);
 
     // Check that the sstables in system_distributed.snapshot_sstables match the sstables in the snapshot directory on disk
     auto& cf = env.local_db().find_column_family("ks", "cf");
