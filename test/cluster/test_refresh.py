@@ -23,9 +23,24 @@ from test.cluster.object_store.conftest import format_tuples
 from test.cluster.object_store.test_backup import topo, take_snapshot, do_test_streaming_scopes
 from test.cluster.util import new_test_keyspace
 from test.pylib.rest_client import read_barrier
-from test.pylib.util import unique_name
+from test.pylib.util import unique_name, wait_for
 
 logger = logging.getLogger(__name__)
+
+
+async def wait_for_upload_dir_empty(upload_dir, timeout=30):
+    '''
+    Wait until the upload directory is empty with a timeout.
+    SSTable unlinking is asynchronous and in rare situations, it can happen
+    that not all sstables are deleted from the upload dir immediately after refresh is done.
+    '''
+    deadline = time.time() + timeout
+    async def check_empty():
+        files = os.listdir(upload_dir)
+        if not files:
+            return True
+        return None
+    await wait_for(check_empty, deadline, period=0.5)
 
 class SSTablesOnLocalStorage:
     def __init__(self):
@@ -153,7 +168,8 @@ async def test_refresh_deletes_uploaded_sstables(manager: ManagerClient):
 
         for s in servers:
             cf_dir = dirs[s.server_id]["cf_dir"]
-            files = os.listdir(os.path.join(cf_dir, 'upload'))
-            assert files == [], f'Upload dir not empty on server {s.server_id}: {files}'
+            upload_dir = os.path.join(cf_dir, 'upload')
+            assert os.path.exists(upload_dir)
+            await wait_for_upload_dir_empty(upload_dir)
 
         shutil.rmtree(tmpbackup)
