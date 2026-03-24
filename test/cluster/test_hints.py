@@ -17,10 +17,10 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import ScyllaMetricsClient, TCPRESTClient, inject_error
 from test.pylib.tablets import get_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.util import wait_for
+from test.pylib.util import gather_safely, wait_for
 
 from test.cluster.conftest import skip_mode
-from test.cluster.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace
+from test.cluster.util import get_topology_coordinator, find_server_by_host_id, keyspace_has_tablets, new_test_keyspace, new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -52,28 +52,42 @@ async def await_sync_point(client: TCPRESTClient, server_ip: IPAddress, sync_poi
 @pytest.mark.asyncio
 async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient):
     node_count = 2
-    servers = await manager.servers_add(node_count)
+    cmdline = ["--logger-log-level", "hints_manager=trace"]
+    servers = await manager.servers_add(node_count, cmdline=cmdline)
+
+    async def wait_for_hints_written(min_hint_count: int, timeout: int):
+        async def aux():
+            hints_written = await get_hint_metrics(manager.metrics, servers[0].ip_addr, "written")
+            if hints_written >= min_hint_count:
+                return True
+            return None
+        assert await wait_for(aux, time.time() + timeout)
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        table = f"{ks}.t"
-        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
+        uses_tablets = await keyspace_has_tablets(manager, ks)
+        # If the keyspace uses tablets, let's explicitly require the table to use multiple tablets.
+        # Otherwise, it could happen that all mutations would target servers[0] only, which would
+        # ultimately lead to a test failure here. We rely on the assumption that mutations will be
+        # distributed more or less uniformly!
+        extra_opts = "WITH tablets = {'min_tablet_count': 16}" if uses_tablets else ""
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra_opts) as table:
+            await manager.server_stop_gracefully(servers[1].server_id)
 
-        await manager.server_stop_gracefully(servers[1].server_id)
+            hints_before = await get_hint_metrics(manager.metrics, servers[0].ip_addr, "written")
 
-        hints_before = await get_hint_metrics(manager.metrics, servers[0].ip_addr, "written")
+            stmt = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+            stmt.consistency_level = ConsistencyLevel.ANY
 
-        # Some of the inserts will be targeted to the dead node.
-        # The coordinator doesn't have live targets to send the write to, but it should write a hint.
-        for i in range(100):
-            await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i+1})", consistency_level=ConsistencyLevel.ANY))
+            # Some of the inserts will be targeted to the dead node.
+            # The coordinator doesn't have live targets to send the write to, but it should write a hint.
+            await gather_safely(*[cql.run_async(stmt, (i, i + 1)) for i in range(100)])
 
-        # Verify hints are written
-        hints_after = await get_hint_metrics(manager.metrics, servers[0].ip_addr, "written")
-        assert hints_after > hints_before
+            # Verify hints are written
+            await wait_for_hints_written(hints_before + 1, timeout=60)
 
-        # For dropping the keyspace
-        await manager.server_start(servers[1].server_id)
+            # For dropping the keyspace
+            await manager.server_start(servers[1].server_id)
 
 @pytest.mark.asyncio
 async def test_limited_concurrency_of_writes(manager: ManagerClient):
