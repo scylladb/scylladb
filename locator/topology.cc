@@ -240,11 +240,11 @@ const node& topology::add_node(node_holder nptr) {
 
 void topology::update_node(node& node, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> opt_shard_count) {
     tlogger.debug("topology[{}]: update_node: {}: to: host_id={} dc={} rack={} state={} shard_count={}, at {}", fmt::ptr(this), node_printer(&node),
-        opt_id ? format("{}", *opt_id) : "unchanged",
-        opt_dr ? format("{}", opt_dr->dc) : "unchanged",
-        opt_dr ? format("{}", opt_dr->rack) : "unchanged",
-        opt_st ? format("{}", *opt_st) : "unchanged",
-        opt_shard_count ? format("{}", *opt_shard_count) : "unchanged",
+        seastar::value_of([&] { return opt_id ? format("{}", *opt_id) : "unchanged"; }),
+        seastar::value_of([&] { return opt_dr ? format("{}", opt_dr->dc) : "unchanged"; }),
+        seastar::value_of([&] { return opt_dr ? format("{}", opt_dr->rack) : "unchanged"; }),
+        seastar::value_of([&] { return opt_st ? format("{}", *opt_st) : "unchanged"; }),
+        seastar::value_of([&] { return opt_shard_count ? format("{}", *opt_shard_count) : "unchanged"; }),
         lazy_backtrace());
 
     bool changed = false;
