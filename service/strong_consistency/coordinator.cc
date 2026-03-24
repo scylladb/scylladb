@@ -71,7 +71,7 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     auto erm = schema.table().get_effective_replication_map();
     if (const auto* tablet_aware_rs = erm->get_replication_strategy().maybe_as_tablet_aware();
         !tablet_aware_rs || 
-        tablet_aware_rs->get_consistency() != data_dictionary::consistency_config_option::local)
+        tablet_aware_rs->get_consistency() != data_dictionary::consistency_config_option::global)
     {
         on_internal_error(logger,
             format("Unexpected replication strategy '{}' with consistency '{}' for table {}.{}",

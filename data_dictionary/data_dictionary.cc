@@ -250,8 +250,8 @@ void keyspace_metadata::validate(const gms::feature_service& fs, const locator::
     if (params.consistency && !fs.strongly_consistent_tables) {
         throw exceptions::configuration_exception("The strongly_consistent_tables feature must be enabled to use a consistency option");
     }
-    if (params.consistency && *params.consistency == data_dictionary::consistency_config_option::global) {
-        throw exceptions::configuration_exception("Global consistency is not supported yet");
+    if (params.consistency && *params.consistency == data_dictionary::consistency_config_option::local) {
+        throw exceptions::configuration_exception("Local consistency is not supported yet");
     }
 }
 

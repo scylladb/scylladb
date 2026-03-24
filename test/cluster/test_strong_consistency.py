@@ -129,7 +129,7 @@ async def test_basic_write_read(manager: ManagerClient):
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
     logger.info("Creating a strongly-consistent keyspace")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         logger.info("Creating a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -261,7 +261,7 @@ async def test_multi_shard_write_read(manager: ManagerClient):
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     logger.info("Creating a strongly-consistent keyspace with 4 tablets")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 4} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             for j in range(50):
                 await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({j}, {j})")
@@ -292,7 +292,7 @@ async def test_sc_multishard_metadata_reads(manager: ManagerClient):
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
             table_id = await manager.get_table_id(ks, table_name)
@@ -391,7 +391,7 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
 
             # Write some rows to trigger raft table updates
@@ -444,7 +444,7 @@ async def test_sc_persistence_with_compaction(manager: ManagerClient):
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
 
             # Create multiple SSTables by doing writes with flushes in between
@@ -495,7 +495,7 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             # Write some rows to trigger raft table updates
             for pk in range(20):
@@ -545,7 +545,7 @@ async def test_no_schema_when_apply_write(manager: ManagerClient):
                 return host
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         # Drop incoming append entries from group0 (schema changes) on `servers[2]` after the table is created,
@@ -596,7 +596,7 @@ async def test_old_schema_when_apply_write(manager: ManagerClient):
                 return host
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         group_id = await get_table_raft_group_id(manager, ks, 'test')
@@ -639,7 +639,7 @@ async def test_reject_user_provided_timestamps(manager: ManagerClient):
     server = await manager.server_add(config=config, cmdline=cmdline)
     cql, _ = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
             error_msg = "Strongly consistent queries don't support user-provided timestamps"
             with pytest.raises(InvalidRequest, match=error_msg):
@@ -677,7 +677,7 @@ async def test_forward_cql_prepared_with_bound_values(manager: ManagerClient):
     servers = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc='dc1')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
-    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND consistency = 'local'")
+    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND consistency = 'global'")
     async with new_test_keyspace(manager, ks_opts) as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, value int") as table:
             table_name = table.split('.')[-1]
@@ -714,7 +714,7 @@ async def test_forward_cql_cache_invalidation(manager: ManagerClient):
     servers = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc='dc1')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
-    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'local'")
+    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'")
     async with new_test_keyspace(manager, ks_opts) as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, value int") as table:
             table_name = table.split('.')[-1]
@@ -757,7 +757,7 @@ async def test_forward_cql_exception_passthrough(manager: ManagerClient):
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
-    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'local'")
+    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'")
     async with new_test_keyspace(manager, ks_opts) as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, value int") as table:
             table_name = table.split('.')[-1]
