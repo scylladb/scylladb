@@ -60,6 +60,7 @@ class ManagerClient:
         self.con_gen = con_gen
         self.ccluster: Optional[CassandraCluster] = None
         self.cql: Optional[CassandraSession] = None
+        self.exclusive_clusters: List[CassandraCluster] = []
         # A client for communicating with ScyllaClusterManager (server)
         self.sock_path = sock_path
         self.client_for_asyncio_loop = {asyncio.get_running_loop(): UnixRESTClient(sock_path)}
@@ -113,6 +114,9 @@ class ManagerClient:
 
     def driver_close(self) -> None:
         """Disconnect from cluster"""
+        for cluster in self.exclusive_clusters:
+            cluster.shutdown()
+        self.exclusive_clusters.clear()
         if self.ccluster is not None:
             logger.debug("shutting down driver")
             safe_driver_shutdown(self.ccluster)
@@ -134,9 +138,12 @@ class ManagerClient:
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
         return cql, hosts
 
-    async def get_cql_exclusive(self, server: ServerInfo):
-        cql = self.con_gen([server.ip_addr], self.port, self.use_ssl, self.auth_provider,
-                                     WhiteListRoundRobinPolicy([server.ip_addr])).connect()
+    async def get_cql_exclusive(self, server: ServerInfo, auth_provider: Optional[AuthProvider] = None):
+        cluster = self.con_gen([server.ip_addr], self.port, self.use_ssl,
+                               auth_provider if auth_provider else self.auth_provider,
+                               WhiteListRoundRobinPolicy([server.ip_addr]))
+        self.exclusive_clusters.append(cluster)
+        cql = cluster.connect()
         await wait_for_cql_and_get_hosts(cql, [server], time() + 60)
         return cql
 
