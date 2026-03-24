@@ -257,39 +257,44 @@ async def manager(request: pytest.FixtureRequest,
     yield manager_client
     # `request.node.stash` contains a report stored in `pytest_runtest_makereport` from where we can retrieve
     # test failure.
-    report = request.node.stash[PHASE_REPORT_KEY]
-    failed = report.when == "call" and report.failed
-
-    # Check if the test has the check_nodes_for_errors marker
-    found_errors = await manager_client.check_all_errors(check_all_errors=(request.node.get_closest_marker("check_nodes_for_errors") is not None))
-
+    cluster_status = None
+    found_errors = {}
+    failed = False
     failed_test_dir_path = None
-    if failed or found_errors:
-        # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
-        # all related logs in one dir.
-        # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
-        failed_test_dir_path = testpy_test.suite.log_dir / "failed_test" / test_case_name.translate(
-            str.maketrans('[]', '()'))
-        failed_test_dir_path.mkdir(parents=True, exist_ok=True)
+    try:
+        report = request.node.stash[PHASE_REPORT_KEY]
+        failed = report.when == "call" and report.failed
 
-    if failed:
-        await manager_client.gather_related_logs(
-            failed_test_dir_path,
-            {'pytest.log': test_log, 'test_py.log': test_py_log_test}
-        )
-        with open(failed_test_dir_path / "stacktrace.txt", "w") as f:
-            f.write(report.longreprtext)
-        if request.config.getoption('artifacts_dir_url') is not None:
-            # get the relative path to the tmpdir for the failed directory
-            dir_path_relative = f"{failed_test_dir_path.as_posix()[failed_test_dir_path.as_posix().find('testlog'):]}"
-            full_url = urllib.parse.urljoin(request.config.getoption('artifacts_dir_url') + '/',
-                                            urllib.parse.quote(dir_path_relative))
-            record_property("TEST_LOGS", full_url)
+        # Check if the test has the check_nodes_for_errors marker
+        found_errors = await manager_client.check_all_errors(check_all_errors=(request.node.get_closest_marker("check_nodes_for_errors") is not None))
 
-    cluster_status = await manager_client.after_test(test_case_name, not failed)
-    await manager_client.stop()  # Stop client session and close driver after each test
+        if failed or found_errors:
+            # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
+            # all related logs in one dir.
+            # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
+            failed_test_dir_path = testpy_test.suite.log_dir / "failed_test" / test_case_name.translate(
+                str.maketrans('[]', '()'))
+            failed_test_dir_path.mkdir(parents=True, exist_ok=True)
 
-    if cluster_status["server_broken"] and not failed:
+        if failed:
+            await manager_client.gather_related_logs(
+                failed_test_dir_path,
+                {'pytest.log': test_log, 'test_py.log': test_py_log_test}
+            )
+            with open(failed_test_dir_path / "stacktrace.txt", "w") as f:
+                f.write(report.longreprtext)
+            if request.config.getoption('artifacts_dir_url') is not None:
+                # get the relative path to the tmpdir for the failed directory
+                dir_path_relative = f"{failed_test_dir_path.as_posix()[failed_test_dir_path.as_posix().find('testlog'):]}"
+                full_url = urllib.parse.urljoin(request.config.getoption('artifacts_dir_url') + '/',
+                                                urllib.parse.quote(dir_path_relative))
+                record_property("TEST_LOGS", full_url)
+
+        cluster_status = await manager_client.after_test(test_case_name, not failed)
+    finally:
+        await manager_client.stop()  # Stop client session and close driver after each test
+
+    if cluster_status is not None and cluster_status["server_broken"] and not failed:
         failed = True
         pytest.fail(
             f"test case {test_case_name} left unfinished tasks on Scylla server. Server marked as broken,"
