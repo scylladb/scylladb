@@ -579,6 +579,17 @@ async def new_materialized_view(manager: ManagerClient, table, select, pk, where
         await manager.get_cql().run_async(f"DROP MATERIALIZED VIEW {mv}")
 
 
+async def keyspace_has_tablets(manager: ManagerClient, keyspace: str) -> bool:
+    """
+    Checks whether the given keyspace uses tablets.
+    Adapted from its counterpart in the cqlpy test: cqlpy/util.py::keyspace_has_tablets.
+    """
+    cql = manager.get_cql()
+    rows_iter = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name='{keyspace}'")
+    rows = list(rows_iter)
+    return len(rows) > 0 and getattr(rows[0], "initial_tablets", None) is not None
+
+
 async def get_raft_log_size(cql, host) -> int:
     query = "select count(\"index\") from system.raft"
     return (await cql.run_async(query, host=host))[0][0]
