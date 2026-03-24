@@ -15,6 +15,7 @@
 #include "compaction_strategy_state.hh"
 #include "utils/error_injection.hh"
 
+#include <seastar/util/lazy.hh>
 #include <ranges>
 
 namespace compaction {
@@ -260,8 +261,12 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
 
     clogger.debug("time_window_compaction_strategy::get_reshaping_job: offstrategy_threshold={} max_sstables={} multi_window={} disjoint={} single_window={} disjoint={}",
             offstrategy_threshold, max_sstables,
-            multi_window.size(), !multi_window.empty() && sstable_set_overlapping_count(schema, multi_window) == 0,
-            single_window.size(), !single_window.empty() && sstable_set_overlapping_count(schema, single_window) == 0);
+            multi_window.size(), seastar::value_of([&] {
+                return !multi_window.empty() && sstable_set_overlapping_count(schema, multi_window) == 0;
+            }),
+            single_window.size(), seastar::value_of([&] {
+                return !single_window.empty() && sstable_set_overlapping_count(schema, single_window) == 0;
+            }));
 
     auto get_job_size = [] (const std::vector<sstables::shared_sstable>& ssts) {
         return std::ranges::fold_left(ssts | std::views::transform(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0), std::plus{});
