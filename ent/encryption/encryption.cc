@@ -380,7 +380,7 @@ public:
     }
 
     template<typename HostType, typename CacheType, typename ConfigType>
-    shared_ptr<HostType> get_host(const sstring& host, CacheType& cache, const ConfigType& config_map) {
+    shared_ptr<HostType> get_host(const sstring& host, CacheType& cache, const ConfigType& config_map, std::string_view config_entry_name) {
         auto& host_cache = cache[this_shard_id()];
         auto it = host_cache.find(host);
         if (it != host_cache.end()) {
@@ -394,23 +394,26 @@ public:
             return result;
         }
 
-        throw std::invalid_argument("No such host: " + host);
+        throw std::invalid_argument(fmt::format(
+            "Encryption host \"{}\" is not defined in scylla.yaml. "
+            "Make sure it is listed under the \"{}\" section.",
+            host, config_entry_name));
     }
 
     shared_ptr<kmip_host> get_kmip_host(const sstring& host) override {
-        return get_host<kmip_host>(host, _per_thread_kmip_host_cache, _cfg->kmip_hosts());
+        return get_host<kmip_host>(host, _per_thread_kmip_host_cache, _cfg->kmip_hosts(), "kmip_hosts");
     }
 
     shared_ptr<kms_host> get_kms_host(const sstring& host) override {
-        return get_host<kms_host>(host, _per_thread_kms_host_cache, _cfg->kms_hosts());
+        return get_host<kms_host>(host, _per_thread_kms_host_cache, _cfg->kms_hosts(), "kms_hosts");
     }
 
     shared_ptr<gcp_host> get_gcp_host(const sstring& host) override {
-        return get_host<gcp_host>(host, _per_thread_gcp_host_cache, _cfg->gcp_hosts());
+        return get_host<gcp_host>(host, _per_thread_gcp_host_cache, _cfg->gcp_hosts(), "gcp_hosts");
     }
 
     shared_ptr<azure_host> get_azure_host(const sstring& host) override {
-        return get_host<azure_host>(host, _per_thread_azure_host_cache, _cfg->azure_hosts());
+        return get_host<azure_host>(host, _per_thread_azure_host_cache, _cfg->azure_hosts(), "azure_hosts");
     }
 
 
