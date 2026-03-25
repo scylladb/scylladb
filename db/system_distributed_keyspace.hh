@@ -37,6 +37,9 @@ namespace service {
     class migration_manager;
 }
 
+namespace replica {
+    class table;
+}
 
 namespace db {
 
@@ -246,6 +249,25 @@ public:
         , std::string_view rack = {}
         , db::consistency_level cl = db::consistency_level::LOCAL_QUORUM
     );
+
+    /**
+     * Helper to write a full snapshot_entries
+     */
+    future<> insert_snapshot_entries(std::string_view snapshot_name, std::string_view keyspace
+        , std::string_view table, std::string_view datacenter, std::string_view rack, locator::host_id
+        , const snapshot_entries& entries
+        , db::consistency_level cl = db::consistency_level::LOCAL_QUORUM
+    );
+
+    /**
+     * Helper to write snapshot base metadata
+     */
+    future<> insert_snapshot_info(std::string_view snapshot_name
+        , db_clock::time_point created, db_clock::time_point expiry
+        , std::span<const lw_shared_ptr<replica::table>> tables
+        , db::consistency_level cl = db::consistency_level::LOCAL_QUORUM
+    );
+
 };
 
 }

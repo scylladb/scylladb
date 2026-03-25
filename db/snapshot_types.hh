@@ -13,6 +13,11 @@
 #include "locator/host_id.hh"
 #include "sstables/types.hh"
 
+namespace utils {
+template <typename, size_t>
+class chunked_vector;
+}
+
 namespace db {
 
 using is_downloaded = bool_class<class is_downloaded_tag>;
@@ -129,6 +134,11 @@ struct snapshot_node_entry {
     locator::host_id node;
 
     constexpr bool operator==(const snapshot_node_entry& o) const noexcept = default;
+};
+
+struct snapshot_entries {
+    utils::chunked_vector<snapshot_sstable_entry> sstables;
+    std::vector<snapshot_tablet_entry> tablets;
 };
 
 } // namespace db
