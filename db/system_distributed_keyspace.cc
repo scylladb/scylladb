@@ -20,9 +20,14 @@
 #include "types/set.hh"
 #include "cdc/generation.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/description.hh"
 #include "service/storage_proxy.hh"
+#include "gms/feature_service.hh"
+#include "replica/schema_describe_helper.hh"
+
 #include "service/migration_manager.hh"
 #include "locator/host_id.hh"
+#include "view_info.hh"
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -1104,6 +1109,95 @@ future<> snapshot_table_helper::insert_snapshot_sstables(std::string_view snapsh
 )
 {
     co_await do_insert_snapshot_sstables(_qp, snapshot_name, ks, table, dc, rack, sstables, cl);
+}
+
+/**
+ * Helper to write a full snapshot_entries
+ */
+future<> snapshot_table_helper::insert_snapshot_entries(std::string_view snapshot_name, std::string_view keyspace
+    , std::string_view table, std::string_view datacenter, std::string_view rack, locator::host_id host
+    , const snapshot_entries& e
+    , db::consistency_level cl
+)
+{
+    co_await insert_snapshot_nodes(snapshot_name, std::span<const snapshot_node_entry>({
+        snapshot_node_entry{
+            .datacenter = std::string(datacenter),
+            .rack = std::string(rack),
+            .node = host,
+        }
+    }), cl);
+    co_await insert_snapshot_sstables(snapshot_name, keyspace, table, datacenter, rack, e.sstables, cl);
+    co_await insert_snapshot_tablets(snapshot_name, keyspace, table, datacenter, e.tablets, cl);
+}
+
+/**
+ * Helper to write snapshot base metadata
+ */
+future<> snapshot_table_helper::insert_snapshot_info(std::string_view snapshot_name
+    , db_clock::time_point created, db_clock::time_point expiry
+    , std::span<const lw_shared_ptr<replica::table>> tables_in
+    , db::consistency_level cl
+)
+{
+    co_await insert_snapshot(db::snapshot_entry{
+        .name = std::string(snapshot_name),
+        .created_at = created,
+        .expires_at = expiry,
+        // TODO: namespace/manifest version?
+    }, cl);
+
+    std::unordered_map<std::string, db::snapshot_keyspace_entry> keyspaces;
+    std::vector<db::snapshot_table_entry> tables;
+
+    for (auto t : tables_in) {
+    auto s = t->schema();
+        std::string name = s->ks_name();
+
+        if (!keyspaces.count(name)) {
+            auto ks_meta = _qp.db().find_keyspace(s->ks_name()).metadata();
+            auto desc = ks_meta->describe(_qp.db().real_database(), cql3::with_create_statement::yes);
+            keyspaces.emplace(name, db::snapshot_keyspace_entry{
+                .snapshot_name = std::string(snapshot_name),
+                .keyspace_name = name,
+                .keyspace_schema = desc.create_statement->linearize(),
+            });
+       }
+
+       auto helper = replica::make_schema_describe_helper(s, _qp.db());
+       auto desc = s->describe(helper, cql3::describe_option::STMTS_AND_INTERNALS);
+
+       auto type = snapshot_table_type::cql_table;
+       table_id base_table_id;
+
+       if (s->is_view()) {
+           type = snapshot_table_type::cql_view;
+           base_table_id = s->view_info()->base_id();
+       }
+
+       std::string tablet_layout = "none";
+
+       if (t->uses_tablets()) {
+           auto erm = t->get_effective_replication_map();
+           auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+           tablet_layout = locator::tablet_layout_to_string(tm.get_layout());
+       }
+
+       // TODO: check alternator etc...
+       tables.emplace_back(db::snapshot_table_entry{
+            .snapshot_name = std::string(snapshot_name),
+            .keyspace_name = name,
+            .table_name = s->cf_name(),
+            .table_id = s->id(),
+            .type = type,
+            .base_table_id = base_table_id,
+            .table_schema = desc.create_statement->linearize(),
+            .tablet_layout = tablet_layout
+       });
+    }
+
+    co_await insert_snapshot_keyspaces(keyspaces | std::views::values | std::ranges::to<std::vector>(), cl);
+    co_await insert_snapshot_tables(tables, cl);
 }
 
 
