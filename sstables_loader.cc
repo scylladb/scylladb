@@ -900,7 +900,7 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     co_return task->id();
 }
 
-future<> sstables_loader::attach_sstable(table_id tid, const minimal_sst_info& min_info) const {
+future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, const minimal_sst_info& min_info) const {
     auto& db = _db.local();
     auto& table = db.find_column_family(tid);
     llog.debug("Adding downloaded SSTables to the table {} on shard {}", table.schema()->cf_name(), this_shard_id());
@@ -914,12 +914,16 @@ future<> sstables_loader::attach_sstable(table_id tid, const minimal_sst_info& m
         .ignore_component_digest_mismatch = db.get_config().ignore_component_digest_mismatch(),
     };
     co_await sst->load(erm->get_sharder(*table.schema()), cfg);
+    if (!sst->sstable_identifier()) {
+        on_internal_error(llog, "sstable identifier is required for tablet restore");
+    }
     co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
         if (loading_sst == sst) {
             auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
             co_await loading_sst->seal_sstable(writer_cfg.backup);
         }
     });
+    co_return sst;
 }
 
 future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid, sstring snap_name, sstring endpoint, sstring bucket) {
