@@ -3998,7 +3998,7 @@ public:
 };
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
-future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts) {
+future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts, snapshot_callback ssc) {
     auto writer = std::visit(overloaded_functor{
         [&name, &opts] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
             if (loc.dir.empty()) {
@@ -4077,6 +4077,28 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         });
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+
+        if (ssc && !tablets.empty()) {
+            auto me = topology.my_host_id();
+            auto sstables = sstable_sets | std::views::transform([](auto& p) -> auto& { return *p; })
+                | std::views::join | std::views::transform([&me](const sstables::sstable_snapshot_metadata& ssm) {
+                    return db::snapshot_sstable_entry{
+                        .sstable_id = sstables::sstable_id(ssm.id),
+                        .first_token = dht::token::from_int64(ssm.first_token),
+                        .last_token = dht::token::from_int64(ssm.last_token),
+                        .toc_name = ssm.toc_name,
+                        .node = me,
+                        .tablet_id = ssm.tablet_id.value_or(0),
+                        .state = db::snapshot_state::local,
+                        .repaired_at = ssm.repaired_at,
+                    };
+                }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
+
+            co_await ssc(db::snapshot_entries{
+                .sstables = std::move(sstables), 
+                .tablets = std::move(tablets)
+            });
         }
 
         co_await writer->sync();
