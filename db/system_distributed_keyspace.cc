@@ -815,4 +815,24 @@ system_distributed_keyspace::get_snapshot_sstables(sstring snapshot_name, sstrin
     co_return sstables;
 }
 
+future<> system_distributed_keyspace::update_sstable_download_status(sstring snapshot_name,
+                                                                     sstring ks,
+                                                                     sstring table,
+                                                                     sstring dc,
+                                                                     sstring rack,
+                                                                     sstables::sstable_id sstable_id,
+                                                                     dht::token start_token,
+                                                                     is_downloaded downloaded) const {
+    static const sstring update_query = format("UPDATE {}.{} USING TTL {} SET downloaded = ? WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND "
+                                               "datacenter = ? AND rack = ? AND first_token = ? AND sstable_id = ?",
+                                               NAME,
+                                               SNAPSHOT_SSTABLES,
+                                               SNAPSHOT_SSTABLES_TTL_SECONDS);
+    co_await _qp.execute_internal(update_query,
+                                  consistency_level::ONE,
+                                  internal_distributed_query_state(),
+                                  {downloaded == is_downloaded::yes ? true : false, snapshot_name, ks, table, dc, rack, dht::token::to_int64(start_token), sstable_id.uuid()},
+                                  cql3::query_processor::cache_internal::no);
 }
+
+} // namespace db
