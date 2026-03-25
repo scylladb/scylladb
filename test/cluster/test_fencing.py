@@ -438,6 +438,7 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
                 await wait_for(all_hosts_are_alive, deadline=time.time() + 60, period=0.1)
             logger.info(f"Upgrading {s.server_id}")
             await manager.server_change_version(s.server_id, scylla_binary)
+            await manager.server_sees_others(s.server_id, 2, interval=60.0)
 
         logger.info("Done upgrading servers")
 
