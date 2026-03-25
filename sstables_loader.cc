@@ -1109,6 +1109,31 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
     sstring _snap_name;
     sstring _endpoint;
     sstring _bucket;
+    tasks::task_manager::task::progress _progress;
+    named_gate _gate{"progress_updater"};
+    timer<seastar::lowres_clock> _progress_update_timer;
+
+    future<> update_progress() {
+        const auto& tm = _loader.local()._db.local().get_token_metadata();
+        const auto s = _loader.local()._db.local().find_schema(_tid);
+        const auto& topo = tm.get_topology();
+        const auto dc = topo.get_datacenter();
+        auto& dc_racks = topo.get_datacenter_racks();
+        size_t total = 0;
+        size_t completed = 0;
+        if (const auto it = dc_racks.find(dc); it != dc_racks.end()) {
+            co_await max_concurrent_for_each(it->second, 16, [&](const auto& rack_entry) -> future<> {
+                auto sst_infos = co_await _loader.local()._sys_dist_ks.get_snapshot_sstables(
+                    _snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first, db::consistency_level::LOCAL_QUORUM);
+                total += sst_infos.size();
+                completed += std::accumulate(sst_infos.begin(), sst_infos.end(), 0ULL, [](size_t acc, const auto& si) {
+                    return acc + (si.downloaded == db::is_downloaded::yes ? 1 : 0);
+                });
+            });
+        }
+        _progress.total = total;
+        _progress.completed = completed;
+    }
 
 public:
     tablet_restore_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader, sstring ks,
@@ -1119,8 +1144,15 @@ public:
         , _snap_name(std::move(snap_name))
         , _endpoint(std::move(endpoint))
         , _bucket(std::move(bucket))
+        , _progress_update_timer([this] {
+            auto gh = _gate.hold();
+            std::ignore = update_progress().finally([this, gh = std::move(gh)] {
+                _progress_update_timer.rearm(lowres_clock::now() + 5s);
+            });
+        })
     {
-        _status.progress_units = "batches";
+        _status.progress_units = "sstables";
+        _progress_update_timer.arm(lowres_clock::now());
     }
 
     virtual std::string type() const override {
@@ -1139,9 +1171,24 @@ public:
         return tasks::is_abortable::no;
     }
 
+    future<tasks::task_manager::task::progress> get_progress() const override {
+        co_return _progress;
+    }
+
 protected:
     virtual future<> run() override {
-        co_await _loader.local()._ss.local().restore_tablets(_tid, _snap_name, _endpoint, _bucket);
+        std::exception_ptr ex;
+        try {
+            co_await _loader.local()._ss.local().restore_tablets(_tid, _snap_name, _endpoint, _bucket);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await update_progress();
+        _progress_update_timer.cancel();
+        co_await _gate.close();
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
     }
 };
 
