@@ -799,6 +799,8 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
         tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, object_storage.address, object_storage.bucket_name, manifests)
         status = await manager.api.wait_task(servers[1].ip_addr, tid)
         assert (status is not None) and (status['state'] == 'done')
+        assert (int(status['progress_total']) > 0)
+        assert (status['progress_total'] == status['progress_completed'])
 
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
