@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "snapshot_types.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "db/consistency_level_type.hh"
@@ -38,23 +39,6 @@ namespace service {
 
 
 namespace db {
-
-using is_downloaded = bool_class<class is_downloaded_tag>;
-
-struct snapshot_sstable_entry {
-    sstables::sstable_id sstable_id;
-    dht::token first_token;
-    dht::token last_token;
-    sstring toc_name;
-    sstring prefix;
-    is_downloaded downloaded{is_downloaded::no};
-};
-
-struct snapshot_remote_location_entry {
-    sstring endpoint;
-    sstring bucket;
-    sstring prefix;
-};
 
 class system_distributed_keyspace {
 public:
