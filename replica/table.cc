@@ -45,6 +45,7 @@
 #include "compaction/compaction_group_view.hh"
 #include "sstables/sstable_directory.hh"
 #include "db/system_keyspace.hh"
+#include "db/snapshot_types.hh"
 #include "db/extensions.hh"
 #include "query/query-result-writer.hh"
 #include "db/view/view_update_generator.hh"
@@ -3861,13 +3862,6 @@ db::replay_position table::highest_flushed_replay_position() const {
     return _highest_flushed_rp;
 }
 
-struct snapshot_tablet_info {
-    size_t id;
-    dht::token first_token, last_token;
-    db_clock::time_point repair_time;
-    int64_t repaired_at;
-};
-
 struct manifest_json : public json::json_base {
     struct info : public json::json_base {
         json::json_element<sstring> version;
@@ -4075,9 +4069,9 @@ struct manifest_json : public json::json_base {
         tablet_info() {
             register_params();
         }
-        tablet_info(const snapshot_tablet_info& e) {
+        tablet_info(const db::snapshot_tablet_entry& e) {
             register_params();
-            id = e.id;
+            id = e.tablet_id;
             first_token = dht::token::to_int64(e.first_token);
             last_token = dht::token::to_int64(e.last_token);
             repair_time = db_clock::to_time_t(e.repair_time);
@@ -4170,8 +4164,8 @@ static std::string get_tablets_type(locator::tablet_layout layout) {
 
 static future<> write_manifest(const locator::topology& topology,
                                snapshot_writer& writer,
-                               std::vector<snapshot_sstable_set> sstable_sets,
-                               std::vector<snapshot_tablet_info> tablets,
+                               const std::vector<snapshot_sstable_set>& sstable_sets,
+                               const std::vector<db::snapshot_tablet_entry>& tablets,
                                sstring name, db::snapshot_options opts,
                                schema_ptr schema,
                                std::optional<int64_t> tablet_count,
@@ -4339,7 +4333,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         const auto& topology = sharded_db.local().get_token_metadata().get_topology();
         std::optional<int64_t> tablet_count;
         std::optional<locator::tablet_layout> tablet_layout;
-        std::vector<snapshot_tablet_info> tablets;
+        std::vector<db::snapshot_tablet_entry> tablets;
         std::unordered_set<size_t> tids;
         if (t.uses_tablets()) {
             auto erm = t.get_effective_replication_map();
@@ -4353,8 +4347,8 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                     sst.tablet_id = tid.id;
                     if (tids.emplace(tid.id).second) {
                         auto& tinfo = tm.get_tablet_info(tid);
-                        tablets.emplace_back(snapshot_tablet_info{
-                            .id = tid.id,
+                        tablets.emplace_back(db::snapshot_tablet_entry{
+                            .tablet_id = tid.id,
                             .first_token = tm.get_first_token(tid),
                             .last_token = tm.get_last_token(tid),
                             .repair_time = tinfo.repair_time,
@@ -4364,7 +4358,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                 }
             }
         }
-        co_await write_manifest(topology, *writer, std::move(sstable_sets), std::move(tablets), name, opts, s,
+        co_await write_manifest(topology, *writer, sstable_sets, tablets, name, opts, s, 
                                 tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
