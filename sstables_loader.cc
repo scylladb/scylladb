@@ -11,6 +11,7 @@
 #include <seastar/core/map_reduce.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/shared_mutex.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
@@ -37,7 +38,6 @@
 
 #include "sstables/object_storage_client.hh"
 #include "utils/rjson.hh"
-#include "db/system_distributed_keyspace.hh"
 
 #include <cfloat>
 #include <algorithm>
