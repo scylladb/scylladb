@@ -20,6 +20,7 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/bool_class.hh>
 
 #include <optional>
 #include <unordered_map>
@@ -42,12 +43,15 @@ namespace service {
 
 namespace db {
 
+using is_downloaded = bool_class<class is_downloaded_tag>;
+
 struct snapshot_sstable_entry {
     sstables::sstable_id sstable_id;
     dht::token first_token;
     dht::token last_token;
     sstring toc_name;
     sstring prefix;
+    is_downloaded downloaded{is_downloaded::no};
 };
 
 class system_distributed_keyspace {
@@ -130,8 +134,8 @@ public:
     /* Inserts a single SSTable entry for a given snapshot, keyspace, table, datacenter,
      * and rack. The row is written with the specified TTL (in seconds). Uses consistency
      * level `EACH_QUORUM` by default.*/
-    future<> insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, sstables::sstable_id sstable_id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
-    
+    future<> insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, sstables::sstable_id sstable_id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix, is_downloaded downloaded, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+
     /* Retrieves all SSTable entries for a given snapshot, keyspace, table, datacenter, and rack.
      * If `start_token` and `end_token` are provided, only entries whose `first_token` is in the range [`start_token`, `end_token`] will be returned.
      * Returns a vector of `snapshot_sstable_entry` structs containing `sstable_id`, `first_token`, `last_token`,

@@ -1053,7 +1053,7 @@ static future<size_t> process_manifest(input_stream<char>& is, sstring keyspace,
         // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
         // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
         co_await sys_dist_ks.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
-                                                    toc_name, prefix, cl);
+                                                    toc_name, prefix, db::is_downloaded::no, cl);
     }
 
     co_return tablet_count;

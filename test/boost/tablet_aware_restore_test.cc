@@ -53,7 +53,7 @@ SEASTAR_TEST_CASE(test_snapshot_manifests_table_api_works, *boost::unit_test::pr
             for (int i = num_iter - 1; i >= 0; --i) {
                 // insert some test data into snapshot_sstables table
                 auto first_token = dht::token::from_int64(i);
-                co_await env.get_system_distributed_keyspace().local().insert_snapshot_sstable(snapshot_name, ks, table, dc, rack, sstables::sstable_id(sstable_id), first_token, last_token, toc_name, prefix, db::consistency_level::ONE);
+                co_await env.get_system_distributed_keyspace().local().insert_snapshot_sstable(snapshot_name, ks, table, dc, rack, sstables::sstable_id(sstable_id), first_token, last_token, toc_name, prefix, db::is_downloaded::no, db::consistency_level::ONE);
             }
             // read it back and check if it is correct
             auto sstables = co_await env.get_system_distributed_keyspace().local().get_snapshot_sstables(snapshot_name, ks, table, dc, rack, db::consistency_level::ONE);
