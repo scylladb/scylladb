@@ -80,6 +80,8 @@ public:
      * The data the coordinator node puts in this table comes from the snapshot manifests. */
     static constexpr auto SNAPSHOT_SSTABLES = "snapshot_sstables";
 
+    static constexpr uint64_t SNAPSHOT_SSTABLES_TTL_SECONDS = std::chrono::seconds(std::chrono::days(3)).count();
+
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
     struct context {
         /* How many different token owners (endpoints) are there in the token ring? */
