@@ -163,6 +163,19 @@ public:
     future<> insert_snapshot_remote_location(sstring snapshot_name, sstring datacenter, sstring endpoint, sstring bucket, sstring prefix, snapshot_state, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
     future<snapshot_remote_location_entry> get_snapshot_remote_location(sstring snapshot_name, sstring datacenter, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM) const;
 
+    /* Inserts multiple SSTable entries for a given snapshot, keyspace, table, datacenter,
+     * and rack. 
+     */
+    future<> insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
+        , std::span<const snapshot_sstable_entry> sstables
+        , db::consistency_level cl = db::consistency_level::EACH_QUORUM
+    );
+
+    future<> insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
+        , const utils::chunked_vector<snapshot_sstable_entry>& sstables
+        , db::consistency_level cl = db::consistency_level::EACH_QUORUM
+    );
+
     /**
      * Inserts a snapshot into system.dist table
      */
