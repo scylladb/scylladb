@@ -28,6 +28,13 @@ async def get_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress, me
     metrics = await client.query(server_ip)
     return metrics.get(f"scylla_hints_manager_{metric_name}")
 
+async def check_written_hints(client: ScyllaMetricsClient, server_ip: IPAddress, min_count: int):
+    """Check if the number of written hints reached min_count. Suitable for use with wait_for."""
+    hints = await get_hint_metrics(client, server_ip, "written")
+    if hints >= min_count:
+        return True
+    return None
+
 async def create_sync_point(client: TCPRESTClient, server_ip: IPAddress) -> str:
     response = await client.post_json("/hinted_handoff/sync_point", host=server_ip, port=10_000)
     return response
@@ -67,9 +74,10 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient)
         for i in range(100):
             await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i+1})", consistency_level=ConsistencyLevel.ANY))
 
-        # Verify hints are written
-        hints_after = await get_hint_metrics(manager.metrics, servers[0].ip_addr, "written")
-        assert hints_after > hints_before
+        # Verify hints are written. Hint writing is asynchronous, so we need to wait
+        # for the written counter to be updated.
+        deadline = time.time() + 30
+        await wait_for(lambda: check_written_hints(manager.metrics, servers[0].ip_addr, hints_before + 1), deadline)
 
         # For dropping the keyspace
         await manager.server_start(servers[1].server_id)
@@ -134,17 +142,13 @@ async def test_sync_point(manager: ManagerClient):
         # Mutations need to be applied to hinted handoff's commitlog before we create the sync point.
         # Otherwise, the sync point will correspond to no hints at all.
 
-        async def check_written_hints(min_count: int) -> bool:
+        async def check_written_hints_no_errors(min_count: int):
             errors = await get_hint_metrics(manager.metrics, node1.ip_addr, "errors")
             assert errors == 0, "Writing hints to disk failed"
-
-            hints = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
-            if hints >= min_count:
-                return True
-            return None
+            return await check_written_hints(manager.metrics, node1.ip_addr, min_count)
 
         deadline = time.time() + 30
-        await wait_for(lambda: check_written_hints(2 * mutation_count), deadline)
+        await wait_for(lambda: check_written_hints_no_errors(2 * mutation_count), deadline)
 
         sync_point1 = await create_sync_point(manager.api.client, node1.ip_addr)
 
