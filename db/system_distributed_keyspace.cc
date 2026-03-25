@@ -772,9 +772,14 @@ system_distributed_keyspace::get_snapshot_sstables(sstring snapshot_name, sstrin
     static const sstring base_query = format("SELECT toc_name, prefix, sstable_id, first_token, last_token, downloaded FROM {}.{}"
         " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?", NAME, SNAPSHOT_SSTABLES);
 
-    auto read_row = [&] (const cql3::untyped_result_set_row& row) {
-            sstables.emplace_back(sstables::sstable_id(row.get_as<utils::UUID>("sstable_id")), dht::token::from_int64(row.get_as<int64_t>("first_token")), dht::token::from_int64(row.get_as<int64_t>("last_token")), row.get_as<sstring>("toc_name"), row.get_as<sstring>("prefix"), is_downloaded(row.get_as<bool>("downloaded")));
-            return make_ready_future<stop_iteration>(stop_iteration::no);
+    auto read_row = [&](const cql3::untyped_result_set_row& row) {
+        sstables.emplace_back(sstables::sstable_id(row.get_as<utils::UUID>("sstable_id")),
+                              dht::token::from_int64(row.get_as<int64_t>("first_token")),
+                              dht::token::from_int64(row.get_as<int64_t>("last_token")),
+                              row.get_as<sstring>("toc_name"),
+                              row.get_as<sstring>("prefix"),
+                              is_downloaded(row.get_as<bool>("downloaded")));
+        return make_ready_future<stop_iteration>(stop_iteration::no);
     };
 
     if (start_token && end_token) {
