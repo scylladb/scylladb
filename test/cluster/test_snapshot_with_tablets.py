@@ -73,6 +73,7 @@ async def test_snapshot_on_all_nodes(manager: ManagerClient):
     servers, _ = await create_cluster(topology, manager, logger)
 
     snapshot_name = unique_name('snap_')
+    cql = manager.get_cql()
 
     async with new_test_keyspace(manager, f"WITH REPLICATION = {{ 'replication_factor' : {topology.rf} }} AND tablets = {{'initial': 20 }}") as ks:
         async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)", "") as tbl:
@@ -91,6 +92,38 @@ async def test_snapshot_on_all_nodes(manager: ManagerClient):
                     for sst in manifest['sstables']:
                         assert sst['tablet_id'] is not None
                         assert tablets[sst['tablet_id']]
+
+                    # check sstables were added to sys_dist
+                    sstables = list(cql.execute(f"""
+                                SELECT * FROM system_distributed.snapshot_sstables WHERE 
+                                snapshot_name = '{snapshot_name}' AND \"keyspace\" = '{ks}' AND
+                                \"table\" = '{cf}' AND datacenter = '{s.datacenter}' AND
+                                rack = '{s.rack}'
+                                """))
+                    assert len(sstables) >= len(files)
+                    tocs = set([t.toc_name for t in sstables])
+                    for f in files:
+                        assert f in tocs
+                    # todo: filter by actual host
+
+                snap = list(cql.execute(f"""
+                                        SELECT * FROM system_distributed.snapshots WHERE 
+                                        name = '{snapshot_name}' AND datacenter = '{servers[0].datacenter}'
+                                        """))
+                assert len(snap) == 1
+                snap_ks = list(cql.execute(f"""
+                                        SELECT * FROM system_distributed.snapshot_keyspaces WHERE 
+                                        snapshot_name = '{snapshot_name}' AND keyspace_name = '{ks}'
+                                        """))
+                assert len(snap_ks) == 1
+
+                snap_cf = list(cql.execute(f"""
+                                        SELECT * FROM system_distributed.snapshot_tables WHERE 
+                                        snapshot_name = '{snapshot_name}' AND keyspace_name = '{ks}' AND
+                                        table_name = '{cf}'
+                                        """))
+                assert len(snap_cf) == 1
+
             finally:
                 #todo: clear snapshot
                 pass

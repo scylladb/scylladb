@@ -2840,8 +2840,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     using get_table_ids_func = std::function<std::unordered_set<table_id>(const db::system_keyspace::topology_requests_entry&)>;
     using send_rpc_func = std::function<future<>(locator::host_id, const service::frozen_topology_guard&)>;
     using desc_func = std::function<std::string()>;
+    using before_finalize_func = std::function<future<>()>;
 
-    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what) {
+    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
         // TODO: Exclude nodes which don't contain replicas of the table we are truncating
@@ -2928,6 +2929,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
         guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
 
+        if (bf) {
+            co_await bf();
+        }
+
         // Finalize the request
         while (true) {
             if (!guard) {
@@ -2981,6 +2986,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     future<> handle_snapshot_tables(group0_guard guard) {
         utils::chunked_vector<table_id> ids;
+        std::vector<lw_shared_ptr<replica::table>> tables;
         sstring tag;
         bool skip_flush;
         gc_clock::time_point t;
@@ -3000,6 +3006,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         throw std::invalid_argument(fmt::format("Cannot SNAPSHOT table with UUID {} because it does not exist.", id));
                     }
                     ids.emplace_back(id);
+                    tables.emplace_back(table);
                 }
                 rtlogger.info("Performing SNAPSHOT TABLES for {}", ids);
                 return *topology_requests_entry.snapshot_table_ids;
@@ -3011,6 +3018,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 return fmt::format("SNAPSHOT on tables {}", ids);
             }
             , "snapshot"
+            , [&]() -> future<> {
+                db::snapshot_table_helper sth(_sys_ks.query_processor());
+                co_await sth.insert_snapshot_info(tag
+                    , db_clock::from_time_t(gc_clock::to_time_t(t))
+                    , db_clock::from_time_t(gc_clock::to_time_t(expiry.value_or({})))
+                    , tables
+                );
+            }
         );
     }
 

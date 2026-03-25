@@ -61,6 +61,7 @@ struct snapshot_entry {
     std::string name;
 
     db_clock::time_point created_at;
+    // Note: if non-expiring, this is db_clock::time_point{} (i.e. zero)
     db_clock::time_point expires_at;
 
     std::string namespace_version;
