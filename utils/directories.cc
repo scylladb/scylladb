@@ -25,7 +25,7 @@ static future<> disk_sanity(fs::path path, bool developer_mode) {
     try {
         co_await check_direct_io_support(path.native());
     } catch (...) {
-        startlog.error("Coould not access {}: {}", path, std::current_exception());
+        startlog.error("Could not access {}: {}", path, std::current_exception());
         throw;
     }
 };
