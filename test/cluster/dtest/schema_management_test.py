@@ -196,7 +196,7 @@ class TestSchemaManagement(Tester):
         logger.debug("read and check data")
         run_stress("read")
 
-    @pytest.mark.skip("unimplemented")
+    @pytest.mark.skip_not_implemented(reason="unimplemented")
     def commitlog_replays_after_schema_change(self):
         """
         Commitlog can be replayed even though schema has been changed

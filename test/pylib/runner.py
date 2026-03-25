@@ -29,6 +29,7 @@ from _pytest.junitxml import xml_key
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, TESTPY_PREPARED_ENVIRONMENT, HOST_ID
 from test.pylib.scylla_cluster import merge_cmdline_options
+from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
     PYTEST_TESTS_LOGS_FOLDER,
@@ -473,7 +474,7 @@ def modify_pytest_item(item: pytest.Item) -> None:
             for mode in modes:
                 if mode == item.stash[BUILD_MODE]:
                     if platform_key is None or platform_key in platform.platform():
-                        item.add_marker(pytest.mark.skip(reason=reason))
+                        skip_marker(item, reason, skip_type="mode")
         try:
             __skip_test(*mark.args, **mark.kwargs)
         except TypeError as e:

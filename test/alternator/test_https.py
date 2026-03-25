@@ -14,11 +14,13 @@ import urllib3
 import urllib.parse
 import ssl
 
+from test.pylib.skip_types import skip_env
+
 @pytest.fixture(scope="module")
 def https_url(dynamodb):
     url = dynamodb.meta.client._endpoint.host
     if not url.startswith('https://'):
-        pytest.skip("HTTPS-specific tests are skipped without the '--https' option")
+        skip_env("HTTPS-specific tests are skipped without the '--https' option")
     yield url
 
 # Test which TLS versions are supported. We require that both TLS 1.2 and 1.3

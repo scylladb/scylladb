@@ -117,7 +117,7 @@ async def test_tablet_repair_progress_split(manager: ManagerClient):
     await do_test_tablet_repair_progress_split_merge(manager, do_split=True)
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/26844")
+@pytest.mark.skip_bug(reason="https://github.com/scylladb/scylladb/issues/26844")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_progress_merge(manager: ManagerClient):
     await do_test_tablet_repair_progress_split_merge(manager, do_merge=True)
@@ -571,7 +571,7 @@ async def test_tablet_auto_repair_cfg_enable(manager: ManagerClient):
     # Check repair is executed
     await check_has_repair_time(cql, hosts[0:1], table_id)
 
-@pytest.mark.skip(reason="no per tablet support yet")
+@pytest.mark.skip_not_implemented(reason="no per tablet support yet")
 @pytest.mark.asyncio
 async def test_tablet_auto_repair_cfg_disable_per_table_enable(manager: ManagerClient):
     cmdline = ["--auto-repair-enabled-default", "0",  "--auto-repair-threshold-default-in-seconds", "1"]
