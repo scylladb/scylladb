@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include "serializer.hh"
+#include "utils/chunked_string.hh"
 #include "enum_set.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/input_stream.hh"
@@ -666,6 +667,33 @@ struct serializer<sstring> {
     static void write(Output& out, const sstring& v) {
         safe_serialize_as_uint32(out, uint32_t(v.size()));
         out.write(v.data(), v.size());
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        in.skip(deserialize(in, std::type_identity<size_type>()));
+    }
+};
+
+// Binary-compatible with serializer<sstring>: wire format is [uint32_t length][raw UTF-8 bytes].
+// This is intentional: forward_cql IDL uses utils::chunked_string for query_string, and a node
+// running old code will deserialize it using serializer<sstring>. The formats must match exactly.
+template<>
+struct serializer<utils::chunked_string> {
+    template<typename Input>
+    static utils::chunked_string read(Input& in) {
+        auto sz = deserialize(in, std::type_identity<uint32_t>());
+        managed_bytes mb(managed_bytes::initialized_later(), sz);
+        for (bytes_mutable_view frag : fragment_range(managed_bytes_mutable_view(mb))) {
+            in.read(reinterpret_cast<char*>(frag.data()), frag.size());
+        }
+        return utils::chunked_string(std::move(mb));
+    }
+    template<typename Output>
+    static void write(Output& out, const utils::chunked_string& v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        for (bytes_view frag : fragment_range(managed_bytes_view(v.data()))) {
+            out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
+        }
     }
     template<typename Input>
     static void skip(Input& in) {

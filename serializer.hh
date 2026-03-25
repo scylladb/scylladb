@@ -11,6 +11,7 @@
 #include <optional>
 #include "utils/assert.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/chunked_string.hh"
 #include "bytes_ostream.hh"
 #include <seastar/core/simple-stream.hh>
 #include <boost/variant/variant.hpp>
@@ -324,6 +325,14 @@ struct normalize<managed_bytes> {
 template <>
 struct normalize<bytes_ostream> {
     using type = bytes;
+};
+
+// utils::chunked_string is wire-compatible with sstring: both serialize as
+// [uint32_t length][raw bytes]. This mapping lets IDL structs declare a field
+// as sstring while the C++ struct uses utils::chunked_string.
+template <>
+struct normalize<utils::chunked_string> {
+    using type = sstring;
 };
 
 template <typename T, typename U>
