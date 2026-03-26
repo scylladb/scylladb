@@ -3600,7 +3600,7 @@ class small_vector(object):
         self.ref = ref
 
     def __len__(self):
-        return self.ref['_begin'] - self.ref['_end']
+        return self.ref['_end'] - self.ref['_begin']
 
     def __iter__(self):
         e = self.ref['_begin']
