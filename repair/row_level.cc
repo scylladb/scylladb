@@ -2173,11 +2173,16 @@ public:
         auto& sstables = _repair_writer->get_sstable_list_to_mark_as_repaired();
         if (_incremental_repair_meta.sst_set || !sstables.empty()) {
             co_await seastar::async([&] {
+                // Keep the new sstables marked as being_repaired until repair_update_compaction_ctrl
+                // is called (after sstables_repaired_at is committed to Raft). This is an additional
+                // in-memory guard; the classifier itself also protects these sstables via the
+                // repaired_at > sstables_repaired_at check.
                 auto do_mark_sstable_as_repaired = [&] (const sstables::shared_sstable& sst, const sstring& type) {
                     auto filename = sst->toc_filename();
                     auto name = sst->component_basename(component_type::Data);
                     int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
                     sst->update_repaired_at(repaired_at);
+                    sst->mark_as_being_repaired(_frozen_topology_guard);
                     rlogger.info("Marking filename={} name={} repaired_at={} being_repaired={} type={} for incremental repair",
                             filename, name, repaired_at, sst->being_repaired, type);
                 };
