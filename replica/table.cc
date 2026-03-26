@@ -861,14 +861,31 @@ private:
         return idx;
     }
 
+    // Returns true if the sstable is currently being repaired. Checks the in-memory
+    // being_repaired flag first, then falls back to a durable check: if the sstable's
+    // repaired_at equals sstables_repaired_at+1 and the tablet is undergoing repair
+    // (i.e. tablet_transition_kind::repair), the sstable belongs to the current repair
+    // round but sstables_repaired_at+1 hasn't been committed to Raft yet (race window).
+    bool is_being_repaired(const sstables::shared_sstable& sst, int64_t sstables_repaired_at) const noexcept {
+        if (!sst->being_repaired.uuid().is_null()) {
+            return true;
+        }
+        auto repaired_at = sst->get_stats_metadata().repaired_at;
+        if (repaired_at != sstables_repaired_at + 1) {
+            return false;
+        }
+        auto& cg = compaction_group_for_sstable(sst);
+        auto trinfo = tablet_map().get_tablet_transition_info(locator::tablet_id(cg.group_id()));
+        return trinfo && trinfo->transition == locator::tablet_transition_kind::repair;
+    }
+
     repair_classifier_func make_repair_sstable_classifier_func() const {
-        // FIXME: implement it for incremental repair!
-        return [] (const sstables::shared_sstable& sst, int64_t sstables_repaired_at) {
+        return [this] (const sstables::shared_sstable& sst, int64_t sstables_repaired_at) {
             bool is_repaired = repair::is_repaired(sstables_repaired_at, sst);
             if (is_repaired) {
                 return repair_sstable_classification::repaired;
             } else {
-                if (!sst->being_repaired.uuid().is_null()) {
+                if (is_being_repaired(sst, sstables_repaired_at)) {
                     return repair_sstable_classification::repairing;
                 } else {
                     return repair_sstable_classification::unrepaired;

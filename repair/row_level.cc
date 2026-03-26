@@ -2177,8 +2177,13 @@ public:
         auto& cm = table.get_compaction_manager();
         int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
 
-        auto modifier = [repaired_at] (sstables::sstable& new_sst) {
+        // Keep the new sstables marked as being_repaired until repair_update_compaction_ctrl
+        // is called (after sstables_repaired_at is committed to Raft). This is an additional
+        // in-memory guard; the classifier itself also protects these sstables via the
+        // repaired_at > sstables_repaired_at check.
+        auto modifier = [repaired_at, session = _frozen_topology_guard] (sstables::sstable& new_sst) {
             new_sst.update_repaired_at(repaired_at);
+            new_sst.mark_as_being_repaired(session);
         };
 
         std::unordered_map<compaction::compaction_group_view*, std::vector<sstables::shared_sstable>> sstables_by_group;
