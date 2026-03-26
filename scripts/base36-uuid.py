@@ -142,7 +142,7 @@ class TimeUuid:
         # need to translate the timestamp to the UNIX time
         unix_time = self.uuid.time - self.UNIX_EPOCH_SINCE_GREGORIAN_DAY0
         seconds, decimicro_seconds = divmod(unix_time, DECIMICRO_RATIO)
-        return datetime.datetime.fromtimestamp(seconds), decimicro_seconds
+        return datetime.datetime.fromtimestamp(seconds, tz=datetime.timezone.utc), decimicro_seconds
 
     def print_field(self, field: str, print_in_hex: bool) -> None:
         def print_num(n: int, bits: int) -> str:
@@ -186,7 +186,7 @@ def test_dencode_base36() -> None:
     assert timeuuid.encode_with_base36() == encoded_uuid
 
     timestamp, decimicro_seconds = timeuuid.timestamp
-    assert timestamp == datetime.datetime(2022, 5, 23, 18, 37, 52)
+    assert timestamp == datetime.datetime(2022, 5, 23, 10, 37, 52, tzinfo=datetime.timezone.utc)
     assert decimicro_seconds == 7040000
 
 
