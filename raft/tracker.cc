@@ -113,8 +113,6 @@ void tracker::set_configuration(const configuration& configuration, index_t next
             }
             auto newp = this->progress::find(s.addr.id);
             if (newp != this->progress::end()) {
-                // Processing joint configuration and already added
-                // an entry for this id.
                 continue;
             }
             auto oldp = old_progress.find(s.addr.id);
@@ -123,7 +121,7 @@ void tracker::set_configuration(const configuration& configuration, index_t next
             } else {
                 newp = this->progress::emplace(s.addr.id, follower_progress{s.addr.id, next_idx}).first;
             }
-            newp->second.can_vote = s.can_vote;
+            newp->second.can_vote = configuration.can_vote(s.addr.id);
         }
     };
     emplace_simple_config(configuration.current, _current_voters);
