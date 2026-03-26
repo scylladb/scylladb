@@ -2324,8 +2324,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // created and started, the locally persisted group0 state has been applied
             // before it returns. As a result, tablet Raft groups are started using
             // tablet metadata that is at least as recent as the locally persisted version.
-            // groups_manager::start() waits for all these Raft groups to start, so when
-            // we begin RPC messaging below, the system is ready to accept proxied requests
+            // groups_manager::start() starts all these Raft groups, so when we begin
+            // RPC messaging below, the system is ready to accept proxied requests
             // from other replicas.
             groups_manager.invoke_on_all([](service::strong_consistency::groups_manager& m) {
                 return m.start();
@@ -2352,6 +2352,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                             }
                         });
                     });
+            }).get();
+
+            groups_manager.invoke_on_all([](service::strong_consistency::groups_manager& m) {
+                return m.wait_for_groups_to_start(lowres_clock::now() + std::chrono::seconds(30)).handle_exception([] (auto&& e) {
+                    startlog.warn("Not all Raft groups started: {}", e);
+                });
             }).get();
 
             api::set_server_client_routes(ctx, client_routes).get();

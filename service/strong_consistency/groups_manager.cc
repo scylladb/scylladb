@@ -424,16 +424,15 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     });
 }
 
-future<> groups_manager::start() {
+void groups_manager::start() {
     _started = true;
 
     if (!_features.strongly_consistent_tables) {
-        co_return;
+        return;
     }
 
     if (_pending_tm) {
         update(std::move(_pending_tm));
-        co_await wait_for_groups_to_start(lowres_clock::now() + std::chrono::seconds(30));
     }
 }
 
