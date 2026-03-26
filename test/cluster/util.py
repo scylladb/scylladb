@@ -68,15 +68,29 @@ async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> 
        The first element of each tuple is the Raft ID of the node (which is equal to the Host ID),
        the second element indicates whether the node is a voter.
      """
+    deadline = time.time() + 60
+
+    async def do_queries():
+        host = (await wait_for_cql_and_get_hosts(manager.cql, [srv], deadline))[0]
+        await read_barrier(manager.api, srv.ip_addr)
+        group0_id = (await manager.cql.run_async(
+            "select value from system.scylla_local where key = 'raft_group0_id'",
+            host=host))[0].value
+        config = await manager.cql.run_async(
+            f"select server_id, can_vote from system.raft_state where group_id = {group0_id} and disposition = 'CURRENT'",
+            host=host)
+        return config
+
     assert manager.cql
-    host = (await wait_for_cql_and_get_hosts(manager.cql, [srv], time.time() + 60))[0]
-    await read_barrier(manager.api, srv.ip_addr)
-    group0_id = (await manager.cql.run_async(
-        "select value from system.scylla_local where key = 'raft_group0_id'",
-        host=host))[0].value
-    config = await manager.cql.run_async(
-        f"select server_id, can_vote from system.raft_state where group_id = {group0_id} and disposition = 'CURRENT'",
-        host=host)
+    try:
+        config = await do_queries()
+    except NoHostAvailable as e:
+        # After topology changes such as node replace with IP reuse, the driver
+        # may still have a stale Host object that gets marked down between the
+        # wait_for_cql_and_get_hosts check and the actual query (see SCYLLADB-833).
+        # Re-obtain the host and retry the queries once.
+        logger.warning(f"NoHostAvailable querying {srv} for group0 config, retrying with refreshed host: {e}")
+        config = await do_queries()
     result = {(str(m.server_id), bool(m.can_vote)) for m in config}
     logger.info(f"Group 0 members by {srv}: {result}")
     return result
