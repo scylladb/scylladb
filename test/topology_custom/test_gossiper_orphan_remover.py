@@ -8,7 +8,10 @@ import asyncio
 import time
 import pytest
 import logging
+from functools import partial
 from test.pylib.manager_client import ManagerClient
+from test.pylib.util import wait_for
+from test.pylib.internal_types import ServerInfo
 from test.topology.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,20 @@ async def test_crashed_node_substitution(manager: ManagerClient):
 
     log = await manager.server_open_log(failed_server.server_id)
     await log.wait_for("finished do_send_ack2_msg")
+
+    # Wait until the failed server's gossip state has propagated to all running peers.
+    # "finished do_send_ack2_msg" only guarantees that one peer completed a gossip round
+    # with the failed server; other nodes learn about it only in subsequent gossip rounds.
+    # Querying gossip before propagation completes would cause the assertion below to fail
+    # because the orphan node would not yet appear as live or down on every peer.
+    async def gossip_has_node(server: ServerInfo):
+        live = await manager.api.client.get_json("/gossiper/endpoint/live", host=server.ip_addr)
+        down = await manager.api.client.get_json("/gossiper/endpoint/down", host=server.ip_addr)
+        return True if failed_server.ip_addr in live + down else None
+
+    for s in servers:
+        await wait_for(partial(gossip_has_node, s), deadline=time.time() + 30)
+
     await manager.api.message_injection(failed_server.ip_addr, 'crash_before_group0_join')
     
     await task
