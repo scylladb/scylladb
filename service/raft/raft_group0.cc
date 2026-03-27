@@ -538,6 +538,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
         group0_id = g0_info.group0_id;
         raft::server_address my_addr{my_id, {}};
 
+        bool starting_server_as_follower = false;
         if (server == nullptr) {
             // This is the first time discovery is run. Create and start a Raft server for group 0 on this node.
             raft::configuration initial_configuration;
@@ -565,6 +566,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 // trigger an empty snapshot transfer.
                 nontrivial_snapshot = true;
             } else {
+                starting_server_as_follower = true;
                 co_await handshaker->pre_server_start(g0_info);
             }
 
@@ -591,7 +593,9 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
         }
 
         SCYLLA_ASSERT(server);
-        if (server->get_configuration().contains(my_id)) {
+        co_await utils::get_local_injector().inject("join_group0_pause_before_config_check",
+                utils::wait_for_message(std::chrono::minutes{5}));
+        if (!starting_server_as_follower && server->get_configuration().contains(my_id)) {
             // True if we started a new group or completed a configuration change initiated earlier.
             group0_log.info("server {} already in group 0 (id {}) as {}", my_id, group0_id,
                     server->get_configuration().can_vote(my_id)? "voter" : "non-voter");
