@@ -87,7 +87,9 @@ async def test_limited_concurrency_of_writes(manager: ManagerClient):
     })
     node2 = await manager.server_add()
 
-    cql = manager.get_cql()
+    cql = cluster_con([node1.ip_addr], 9042, False,
+                      load_balancing_policy=WhiteListRoundRobinPolicy([node1.ip_addr])).connect()
+    await wait_for_cql_and_get_hosts(cql, [node1], time.time() + 60)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2}") as ks:
         table = f"{ks}.t"
         await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
