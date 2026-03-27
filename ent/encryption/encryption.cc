@@ -1045,7 +1045,7 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
             // Since we are in pre-init phase, this should be safe.
             co_await smp::invoke_on_all([&opts, &exts] () mutable {
                 auto& f = exts.schema_extensions().at(encryption_attribute);
-                for (auto& s : { db::system_keyspace::paxos(), db::system_keyspace::batchlog(), db::system_keyspace::dicts() }) {
+                for (auto& s : { db::system_keyspace::paxos(), db::system_keyspace::batchlog(), db::system_keyspace::dicts(), db::system_keyspace::raft() }) {
                     exts.add_extension_to_schema(s, encryption_attribute, f(*opts));
                 }
             });
