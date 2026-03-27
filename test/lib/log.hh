@@ -15,3 +15,22 @@
 
 extern seastar::logger testlog;
 
+
+// RAII helper that sets a logger to the given level for the duration of a scope,
+// restoring the previous level on destruction.
+class scoped_logger_level {
+    seastar::sstring _name;
+    seastar::log_level _prev_level;
+public:
+    scoped_logger_level(seastar::sstring name, seastar::log_level level)
+        : _name(std::move(name))
+        , _prev_level(seastar::global_logger_registry().get_logger_level(_name))
+    {
+        seastar::global_logger_registry().set_logger_level(_name, level);
+    }
+    ~scoped_logger_level() {
+        seastar::global_logger_registry().set_logger_level(_name, _prev_level);
+    }
+    scoped_logger_level(const scoped_logger_level&) = delete;
+    scoped_logger_level& operator=(const scoped_logger_level&) = delete;
+};

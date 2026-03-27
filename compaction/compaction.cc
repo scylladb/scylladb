@@ -1353,6 +1353,35 @@ private:
             _sstables.erase(exhausted, _sstables.end());
             dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
         }
+
+        // Release exhausted garbage collected sstables.
+        // A GC sstable is exhausted when it doesn't overlap with any remaining input sstable.
+        // GC sstables serve as safeguards against data resurrection: their tombstones may shadow
+        // data in not-yet-exhausted input sstables. So a GC sstable can only be released once
+        // all overlapping input sstables have been exhausted.
+        auto gc_not_exhausted = [this] (const sstables::shared_sstable& gc_sst) {
+            auto gc_range = ::wrapping_interval<dht::token>::make(
+                gc_sst->get_first_decorated_key()._token,
+                gc_sst->get_last_decorated_key()._token);
+            for (const auto& input_sst : _sstables) {
+                auto input_range = ::wrapping_interval<dht::token>::make(
+                    input_sst->get_first_decorated_key()._token,
+                    input_sst->get_last_decorated_key()._token);
+                if (gc_range.overlaps(input_range, dht::token_comparator())) {
+                    return true; // overlaps with a remaining input sstable, not exhausted yet
+                }
+            }
+            return false; // no overlap with any remaining input sstable, can be released
+        };
+        exhausted = std::partition(_used_garbage_collected_sstables.begin(), _used_garbage_collected_sstables.end(), gc_not_exhausted);
+        if (exhausted != _used_garbage_collected_sstables.end()) {
+            auto exhausted_gc_ssts = std::vector<sstables::shared_sstable>(exhausted, _used_garbage_collected_sstables.end());
+            log_debug("Releasing {} exhausted GC sstable(s) earlier: [{}]",
+                exhausted_gc_ssts.size(),
+                fmt::join(exhausted_gc_ssts | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
+            _replacer(get_compaction_completion_desc(std::move(exhausted_gc_ssts), {}));
+            _used_garbage_collected_sstables.erase(exhausted, _used_garbage_collected_sstables.end());
+        }
     }
 
     void replace_remaining_exhausted_sstables() {

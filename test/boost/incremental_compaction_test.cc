@@ -36,6 +36,7 @@
 
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
+#include "test/lib/log.hh"
 
 using namespace sstables;
 
@@ -526,5 +527,215 @@ SEASTAR_TEST_CASE(gc_tombstone_with_grace_seconds_test) {
         auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
         BOOST_REQUIRE_EQUAL(descriptor.sstables.size(), 1);
         BOOST_REQUIRE_EQUAL(descriptor.sstables.front(), sst);
+    });
+}
+
+SEASTAR_TEST_CASE(gc_sstable_incremental_release_test) {
+    return test_env::do_with_async([](test_env& env) {
+
+        scoped_logger_level compaction_log_level("compaction", seastar::log_level::debug);
+
+        auto schema = schema_builder("ks", "gc_incremental_release_test")
+                              .with_column("pk", utf8_type, column_kind::partition_key)
+                              .with_column("data", utf8_type)
+                              .with_tombstone_gc_options(tombstone_gc_options{tombstone_gc_mode::immediate})
+                              .build();
+
+        constexpr int num_sstables = 16;
+        constexpr int keys_per_sstable = 100;
+        constexpr api::timestamp_type ts = 100;
+
+        auto dks = tests::generate_partition_keys(num_sstables * keys_per_sstable, schema, local_shard_only::yes);
+
+        table_for_tests cf = env.make_table_for_tests(schema);
+        auto close_cf = deferred_stop(cf);
+
+        auto make_mutation = [&] (size_t key_index, bool insert_tombstones) {
+            mutation mut(schema, dks.at(key_index));
+            auto ck = clustering_key::make_empty();
+            auto& cdef = *schema->get_column_definition("data");
+            if (insert_tombstones) {
+                auto expiration_time = (gc_clock::now() - 2s).time_since_epoch().count();
+                auto tombstone = atomic_cell::make_dead(ts, gc_clock::time_point(gc_clock::duration(expiration_time)));
+                mut.set_clustered_cell(ck, cdef, std::move(tombstone));
+            } else {
+                auto live_cell = atomic_cell::make_live(*cdef.type, ts, serialized("live_data"));
+                mut.set_clustered_cell(ck, cdef, std::move(live_cell));
+            }
+            return mut;
+        };
+
+        const auto run_id = sstables::run_id::create_random_id();
+        std::vector<shared_sstable> input_sstables;
+        for (int i = 0; i < num_sstables; i++) {
+            utils::chunked_vector<mutation> mutations;
+            for (int j = 0; j < keys_per_sstable; j++) {
+                int key_idx = i * keys_per_sstable + j;
+                // 3/4th of the keys are expired tombstones
+                bool expired = (key_idx % 4) == 0;
+                mutations.push_back(make_mutation(key_idx, !expired));
+            }
+            auto sst = make_sstable_containing(env.make_sst_factory(schema), std::move(mutations));
+            sstables::test(sst).set_run_identifier(run_id);
+            column_family_test(cf).add_sstable(sst).get();
+            input_sstables.push_back(std::move(sst));
+        }
+
+        // Track GC sstables and their release order
+        size_t gc_release_count = 0;
+        auto replacer = [&](compaction::compaction_completion_desc desc) {
+            if (desc.new_sstables.empty()) {
+                for (const auto& old_sst : desc.old_sstables) {
+                    if (old_sst->get_origin() == "garbage_collection") {
+                        gc_release_count++;
+                    }
+                }
+            }
+
+            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), desc.new_sstables, desc.old_sstables).get();
+            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(), desc.old_sstables, desc.new_sstables);
+        };
+
+        auto desc = compaction::compaction_descriptor(std::move(input_sstables), 1, 512);
+        desc.enable_garbage_collection(cf->get_sstable_set());
+        auto result = compact_sstables(env, std::move(desc), cf, env.make_sst_factory(schema), replacer).get();
+
+        // Verify that GC sstables were released during compaction
+        BOOST_CHECK_GT(gc_release_count, 0);
+    });
+}
+
+// Test that GC sstables are NOT prematurely released when input sstables have
+// overlapping key ranges. A GC sstable's tombstones may shadow data in
+// not-yet-exhausted overlapping input sstables, so releasing the GC sstable
+// early would cause data resurrection.
+//
+// Scenario (from review comment):
+//   Input sstables: S1:[1,10], S2:[1,20]
+//   1) produces output [1, 11], S1 exhausted, produces GC-S1: [1, 11]
+//   2) GC-S1 must NOT be released because it overlaps with still-alive S2
+//   3) GC-S1 can only be released after S2 is also exhausted
+SEASTAR_TEST_CASE(gc_sstable_no_premature_release_with_overlapping_inputs_test) {
+    return test_env::do_with_async([](test_env& env) {
+        scoped_logger_level compaction_log_level("compaction", seastar::log_level::debug);
+
+        auto schema = schema_builder("ks", "gc_no_premature_release_test")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("data", utf8_type)
+                .with_tombstone_gc_options(tombstone_gc_options{tombstone_gc_mode::immediate})
+                .build();
+
+        constexpr int total_keys = 1600;
+        constexpr int narrow_keys = 100;
+        constexpr int num_narrow = 4;
+        constexpr api::timestamp_type live_ts = 100;
+        // Tombstone timestamp must be higher than live data to shadow it
+        constexpr api::timestamp_type tombstone_ts = 200;
+
+        auto dks = tests::generate_partition_keys(total_keys, schema, local_shard_only::yes);
+
+        table_for_tests cf = env.make_table_for_tests(schema);
+        auto close_cf = deferred_stop(cf);
+
+        const auto run_id = sstables::run_id::create_random_id();
+        std::vector<shared_sstable> input_sstables;
+
+        // Create overlapping sstables:
+        // - "narrow" sstables each covering [i*100, (i+1)*100) with a mix of
+        //   live data and expired tombstones (so they're not fully expired)
+        // - "wide" sstable covering ALL keys [0, 1600) with live data
+        //
+        // When narrow sstables are exhausted before the wide one, they produce
+        // GC sstables whose tombstones shadow data in the still-alive wide sstable.
+
+        // Create narrow sstables, each with 3/4 tombstones and 1/4 live data.
+        for (int i = 0; i < num_narrow; i++) {
+            utils::chunked_vector<mutation> mutations;
+            for (int j = 0; j < narrow_keys; j++) {
+                int key_idx = i * narrow_keys + j;
+                mutation mut(schema, dks.at(key_idx));
+                auto ck = clustering_key::make_empty();
+                auto& cdef = *schema->get_column_definition("data");
+                if ((key_idx % 4) != 0) {
+                    // 3/4 of keys: expired tombstones that shadow data in the wide sstable
+                    auto expiration_time = (gc_clock::now() - 2s).time_since_epoch().count();
+                    auto tombstone = atomic_cell::make_dead(tombstone_ts, gc_clock::time_point(gc_clock::duration(expiration_time)));
+                    mut.set_clustered_cell(ck, cdef, std::move(tombstone));
+                } else {
+                    // 1/4 of keys: live data (prevents the sstable from being fully expired)
+                    auto live_cell = atomic_cell::make_live(*cdef.type, live_ts, serialized("narrow_live"));
+                    mut.set_clustered_cell(ck, cdef, std::move(live_cell));
+                }
+                mutations.push_back(std::move(mut));
+            }
+            auto sst = make_sstable_containing(env.make_sst_factory(schema), std::move(mutations));
+            sstables::test(sst).set_run_identifier(run_id);
+            column_family_test(cf).add_sstable(sst).get();
+            input_sstables.push_back(std::move(sst));
+        }
+
+        // Create 1 wide sstable covering ALL keys [0, 1600) with live data.
+        {
+            utils::chunked_vector<mutation> mutations;
+            for (int j = 0; j < total_keys; j++) {
+                mutation mut(schema, dks.at(j));
+                auto ck = clustering_key::make_empty();
+                auto& cdef = *schema->get_column_definition("data");
+                auto live_cell = atomic_cell::make_live(*cdef.type, live_ts, serialized("wide_live"));
+                mut.set_clustered_cell(ck, cdef, std::move(live_cell));
+                mutations.push_back(std::move(mut));
+            }
+            auto sst = make_sstable_containing(env.make_sst_factory(schema), std::move(mutations));
+            sstables::test(sst).set_run_identifier(run_id);
+            column_family_test(cf).add_sstable(sst).get();
+            input_sstables.push_back(std::move(sst));
+        }
+
+        // Track whether any GC sstable was released while input sstables remain.
+        // A GC sstable must not be released if it overlaps with any remaining input sstable.
+        bool premature_gc_release = false;
+        size_t gc_release_count = 0;
+        // Track currently alive input sstables
+        auto alive_inputs = input_sstables;
+
+        auto replacer = [&](compaction::compaction_completion_desc desc) {
+            // Check for premature GC release: if a GC sstable is being removed
+            // (old_sstables with no new_sstables), verify it doesn't overlap any alive input.
+            if (desc.new_sstables.empty()) {
+                for (const auto& old_sst : desc.old_sstables) {
+                    if (old_sst->get_origin() == "garbage_collection") {
+                        gc_release_count++;
+                        auto gc_first = old_sst->get_first_decorated_key()._token;
+                        auto gc_last = old_sst->get_last_decorated_key()._token;
+                        for (const auto& alive : alive_inputs) {
+                            auto alive_first = alive->get_first_decorated_key()._token;
+                            auto alive_last = alive->get_last_decorated_key()._token;
+                            auto gc_range = ::wrapping_interval<dht::token>::make(gc_first, gc_last);
+                            auto alive_range = ::wrapping_interval<dht::token>::make(alive_first, alive_last);
+                            if (gc_range.overlaps(alive_range, dht::token_comparator())) {
+                                premature_gc_release = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update alive inputs: remove any input sstables being replaced
+            for (const auto& old_sst : desc.old_sstables) {
+                std::erase(alive_inputs, old_sst);
+            }
+
+            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), desc.new_sstables, desc.old_sstables).get();
+            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(), desc.old_sstables, desc.new_sstables);
+        };
+
+        auto desc = compaction::compaction_descriptor(std::move(input_sstables), 1, 512);
+        desc.enable_garbage_collection(cf->get_sstable_set());
+        auto result = compact_sstables(env, std::move(desc), cf, env.make_sst_factory(schema), replacer).get();
+
+        // The wide sstable overlaps all GC sstables, so no GC sstable should be
+        // released while the wide sstable is alive. GC sstables should only be
+        // released at the very end (or not incrementally at all).
+        BOOST_CHECK_MESSAGE(!premature_gc_release, "GC sstable was released while overlapping input sstables were still alive");
     });
 }
