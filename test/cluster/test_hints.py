@@ -100,7 +100,7 @@ async def test_limited_concurrency_of_writes(manager: ManagerClient):
     })
     node2 = await manager.server_add()
 
-    cql = manager.get_cql()
+    cql = await manager.get_cql_exclusive(node1)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2}") as ks:
         table = f"{ks}.t"
         await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
