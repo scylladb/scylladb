@@ -38,7 +38,7 @@ This directory should have 700 permissions and belong to the scylla user)foo")
                                 R"foo(System information encryption settings
 
 If enabled, system tables that may contain sensitive information (system.batchlog,
-system.paxos), hints files and commit logs are encrypted with the
+system.paxos, system.raft), hints files and commit logs are encrypted with the
 encryption settings below.
 
 When enabling system table encryption on a node with existing data, run
