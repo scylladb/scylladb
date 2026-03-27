@@ -123,8 +123,10 @@ SEASTAR_TEST_CASE(test_index_doesnt_flood_cache_in_small_partition_workload) {
                 uint64_t reads_after = e.local_db().row_cache_tracker().get_stats().reads_done;
                 uint64_t misses_after = get_misses();
                 if (get_misses() != misses_before) {
-                    // Cache misses are allowed only if they were done by something outside of the test.
-                    BOOST_REQUIRE_GT(reads_after, reads_expected);
+                    // Cache misses are allowed only if they can be explained by activity outside of the test.
+                    // We use GE rather than GT because cache eviction can also be triggered by
+                    // LSA memory pressure (e.g. from index page loading) without any extra reads.
+                    BOOST_REQUIRE_GE(reads_after, reads_expected);
                     if (retries < max_retries) {
                         ++retries;
                         testlog.warn("Detected extra cache misses (actual={}, expected={}, repeat={}, i={}), but they can be explained by extra reads (after={}, before={}, expected={}) done by something in the background, so retrying. (retries={})", misses_after, misses_before, repeat, i, reads_after, reads_before, reads_expected, retries);
@@ -213,8 +215,10 @@ SEASTAR_TEST_CASE(test_index_is_cached_in_big_partition_workload) {
         uint64_t reads_after = e.local_db().row_cache_tracker().get_stats().reads_done;
         uint64_t misses_after = get_misses();
         if (misses_after != misses_before) {
-            // Cache misses are allowed only if they were done by something outside of the test.
-            BOOST_REQUIRE_GT(reads_after, reads_expected);
+            // Cache misses are allowed only if they can be explained by activity outside of the test.
+            // We use GE rather than GT because cache eviction can also be triggered by
+            // LSA memory pressure (e.g. from index page loading) without any extra reads.
+            BOOST_REQUIRE_GE(reads_after, reads_expected);
             if (retries < max_retries) {
                 ++retries;
                 testlog.warn("Detected extra cache misses (actual={}, expected={}), but they can be explained by extra reads (after={}, before={}, expected={}) done by something in the background, so retrying. (retries={})", misses_after, misses_before, reads_after, reads_before, reads_expected, retries);
