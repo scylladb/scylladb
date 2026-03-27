@@ -38,6 +38,7 @@
 #include "test/lib/proc_utils.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
+#include "db/system_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "init.hh"
@@ -792,6 +793,39 @@ static auto make_commitlog_config(const test_provider_args& args, const std::uno
     }
 
     return std::make_tuple(cfg, ext);
+}
+
+SEASTAR_TEST_CASE(test_system_info_encryption_includes_raft_tables) {
+    tmpdir tmp;
+    auto sysdir = tmp.path() / "system_keys";
+    auto syskey = sysdir / "system" / "system_table_keytab";
+    auto yaml = fmt::format("system_key_directory: {}", sysdir.string());
+
+    co_await create_key_file(syskey, { { "AES/CBC/PKCSPadding", 128 }});
+
+    test_provider_args args{
+            .tmp = tmp,
+            .extra_yaml = yaml,
+    };
+
+    auto [cfg, ext] = make_commitlog_config(args, {});
+
+    co_await do_with_cql_env_thread(
+            [](cql_test_env& env) {
+                auto check_has_encryption = [&](schema_ptr s) {
+                    auto it = s->extensions().find("scylla_encryption_options");
+                    BOOST_REQUIRE_MESSAGE(it != s->extensions().end(),
+                            fmt::format("Expected encryption extension on {}.{}",
+                                    s->ks_name(), s->cf_name()));
+                    BOOST_REQUIRE_MESSAGE(!it->second->is_placeholder(),
+                            fmt::format("Encryption extension on {}.{} "
+                                        "should not be a placeholder",
+                                    s->ks_name(), s->cf_name()));
+                };
+
+                check_has_encryption(db::system_keyspace::raft());
+            },
+            cfg, {}, cql_test_init_configurables{ *ext });
 }
 
 static future<> test_encrypted_commitlog(const test_provider_args& args, std::unordered_map<std::string, std::string> scopts = {}) {
