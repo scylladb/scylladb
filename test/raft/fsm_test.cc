@@ -270,11 +270,11 @@ BOOST_AUTO_TEST_CASE(test_tracker_voter_demotion_joint_config) {
     // During joint consensus it must still be treated as a voter.
     auto pr3 = tracker.find(id3);
     BOOST_CHECK_NE(pr3, nullptr);
-    BOOST_CHECK_EQUAL(pr3->can_vote, true);
+    BOOST_CHECK_EQUAL(pr3->can_vote, is_voter::yes);
 
     // id1 and id2 should remain voters.
-    BOOST_CHECK_EQUAL(tracker.find(id1)->can_vote, true);
-    BOOST_CHECK_EQUAL(tracker.find(id2)->can_vote, true);
+    BOOST_CHECK_EQUAL(tracker.find(id1)->can_vote, is_voter::yes);
+    BOOST_CHECK_EQUAL(tracker.find(id2)->can_vote, is_voter::yes);
 }
 
 BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
