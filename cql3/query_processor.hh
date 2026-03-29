@@ -260,6 +260,10 @@ public:
         return _prepared_cache.find(key);
     }
 
+    bool update_prepared_result_metadata_id(const prepared_cache_key_type& key, cql_metadata_id_type metadata_id) {
+        return _prepared_cache.update_result_metadata_id(key, std::move(metadata_id));
+    }
+
     inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_prepared(

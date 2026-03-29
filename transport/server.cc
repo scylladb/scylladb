@@ -1633,13 +1633,22 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     }
 
     tracing::trace(trace_state, "Processing a statement");
-    return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
-            .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
+    auto cache_key_for_metadata = cache_key;
+    return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, prepared, std::move(cache_key), needs_authorization)
+            .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id), &qp, cache_key = std::move(cache_key_for_metadata), prepared = std::move(prepared)] (auto msg) mutable {
         if (msg->move_to_shard()) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
+            if (prepared->result_metadata_is_empty() && metadata_id.has_request_metadata_id()) {
+                if (auto rows = dynamic_pointer_cast<messages::result_message::rows>(msg)) {
+                    auto rows_metadata_id = rows->rs().get_metadata().calculate_metadata_id();
+                    qp.local().update_prepared_result_metadata_id(cache_key, rows_metadata_id);
+                    auto request_metadata_id = metadata_id.get_request_metadata_id();
+                    metadata_id = cql_metadata_id_wrapper(std::move(request_metadata_id), std::move(rows_metadata_id));
+                }
+            }
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
             return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, std::move(metadata_id), skip_metadata)));
         }
