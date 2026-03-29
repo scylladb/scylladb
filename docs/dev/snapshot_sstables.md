@@ -24,6 +24,7 @@ CREATE TABLE system_distributed.snapshot_sstables (
     last_token bigint,
     toc_name text,
     prefix text,
+    downloaded boolean,
     PRIMARY KEY ((snapshot_name, "keyspace", "table", datacenter, rack), first_token, sstable_id)
 )
 ~~~
@@ -42,6 +43,7 @@ Column descriptions:
 | `last_token` | bigint | Last token in the token range covered by this SSTable |
 | `toc_name` | text | TOC filename of the SSTable (e.g. `me-3gdq_0bki_2cvk01yl83nj0tp5gh-big-TOC.txt`) |
 | `prefix` | text | Prefix path in object storage where the SSTable was backed up |
+| `downloaded` | boolean | Flag indicating whether the SSTable has been downloaded already |
 
 ## APIs
 
@@ -50,3 +52,6 @@ The following C++ APIs are provided in `db::system_distributed_keyspace`:
 - insert\_snapshot\_sstable
 
 - get\_snapshot\_sstables
+
+- update\_sstable\_download\_status
+
