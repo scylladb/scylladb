@@ -37,21 +37,34 @@ class log_record_writer {
     using ostream = seastar::simple_memory_output_stream;
 
     log_record _record;
-    mutable std::optional<size_t> _size;
+    mutable std::optional<size_t> _header_size;
+    mutable std::optional<size_t> _data_size;
 
-    void compute_size() const;
+    void compute_sizes() const;
 
 public:
     explicit log_record_writer(log_record record)
         : _record(std::move(record))
     {}
 
-    // Get serialized size (computed lazily)
-    size_t size() const {
-        if (!_size) {
-            compute_size();
+    // Get serialized sizes (computed lazily)
+    size_t header_size() const {
+        if (!_header_size) {
+            compute_sizes();
         }
-        return *_size;
+        return *_header_size;
+    }
+
+    size_t data_size() const {
+        if (!_data_size) {
+            compute_sizes();
+        }
+        return *_data_size;
+    }
+
+    // Total serialized content size (header + data)
+    size_t size() const {
+        return header_size() + data_size();
     }
 
     // Write the record to an output stream
@@ -128,9 +141,10 @@ public:
     static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
 
     struct record_header {
-        uint32_t data_size; // size of the record data following the record_header
+        uint32_t header_size; // size of the serialized log_record_header
+        uint32_t data_size;   // size of the serialized canonical_mutation
     };
-    static constexpr size_t record_header_size = sizeof(uint32_t);
+    static constexpr size_t record_header_size = 2 * sizeof(uint32_t);
 
 private:
 
@@ -155,8 +169,6 @@ private:
 
     struct record_in_buffer {
         log_record_writer writer;
-        size_t offset_in_buffer;
-        size_t data_size;
         future<log_location> loc;
         compaction_group* cg;
         seastar::gate::holder cg_holder;
@@ -373,16 +385,19 @@ template <>
 struct serializer<replica::logstor::write_buffer::record_header> {
     template <typename Output>
     static void write(Output& out, const replica::logstor::write_buffer::record_header& h) {
+        serializer<uint32_t>::write(out, h.header_size);
         serializer<uint32_t>::write(out, h.data_size);
     }
     template <typename Input>
     static replica::logstor::write_buffer::record_header read(Input& in) {
         replica::logstor::write_buffer::record_header h;
+        h.header_size = serializer<uint32_t>::read(in);
         h.data_size = serializer<uint32_t>::read(in);
         return h;
     }
     template <typename Input>
     static void skip(Input& in) {
+        serializer<uint32_t>::skip(in);
         serializer<uint32_t>::skip(in);
     }
 };

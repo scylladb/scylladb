@@ -16,6 +16,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/util/bool_class.hh>
 #include "bytes_fwd.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "replica/logstor/write_buffer.hh"
@@ -29,6 +30,8 @@ class database;
 class table;
 
 namespace logstor {
+
+using want_data = seastar::bool_class<class want_data_tag>;
 
 class compaction_manager;
 class segment_set;

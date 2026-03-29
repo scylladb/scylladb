@@ -80,9 +80,11 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
          }).value_or(record_generation(1));
 
     log_record record {
-        .key = key,
-        .generation = gen,
-        .table = table,
+        .header = {
+            .key = key,
+            .generation = gen,
+            .table = table,
+        },
         .mut = canonical_mutation(m)
     };
 

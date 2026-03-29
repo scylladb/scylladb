@@ -23,14 +23,19 @@
 
 namespace replica::logstor {
 
-void log_record_writer::compute_size() const {
-    seastar::measuring_output_stream ms;
-    ser::serialize(ms, _record);
-    _size = ms.size();
+void log_record_writer::compute_sizes() const {
+    seastar::measuring_output_stream ms_header;
+    ser::serialize(ms_header, _record.header);
+    _header_size = ms_header.size();
+
+    seastar::measuring_output_stream ms_data;
+    ser::serialize(ms_data, _record.mut);
+    _data_size = ms_data.size();
 }
 
 void log_record_writer::write(ostream& out) const {
-    ser::serialize(out, _record);
+    ser::serialize(out, _record.header);
+    ser::serialize(out, _record.mut);
 }
 
 // write_buffer
@@ -84,50 +89,51 @@ bool write_buffer::has_data() const noexcept {
 }
 
 future<log_location_with_holder> write_buffer::write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder) {
-    const auto data_size = writer.size();
+    const auto content_size = writer.size();
 
-    if (!can_fit(data_size)) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", data_size, _stream.size()));
+    if (!can_fit(content_size)) {
+        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", content_size, _stream.size()));
     }
-    if (data_size == 0) {
+    if (content_size == 0) {
         throw std::runtime_error("Cannot write empty record");
     }
 
+    size_t record_header_offset = offset_in_buffer();
     auto rh = record_header {
-        .data_size = data_size
+        .header_size = static_cast<uint32_t>(writer.header_size()),
+        .data_size = static_cast<uint32_t>(writer.data_size())
     };
     ser::serialize(_stream, rh);
 
     // Write actual data
-    size_t data_offset_in_buffer = offset_in_buffer();
-    auto data_out = _stream.write_substream(data_size);
+    auto data_out = _stream.write_substream(content_size);
     writer.write(data_out);
 
-    _net_data_size += data_size;
+    const size_t total_size = record_header_size + content_size;
+
+    _net_data_size += total_size;
     _record_count++;
-    if (!_min_token || writer.record().key.dk.token() < *_min_token) {
-        _min_token = writer.record().key.dk.token();
+    if (!_min_token || writer.record().header.key.dk.token() < *_min_token) {
+        _min_token = writer.record().header.key.dk.token();
     }
-    if (!_max_token || writer.record().key.dk.token() > *_max_token) {
-        _max_token = writer.record().key.dk.token();
+    if (!_max_token || writer.record().header.key.dk.token() > *_max_token) {
+        _max_token = writer.record().header.key.dk.token();
     }
 
     // Add padding to align record
     pad_to_alignment(record_alignment);
 
-    auto record_location = [data_offset_in_buffer, data_size] (log_location base_location) {
+    auto record_location = [record_header_offset, total_size] (log_location base_location) {
         return log_location {
             .segment = base_location.segment,
-            .offset = base_location.offset + data_offset_in_buffer,
-            .size = data_size
+            .offset = static_cast<uint32_t>(base_location.offset + record_header_offset),
+            .size = static_cast<uint32_t>(total_size)
         };
     };
 
     if (with_record_copy()) {
         _records_copy.push_back(record_in_buffer {
             .writer = std::move(writer),
-            .offset_in_buffer = data_offset_in_buffer,
-            .data_size = data_size,
             .loc = _written.get_shared_future().then(record_location),
             .cg = cg,
             .cg_holder = std::move(cg_holder)
@@ -228,8 +234,9 @@ std::vector<write_buffer::record_in_buffer>& write_buffer::records() {
 }
 
 size_t write_buffer::estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size) {
-    // Calculate total size needed including headers and alignment padding
-    size_t total_size = record_header_size * record_count + net_data_size;
+    // Calculate total size needed including headers and alignment padding.
+    // net_data_size includes record headers.
+    size_t total_size = net_data_size;
 
     // not perfect so let's multiply by some overhead constant
     total_size = static_cast<size_t>(total_size * 1.1);

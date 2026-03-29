@@ -44,10 +44,14 @@ struct index_entry {
     bool operator==(const index_entry& other) const noexcept = default;
 };
 
-struct log_record {
+struct log_record_header {
     primary_index_key key;
     record_generation generation;
     table_id table;
+};
+
+struct log_record {
+    log_record_header header;
     canonical_mutation mut;
 };
 

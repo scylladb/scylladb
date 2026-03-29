@@ -188,20 +188,32 @@ A serialized form of `write_buffer::segment_header`.
 Each record within the buffer is structured as:
 
 ```
-record_header (4 bytes)
-record_data   (variable)
-zero_padding  -- to align to record_alignment (8 bytes)
+record_header        (8 bytes)
+log_record_header    (header_size bytes)
+canonical_mutation   (data_size bytes)
+zero_padding         -- to align to record_alignment (8 bytes)
 ```
 
-**Record Header:**
+**Record Header** (`write_buffer::record_header`):
 
-| Offset | Size | Field       | Description |
-|--------|------|-------------|-------------|
-| 0      | 4    | `data_size` | Size in bytes of the serialized `log_record` that follows. |
+| Offset | Size | Field         | Description |
+|--------|------|---------------|-------------|
+| 0      | 4    | `header_size` | Size in bytes of the serialized `log_record_header` that follows. |
+| 4      | 4    | `data_size`   | Size in bytes of the serialized `canonical_mutation` that follows `log_record_header`. |
 
-**Record Data:**
+**Log Record Header** (`log_record_header`):
 
-The record data is the serialized form of a `log_record`, which contains:
+The `header_size` bytes immediately following the record header are the IDL-serialized form of `log_record_header`, which contains:
 - `key`: the partition key (`primary_index_key`), including a `decorated_key` with a token and partition key bytes.
 - `generation`: a 16-bit write generation number, used during recovery to resolve conflicts when the same key appears in multiple segments.
-- `mut`: the full partition value as a `canonical_mutation`.
+- `table`: UUID of the table this record belongs to.
+
+**Mutation Data**:
+
+The `data_size` bytes immediately following the log record header are the IDL-serialized `canonical_mutation`, which holds the full partition value.
+
+**Record Location** (`log_location`):
+
+The `log_location` stored in the index for each record points to the start of the `record_header`:
+- `offset`: byte offset from the start of the segment to the `record_header`.
+- `size`: total size including `record_header` + `log_record_header` + `canonical_mutation`
