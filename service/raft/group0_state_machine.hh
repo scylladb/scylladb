@@ -64,8 +64,10 @@ struct write_mutations {
 // system.topology, system.topology_requests, system.tablets, system.cdc_generations_v3.
 const std::unordered_set<table_id>& get_topology_table_ids();
 
+using group0_change_type = std::variant<schema_change, broadcast_table_query, topology_change, write_mutations, mixed_change>;
+
 struct group0_command {
-    std::variant<schema_change, broadcast_table_query, topology_change, write_mutations, mixed_change> change;
+    group0_change_type change;
 
     // Mutation of group0 history table, appending a new state ID and optionally a description.
     canonical_mutation history_append;
