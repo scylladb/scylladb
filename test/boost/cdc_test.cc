@@ -2443,7 +2443,7 @@ void do_cdc_gc_test(cql_test_env& e, const cdc_gc_test_config& cfg) {
             utils::chunked_vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
 
             auto group0_cmd = group0_client.prepare_command(
-                ::service::write_mutations{
+                ::service::mixed_change{
                     .mutations{std::move(cmuts)},
                 },
                 guard,

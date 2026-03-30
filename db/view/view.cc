@@ -2541,7 +2541,7 @@ static future<> announce_with_raft(
         cmuts.emplace_back(std::move(mut));
 
         auto group0_cmd = group0_client.prepare_command(
-            ::service::write_mutations{
+            ::service::mixed_change{
                 .mutations{std::move(cmuts)},
             },
             guard,
@@ -2896,9 +2896,10 @@ future<> view_builder::migrate_to_v1_5(locator::token_metadata_ptr tmptr, db::sy
     // Update the view builder version to v1_5
     auto version_mut = co_await sys_ks.make_view_builder_version_mutation(guard.write_timestamp(), db::system_keyspace::view_builder_version_t::v1_5);
 
-    // write the version as topology_change so that we can apply
-    // the change to the view_builder service in topology_state_load
-    service::topology_change change {
+    // The version mutation targets scylla_local, which is included in
+    // get_topology_table_ids(), so the mixed_change handler will trigger
+    // topology_state_load() on all nodes, applying the version upgrade.
+    service::mixed_change change {
         .mutations{canonical_mutation(std::move(version_mut))},
     };
 
@@ -2989,9 +2990,10 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
     auto version_mut = co_await sys_ks.make_view_builder_version_mutation(guard.write_timestamp(), db::system_keyspace::view_builder_version_t::v2);
     migration_muts.push_back(std::move(version_mut));
 
-    // write the version as topology_change so that we can apply
-    // the change to the view_builder service in topology_state_load
-    service::topology_change change {
+    // The version mutation targets scylla_local, which is included in
+    // get_topology_table_ids(), so the mixed_change handler will trigger
+    // topology_state_load() on all nodes, applying the version upgrade.
+    service::mixed_change change {
         .mutations{migration_muts.begin(), migration_muts.end()},
     };
 

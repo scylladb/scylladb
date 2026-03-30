@@ -86,7 +86,7 @@ seastar::future<> service::client_routes_service::set_client_routes_inner(const 
         auto mut = co_await make_update_client_route_mutation(guard.write_timestamp(), entry);
         cmuts.emplace_back(std::move(mut));
     }
-    auto cmd = _group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "insert client routes");
+    auto cmd = _group0_client.prepare_command(service::mixed_change{std::move(cmuts)}, guard, "insert client routes");
     co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _abort_source);
 }
 
@@ -99,7 +99,7 @@ seastar::future<> service::client_routes_service::delete_client_routes_inner(con
         cmuts.emplace_back(std::move(mut));
     }
 
-    auto cmd = _group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "delete client routes");
+    auto cmd = _group0_client.prepare_command(service::mixed_change{std::move(cmuts)}, guard, "delete client routes");
     co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _abort_source);
 }
 

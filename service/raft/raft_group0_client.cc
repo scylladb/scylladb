@@ -518,7 +518,7 @@ static future<> add_write_mutations_entry(
     logger.trace("add_write_mutations_entry: {} mutations with description {}",
             muts.size(), description);
     auto group0_cmd = group0_client.prepare_command(
-        ::service::write_mutations{
+        ::service::mixed_change{
             .mutations{std::move(muts)},
         },
         group0_guard,

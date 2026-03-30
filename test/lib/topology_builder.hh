@@ -132,7 +132,7 @@ private:
                 continue;
             }
 
-            service::topology_change change({service::topology_mutation_builder(guard.write_timestamp())
+            service::mixed_change change({service::topology_mutation_builder(guard.write_timestamp())
                                                  .set_transition_state(service::topology::transition_state::lock)
                                                  .build()});
             service::group0_command g0_cmd = client.prepare_command(std::move(change), guard, "locking topology");
@@ -250,7 +250,7 @@ public:
                     .set("supported_features", std::set<sstring>())
                     .set("request_id", utils::UUID())
                     .set("ignore_msb", (uint32_t) 0);
-            service::topology_change change({builder.build()});
+            service::mixed_change change({builder.build()});
             service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
                                                                     format("adding node {} to topology", id));
             testlog.info("Adding node {}/{} dc={} rack={} to topology", id, ip, dc_rack.dc, dc_rack.rack);
@@ -285,7 +285,7 @@ public:
             auto guard = client.start_operation(as).get();
             utils::chunked_vector<canonical_mutation> muts;
             func(guard, muts);
-            service::topology_change change({std::move(muts)});
+            service::mixed_change change({std::move(muts)});
             service::group0_command g0_cmd = client.prepare_command(std::move(change), guard, "modify_topology()");
             try {
                 client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
@@ -311,7 +311,7 @@ public:
             auto guard = client.start_operation(as).get();
             service::topology_mutation_builder builder(guard.write_timestamp());
             builder.pause_rf_change_request(new_elem);
-            service::topology_change change({builder.build()});
+            service::mixed_change change({builder.build()});
             service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
                                                                     "setting ongoing RF change data");
             try {
@@ -330,7 +330,7 @@ public:
             auto guard = client.start_operation(as).get();
             service::topology_mutation_builder builder(guard.write_timestamp());
             builder.resume_rf_change_request(current_queue, elem_to_remove);
-            service::topology_change change({builder.build()});
+            service::mixed_change change({builder.build()});
             service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
                                                                     "setting ongoing RF change data");
             try {
