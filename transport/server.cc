@@ -69,6 +69,7 @@
 #include "message/messaging_service.hh"
 #include "idl/forward_cql.dist.hh"
 #include "utils/bit_cast.hh"
+#include "utils/error_injection.hh"
 #include "utils/labels.hh"
 #include "utils/result.hh"
 #include "utils/reusable_buffer.hh"
@@ -1641,9 +1642,13 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
-            if (prepared->result_metadata_is_empty() && metadata_id.has_request_metadata_id()) {
+            if (prepared->result_metadata_is_empty()
+                    && metadata_id.has_request_metadata_id()
+                    && !utils::get_local_injector().enter("skip_prepared_result_metadata_promotion")) {
                 if (auto rows = dynamic_pointer_cast<messages::result_message::rows>(msg)) {
                     auto rows_metadata_id = rows->rs().get_metadata().calculate_metadata_id();
+                    clogger.debug("prepared result metadata promotion: request_metadata_id_present={}, calculated_rows_metadata_id_size={}",
+                            metadata_id.has_request_metadata_id(), rows_metadata_id._metadata_id.size());
                     qp.local().update_prepared_result_metadata_id(cache_key, rows_metadata_id);
                     auto request_metadata_id = metadata_id.get_request_metadata_id();
                     metadata_id = cql_metadata_id_wrapper(std::move(request_metadata_id), std::move(rows_metadata_id));
@@ -2516,9 +2521,16 @@ void cql_server::response::write(const cql3::metadata& m, const cql_metadata_id_
     cql3::cql_metadata_id_type calculated_metadata_id{bytes{}};
     if (metadata_id.has_request_metadata_id() && metadata_id.has_response_metadata_id()) {
         if (metadata_id.get_request_metadata_id() != metadata_id.get_response_metadata_id()) {
-            flags.remove<cql3::metadata::flag::NO_METADATA>();
-            flags.set<cql3::metadata::flag::METADATA_CHANGED>();
-            no_metadata = false;
+            const bool skip_rows_metadata_changed_response = utils::get_local_injector().enter("skip_rows_metadata_changed_response");
+            clogger.debug("rows metadata changed response: request_metadata_id_present={}, response_metadata_id_present={}, metadata_changed={}, no_metadata_before={}, injection_fired={}",
+                    metadata_id.has_request_metadata_id(), metadata_id.has_response_metadata_id(),
+                    metadata_id.get_request_metadata_id() != metadata_id.get_response_metadata_id(),
+                    no_metadata, skip_rows_metadata_changed_response);
+            if (!skip_rows_metadata_changed_response) {
+                flags.remove<cql3::metadata::flag::NO_METADATA>();
+                flags.set<cql3::metadata::flag::METADATA_CHANGED>();
+                no_metadata = false;
+            }
         }
     }
 
