@@ -294,16 +294,11 @@ std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract
 }
 
 std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::database db, sstring ks_name, bool supports_repair) {
-    auto real_db_ptr = db.real_database_ptr();
-    if (!real_db_ptr) {
-        return {{"mode", "timeout"}};
-    }
-
     if (!supports_repair) {
         return {{"mode", "timeout"}};
     }
 
-    const replica::keyspace& ks = real_db_ptr->find_keyspace(ks_name);
+    const auto ks = db.find_keyspace(ks_name);
 
     return get_default_tombstone_gc_mode(ks.get_replication_strategy(), supports_repair);
 }
@@ -316,7 +311,7 @@ void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dic
         throw exceptions::configuration_exception("tombstone_gc option not supported by the cluster");
     }
 
-    const replica::keyspace& ks = db.real_database().find_keyspace(ks_name);
+    const auto ks = db.find_keyspace(ks_name);
     if (options->mode() == tombstone_gc_mode::repair && is_local_replication_table(ks.get_replication_strategy())) {
         throw exceptions::configuration_exception("tombstone_gc option with mode = repair not supported for table with local replication strategy");
     }
