@@ -88,13 +88,16 @@ def test_partitions_estimate_simple_large(cql, test_keyspace):
 # if the partition estimate, it should *not* return double the accurate count
 # just because it naively sums up the estimates for the different sstables.
 # Rather it should use the cardinality estimator to estimate the overlap.
-# Currently both Cassandra and Scylla fail this test. They are simply not
-# meant to provide accurate partition-count estimates when faced with high
-# space amplification.
-@pytest.mark.xfail(reason="partition count estimator does not use cardinality estimator")
+# Cassandra fails this test - it naively sums up per-sstable counts.
+# Scylla with BTI (trie-based index, sstable format 'ms') passes because
+# the BTI estimation uses precise byte positions and does not double-count
+# overlapping sstables. We use NullCompactionStrategy to prevent the two
+# sstables from being compacted together before the estimate is taken.
+# Experimentally, with N=500 and 2 shards / 16 vnodes the estimate is
+# around 504-530.
 def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
     N = 500
-    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', " WITH compaction = {'class': 'NullCompactionStrategy'}") as table:
         write = cql.prepare(f"INSERT INTO {table} (k) VALUES (?)")
         for i in range(N):
             cql.execute(write, [i])
@@ -103,8 +106,6 @@ def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
         for i in range(N):
             cql.execute(write, [i])
         nodetool.flush(cql, table)
-        # TODO: In Scylla we should use NullCompactionStrategy to avoid the two
-        # sstables from immediately being compacted together.
         nodetool.refreshsizeestimates(cql)
         table_name = table[len(test_keyspace)+1:]
         counts = [x.partitions_count for x in cql.execute(
@@ -137,7 +138,7 @@ def test_partitions_estimate_only_deletions(cassandra_bug, cql, test_keyspace):
         print(counts)
         print(count)
         # Count should be close to 0, not to N
-        assert count < N/1.25
+        assert count < N/4
 
 # See issue #21223
 # Test possibility to set 'memtable_flush_period_in_ms' option for system tables
