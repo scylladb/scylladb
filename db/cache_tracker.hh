@@ -144,6 +144,8 @@ public:
     seastar::memory::reclaiming_result evict_from_lru_shallow() noexcept;
 };
 
+cache_tracker* get_current_cache_tracker() noexcept;
+
 inline
 void cache_tracker::remove(rows_entry& entry) noexcept {
     --_stats.rows;

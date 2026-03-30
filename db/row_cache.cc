@@ -68,6 +68,10 @@ cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fractio
 
 static thread_local cache_tracker* current_tracker;
 
+cache_tracker* get_current_cache_tracker() noexcept {
+    return current_tracker;
+}
+
 cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fraction, mutation_application_stats& app_stats, register_metrics with_metrics)
     : _garbage(_region, this, app_stats)
     , _memtable_cleaner(_region, nullptr, app_stats)

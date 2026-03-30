@@ -807,3 +807,205 @@ async def test_tablet_migration_with_compaction(manager: ManagerClient):
             rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
             assert len(rows) == 1, f"Key {pk} not found after migration with concurrent compaction"
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after migration with concurrent compaction"
+
+@pytest.mark.asyncio
+async def test_cache(manager: ManagerClient):
+    """
+    Verify the logstor mutation cache works correctly.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {'experimental_features': ['logstor']}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async def cache_metrics():
+        """Return (hits, misses, insertions, evictions) summed over all shards."""
+        m = await manager.metrics.query(servers[0].ip_addr)
+        hits       = m.get("scylla_cache_partition_hits")       or 0
+        misses     = m.get("scylla_cache_partition_misses")     or 0
+        insertions = m.get("scylla_cache_partition_insertions") or 0
+        evictions  = m.get("scylla_cache_partition_evictions")  or 0
+        return hits, misses, insertions, evictions
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial': 1}") as ks:
+        await cql.run_async(
+            f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)"
+            " WITH storage_engine = 'logstor'"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 1: cold reads — every point read is a miss + insertion.       #
+        # ------------------------------------------------------------------ #
+        num_keys = 10
+        for i in range(num_keys):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, {i * 10})")
+
+        hits0, misses0, insertions0, _ = await cache_metrics()
+
+        for i in range(num_keys):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert rows[0].v == i * 10, f"unexpected value for pk={i}"
+
+        hits1, misses1, insertions1, _ = await cache_metrics()
+
+        # The cache metrics are shared with row_cache, so unrelated background
+        # activity can add extra hits/misses/insertions. We therefore only
+        # assert the deltas caused by the logstor reads as lower bounds.
+        assert misses1 - misses0 >= num_keys, (
+            f"expected at least {num_keys} misses for cold reads, "
+            f"got {misses1 - misses0}"
+        )
+        assert insertions1 - insertions0 >= num_keys, (
+            f"expected at least {num_keys} insertions, got {insertions1 - insertions0}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 2: warm reads — same keys should all be cache hits.           #
+        # ------------------------------------------------------------------ #
+        for i in range(num_keys):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert rows[0].v == i * 10, f"unexpected value for pk={i} (warm read)"
+
+        hits2, misses2, insertions2, _ = await cache_metrics()
+
+        assert hits2 - hits1 >= num_keys, (
+            f"expected at least {num_keys} cache hits for warm reads, "
+            f"got {hits2 - hits1}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 3: overwrite invalidates cache.  The overwritten keys should  #
+        # be misses on the next read; the untouched keys should still be hits. #
+        # ------------------------------------------------------------------ #
+        overwrite_pks = [0, 3, 7]
+        for pk in overwrite_pks:
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, {pk * 100})")
+
+        hits3_before, misses3_before, insertions3_before, _ = await cache_metrics()
+
+        for i in range(num_keys):
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            if i in overwrite_pks:
+                assert rows[0].v == i * 100, f"pk={i}: expected overwritten value"
+            else:
+                assert rows[0].v == i * 10, f"pk={i}: unexpected value after overwrite"
+
+        hits3, misses3, insertions3, _ = await cache_metrics()
+
+        # Overwritten keys were invalidated → misses; others → hits.
+        assert misses3 - misses3_before >= len(overwrite_pks), (
+            f"expected at least {len(overwrite_pks)} misses after overwrite, "
+            f"got {misses3 - misses3_before}"
+        )
+        assert hits3 - hits3_before >= num_keys - len(overwrite_pks), (
+            f"expected at least {num_keys - len(overwrite_pks)} hits for untouched keys, "
+            f"got {hits3 - hits3_before}"
+        )
+        assert insertions3 - insertions3_before >= len(overwrite_pks), (
+            f"expected at least {len(overwrite_pks)} new insertions after overwrite, "
+            f"got {insertions3 - insertions3_before}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 4: range read — scans all keys through the cache.             #
+        # After Phase 3 every key is cached, so a full-table scan should      #
+        # produce all hits and no new misses/insertions.                      #
+        # ------------------------------------------------------------------ #
+        hits4_before, misses4_before, insertions4_before, _ = await cache_metrics()
+
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test")
+        assert len(rows) == num_keys, f"expected {num_keys} rows in range scan"
+
+        hits4, misses4, insertions4, _ = await cache_metrics()
+
+        assert hits4 - hits4_before >= num_keys, (
+            f"expected at least {num_keys} cache hits for range scan, "
+            f"got {hits4 - hits4_before}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 5: BYPASS CACHE — reads go directly to disk, skipping the    #
+        # cache entirely. Shared cache metrics may still move due to         #
+        # unrelated background activity, so we only verify that data is      #
+        # correct and that the cache remains warm afterward.                 #
+        # ------------------------------------------------------------------ #
+        for i in range(num_keys):
+            expected_v = (i * 100) if i in overwrite_pks else (i * 10)
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i} BYPASS CACHE")
+            assert rows[0].v == expected_v, f"BYPASS CACHE point read: unexpected value for pk={i}"
+
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test BYPASS CACHE")
+        assert len(rows) == num_keys, f"BYPASS CACHE range scan: expected {num_keys} rows"
+
+        # Verify the cache is intact after BYPASS CACHE reads: normal reads
+        # should still produce cache hits.
+        hits5c_before, misses5c_before, insertions5c_before, _ = await cache_metrics()
+
+        for i in range(num_keys):
+            expected_v = (i * 100) if i in overwrite_pks else (i * 10)
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {i}")
+            assert rows[0].v == expected_v, f"warm read after BYPASS CACHE: unexpected value for pk={i}"
+
+        hits5c, misses5c, insertions5c, _ = await cache_metrics()
+
+        assert hits5c - hits5c_before >= num_keys, (
+            f"expected at least {num_keys} cache hits for warm reads after BYPASS CACHE, "
+            f"got {hits5c - hits5c_before}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 6: schema change on cached row. The first read after ALTER    #
+        # should upgrade the cached mutation in place, and the second read    #
+        # should hit the already-upgraded cache entry.                        #
+        # ------------------------------------------------------------------ #
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, 1000)")
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = 100")
+        assert rows[0].pk == 100
+        assert rows[0].v == 1000
+
+        hits6_before, misses6_before, insertions6_before, _ = await cache_metrics()
+
+        await cql.run_async(f"ALTER TABLE {ks}.test ADD v2 int")
+
+        rows = await cql.run_async(f"SELECT pk, v, v2 FROM {ks}.test WHERE pk = 100")
+        assert rows[0].pk == 100
+        assert rows[0].v == 1000
+        assert rows[0].v2 is None
+
+        hits6_mid, misses6_mid, insertions6_mid, _ = await cache_metrics()
+        assert hits6_mid - hits6_before >= 1, (
+            f"expected at least 1 cache hit for schema-upgrade read, got {hits6_mid - hits6_before}"
+        )
+
+        rows = await cql.run_async(f"SELECT pk, v, v2 FROM {ks}.test WHERE pk = 100")
+        assert rows[0].pk == 100
+        assert rows[0].v == 1000
+        assert rows[0].v2 is None
+
+        hits6, misses6, insertions6, _ = await cache_metrics()
+        assert hits6 - hits6_mid >= 1, (
+            f"expected at least 1 cache hit for read after cache upgrade, got {hits6 - hits6_mid}"
+        )
+        hits_final, misses_final, insertions_final, evictions_final = await cache_metrics()
+        logger.info(
+            "logstor cache test complete: hits=%d misses=%d insertions=%d evictions=%d",
+            hits_final, misses_final, insertions_final, evictions_final,
+        )
+
+        # ------------------------------------------------------------------ #
+        # Phase 7: test table with caching disabled. Shared cache metrics are #
+        # global, so we validate correctness only.                           #
+        # ------------------------------------------------------------------ #
+        await cql.run_async(
+            f"CREATE TABLE {ks}.test_no_cache (pk int PRIMARY KEY, v int)"
+            " WITH storage_engine = 'logstor' AND caching = {'enabled': false}"
+        )
+
+        num_keys = 10
+        for i in range(num_keys):
+            await cql.run_async(f"INSERT INTO {ks}.test_no_cache (pk, v) VALUES ({i}, {i * 10})")
+
+        for _ in range(2):
+            for i in range(num_keys):
+                rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_no_cache WHERE pk = {i}")
+                assert rows[0].v == i * 10, f"unexpected value for pk={i}"

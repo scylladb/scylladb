@@ -972,7 +972,7 @@ database::init_logstor() {
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
     };
-    _logstor = std::make_unique<logstor::logstor>(std::move(cfg));
+    _logstor = std::make_unique<logstor::logstor>(std::move(cfg), _row_cache_tracker);
 
     _logstor->set_trigger_compaction_hook([this] {
         trigger_logstor_compaction(false);
