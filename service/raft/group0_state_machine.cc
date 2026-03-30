@@ -54,6 +54,19 @@ namespace service {
 
 static logging::logger slogger("group0_raft_sm");
 
+static const std::unordered_set<table_id>& get_topology_table_ids() {
+    static const std::unordered_set<table_id> ids = {
+        db::system_keyspace::topology()->id(),
+        db::system_keyspace::topology_requests()->id(),
+        db::system_keyspace::tablets()->id(),
+        db::system_keyspace::cdc_generations_v3()->id(),
+        // scylla_local is read by topology_state_load() (e.g. view_builder_version),
+        // so mutations to it must trigger topology_state_load().
+        db::system_keyspace::scylla_local()->id(),
+    };
+    return ids;
+}
+
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
         gms::gossiper& gossiper, gms::feature_service& feat)
     : _client(client), _mm(mm), _sp(sp), _ss(ss)
@@ -301,8 +314,31 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     },
     [&] (mixed_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
-        topology_state_change_hint.emplace();
-        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+
+        bool has_schema_mutations = false;
+        auto& topology_ids = get_topology_table_ids();
+        utils::chunked_vector<canonical_mutation> topology_mutations;
+
+        for (auto& cm : chng.mutations) {
+            auto tid = cm.column_family_id();
+            if (_sp.data_dictionary().find_schema(tid)->ks_name() == db::schema_tables::v3::NAME) {
+                has_schema_mutations = true;
+            } else if (topology_ids.contains(tid)) {
+                topology_mutations.push_back(cm);
+            }
+        }
+
+        if (!topology_mutations.empty()) {
+            topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(topology_mutations)};
+        }
+        // Use merge_schema_from for all mutations if any schema mutations are present,
+        // to avoid partial application if one of two separate calls fails.
+        // merge_schema_from applies all mutations to the database, not only schema ones.
+        if (has_schema_mutations) {
+            co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, chng.mutations);
+        } else {
+            co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
+        }
     },
     [&] (write_mutations& muts) -> future<> {
         modules_to_reload = get_modules_to_reload(muts.mutations);
