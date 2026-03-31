@@ -239,11 +239,9 @@ public:
     // The i-th element corresponds to the i-th entry in _entries.
     // Can be smaller than _entries. If _entries[i] doesn't have a matching element in _promoted_indexes then
     // that entry doesn't have a promoted index.
-    // It's not chunked, because promoted index is present only when there are large partitions in the page,
-    // which also means the page will have typically only 1 entry due to summary:data_file size ratio.
     // Kept separately to avoid paying for storage cost in pages where no entry has a promoted index,
     // which is typical in workloads with small partitions.
-    managed_vector<promoted_index> _promoted_indexes;
+    lsa::chunked_managed_vector<promoted_index> _promoted_indexes;
 public:
     partition_index_page() = default;
     partition_index_page(partition_index_page&&) noexcept = default;
