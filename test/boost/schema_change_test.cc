@@ -34,6 +34,9 @@
 #include "test/lib/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "test/lib/test_utils.hh"
+#include "transport/request.hh"
+#include "transport/response.hh"
+#include "utils/memory_data_sink.hh"
 
 BOOST_AUTO_TEST_SUITE(schema_change_test)
 
@@ -1181,6 +1184,16 @@ cql3::cql_metadata_id_type compute_metadata_id(std::vector<std::pair<sstring, sh
     return cql3::metadata{columns_specification}.calculate_metadata_id();
 }
 
+std::vector<lw_shared_ptr<cql3::column_specification>> make_columns_specification(
+        const std::vector<std::pair<sstring, shared_ptr<const abstract_type>>>& columns, sstring ks = "ks", sstring cf = "cf") {
+    std::vector<lw_shared_ptr<cql3::column_specification>> columns_specification;
+    columns_specification.reserve(columns.size());
+    for (const auto& column : columns) {
+        columns_specification.push_back(make_lw_shared(cql3::column_specification(ks, cf, make_shared<cql3::column_identifier>(column.first, false), column.second)));
+    }
+    return columns_specification;
+}
+
 BOOST_AUTO_TEST_CASE(metadata_id_with_different_keyspace_and_table) {
     const auto c = std::make_pair("id", uuid_type);
     auto h1 = compute_metadata_id({c}, "ks1", "cf1");
@@ -1229,6 +1242,55 @@ BOOST_AUTO_TEST_CASE(metadata_id_with_different_column_order) {
     BOOST_REQUIRE_NE(h1, h2);
     verify_metadata_id_is_stable(h1, "31c5cb5d0d41fbc426266248cc37941a");
     verify_metadata_id_is_stable(h2, "b52512f2b76d3e0695dcaf7b0a71efac");
+}
+
+SEASTAR_TEST_CASE(metadata_id_changed_rows_response_overrides_no_metadata) {
+    auto empty_metadata_id = cql3::metadata{std::vector<lw_shared_ptr<cql3::column_specification>>{}}.calculate_metadata_id();
+    auto columns_specification = make_columns_specification({{"role", utf8_type}});
+    cql3::metadata rows_metadata(columns_specification);
+    auto rows_metadata_id = rows_metadata.calculate_metadata_id();
+
+    cql_transport::response resp{0, cql_transport::cql_binary_opcode::RESULT, tracing::trace_state_ptr{}};
+    resp.write(rows_metadata, cql_transport::cql_metadata_id_wrapper(
+            std::move(empty_metadata_id),
+            cql3::cql_metadata_id_type(bytes(rows_metadata_id._metadata_id))), true);
+
+    memory_data_sink_buffers buffers;
+    {
+        output_stream<char> out(data_sink(std::make_unique<memory_data_sink>(buffers)));
+        co_await resp.write_message(out, 4, cql_transport::cql_compression::none, deleter());
+        co_await out.close();
+    }
+    auto total_length = buffers.size();
+    auto fbufs = fragmented_temporary_buffer(buffers.buffers() | std::views::as_rvalue | std::ranges::to<std::vector>(), total_length);
+
+    bytes_ostream linearization_buffer;
+    auto req = cql_transport::request_reader(fbufs.get_istream(), linearization_buffer);
+    BOOST_REQUIRE_EQUAL(unsigned(uint8_t(req.read_byte().value())), 4 | 0x80);
+    BOOST_REQUIRE_EQUAL(unsigned(req.read_byte().value()), 0);
+    BOOST_REQUIRE_EQUAL(req.read_short().value(), 0);
+    BOOST_REQUIRE_EQUAL(unsigned(req.read_byte().value()), unsigned(uint8_t(cql_transport::cql_binary_opcode::RESULT)));
+    BOOST_REQUIRE_EQUAL(req.read_int().value(), total_length - 9);
+
+    auto body = req.read_raw_bytes_view(req.bytes_left()).value();
+    const auto* ptr = reinterpret_cast<const char*>(body.begin());
+
+    const auto flags_mask = read_be<int32_t>(ptr);
+    ptr += sizeof(int32_t);
+    const auto flags = cql3::metadata::flag_enum_set::from_mask(flags_mask);
+    BOOST_REQUIRE(flags.contains<cql3::metadata::flag::METADATA_CHANGED>());
+    BOOST_REQUIRE(!flags.contains<cql3::metadata::flag::NO_METADATA>());
+
+    const auto column_count = read_be<int32_t>(ptr);
+    ptr += sizeof(int32_t);
+    BOOST_REQUIRE_EQUAL(column_count, 1);
+
+    const auto metadata_id_length = read_be<uint16_t>(ptr);
+    ptr += sizeof(uint16_t);
+    BOOST_REQUIRE_EQUAL(metadata_id_length, rows_metadata_id._metadata_id.size());
+    BOOST_REQUIRE(std::equal(rows_metadata_id._metadata_id.begin(), rows_metadata_id._metadata_id.end(),
+            reinterpret_cast<const bytes::value_type*>(ptr)));
+    co_return;
 }
 
 BOOST_AUTO_TEST_CASE(metadata_id_with_udt) {

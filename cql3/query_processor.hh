@@ -481,6 +481,12 @@ public:
 
     void update_authorized_prepared_cache_config();
 
+    /// Update the result metadata_id of a cached prepared statement.
+    /// Returns true if the entry was found and updated, false if it was evicted.
+    bool update_prepared_result_metadata_id(const cql3::prepared_cache_key_type& cache_key, cql3::cql_metadata_id_type metadata_id) {
+        return _prepared_cache.update_result_metadata_id(cache_key, std::move(metadata_id));
+    }
+
     void reset_cache();
 
     bool topology_global_queue_empty();

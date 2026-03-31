@@ -49,6 +49,7 @@ prepared_statement::prepared_statement(
     , partition_key_bind_indices(std::move(partition_key_bind_indices))
     , warnings(std::move(warnings))
     , _metadata_id(bytes{})
+    , _result_metadata_is_empty(statement->get_result_metadata()->flags().contains<metadata::flag::NO_METADATA>())
 {
     statement->set_audit_info(std::move(audit_info));
 }

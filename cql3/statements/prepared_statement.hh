@@ -52,6 +52,7 @@ public:
     std::vector<sstring> warnings;
 private:
     cql_metadata_id_type _metadata_id;
+    bool _result_metadata_is_empty;
 
 public:
     prepared_statement(audit::audit_info_ptr&& audit_info, seastar::shared_ptr<cql_statement> statement_, std::vector<seastar::lw_shared_ptr<column_specification>> bound_names_,
@@ -71,6 +72,15 @@ public:
     void calculate_metadata_id();
 
     cql_metadata_id_type get_metadata_id() const;
+
+    bool result_metadata_is_empty() const {
+        return _result_metadata_is_empty;
+    }
+
+    void update_result_metadata_id(cql_metadata_id_type metadata_id) {
+        _metadata_id = std::move(metadata_id);
+        _result_metadata_is_empty = false;
+    }
 };
 
 }

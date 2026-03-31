@@ -137,6 +137,15 @@ public:
         return value_type();
     }
 
+    bool update_result_metadata_id(const key_type& key, cql3::cql_metadata_id_type metadata_id) {
+        cache_value_ptr vp = _cache.find(key.key());
+        if (!vp) {
+            return false;
+        }
+        (*vp)->update_result_metadata_id(std::move(metadata_id));
+        return true;
+    }
+
     template <typename Pred>
     requires std::is_invocable_r_v<bool, Pred, ::shared_ptr<cql_statement>>
     void remove_if(Pred&& pred) {
