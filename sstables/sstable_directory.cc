@@ -27,6 +27,7 @@
 #include "utils/directories.hh"
 #include "utils/s3/client.hh"
 #include "replica/database.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "dht/auto_refreshing_sharder.hh"
 
 static logging::logger dirlog("sstable_directory");
@@ -493,7 +494,8 @@ future<> sstable_directory::sstables_registry_components_lister::garbage_collect
         co_await st.remove_by_registry_entry(std::move(desc));
     }));
     co_await coroutine::parallel_for_each(gens_to_remove, [this] (auto gen) -> future<> {
-        co_await _sstables_registry.delete_entry(_owner, gen);
+        auto mc = service::group0_batch::unused();
+        co_await _sstables_registry.delete_entry(_owner, gen, mc);
     });
 }
 

@@ -3404,26 +3404,26 @@ system_keyspace::read_cdc_generation_opt(utils::UUID id) {
     co_return cdc::topology_description{std::move(entries)};
 }
 
-future<> system_keyspace::sstables_registry_create_entry(table_id owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {
+future<> system_keyspace::sstables_registry_create_entry(table_id owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc, service::group0_batch& mc) {
     static const auto req = format("INSERT INTO system.{} (owner, generation, status, state, version, format) VALUES (?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
     slogger.trace("Inserting {}.{} into {}", owner, desc.generation, SSTABLES_REGISTRY);
     co_await execute_cql(req, owner.id, desc.generation, status, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
 }
 
-future<> system_keyspace::sstables_registry_update_entry_status(table_id owner, sstables::generation_type gen, sstring status) {
+future<> system_keyspace::sstables_registry_update_entry_status(table_id owner, sstables::generation_type gen, sstring status, service::group0_batch& mc) {
     static const auto req = format("UPDATE system.{} SET status = ? WHERE owner = ? AND generation = ?", SSTABLES_REGISTRY);
     slogger.trace("Updating {}.{} -> status={} in {}", owner, gen, status, SSTABLES_REGISTRY);
     co_await execute_cql(req, status, owner.id, gen).discard_result();
 }
 
-future<> system_keyspace::sstables_registry_update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state) {
+future<> system_keyspace::sstables_registry_update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state, service::group0_batch& mc) {
     static const auto req = format("UPDATE system.{} SET state = ? WHERE owner = ? AND generation = ?", SSTABLES_REGISTRY);
     auto new_state = sstables::state_to_dir(state);
     slogger.trace("Updating {}.{} -> state={} in {}", owner, gen, new_state, SSTABLES_REGISTRY);
     co_await execute_cql(req, new_state, owner.id, gen).discard_result();
 }
 
-future<> system_keyspace::sstables_registry_delete_entry(table_id owner, sstables::generation_type gen) {
+future<> system_keyspace::sstables_registry_delete_entry(table_id owner, sstables::generation_type gen, service::group0_batch& mc) {
     static const auto req = format("DELETE FROM system.{} WHERE owner = ? AND generation = ?", SSTABLES_REGISTRY);
     slogger.trace("Removing {}.{} from {}", owner, gen, SSTABLES_REGISTRY);
     co_await execute_cql(req, owner.id, gen).discard_result();

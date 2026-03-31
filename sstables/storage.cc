@@ -31,6 +31,7 @@
 #include "sstables/integrity_checked_file_impl.hh"
 #include "sstables/writer.hh"
 #include "utils/assert.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/memory_data_sink.hh"
@@ -719,7 +720,8 @@ object_name object_storage_base::make_object_name(const sstable& sst, component_
 
 void object_storage_base::open(sstable& sst) {
     entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
-    sst.manager().sstables_registry().create_entry(owner(), status_creating, sst._state, std::move(desc)).get();
+    auto mc = service::group0_batch::unused();
+    sst.manager().sstables_registry().create_entry(owner(), status_creating, sst._state, std::move(desc), mc).get();
 
     memory_data_sink_buffers bufs;
     auto out = data_sink(std::make_unique<memory_data_sink>(bufs));
@@ -807,7 +809,8 @@ future<data_sink> object_storage_base::make_component_sink(sstable& sst, compone
 }
 
 future<> object_storage_base::seal(const sstable& sst) {
-    co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.generation(), status_sealed);
+    auto mc = service::group0_batch::unused();
+    co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.generation(), status_sealed, mc);
 }
 
 future<> object_storage_base::change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) {
@@ -817,19 +820,22 @@ future<> object_storage_base::change_state(const sstable& sst, sstable_state sta
         // is moved from upload directory and this is another issue for S3 (#13018)
         co_await coroutine::return_exception(std::runtime_error("Cannot change state and generation of an S3 object"));
     }
-    co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.generation(), state);
+    auto mc = service::group0_batch::unused();
+    co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.generation(), state, mc);
 }
 
 future<> object_storage_base::wipe(const sstable& sst, sync_dir) noexcept {
     auto& sstables_registry = sst.manager().sstables_registry();
 
-    co_await sstables_registry.update_entry_status(owner(), sst.generation(), status_removing);
+    auto mc1 = service::group0_batch::unused();
+    co_await sstables_registry.update_entry_status(owner(), sst.generation(), status_removing, mc1);
 
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
         co_await delete_object(make_object_name(sst, type));
     });
 
-    co_await sstables_registry.delete_entry(owner(), sst.generation());
+    auto mc2 = service::group0_batch::unused();
+    co_await sstables_registry.delete_entry(owner(), sst.generation(), mc2);
 }
 
 future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>&) const {

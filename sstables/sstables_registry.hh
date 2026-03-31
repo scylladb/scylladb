@@ -10,6 +10,10 @@
 #include "schema/schema_fwd.hh"
 #include "seastarx.hh"
 
+namespace service {
+class group0_batch;
+}
+
 namespace sstables {
 
 // sstables_manager needs to store the names of its sstables somewhere, when
@@ -19,10 +23,10 @@ namespace sstables {
 class sstables_registry {
 public:
     virtual ~sstables_registry();
-    virtual future<> create_entry(table_id owner, sstring status, sstable_state state, sstables::entry_descriptor desc) = 0;
-    virtual future<> update_entry_status(table_id owner, sstables::generation_type gen, sstring status) = 0;
-    virtual future<> update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state) = 0;
-    virtual future<> delete_entry(table_id owner, sstables::generation_type gen) = 0;
+    virtual future<> create_entry(table_id owner, sstring status, sstable_state state, sstables::entry_descriptor desc, service::group0_batch& mc) = 0;
+    virtual future<> update_entry_status(table_id owner, sstables::generation_type gen, sstring status, service::group0_batch& mc) = 0;
+    virtual future<> update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state, service::group0_batch& mc) = 0;
+    virtual future<> delete_entry(table_id owner, sstables::generation_type gen, service::group0_batch& mc) = 0;
     using entry_consumer = noncopyable_function<future<>(sstring status, sstables::sstable_state state, sstables::entry_descriptor desc)>;
     virtual future<> sstables_registry_list(table_id owner, entry_consumer consumer) = 0;
 };
