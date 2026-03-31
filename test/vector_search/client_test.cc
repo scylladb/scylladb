@@ -181,7 +181,8 @@ SEASTAR_TEST_CASE(remains_down_when_server_status_is_not_serving) {
         auto down_server = co_await make_unavailable_server();
         client client{client_test_logger, make_endpoint(down_server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
 
-        co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
+        auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
+        BOOST_CHECK(!res);
         auto server = co_await make_available(down_server);
         server->next_status_response(vs_mock_server::response{seastar::http::reply::status_type::ok, rjson::quote_json_string(status)});
 

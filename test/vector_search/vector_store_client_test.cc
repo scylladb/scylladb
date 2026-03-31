@@ -583,7 +583,8 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
                 // Wait until requests are handled by s2
                 // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
                 BOOST_CHECK(co_await repeat_until(DNS_REFRESH_INTERVAL * 2, [&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    BOOST_CHECK(keys);
                     co_return s2->ann_requests().size() > 0;
                 }));
             },
@@ -647,7 +648,8 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    BOOST_CHECK(keys);
                     co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
@@ -711,7 +713,8 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    BOOST_CHECK(keys);
                     co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
@@ -920,7 +923,8 @@ SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_request
                 // Set request timeout to 100ms, hence max backoff time is 2x100ms = 200ms.
                 cfg.db_config->read_request_timeout_in_ms.set(100);
                 // Trigger status checking by making ANN request to unavailable server.
-                co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                BOOST_CHECK(!result);
                 co_await repeat_until([&unavail_s]() -> future<bool> {
                     // Wait for 1 ANN request + 4 status check connections (5 total)
                     co_return unavail_s->connections().size() > 4;
