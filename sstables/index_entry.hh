@@ -290,7 +290,33 @@ public:
 // So the shallow part is in the standard allocator but all indirect objects are inside LSA.
 class partition_index_page {
 public:
+<<<<<<< HEAD
     lsa::chunked_managed_vector<managed_ref<index_entry>> _entries;
+||||||| parent of 2d2ff4fbda (sstables: use chunked_managed_vector for promoted indexes in partition_index_page)
+    lsa::chunked_managed_vector<index_entry> _entries;
+    managed_bytes _key_storage;
+
+    // Stores promoted index information of index entries.
+    // The i-th element corresponds to the i-th entry in _entries.
+    // Can be smaller than _entries. If _entries[i] doesn't have a matching element in _promoted_indexes then
+    // that entry doesn't have a promoted index.
+    // It's not chunked, because promoted index is present only when there are large partitions in the page,
+    // which also means the page will have typically only 1 entry due to summary:data_file size ratio.
+    // Kept separately to avoid paying for storage cost in pages where no entry has a promoted index,
+    // which is typical in workloads with small partitions.
+    managed_vector<promoted_index> _promoted_indexes;
+=======
+    lsa::chunked_managed_vector<index_entry> _entries;
+    managed_bytes _key_storage;
+
+    // Stores promoted index information of index entries.
+    // The i-th element corresponds to the i-th entry in _entries.
+    // Can be smaller than _entries. If _entries[i] doesn't have a matching element in _promoted_indexes then
+    // that entry doesn't have a promoted index.
+    // Kept separately to avoid paying for storage cost in pages where no entry has a promoted index,
+    // which is typical in workloads with small partitions.
+    lsa::chunked_managed_vector<promoted_index> _promoted_indexes;
+>>>>>>> 2d2ff4fbda (sstables: use chunked_managed_vector for promoted indexes in partition_index_page)
 public:
     partition_index_page() = default;
     partition_index_page(partition_index_page&&) noexcept = default;
