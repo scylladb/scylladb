@@ -29,6 +29,7 @@
 #include "db/system_keyspace.hh"
 #include "replica/tablets.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 
 
 namespace service {
@@ -321,8 +322,8 @@ group0_command raft_group0_client::prepare_command(Command change, std::string_v
 }
 
 raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, gms::gossiper& gossiper,
-        db::system_keyspace& sys_ks, locator::shared_token_metadata& tm, maintenance_mode_enabled maintenance_mode)
-        : _raft_gr(raft_gr), _gossiper(gossiper), _sys_ks(sys_ks), _token_metadata(tm), _maintenance_mode(maintenance_mode) {
+        gms::feature_service& feat, db::system_keyspace& sys_ks, locator::shared_token_metadata& tm, maintenance_mode_enabled maintenance_mode)
+        : _raft_gr(raft_gr), _gossiper(gossiper), _feature_service(feat), _sys_ks(sys_ks), _token_metadata(tm), _maintenance_mode(maintenance_mode) {
 }
 
 size_t raft_group0_client::max_command_size() const {
