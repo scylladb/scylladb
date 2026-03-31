@@ -27,6 +27,7 @@
 #include "utils/assert.hh"
 #include "utils/to_string.hh"
 #include "db/system_keyspace.hh"
+#include "db/schema_tables.hh"
 #include "replica/tablets.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
@@ -279,12 +280,57 @@ void raft_group0_client::validate_change(const Command& change) {
     replica::validate_tablet_metadata_change(_token_metadata.get()->tablets(), change.mutations);
 }
 
+// Convert mixed_change to the appropriate legacy change type for backward
+// compatibility during rolling upgrades when UNIFIED_GROUP0_CHANGE is not
+// yet enabled. Classifies mutations by inspecting their table/keyspace:
+// - both topology and schema mutations → mixed_change (no downgrade)
+// - only schema mutations → schema_change
+// - only topology mutations → topology_change
+// - everything else → write_mutations
+static decltype(group0_command::change) downgrade_mixed_change(mixed_change&& mc, const replica::database& db) {
+    auto& topology_ids = get_topology_table_ids();
+    bool has_schema = false;
+    bool has_topology = false;
+
+    for (auto& cm : mc.mutations) {
+        auto tid = cm.column_family_id();
+        if (topology_ids.contains(tid)) {
+            has_topology = true;
+        } else if (db.find_column_family(tid).schema()->ks_name() == db::schema_tables::v3::NAME) {
+            has_schema = true;
+        }
+    }
+
+    if (has_topology && has_schema) {
+        return mc;
+    }
+    if (has_topology) {
+        return topology_change{std::move(mc.mutations)};
+    }
+    if (has_schema) {
+        return schema_change{std::move(mc.mutations)};
+    }
+    return write_mutations{std::move(mc.mutations)};
+}
+
 template<typename Command>
 requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations> || std::same_as<Command, mixed_change>
 group0_command raft_group0_client::prepare_command(Command change, group0_guard& guard, std::string_view description) {
     validate_change(change);
+
+    decltype(group0_command::change) effective_change;
+    if constexpr (std::same_as<Command, mixed_change>) {
+        if (!_feature_service.unified_group0_change) {
+            effective_change = downgrade_mixed_change(std::move(change), _sys_ks.local_db());
+        } else {
+            effective_change = std::move(change);
+        }
+    } else {
+        effective_change = std::move(change);
+    }
+
     group0_command group0_cmd {
-        .change{std::move(change)},
+        .change{std::move(effective_change)},
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
             guard.new_group0_state_id(), _history_gc_duration, description)},
 

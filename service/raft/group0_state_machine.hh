@@ -10,6 +10,8 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
 
+#include <unordered_set>
+
 #include "data_dictionary/data_dictionary.hh"
 #include "keys/keys.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
@@ -57,6 +59,10 @@ struct mixed_change {
 struct write_mutations {
     utils::chunked_vector<canonical_mutation> mutations;
 };
+
+// Returns the set of table IDs for topology-related tables:
+// system.topology, system.topology_requests, system.tablets, system.cdc_generations_v3.
+const std::unordered_set<table_id>& get_topology_table_ids();
 
 struct group0_command {
     std::variant<schema_change, broadcast_table_query, topology_change, write_mutations, mixed_change> change;

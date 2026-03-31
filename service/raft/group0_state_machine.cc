@@ -54,7 +54,7 @@ namespace service {
 
 static logging::logger slogger("group0_raft_sm");
 
-static const std::unordered_set<table_id>& get_topology_table_ids() {
+const std::unordered_set<table_id>& get_topology_table_ids() {
     static const std::unordered_set<table_id> ids = {
         db::system_keyspace::topology()->id(),
         db::system_keyspace::topology_requests()->id(),
