@@ -29,6 +29,9 @@ public:
 };
 
 [[noreturn]] void on_parse_error(sstring message, std::optional<component_name> filename);
+[[noreturn]] inline void on_parse_error(const char* message, std::optional<component_name> filename) {
+    on_parse_error(message ? sstring(message) : sstring(), filename);
+}
 [[noreturn, gnu::noinline]] void on_bti_parse_error(uint64_t pos);
 
 // Use this instead of SCYLLA_ASSERT() or assert() in code that is used while parsing SSTables.
