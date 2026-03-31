@@ -440,6 +440,18 @@ void sstables_manager::unplug_sstables_registry() noexcept {
     _sstables_registry.reset();
 }
 
+void sstables_manager::plug_group0_client(service::raft_group0_client& client, sharded<replica::database>& db, sharded<abort_source>& as) noexcept {
+    _group0_client = &client;
+    _db = &db;
+    _group0_as = &as;
+}
+
+void sstables_manager::unplug_group0_client() noexcept {
+    _group0_client = nullptr;
+    _db = nullptr;
+    _group0_as = nullptr;
+}
+
 future<lw_shared_ptr<const data_dictionary::storage_options>> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {
     return sstables::init_table_storage(*this, s, so);
 }

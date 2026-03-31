@@ -40,6 +40,13 @@ class config;
 
 namespace s3 { class client; }
 
+namespace replica { class database; }
+
+namespace service {
+class raft_group0_client;
+class group0_batch;
+}
+
 namespace gms { class feature_service; }
 
 namespace sstables {
@@ -165,6 +172,9 @@ private:
     sstable_compressor_factory& _compressor_factory;
 
     const abort_source& _abort;
+    service::raft_group0_client* _group0_client = nullptr;
+    sharded<replica::database>* _db = nullptr;
+    sharded<abort_source>* _group0_as = nullptr;
 
     named_gate _signal_gate;
     signal_type _signal_source;
@@ -250,12 +260,18 @@ public:
 
     void plug_sstables_registry(std::unique_ptr<sstables_registry>) noexcept;
     void unplug_sstables_registry() noexcept;
+    void plug_group0_client(service::raft_group0_client& client, sharded<replica::database>& db, sharded<abort_source>& as) noexcept;
+    void unplug_group0_client() noexcept;
 
     // Only for sstable::storage usage
     sstables::sstables_registry& sstables_registry() const noexcept {
         SCYLLA_ASSERT(_sstables_registry && "sstables_registry is not plugged");
         return *_sstables_registry;
     }
+
+    service::raft_group0_client* group0_client() const noexcept { return _group0_client; }
+    sharded<replica::database>* database_container() const noexcept { return _db; }
+    sharded<abort_source>* group0_abort_source() const noexcept { return _group0_as; }
 
     future<> delete_atomically(std::vector<shared_sstable> ssts);
     future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring jsondir);
