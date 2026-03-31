@@ -31,7 +31,8 @@ from _pytest.junitxml import xml_key
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, HOST_ID
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
-    SCYLLA_TEST_CGROUP_BASE_ENV
+    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
+from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.scylla_cluster import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.suite.base import (
@@ -431,6 +432,19 @@ def pytest_configure(config: pytest.Config) -> None:
     if testpy_run_id := config.getoption("--run_id"):
         if config.getoption("--repeat") != 1:
             raise RuntimeError("Can't use --run_id and --repeat simultaneously.")
+    # Write host hardware info once, at the very start, before any test preparation.
+    # Done unconditionally (not gated on --gather-metrics) so that the host_info FK
+    # referenced by every other table is always populated, regardless of whether
+    # full metrics collection is enabled.
+    # Only in the main process — xdist workers share the same DB and the same host_id,
+    # so there is nothing new to record.
+    if os.environ.get("PYTEST_XDIST_WORKER") is None and not config.getoption("--collect-only"):
+        temp_dir = pathlib.Path(config.getoption("--tmpdir")).absolute()
+        writer = SQLiteWriter(temp_dir / DEFAULT_DB_NAME)
+        try:
+            writer.write_row_if_not_exist(gather_host_info(), HOST_INFO_TABLE, id_column="host_id")
+        finally:
+            writer.close()
 
 
 class DisabledFile(pytest.File):

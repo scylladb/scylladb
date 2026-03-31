@@ -9,6 +9,14 @@ from attr import define
 
 
 @define
+class HostInfo:
+    host_id: str
+    cpu_model: str
+    cpu_cores: int
+    ram_bytes: int
+
+
+@define
 class CgroupMetric:
     memory: int
     test_id: int

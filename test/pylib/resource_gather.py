@@ -26,10 +26,11 @@ import psutil
 
 from threading import Event
 from test import HOST_ID, TOP_SRC_DIR
-from test.pylib.db.model import Metric, SystemResourceMetric, CgroupMetric, Test
+from test.pylib.db.model import HostInfo, Metric, SystemResourceMetric, CgroupMetric, Test
 from test.pylib.db.writer import (
     CGROUP_MEMORY_METRICS_TABLE,
     DEFAULT_DB_NAME,
+    HOST_INFO_TABLE,
     METRICS_TABLE,
     SYSTEM_RESOURCE_METRICS_TABLE,
     TESTS_TABLE,
@@ -242,6 +243,23 @@ class ResourceGatherOn(ResourceGatherRecord):
             if len(parts) == 2 and parts[0] in ResourceGatherOn._CPU_STAT_FIELDS:
                 result[parts[0]] = float(parts[1]) / 1_000_000
         return result
+
+
+def gather_host_info() -> HostInfo:
+    """Collect static hardware information about the current host."""
+    try:
+        cpu_model = "unknown"
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    cpu_model = line.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        cpu_model = platform.processor() or "unknown"
+
+    cpu_cores = psutil.cpu_count(logical=False) or os.cpu_count() or 0
+    ram_bytes = psutil.virtual_memory().total
+    return HostInfo(host_id=HOST_ID, cpu_model=cpu_model, cpu_cores=cpu_cores, ram_bytes=ram_bytes)
 
 
 def get_resource_gather(temp_dir: Path, is_switched_on: bool, test: TestPyTest | SimpleNamespace, worker_id: str | None = None) -> ResourceGather:

@@ -20,10 +20,21 @@ TESTS_TABLE = 'tests'
 METRICS_TABLE = 'test_metrics'
 SYSTEM_RESOURCE_METRICS_TABLE = 'system_resource_metrics'
 CGROUP_MEMORY_METRICS_TABLE = 'cgroup_memory_metrics'
+HOST_INFO_TABLE = 'host_info'
 DEFAULT_DB_NAME = f'sqlite_{HOST_ID}.db'
 DATE_TIME_TEMPLATE = '%Y-%m-%d %H:%M:%S.%f'
 
 create_table = [
+    # host_info must be created first — all other tables reference it via host_id FK
+    f'''
+    CREATE TABLE IF NOT EXISTS {HOST_INFO_TABLE} (
+        host_id VARCHAR(5) PRIMARY KEY,
+        cpu_model TEXT NOT NULL,
+        cpu_cores INTEGER NOT NULL,
+        ram_bytes INTEGER NOT NULL
+    );
+    ''',
+
     f'''
     CREATE TABLE IF NOT EXISTS {TESTS_TABLE} (
         id INTEGER PRIMARY KEY,
@@ -33,7 +44,8 @@ create_table = [
         file VARCHAR(255) NOT NULL,
         mode VARCHAR(15) NOT NULL,
         run_id INTEGER,
-        test_name VARCHAR(255) NOT NULL
+        test_name VARCHAR(255) NOT NULL,
+        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
     );
     ''',
 
@@ -52,7 +64,8 @@ create_table = [
         success BOOLEAN,
         status VARCHAR(15),
         worker_id VARCHAR(15),
-        FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id)
+        FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id),
+        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
     );
     ''',
 
@@ -67,7 +80,8 @@ create_table = [
         memory_active INTEGER,
         memory_inactive INTEGER,
         memory_buffers INTEGER,
-        timestamp DATETIME
+        timestamp DATETIME,
+        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
     );
     ''',
 
@@ -78,7 +92,8 @@ create_table = [
         host_id VARCHAR(5) NOT NULL,
         memory REAL,
         timestamp DATETIME,
-        FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id)
+        FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id),
+        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
     );
     '''
 ]
@@ -192,13 +207,14 @@ class SQLiteWriter:
             self._connection.close()
             self._connection = None
 
-    def write_row_if_not_exist(self, model, table_name: str) -> int:
+    def write_row_if_not_exist(self, model, table_name: str, id_column: str = "id") -> int:
         """
         Writes a row to the table if it doesn't exist, otherwise returns the existing row's ID.
 
         Args:
             model: A AttrsInstance object with a data to insert.
             table_name: Name of the table where data is being written.
+            id_column: Name of the primary key column to return (default: "id").
 
         Return:
             int: Returns the ID of the existing or newly inserted record
@@ -210,7 +226,7 @@ class SQLiteWriter:
 
                 # Construct the SQL query to retrieve the ID if the record exists
                 select_query = f"""
-                    SELECT id FROM {table_name} WHERE {
+                    SELECT {id_column} FROM {table_name} WHERE {
                     ' AND '.join([f"{col} = ?" for col in data.keys()])
                     }
                 """
