@@ -17,6 +17,7 @@ import socket
 import socketserver
 import tempfile
 import threading
+import time
 import uuid
 from collections import namedtuple
 from contextlib import contextmanager
@@ -35,6 +36,7 @@ from test.cluster.dtest.tools.data import rows_to_list, run_in_parallel
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
+from test.pylib.util import wait_for as wait_for_async
 
 logger = logging.getLogger(__name__)
 
@@ -1347,7 +1349,13 @@ class CQLAuditTester(AuditTester):
             conn = await self.manager.get_cql_exclusive(srv)
             stmt = SimpleStatement("INSERT INTO ks.test1 (k, v1) VALUES (1000, 1000)", consistency_level=ConsistencyLevel.THREE)
             conn.execute(stmt)
-            audit_node_ips = await self.get_audit_partitions_for_operation(session, stmt.query_string)
+            # The audit log entry may not be visible immediately after the
+            # insert, so retry with exponential backoff until it appears.
+            audit_node_ips = await wait_for_async(
+                lambda: self.get_audit_partitions_for_operation(session, stmt.query_string),
+                deadline=time.time() + 10,
+                period=0.05,
+                label=f"audit entry for node {index}")
             node_to_audit_nodes[index] = set(audit_node_ips)
 
         all_addresses = set(srv.ip_addr for srv in servers)
