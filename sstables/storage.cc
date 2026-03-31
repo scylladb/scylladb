@@ -848,17 +848,25 @@ future<> object_storage_base::change_state(const sstable& sst, sstable_state sta
 }
 
 future<> object_storage_base::wipe(const sstable& sst, sync_dir) noexcept {
+    try {
     co_await sstables_registry_apply_operation(sst.manager(), [owner = owner(), gen = sst.generation()](sstables_registry& registry, service::group0_batch& mc) {
         return registry.update_entry_status(owner, gen, status_removing, mc);
     });
+    } catch (...) {
+        sstlog.warn("Failed to mark sstable {}.{} as removing in registry: {}. Orphaned entry will be cleaned up by GC.", owner(), sst.generation(), std::current_exception());
+    }
 
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
         co_await delete_object(make_object_name(sst, type));
     });
 
+    try {
     co_await sstables_registry_apply_operation(sst.manager(), [owner = owner(), gen = sst.generation()](sstables_registry& registry, service::group0_batch& mc) {
         return registry.delete_entry(owner, gen, mc);
     });
+    } catch (...) {
+        sstlog.warn("Failed to delete sstable {}.{} from registry: {}. Orphaned entry will be cleaned up by GC.", owner(), sst.generation(), std::current_exception());
+    }
 }
 
 future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>&) const {
