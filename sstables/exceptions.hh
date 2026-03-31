@@ -38,7 +38,7 @@ public:
 // The exception will include a complete backtrace, so no need to add call-site identifiers to the message.
 inline void parse_assert(bool condition, std::optional<component_name> filename = {}, const char* message = nullptr) {
     if (!condition) [[unlikely]] {
-        on_parse_error(message, filename);
+        on_parse_error(message ? message : sstring(), filename);
     }
 }
 
