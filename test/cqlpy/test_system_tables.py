@@ -13,9 +13,27 @@
 #############################################################################
 
 from .util import new_test_table
+import json
 import pytest
+from contextlib import contextmanager
 from . import nodetool
 from cassandra.protocol import Unauthorized
+
+# Context manager that temporarily overrides Scylla's sstable_format
+# configuration option via system.config, restoring the previous value on
+# exit. Note that the cqlpy harness reuses a single Scylla node across
+# tests, so restoration is necessary to avoid leaking the change into
+# subsequent tests. The 'value' column is JSON-encoded on read but expects a
+# raw string on write, so we JSON-decode the saved value before writing it
+# back.
+@contextmanager
+def sstable_format(cql, fmt):
+    old = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'sstable_format'").one().value)
+    cql.execute(f"UPDATE system.config SET value = '{fmt}' WHERE name = 'sstable_format'")
+    try:
+        yield
+    finally:
+        cql.execute(f"UPDATE system.config SET value = '{old}' WHERE name = 'sstable_format'")
 
 #############################################################################
 # system.size_estimates.partitions_count
@@ -64,11 +82,14 @@ def write_table_and_estimate_partitions(cql, test_keyspace, N):
 # up to 14%. So just to be generous let's allow a 25% inaccuracy for this
 # small test. In issue #9083 we noted that Scylla had much larger errors -
 # reporting as much as 10880 (!) partitions when we have just 1000.
-@pytest.mark.xfail(reason="issue #9083")
 def test_partitions_estimate_simple_small(cql, test_keyspace):
-    N = 1000
-    count = write_table_and_estimate_partitions(cql, test_keyspace, N)
-    assert count > N/1.25 and count < N*1.25
+    # The 25% accuracy threshold below relies on the 'ms' sstable format's
+    # cardinality estimator. The default format ('me' on this branch) has
+    # wider per-sstable error and would not meet this bound.
+    with sstable_format(cql, 'ms'):
+        N = 1000
+        count = write_table_and_estimate_partitions(cql, test_keyspace, N)
+        assert count > N/1.25 and count < N*1.25
 
 # For a larger test, the estimation accuracy should be better:
 # Experimentally, for 10,000 rows, Cassandra's estimation error goes
@@ -76,12 +97,12 @@ def test_partitions_estimate_simple_small(cql, test_keyspace):
 # This is a relatively long test (takes around 2 seconds), and isn't
 # needed to reproduce #9083 (the previous shorter test does it too),
 # so we skip this test.
-@pytest.mark.xfail(reason="issue #9083")
 @pytest.mark.skip(reason="slow test, remove skip to try it anyway")
 def test_partitions_estimate_simple_large(cql, test_keyspace):
-    N = 10000
-    count = write_table_and_estimate_partitions(cql, test_keyspace, N)
-    assert count > N/1.05 and count < N*1.05
+    with sstable_format(cql, 'ms'):
+        N = 10000
+        count = write_table_and_estimate_partitions(cql, test_keyspace, N)
+        assert count > N/1.05 and count < N*1.05
 
 # If we write the *same* 1000 partitions to two sstables (by flushing twice,
 # and assuming that 1000 tiny partitions easily fit a memtable), and check
@@ -95,24 +116,25 @@ def test_partitions_estimate_simple_large(cql, test_keyspace):
 def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
     N = 500
     with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
-        write = cql.prepare(f"INSERT INTO {table} (k) VALUES (?)")
-        for i in range(N):
-            cql.execute(write, [i])
-        nodetool.flush(cql, table)
-        # And a second copy of the *same* data will end up in a second sstable:
-        for i in range(N):
-            cql.execute(write, [i])
-        nodetool.flush(cql, table)
-        # TODO: In Scylla we should use NullCompactionStrategy to avoid the two
-        # sstables from immediately being compacted together.
-        nodetool.refreshsizeestimates(cql)
-        table_name = table[len(test_keyspace)+1:]
-        counts = [x.partitions_count for x in cql.execute(
-            f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'")]
-        count = sum(counts)
-        print(counts)
-        print(count)
-        assert count > N/1.5 and count < N*1.5
+        # Disable autocompaction to prevent the two sstables from being
+        # compacted together before we read the size estimates.
+        with nodetool.no_autocompaction_context(cql, table):
+            write = cql.prepare(f"INSERT INTO {table} (k) VALUES (?)")
+            for i in range(N):
+                cql.execute(write, [i])
+            nodetool.flush(cql, table)
+            # And a second copy of the *same* data will end up in a second sstable:
+            for i in range(N):
+                cql.execute(write, [i])
+            nodetool.flush(cql, table)
+            nodetool.refreshsizeestimates(cql)
+            table_name = table[len(test_keyspace)+1:]
+            counts = [x.partitions_count for x in cql.execute(
+                f"SELECT partitions_count FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'")]
+            count = sum(counts)
+            print(counts)
+            print(count)
+            assert count > N/1.5 and count < N*1.5
 
 # Test that deleted partitions should not be counted by the estimated
 # partitions count. Unfortunately, the current state of both Cassandra
