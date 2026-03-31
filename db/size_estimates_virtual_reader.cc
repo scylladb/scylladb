@@ -144,7 +144,7 @@ static std::vector<sstring> get_keyspaces(const schema& s, const replica::databa
 /**
  * Makes a wrapping range of ring_position from a nonwrapping range of token, used to select sstables.
  */
-static dht::partition_range as_ring_position_range(dht::token_range& r) {
+static dht::partition_range as_ring_position_range(const dht::token_range& r) {
     std::optional<wrapping_interval<dht::ring_position>::bound> start_bound, end_bound;
     if (r.start()) {
         start_bound = {{ dht::ring_position(r.start()->value(), dht::ring_position::token_bound::start), r.start()->is_inclusive() }};
@@ -156,11 +156,14 @@ static dht::partition_range as_ring_position_range(dht::token_range& r) {
 }
 
 /**
- * Add a new range_estimates for the specified range, considering the sstables associated with `cf`.
+ * Add a new range_estimates for the specified range, considering the sstables associated
+ * with the table identified by `cf_id` across all shards.
  */
-static future<system_keyspace::range_estimates> estimate(const replica::column_family& cf, const token_range& r) {
-    int64_t count{0};
-    utils::estimated_histogram hist{0};
+static future<system_keyspace::range_estimates> estimate(replica::database& db, table_id cf_id, schema_ptr schema, const token_range& r) {
+    struct shard_estimate {
+        int64_t count = 0;
+        utils::estimated_histogram hist{0};
+    };
     auto from_bytes = [] (auto& b) {
         return dht::token::from_sstring(utf8_type->to_string(b));
     };
@@ -169,14 +172,35 @@ static future<system_keyspace::range_estimates> estimate(const replica::column_f
         wrapping_interval<dht::token>({{ from_bytes(r.start), false }}, {{ from_bytes(r.end) }}),
         dht::token_comparator(),
         [&] (auto&& rng) { ranges.push_back(std::move(rng)); });
-    for (auto&& r : ranges) {
-        auto rp_range = as_ring_position_range(r);
-        for (auto&& sstable : cf.select_sstables(rp_range)) {
-            count += co_await sstable->estimated_keys_for_range(r);
-            hist.merge(sstable->get_stats_metadata().estimated_partition_size);
+
+    // Estimate partition count and size distribution from sstables on a single shard.
+    auto estimate_on_shard = [cf_id, ranges] (replica::database& local_db) -> future<shard_estimate> {
+        auto table_ptr = local_db.get_tables_metadata().get_table_if_exists(cf_id);
+        if (!table_ptr) {
+            co_return shard_estimate{};
         }
-    }
-    co_return system_keyspace::range_estimates{cf.schema(), r.start, r.end, count, count > 0 ? hist.mean() : 0};
+        auto& cf = *table_ptr;
+        shard_estimate result;
+        for (auto&& r : ranges) {
+            auto rp_range = as_ring_position_range(r);
+            for (auto&& sstable : cf.select_sstables(rp_range)) {
+                result.count += co_await sstable->estimated_keys_for_range(r);
+                result.hist.merge(sstable->get_stats_metadata().estimated_partition_size);
+            }
+        }
+        co_return result;
+    };
+
+    // Combine partial results from two shards.
+    auto reduce = [] (shard_estimate a, const shard_estimate& b) {
+        a.count += b.count;
+        a.hist.merge(b.hist);
+        return a;
+    };
+
+    auto aggregate = co_await db.container().map_reduce0(std::move(estimate_on_shard), shard_estimate{}, std::move(reduce));
+    int64_t mean_size = aggregate.count > 0 ? aggregate.hist.mean() : 0;
+    co_return system_keyspace::range_estimates{std::move(schema), r.start, r.end, aggregate.count, mean_size};
 }
 
 /**
@@ -321,7 +345,7 @@ size_estimates_mutation_reader::estimates_for_current_keyspace(std::vector<token
         auto rows_to_estimate = range.slice(rows, virtual_row_comparator(_schema));
         for (auto&& r : rows_to_estimate) {
             auto& cf = _db.find_column_family(*_current_partition, utf8_type->to_string(r.cf_name));
-            estimates.push_back(co_await estimate(cf, r.tokens));
+            estimates.push_back(co_await estimate(_db, cf.schema()->id(), cf.schema(), r.tokens));
             if (estimates.size() >= _slice.partition_row_limit()) {
                 co_return estimates;
             }
