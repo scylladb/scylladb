@@ -18,7 +18,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/manual_clock.hh>
-#include <seastar/util/later.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/alloc_failure_injector.hh>
@@ -290,12 +290,17 @@ SEASTAR_THREAD_TEST_CASE(test_address_map_replication) {
         m.set_expiring(id1);
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
         m.barrier().get();
+        promise<> shard0_timer_expired;
+        timer<manual_clock> shard0_timer([&shard0_timer_expired] {
+            shard0_timer_expired.set_value();
+        });
+        shard0_timer.arm(manual_clock::now() + expiration_time);
         m_svc.invoke_on(1, [] (address_map_t<manual_clock>& m) {
             BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
             manual_clock::advance(expiration_time);
             BOOST_CHECK(!m.find(id1));
-            return smp::submit_to(0, []{}); // Ensure shard 0 notices timer is expired.
         }).get();
+        shard0_timer_expired.get_future().get();
         BOOST_CHECK(!m.find(id1));
 
         // Expiring entries are replicated
