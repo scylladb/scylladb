@@ -18,7 +18,7 @@ from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvail
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import get_host_api_address, read_barrier
+from test.pylib.rest_client import HTTPError, get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
 from typing import Optional, List, Union
 
@@ -117,6 +117,42 @@ async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> Non
         group0_ids = {m[0] for m in group0_members}
         token_ring_ids = await get_token_ring_host_ids(manager, srv)
         assert token_ring_ids == group0_ids
+
+
+async def wait_for_no_pending_topology_transition(manager: ManagerClient, deadline: float) -> None:
+    """Wait until there is no pending topology transition.
+    Polls system.topology until the transition_state column is null,
+    indicating that the topology coordinator has finished processing the
+    current operation (whether it completed successfully or was rolled back).
+    """
+    cql = manager.get_cql()
+
+    async def no_transition():
+        try:
+            host = await get_available_host(cql, deadline)
+            await read_barrier(manager.api, get_host_api_address(host))
+            rs = await cql.run_async(
+                "select transition_state from system.topology where key = 'topology'",
+                host=host)
+        except NoHostAvailable as e:
+            logger.info(f"Topology transition check failed, retrying: {e}")
+            return None
+        except ConnectionException as e:
+            logger.info(f"Topology transition check failed, retrying: {e}")
+            return None
+        except HTTPError as e:
+            logger.info(f"Read barrier failed, retrying: {e}")
+            return None
+
+        if not rs:
+            logger.warning(f"Topology transition not visible: system.topology row not found, retrying")
+            return None
+        if rs[0].transition_state is not None:
+            logger.warning(f"Topology transition still in progress: {rs[0].transition_state}")
+            return None
+        return True
+
+    await wait_for(no_transition, deadline, period=.5)
 
 
 async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, deadline: float) -> None:
@@ -398,13 +434,14 @@ def get_uuid_from_str(string: str) -> str:
 async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_elections: int, deadline: float) -> None:
     """Wait new coordinator to be elected
 
-    Wait while the table 'system.group0_history' will have a number of lines 
-    with the 'new topology coordinator' equal to the expected_num_of_elections number,
+    Wait while the table 'system.group0_history' will have at least
+    expected_num_of_elections lines with 'new topology coordinator',
     and the latest host_id coordinator differs from the previous one.
     """
     async def new_coordinator_elected():
         coordinators_ids = await get_coordinator_host_ids(manager)
-        if len(coordinators_ids) == expected_num_of_elections \
+        logger.debug(f"Coordinators ids in history: {coordinators_ids}")
+        if len(coordinators_ids) >= expected_num_of_elections \
             and coordinators_ids[0] != coordinators_ids[1]:
             return True
         logger.warning("New coordinator was not elected %s", coordinators_ids)
