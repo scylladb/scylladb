@@ -1708,6 +1708,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // The client has to be created before `stop_raft` since during
             // destruction it has to exist until raft_gr.stop() completes.
             service::raft_group0_client group0_client{raft_gr.local(), gossiper.local(), sys_ks.local(), token_metadata.local(), maintenance_mode_enabled{cfg->maintenance_mode()}};
+            db.invoke_on_all([&group0_client, &db, &stop_signal](replica::database& local_db) {
+                local_db.get_user_sstables_manager().plug_group0_client(group0_client, db, stop_signal.as_sharded_abort_source());
+            }).get();
+            auto unplug_group0_client = defer_verbose_shutdown("sstables_manager group0_client", [&db] {
+                db.invoke_on_all([](replica::database& local_db) {
+                    local_db.get_user_sstables_manager().unplug_group0_client();
+                }).get();
+            });
 
             service::raft_group0 group0_service{
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
