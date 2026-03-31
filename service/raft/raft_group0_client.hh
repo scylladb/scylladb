@@ -222,6 +222,10 @@ public:
         return _guard.value();
     }
 
+    bool has_guard() const noexcept {
+        return _guard.has_value();
+    }
+
     // Gets timestamp which should be used when building mutations.
     api::timestamp_type write_timestamp() const;
     utils::UUID new_group0_state_id() const;
