@@ -215,6 +215,11 @@ async def test_node_ops_tasks_tree(manager: ManagerClient):
         servers, vt_ids = await check_remove_node_tasks_tree(manager, tm, module_name, servers, vt_ids)
         servers, vt_ids = await check_decommission_tasks_tree(manager, tm, module_name, servers, vt_ids)
 
+        # Reconnect the driver after topology changes (replace, removenode,
+        # decommission) so that the new_test_keyspace cleanup can reach a
+        # live node for DROP KEYSPACE.
+        await manager.driver_connect()
+
 @pytest.mark.asyncio
 async def test_node_ops_tasks_ttl(manager: ManagerClient):
     """Test node ops virtual tasks' ttl."""
