@@ -9,20 +9,24 @@ import json
 
 from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
+from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import reconnect_driver
 from test.cluster.object_store.conftest import format_tuples, keyspace_options
 from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace
+from test.pylib.tablets import get_all_tablet_replicas
 
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.parametrize('replication_factor', [1, 3])
 @pytest.mark.parametrize('mode', ['normal', 'encrypted'])
 @pytest.mark.asyncio
-async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
-    '''verify ownership table is updated, and tables written to object storage can be read after scylla restarts'''
+async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, replication_factor):
+    '''verify ownership table is updated, and tables written to object storage can be read after scylla restarts.
+    Parametrized over replication_factor to also verify RF=3 with multiple servers.'''
 
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
@@ -35,12 +39,17 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
             'system_key_directory': str(d),
             'user_info_encryption': { 'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory' }
         }
-    server = await manager.server_add(config=cfg)
+
+    servers = []
+    for rack_num in range(replication_factor):
+        property_file = {"dc": "dc1", "rack": f"r{rack_num}"}
+        server = await manager.server_add(config=cfg, property_file=property_file)
+        servers.append(server)
 
     cql = manager.get_cql()
-    workdir = await manager.server_get_workdir(server.server_id)
+    workdir = await manager.server_get_workdir(servers[0].server_id)
     print(f'Create keyspace (storage server listening at {object_storage.address})')
-    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=replication_factor)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
 
@@ -57,24 +66,37 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode):
         rows = {x.name: x.value for x in res}
         assert len(rows) > 0, 'Test table is empty'
 
-        await manager.api.flush_keyspace(server.ip_addr, ks)
+        print('Flush keyspace on all servers')
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
 
         # Check that the ownership table is populated properly
-        res = cql.execute("SELECT * FROM system.sstables;")
         tid = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'").one()
+        res = cql.execute("SELECT * FROM system.sstables;")
         for row in res:
             assert row.owner == tid.id, \
                 f'Unexpected entry owner in registry: {row.owner}'
             assert row.status == 'sealed', f'Unexpected entry status in registry: {row.status}'
 
+        if replication_factor > 1:
+            tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+            print(f'Found {len(tablet_replicas)} tablets')
+            hosts = {await manager.get_host_id(s.server_id): s.ip_addr for s in servers}
+            for idx, tablet in enumerate(tablet_replicas):
+                replica_ips = [hosts[r[0]] for r in tablet.replicas]
+                print(f'Tablet {idx}: last_token={tablet.last_token}, replicas={replica_ips}')
+                assert len(replica_ips) == replication_factor, f'Expected RF={replication_factor} replicas, got {len(replica_ips)}'
+
         print('Restart scylla')
-        await manager.server_restart(server.server_id)
+        for server in servers:
+            await manager.server_restart(server.server_id)
         cql = await reconnect_driver(manager)
 
         # Shouldn't be recreated by populator code
         assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory resurrected"
 
-        res = cql.execute(f"SELECT * FROM {ks}.test;")
+        stmt = SimpleStatement(f"SELECT * FROM {ks}.test;", consistency_level=ConsistencyLevel.ALL)
+        res = cql.execute(stmt)
         have_res = {x.name: x.value for x in res}
         assert have_res == rows, f'Unexpected table content: {have_res}'
 
@@ -293,5 +315,4 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     print('Passing a known endpoint will make the CREATE KEYSPACE stmt to succeed')
     cql.execute((f'CREATE KEYSPACE random_ks WITH'
                     f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
-    
 
