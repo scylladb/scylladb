@@ -23,7 +23,6 @@ convenience wrappers from :mod:`test.pylib.skip_types`::
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Callable
 from enum import StrEnum
 
@@ -114,15 +113,14 @@ class SkipReasonPlugin:
                     item.stash[SKIP_TYPE_KEY] = str(st)
                     item.stash[SKIP_REASON_KEY] = reason
 
-            # Warn on bare pytest.mark.skip not added by typed markers.
+            # Reject bare pytest.mark.skip not added by typed markers.
             # skip_mode sets SKIP_TYPE_KEY before this hook runs (trylast).
             if SKIP_TYPE_KEY not in item.stash:
                 bare = [self._get_reason(m) for m in item.iter_markers("skip")]
                 if bare:
                     alternatives = ", ".join(
                         f"@pytest.mark.{st.marker_name}" for st in self._skip_types)
-                    # TODO: Change to pytest.fail() after full migration.
-                    warnings.warn(
+                    raise pytest.UsageError(
                         f"Untyped skip on {item.nodeid}: {'; '.join(bare)}. "
                         f"Use {alternatives} instead.",
                     )

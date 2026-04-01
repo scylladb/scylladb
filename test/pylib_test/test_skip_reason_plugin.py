@@ -102,27 +102,26 @@ def test_missing_reason_is_rejected(skippytest, marker):
     assert result.ret != 0
 
 
-# -- Bare skip warning ------------------------------------------------------
+# -- Bare skip rejection -----------------------------------------------------
 
-def test_bare_skip_warns_and_lists_alternatives(skippytest):
-    """Bare skip must warn and list all typed alternatives."""
+def test_bare_skip_rejected_and_lists_alternatives(skippytest):
+    """Bare skip must be rejected with UsageError listing all typed alternatives."""
     skippytest.makepyfile("""
         import pytest
         @pytest.mark.skip(reason="some bare reason")
         def test_bare():
             pass
     """)
-    result = skippytest.runpytest("-W", "all")
-    result.assert_outcomes(skipped=1)
-    out = result.stdout.str()
-    assert "Untyped skip" in out
-    assert "some bare reason" in out
+    result = skippytest.runpytest()
+    result.stderr.fnmatch_lines(["*Untyped skip*some bare reason*"])
+    assert result.ret != 0
+    out = result.stderr.str()
     for m in ("skip_bug", "skip_not_implemented", "skip_slow",
               "skip_env"):
-        assert m in out, f"expected '{m}' in warning output"
+        assert m in out, f"expected '{m}' in error output"
 
 
-def test_bare_skip_in_pytest_param_warns(skippytest):
+def test_bare_skip_in_pytest_param_rejected(skippytest):
     skippytest.makepyfile("""
         import pytest
         @pytest.mark.parametrize("x", [
@@ -133,21 +132,21 @@ def test_bare_skip_in_pytest_param_warns(skippytest):
         def test_p(x):
             pass
     """)
-    result = skippytest.runpytest("-W", "all")
-    result.assert_outcomes(passed=1, skipped=1)
-    assert "Untyped skip" in result.stdout.str()
+    result = skippytest.runpytest()
+    result.stderr.fnmatch_lines(["*Untyped skip*bare in param*"])
+    assert result.ret != 0
 
 
-def test_typed_skip_does_not_warn(skippytest):
+def test_typed_skip_does_not_reject(skippytest):
     skippytest.makepyfile("""
         import pytest
         @pytest.mark.skip_bug(reason="scylladb/scylladb#11111")
         def test_typed():
             pass
     """)
-    result = skippytest.runpytest("-W", "error::UserWarning")
+    result = skippytest.runpytest()
     result.assert_outcomes(skipped=1)
-    assert "Untyped skip" not in result.stdout.str()
+    assert "Untyped skip" not in result.stderr.str()
 
 
 # -- Runtime skip helper ----------------------------------------------------
@@ -297,8 +296,8 @@ def test_skip_mode_prefix_populates_junit(skippytest, tmp_path):
     assert "not supported in release" in xml
 
 
-def test_bare_skip_with_skip_mode_no_warn(skippytest):
-    """When skip_mode uses skip_marker(), bare-skip warning is suppressed
+def test_bare_skip_with_skip_mode_no_rejection(skippytest):
+    """When skip_mode uses skip_marker(), bare-skip rejection is suppressed
     for the item even if it also has a bare @pytest.mark.skip. The
     skip_marker() call signals the item already has a typed skip.
     """
@@ -310,7 +309,6 @@ def test_bare_skip_with_skip_mode_no_warn(skippytest):
         def test_both_bare_and_mode():
             assert False
     """)
-    result = skippytest.runpytest("-W", "all")
+    result = skippytest.runpytest()
     result.assert_outcomes(skipped=1)
-    out = result.stdout.str()
-    assert "Untyped skip" not in out
+    assert "Untyped skip" not in result.stderr.str()
