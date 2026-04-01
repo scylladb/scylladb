@@ -665,6 +665,7 @@ public:
     future<> sstables_registry_delete_entry(table_id owner, sstables::generation_type gen, service::group0_batch& mc);
     using sstable_registry_entry_consumer = sstables::sstables_registry::entry_consumer;
     future<> sstables_registry_list(table_id owner, sstable_registry_entry_consumer consumer);
+    static mutation make_drop_sstables_registry_mutation(table_id id, api::timestamp_type ts);
 
     future<std::optional<sstring>> load_group0_upgrade_state();
     future<> save_group0_upgrade_state(sstring);

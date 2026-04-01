@@ -3470,6 +3470,15 @@ future<> system_keyspace::sstables_registry_list(table_id owner, sstable_registr
     });
 }
 
+mutation system_keyspace::make_drop_sstables_registry_mutation(table_id id, api::timestamp_type ts) {
+    auto s = db::system_keyspace::sstables_registry();
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(id.uuid()).serialize_nonnull()
+    ));
+    m.partition().apply(tombstone(ts, gc_clock::now()));
+    return m;
+}
+
 future<service::topology_request_state> system_keyspace::get_topology_request_state(utils::UUID id, bool require_entry) {
     auto rs = co_await execute_cql(
         format("SELECT done, error FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
