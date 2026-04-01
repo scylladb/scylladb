@@ -277,6 +277,10 @@ const auto flaky_server_query_template = fmt::format(
         "ldap://localhost:{}/{}?cn?sub?(uniqueMember=uid={{USER}},ou=People,dc=example,dc=com)",
         std::stoi(ldap_port) + 2, base_dn);
 
+const auto member_uid_query_template = fmt::format(
+        "ldap://localhost:{}/dc=example,dc=com?cn?sub?(memberUid={{USER}})",
+        ldap_port);
+
 auto make_ldap_manager(cql_test_env& env, sstring query_template = default_query_template) {
     auto stop_role_manager = [] (auth::ldap_role_manager* m) {
         m->stop().get();
@@ -336,6 +340,42 @@ SEASTAR_TEST_CASE(ldap_wrong_role) {
         m->start().get();
         create_ldap_roles(env, *m);
         BOOST_REQUIRE_EQUAL(role_set{"jdoe"}, m->query_granted("jdoe", auth::recursive_role_query::no).get());
+    });
+}
+
+SEASTAR_TEST_CASE(ldap_filter_injection_with_wildcard_user) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, member_uid_query_template);
+        m->start().get();
+        do_with_mc(env, [&] (::service::group0_batch& b) {
+            m->create("*", auth::role_config{.is_superuser = false, .can_login = true}, b).get();
+            m->create("role1", auth::role_config{}, b).get();
+            m->create("role2", auth::role_config{.is_superuser = true, .can_login = false}, b).get();
+        });
+
+        // BUG: Without escaping, '*' is interpolated literally into the LDAP
+        // filter (memberUid=*), which matches all group entries.
+        const role_set expected{"*", "role1", "role2"};
+        BOOST_REQUIRE_EQUAL(expected, m->query_granted("*", auth::recursive_role_query::no).get());
+    });
+}
+
+SEASTAR_TEST_CASE(ldap_filter_injection_with_parenthesis_payload) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, member_uid_query_template);
+        m->start().get();
+
+        // BUG: Without escaping, the payload ")(uid=*" produces the malformed
+        // filter (memberUid=)(uid=*), which the LDAP server rejects outright.
+        const sstring payload = ")(uid=*";
+        do_with_mc(env, [&] (::service::group0_batch& b) {
+            m->create(payload, auth::role_config{.is_superuser = false, .can_login = true}, b).get();
+            m->create("role1", auth::role_config{}, b).get();
+            m->create("role2", auth::role_config{.is_superuser = true, .can_login = false}, b).get();
+        });
+
+        BOOST_REQUIRE_EXCEPTION(m->query_granted(payload, auth::recursive_role_query::no).get(),
+                                std::runtime_error, exception_predicate::message_contains("Bad search filter"));
     });
 }
 
