@@ -2279,7 +2279,7 @@ async def test_split_stopped_on_shutdown(manager: ManagerClient):
 
         shutdown_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
 
-        await log.wait_for('Stopping.*ongoing compactions')
+        await log.wait_for('Stopping.*ongoing compactions', from_mark=log_mark)
         await manager.api.message_injection(server.ip_addr, "splitting_mutation_writer_switch_wait")
 
         await log.wait_for('storage_service_drain_wait: waiting', from_mark=log_mark)
