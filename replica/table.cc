@@ -1576,7 +1576,15 @@ table::clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed) {
     utils::chunked_vector<sstables::entry_descriptor> ret;
     auto holder = async_gate().hold();
 
-    auto& sg = storage_group_for_id(tid.value());
+    // In the internode migration path the handler runs on all shards via
+    // map_reduce0.  Only the shard that owns the tablet will have a storage
+    // group for it; other shards should return an empty result, just like
+    // take_storage_snapshot / storage_groups_for_token_range do.
+    auto* sgp = _sg_manager->maybe_storage_group_for_id(_schema, tid.value());
+    if (!sgp) {
+        co_return ret;
+    }
+    auto& sg = *sgp;
     auto sg_holder = sg.async_gate().hold();
     co_await sg.flush();
     // The sstable set must be obtained *after* the deletion lock is taken,
