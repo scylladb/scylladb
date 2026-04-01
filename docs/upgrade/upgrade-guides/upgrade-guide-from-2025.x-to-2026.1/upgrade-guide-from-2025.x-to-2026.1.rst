@@ -20,7 +20,7 @@ This guide covers upgrading ScyllaDB on Red Hat Enterprise Linux (RHEL), CentOS,
 and Ubuntu. See `OS Support by Platform and Version <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_ 
 for information about supported versions. It also applies when using the ScyllaDB official image on EC2, GCP, or Azure.
 
-See :doc:`About Upgrade </upgrade/about-upgrade/>` for the ScyllaDB upgrade policy.
+See `Upgrade Policy <https://docs.scylladb.com/stable/versioning/upgrade-policy.html>`_ for the ScyllaDB upgrade policy.
 
 Before You Upgrade ScyllaDB
 ==============================
