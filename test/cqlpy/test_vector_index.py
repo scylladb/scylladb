@@ -424,6 +424,54 @@ def test_try_enable_vector_search_with_cdc_disabled(scylla_only, cql, test_keysp
         assert alter_cdc(cql, table, {'enabled': True})
         assert create_index(cql, test_keyspace, table, "v")
 
+# When a vector index is created on a table, writes to it should appear in the
+# CDC log, even though CDC was never explicitly enabled. This should be true
+# both for regular writes and writes using LWT.
+# This is a regression test for SCYLLADB-1342, where LWT writes forgot to update
+# the CDC log.
+def test_vector_index_writes_appear_in_cdc_log(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = "p int primary key, v vector<float, 3>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        _, table_name = table.split('.')
+        cdc_log_table = f"{test_keyspace}.{table_name}_scylla_cdc_log"
+
+        # Creating a vector index auto-enables CDC on the table.
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+
+        # Confirm that traditional CDC was *not* enabled, but the CDC log
+        # table was created (SELECT from it generates no error).
+        cdc_opts = cql.execute(f"SELECT cdc FROM system_schema.scylla_tables WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'").one().cdc
+        assert not cdc_opts or cdc_opts.get('enabled') != 'true'
+        cql.execute(f"SELECT * FROM {cdc_log_table}")
+
+        # A regular write should appear in the CDC log
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, [1.0, 2.0, 3.0])")
+        rows_after_regular = list(cql.execute(f"SELECT * FROM {cdc_log_table}"))
+        assert len(rows_after_regular) > 0
+
+        # A successful LWT write should appear in the CDC log (reproduces
+        # SCYLLADB-1342)
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (2, [4.0, 5.0, 6.0]) IF NOT EXISTS")
+        rows_after_lwt = list(cql.execute(f"SELECT * FROM {cdc_log_table} ALLOW FILTERING"))
+        assert len(rows_after_lwt) > len(rows_after_regular)
+
+        # An unsuccessful LWT write should not appear in the CDC log.
+        # p=2 already exists, so this IF NOT EXISTS will not be applied.
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (2, [7.0, 8.0, 9.0]) IF NOT EXISTS")
+        rows_after_failed_lwt = list(cql.execute(f"SELECT * FROM {cdc_log_table} ALLOW FILTERING"))
+        assert len(rows_after_failed_lwt) == len(rows_after_lwt)
+
+        # Above we tested sucessful LWT writes using INSERT. Verify the same
+        # also for UPDATE and DELETE.
+        # A successful LWT UPDATE (p=1 exists) should appear in the CDC log.
+        cql.execute(f"UPDATE {table} SET v = [0.1, 0.2, 0.3] WHERE p = 1 IF EXISTS")
+        rows_after_lwt_update = list(cql.execute(f"SELECT * FROM {cdc_log_table} ALLOW FILTERING"))
+        assert len(rows_after_lwt_update) > len(rows_after_failed_lwt)
+
+        # A successful LWT DELETE (p=2 exists) should appear in the CDC log.
+        cql.execute(f"DELETE FROM {table} WHERE p = 2 IF EXISTS")
+        rows_after_lwt_delete = list(cql.execute(f"SELECT * FROM {cdc_log_table} ALLOW FILTERING"))
+        assert len(rows_after_lwt_delete) > len(rows_after_lwt_update)
 
 # This test reproduces VECTOR-179.
 # It performs a vector search with tracing enabled. An exception is expected

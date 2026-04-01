@@ -30,6 +30,9 @@ class caching_options {
     friend class schema;
     caching_options();
 public:
+    // do not used schema.cdc_options().enabled(), use cdc::cdc_enabled(schema)
+    // instead. This is because cdc_enabled() also checks for CDC being enabled
+    // by a vector index.
     bool enabled() const {
         return _enabled;
     }
