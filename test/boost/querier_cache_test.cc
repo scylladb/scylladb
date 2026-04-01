@@ -906,9 +906,13 @@ SEASTAR_THREAD_TEST_CASE(test_timeout_is_applied_on_lookup) {
     BOOST_REQUIRE(entry.permit.timeout() == new_timeout);
     BOOST_REQUIRE(!entry.permit.get_abort_exception());
 
-    sleep(ttl_timeout_test_timeout * 2).get();
+    // Don't waste time retrying before the timeout is up
+    sleep(ttl_timeout_test_timeout).get();
 
-    BOOST_REQUIRE(entry.permit.get_abort_exception());
+    eventually_true([&entry] {
+        return bool(entry.permit.get_abort_exception());
+    });
+
     BOOST_REQUIRE_THROW(std::rethrow_exception(entry.permit.get_abort_exception()), seastar::named_semaphore_timed_out);
 }
 
