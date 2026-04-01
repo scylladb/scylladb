@@ -27,6 +27,16 @@ This configuration takes the form of a query template which is defined in the sc
 The value of ``ldap_url_template`` parameter should contain a valid LDAP URL (e.g., as returned by the ldapurl utility from OpenLDAP) representing an LDAP query that returns entries for all the user's roles.
 Scylla will replace the text ``{USER}`` in the URL with the user's Scylla username before querying LDAP.
 
+.. note:: Usernames substituted into ``{USER}`` are automatically escaped
+   using RFC 4515 filter escaping and URL percent-encoding, so LDAP filter
+   metacharacters (``*``, ``(``, ``)``, ``\``, NUL) and URL metacharacters
+   (``%``, ``?``, ``#``) in usernames are handled safely.
+   
+   ``{USER}`` must appear only in the **filter** component of the LDAP URL
+   (the part after the third ``?``).  Templates that place ``{USER}`` in the
+   host, base DN, attributes, or extensions are rejected at startup, because
+   filter escaping is not the correct encoding for those components.
+
 Workflow
 --------
 
