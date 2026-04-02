@@ -117,17 +117,18 @@ async def create_encrypted_cf(manager: ManagerClient, ks: str,
 
     return new_test_table(manager, ks, columns, extra)
 
-async def prepare_write_workload(cql: CassandraSession, table_name, flush=True, n: int = None):
-    """write some data"""
-    keys = list(range(n if n else 100))
+async def prepare_write_workload(cql: CassandraSession, table_name, flush=True, n: int = None) -> list[str]:
+    """write some data, returns list of written partition keys"""
+    key_ids = list(range(n if n else 100))
     c1_values = ['value1']
     c2_values = ['value2']
 
     statement = cql.prepare(f"INSERT INTO {table_name} (key, c1, c2) VALUES (?, ?, ?)")
     statement.consistency_level = ConsistencyLevel.ALL
 
+    keys = [f"k{x}" for x in key_ids]
     await asyncio.gather(*[cql.run_async(statement, params) for params in
-                           list(map(lambda x, y, z: [f"k{x}", y, z], keys,
+                           list(map(lambda x, y, z: [x, y, z], keys,
                                     itertools.cycle(c1_values),
                                     itertools.cycle(c2_values)))]
                                     )
@@ -135,10 +136,14 @@ async def prepare_write_workload(cql: CassandraSession, table_name, flush=True, 
     if flush:
         nodetool.flush(cql, table_name)
 
-async def read_verify_workload(cql: CassandraSession, table_name: str, expected_len: int = 100):
-    """check written data"""
-    rows = list(cql.execute(f"SELECT c1, c2 FROM {table_name}"))
-    assert len(rows) == expected_len
+    return keys
+
+async def read_verify_workload(cql: CassandraSession, table_name: str, keys: list[str]):
+    """check written data using single-partition queries"""
+    statement = cql.prepare(f"SELECT c1, c2 FROM {table_name} WHERE key = ?")
+    rows = await asyncio.gather(*[cql.run_async(statement, [key]) for key in keys])
+    for key, result in zip(keys, rows):
+        assert len(list(result)) == 1, f"Expected 1 row for key={key}, got {len(list(result))}"
 
 async def _smoke_test(manager: ManagerClient, key_provider: KeyProviderFactory,
                       ciphers: dict[str, list[int]], compression: str = None,
@@ -167,8 +172,8 @@ async def _smoke_test(manager: ManagerClient, key_provider: KeyProviderFactory,
                                                   compression=compression,
                                                   additional_options=additional_options
                                                   ))
-                    await prepare_write_workload(cql, table_name=table_name)
-                    cfs.append(table_name)
+                    keys = await prepare_write_workload(cql, table_name=table_name)
+                    cfs.append((table_name, keys))
                 except Exception as e:
                     if exception_handler:
                         exception_handler(e, cipher_algorithm, secret_key_strength)
@@ -176,12 +181,12 @@ async def _smoke_test(manager: ManagerClient, key_provider: KeyProviderFactory,
                     raise e
             # restart the cluster
             if restart:
-                await restart(manager, servers, cfs)
+                await restart(manager, servers, [table_name for table_name, _ in cfs])
                 cql, _ = await manager.get_ready_cql(servers)
             else:
                 await manager.rolling_restart(servers)
-            for table_name in cfs:
-                await read_verify_workload(cql, table_name=table_name)
+            for table_name, keys in cfs:
+                await read_verify_workload(cql, table_name=table_name, keys=keys)
 
 # default: 'AES/CBC/PKCS5Padding', length 128
 supported_cipher_algorithms = {
@@ -363,7 +368,7 @@ async def test_alter(manager, key_provider):
                                            table_names[0], False,
                                            expected_data=expected_data)
 
-        await read_verify_workload(cql, table_name=table_names[0])
+        await read_verify_workload(cql, table_name=table_names[0], keys=[row[0] for row in expected_data])
         # enable encryption again
         options = key_provider.additional_cf_options()
         cql.execute(f"ALTER TABLE {table_names[0]} with scylla_encryption_options={options}")
