@@ -175,6 +175,7 @@ private:
     service::raft_group0_client* _group0_client = nullptr;
     sharded<replica::database>* _db = nullptr;
     sharded<abort_source>* _group0_as = nullptr;
+    bool _in_group0_drop_schema_trx = false;
 
     named_gate _signal_gate;
     signal_type _signal_source;
@@ -272,6 +273,8 @@ public:
     service::raft_group0_client* group0_client() const noexcept { return _group0_client; }
     sharded<replica::database>* database_container() const noexcept { return _db; }
     sharded<abort_source>* group0_abort_source() const noexcept { return _group0_as; }
+    void set_in_group0_drop_schema_trx(bool v) noexcept { _in_group0_drop_schema_trx = v; }
+    bool in_group0_drop_schema_trx() const noexcept { return _in_group0_drop_schema_trx; }
 
     future<> delete_atomically(std::vector<shared_sstable> ssts);
     future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring jsondir);

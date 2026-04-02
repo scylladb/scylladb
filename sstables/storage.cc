@@ -848,12 +848,19 @@ future<> object_storage_base::change_state(const sstable& sst, sstable_state sta
 }
 
 future<> object_storage_base::wipe(const sstable& sst, sync_dir) noexcept {
+    // When called during DROP TABLE schema merge, the on_before_drop_column_family
+    // listener already piggybacked a partition tombstone for this table's registry
+    // entries into the group0 command. Skip registry updates to avoid deadlock.
+    bool skip_registry = sst.manager().in_group0_drop_schema_trx();
+
     try {
-    co_await sstables_registry_apply_operation(sst.manager(), [owner = owner(), gen = sst.generation()](sstables_registry& registry, service::group0_batch& mc) {
-        return registry.update_entry_status(owner, gen, status_removing, mc);
-    });
+        if (!skip_registry) {
+            co_await sstables_registry_apply_operation(sst.manager(), [owner = owner(), gen = sst.generation()](sstables_registry& registry, service::group0_batch& mc) {
+                return registry.update_entry_status(owner, gen, status_removing, mc);
+            });
+        }
     } catch (...) {
-        sstlog.warn("Failed to mark sstable {}.{} as removing in registry: {}. Orphaned entry will be cleaned up by GC.", owner(), sst.generation(), std::current_exception());
+        sstlog.warn("Failed to mark sstable {}.{} as removing in registry: {}. Orphaned entry will be cleaned up by GC during next boot.", owner(), sst.generation(), std::current_exception());
     }
 
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
@@ -861,11 +868,13 @@ future<> object_storage_base::wipe(const sstable& sst, sync_dir) noexcept {
     });
 
     try {
-    co_await sstables_registry_apply_operation(sst.manager(), [owner = owner(), gen = sst.generation()](sstables_registry& registry, service::group0_batch& mc) {
-        return registry.delete_entry(owner, gen, mc);
-    });
+        if (!skip_registry) {
+            co_await sstables_registry_apply_operation(sst.manager(), [owner = owner(), gen = sst.generation()](sstables_registry& registry, service::group0_batch& mc) {
+                return registry.delete_entry(owner, gen, mc);
+            });
+        }
     } catch (...) {
-        sstlog.warn("Failed to delete sstable {}.{} from registry: {}. Orphaned entry will be cleaned up by GC.", owner(), sst.generation(), std::current_exception());
+        sstlog.warn("Failed to delete sstable {}.{} from registry: {}. Orphaned entry will be cleaned up by GC during next boot.", owner(), sst.generation(), std::current_exception());
     }
 }
 
