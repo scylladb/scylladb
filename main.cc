@@ -1769,6 +1769,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     if (!_db.find_keyspace(s.ks_name()).metadata()->get_storage_options().is_object_storage_type()) {
                         return;
                     }
+                    if (utils::get_local_injector().enter("skip_sstables_registry_drop_tombstone")) {
+                        return;
+                    }
                     muts.emplace_back(db::system_keyspace::make_drop_sstables_registry_mutation(s.id(), ts));
                 }
                 void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
