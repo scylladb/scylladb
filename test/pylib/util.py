@@ -58,9 +58,24 @@ async def wait_for(
         deadline: float,
         period: float = 1,
         before_retry: Optional[Callable[[], Any]] = None) -> T:
+    last_exception: Exception | None = None
     while True:
-        assert(time.time() < deadline), "Deadline exceeded, failing test."
-        res = await pred()
+        if time.time() >= deadline:
+            timeout_msg = "Deadline exceeded, failing test."
+            if last_exception is not None:
+                timeout_msg += (
+                    f"; last exception: {type(last_exception).__name__}: {last_exception}"
+                )
+                raise AssertionError(timeout_msg) from last_exception
+            raise AssertionError(timeout_msg)
+
+        try:
+            res = await pred()
+            last_exception = None
+        except Exception as exc:
+            res = None
+            last_exception = exc
+
         if res is not None:
             return res
         await asyncio.sleep(period)
