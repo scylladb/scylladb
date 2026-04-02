@@ -442,6 +442,16 @@ void vector_index::check_uses_tablets(const schema& schema, const data_dictionar
     }
 }
 
+void vector_index::check_key_column_count(const schema& schema) const {
+    // The vector-store InvariantKey supports at most 255 key columns (VECTOR-553).
+    static constexpr column_count_type max_key_columns = 255;
+    auto key_column_count = schema.partition_key_size() + schema.clustering_key_size();
+    if (key_column_count > max_key_columns) {
+        throw exceptions::invalid_request_exception(
+            format("Vector index requires at most {:d} primary key columns, but {:d} were found", max_key_columns, key_column_count));
+    }
+}
+
 void vector_index::validate(const schema &schema, const cql3::statements::index_specific_prop_defs &properties,
         const std::vector<::shared_ptr<cql3::statements::index_target>> &targets,
         const gms::feature_service& fs,
@@ -449,6 +459,7 @@ void vector_index::validate(const schema &schema, const cql3::statements::index_
 {
     check_uses_tablets(schema, db);
     check_target(schema, targets);
+    check_key_column_count(schema);
     check_cdc_not_explicitly_disabled(schema);
     check_cdc_options(schema);
     check_index_options(properties);
