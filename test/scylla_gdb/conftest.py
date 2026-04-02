@@ -14,7 +14,7 @@ from test.pylib.suite.python import PythonTest
 @pytest.fixture(scope="module")
 async def scylla_server(testpy_test: PythonTest | None):
     """Return a running Scylla server instance from the active test cluster."""
-    async with testpy_test.run_ctx(options=testpy_test.suite.options) as cluster:
+    async with testpy_test.run_ctx() as cluster:
         yield next(iter(cluster.running.values()))
 
 

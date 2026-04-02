@@ -43,7 +43,7 @@ async def host(request, testpy_test: PythonTest | None):
     if testpy_test is None:
         yield request.config.getoption("--host")
     else:
-        async with testpy_test.run_ctx(options=testpy_test.suite.options):
+        async with testpy_test.run_ctx():
             yield testpy_test.server_address
 
 

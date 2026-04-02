@@ -90,72 +90,76 @@ If you want to specify a specific build mode:
 
     $ ./test.py --mode=dev
 
-If you want to run only a specific test:
+If you want to run only tests in a specific directory:
 
-    $ ./test.py suitename/testname
+    $ ./test.py test/cqlpy/
 
-This will select and run all tests having suitename/testname as substring,
-e.g. suitename/testname_ext and others.
+If you want to run a specific test file:
 
-If you want to run only a specific test-case from a specific test:
+    $ ./test.py test/cqlpy/test_null.py
 
-    $ ./test.py suitename/testname::casename
+If you want to run a specific test case within a file:
 
-This will select only the test with the suitename/testname name, no
-substring search is performed in this case. If the casename is `*`, then
-all test-cases will be selected.
+    $ ./test.py test/boost/aggregate_fcts_test.cc::test_aggregate_avg
 
-Note that not all tests are divided into cases. Below sections will
-shed more light on this.
+You can also use `-k` for expression-based filtering by test name:
+
+    $ ./test.py -k 'test_null or test_empty'
+
+This matches all test functions and classes whose name contains
+`test_null` or `test_empty`. Use `not` to exclude:
+
+    $ ./test.py -k 'not test_slow'
+
+To skip tests matching a pattern, use `--skip`:
+
+    $ ./test.py --skip test_slow
+
+Multiple paths and options can be combined freely.
 
 Build artefacts, such as test output and harness output is stored
 in `./testlog`. Scylla data files are stored in `/tmp`.
 
-There are several test directories that are excluded from orchestration by `test.py`:
-
-- test/boost
-- test/ldap
-- test/raft
-- test/unit
-- test/vector_search
-- test/vector_search_validator
-- test/alternator
-- test/broadcast_tables
-- test/cql
-- test/cqlpy
-- test/rest_api
-- test/scylla_gdb
-
-This means that `test.py` will not run tests directly, but will delegate all work to `pytest`.
-That's why all these directories do not have `suite.yaml` files.
-Additionally, these directories do not follow abstract naming suite/testname
-convention, and instead use the `pytest` naming convention, i.e. to run a test you need to provide the path to the file
-and optionally the test name, e.g. `test/boost/aggregate_fcts_test.cc::test_aggregate_avg`.
+Test directories under `./test/` may contain a `test_config.yaml` file
+that configures suite-specific behaviour such as server pool size,
+extra Scylla command-line options, and cluster topology. All test
+execution is delegated to pytest; `test.py` itself is a thin wrapper
+that builds the appropriate pytest arguments.
 
 ## How it works
 
-On start, `test.py` invokes `ninja` to find out configured build modes. Then
-it searches all subdirectories of `./test/` for `suite.yaml` files: each
-directory containing `suite.yaml` is a test suite, in which `test.py` then looks
-for tests. All files ending with `_test.cc` or `_test.cql` are considered
-tests.
+`test.py` is a thin wrapper around `pytest`. On start it invokes `ninja`
+to find out configured build modes, builds a list of pytest arguments,
+and calls `pytest.main()`.
 
-A suite must contain tests of the same type, as configured in `suite.yaml`.
-The list of found tests is matched with the optional command line test name
-filter. A match is registered if filter substring exists anywhere in test
-full name. For example:
+`HOST_ID` is a short hash derived from the hostname and the current
+time (or set via the `SCYLLA_TEST_HOST_ID` environment variable).
+It is appended to log filenames, report paths, and the metrics database
+so that results from different CI builder nodes are not overwritten
+when Jenkins collects them into a single directory.
 
-    $ ./test.py cql
+Test discovery, collection and execution are handled entirely by pytest
+and its collectors (defined in `test/pylib/`). Each test directory
+contains a `test_config.yaml` that declares the suite type and options.
+Pytest collectors use these configs to locate test files — e.g. files
+ending with `_test.cc` or `_test.cql` for C++ and CQL suites,
+and `*_test.py` / `test_*.py` for Python suites.
 
-runs `cql/lwt_test`, `cql/lwt_batch_test`, as well as
-`boost/cql_query_test`.
+Test names or paths given on the command line are forwarded to pytest
+for selection. For example:
+
+    $ ./test.py test/cqlpy/test_null.py
+
+runs only `test/cqlpy/test_null.py`. You can also pass a substring via
+`-k` to filter by test name.
 
 The `./testlog` directory is created if it doesn't exist, otherwise it is
 cleared from the previous run artefacts.
 
-Matched tests are run concurrently, with concurrency factor set to the
-number of available CPU cores. `test.py` continues until all tests are run
-even if any one of them fails.
+Tests are run concurrently via `pytest-xdist`, with the number of worker
+processes determined by available CPU cores, system memory, and build mode
+(see `ThreadsCalculator` in `test.py`). `test.py`
+continues until all tests are run even if any one of them fails.
 
 ## CQL tests
 
@@ -210,16 +214,17 @@ Boost tests support `path/to/file_name.cc::casename` selection described above.
 
 ### Debugging unit tests
 
-If a test fails, its log can be found in `testlog/${mode}/testname.log`.
+If a test fails, its log can be found in
+`testlog/{mode}/{suitename}.{testname}.{casename}_stdout.{run_id}.log`
+(e.g. `testlog/dev/boost.aggregate_fcts_test.test_aggregate_avg_stdout.1.log`).
 By default, all unit tests are built stripped. To build non-stripped tests,
 `./configure` with `--tests-debuginfo list-of-tests`.
-`test.py` adds some command line arguments to unit tests. The exact way in
-which the test is invoked is recorded in `testlog/test.py.log`.
+`test.py` adds some command line arguments to unit tests.
 
 ## Python tests
 
 `test.py` supports pytest standard of tests, for suites (directories)
-specifying `Python` test type in their suite.yaml. For such tests,
+specifying `Python` test type in their test_config.yaml. For such tests,
 a standalone server instance is created, and a connection URI to the
 server is passed to the test. Thanks to convenience fixtures,
 test writers don't need to create or cleanup connections or keyspaces.
@@ -230,8 +235,8 @@ Note that some suites have a convenience helper script called `run`. Find
 more information about it in [test/cqlpy](../../test/cqlpy/README.md) and [test/alternator](../../test/alternator/README.md).
 
 All tests in pytest suites consist of test-cases -- top-level functions
-starting with test_ -- and thus support the `suitename/testname::casename`
-selection described above.
+starting with test_ -- and thus support the `path/to/test_file.py::casename`
+selection described in the Usage section.
 
 ## Sharing and pooling servers
 
@@ -254,65 +259,46 @@ of the used server:
 
 To have a full picture for a failing pytest it is necessary to identify
 the server which was used to run it and the relevant fragment in the server
-log. For this, `test.py` maintains this link through relevant log
-messages and preserves Scylla output on test failure.
+log.
 
-A typical debugging journey should start with looking at `test.py.log` in
-`testlog` where, for each test it runs, `test.py` prints all relevant paths
-to server log and pytest output.
-
-To extend `test.py` logging, you can use the standard 'logging' module API.
-Individual pytests are programmed to not gobble stdout, so you can also
-add prints to pytests, and they will end up in the test' log.
+Tests run in parallel via `pytest-xdist` workers (`gw0`, `gw1`, ...).
+Each worker writes its log to `testlog/pytest_log/pytest_gw{N}_{HOST_ID}.log`.
+This log contains cluster lifecycle messages and test pass/fail status.
 
 For example, imagine `cqlpy/test_null.py` fails. The relevant lines
-in `test.py.log` will be:
+in the worker log will be:
 
 ```
-21:53:04.789 INFO> Created cluster {127.101.161.1}
-21:53:04.790 INFO> Leasing Scylla cluster {127.101.161.1} for test test_null.1
-21:53:04.790 INFO> Starting test test_null.1: pytest --host=127.101.161.1 -s ...test/cqlpy/test_null.py
-21:53:05.533 INFO> Test test_null.1 failed
-```
-To find out the working directory of instance 127.101.161.1 search
-for its initialization message in `test.py.log`:
-
-```
-10:05:51.722 INFO> installing Scylla server in /opt/local/work/scylla/scylla/testlog/dev/scylla-1...
-10:05:51.722 INFO> starting server at host 127.159.235.1 in scylla-1...
-10:05:52.688 INFO> started server at host 127.159.235.1 in scylla-1, pid 2165602
+INFO> installing Scylla server in .../testlog/dev/scylla-gw0-1...
+INFO> starting server at host 127.1.191.1 in scylla-gw0-1...
+INFO> started server at host 127.1.191.1 in scylla-gw0-1, pid 675
+INFO> Leasing Scylla cluster ... for test gw0.cqlpy.test_null.1
+INFO> Test gw0.cqlpy.test_null.1 failed
 ```
 
-Next, we can take a look at the server log, which is at
-`/opt/local/work/scylla/scylla/testlog/dev/scylla-1.log`:
+From these messages you can identify the server working directory
+(`testlog/dev/scylla-gw0-1/`) and the server log
+(`testlog/dev/scylla-gw0-1.log`).
 
-The log contains special markers, written at test start and end:
+The server log contains special markers, written at test start and end:
 
 ```
-INFO  2022-08-18 10:05:52,598 [shard 0] schema_tables - Schema version changed to 8b5e9c73-7c1c-3b28-8c31-c1359210c484
------- Starting test test_null.1 ------
+------ Starting test gw0.cqlpy.test_null.1 ------
 ...
-INFO  2022-08-18 10:05:53,297 [shard 0] schema_tables - Dropping keyspace cql_test_1660806353124
-INFO  2022-08-18 10:05:53,304 [shard 0] schema_tables - Schema version changed to 8b5e9c73-7c1c-3b28-8c31-c1359210c484
------- Ending test test_null.1 ------
+------ Ending test gw0.cqlpy.test_null.1 ------
 ```
 
-Most often there are no errors in Scylla log, so next we inspect
-the test' log, which is next to the server's at
-`/opt/local/scylla/scylla/testlog/dev/test_null.1.log`:
+The per-test failure output (pytest traceback) is captured in
+`testlog/pytest_tests_logs/`. For example:
+
 ```
-        cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{p}', '3')")
->       assert False
-E       assert False
+testlog/pytest_tests_logs/cqlpy-test_null.py-test_insert_null_key.dev.1-call-c8a46.log
 ```
 
-What does number 1 mean in the log file name? Since `test.py` can
-run parallel jobs and run each test multiple times with `--repeat`,
-each execution is assigned a unique sequence number, allowing to
-distinguish artifacts of different execution.
+To extend logging, you can use the standard `logging` module API.
 
 When finished debugging, you don't have to worry about deleting the remains
-of a previous run, `test.py` will clean then up on the next execution
+of a previous run, `test.py` will clean them up on the next execution
 automatically.
 
 ### Pooling implementation details
@@ -330,13 +316,11 @@ to speed up boot. Some of these options are developer-only, such as
 `flush_schema_tables_after_modification: false`. If you wish to
 extend the options of a used server, you can do it by adding
 `extra_scylla_cmdline_options` or `extra_scylla_config_options`
-to your suite.yaml.
+to your test_config.yaml.
 
 ## Topology pytests
 
-In addition to the standard 'Python' suite type, `test.py`
-supports an extended pytest suite, `Topology`. Unlike
-`Python` tests, `Topology` tests run against Scylla clusters,
+Some pytest suites run against Scylla clusters
 and support topology operations. A standard `manager`
 fixture is available for these. Through this fixture,
 you can access individual nodes, start, stop
@@ -358,7 +342,7 @@ the pool is replenished with a new cluster instead.
 
 The parameter `--gather-metrics` is used to gather CPU/RAM usage during tests from the cgroup and system overall CPU/RAM
 usage.
-For that, SQLite database is used to store the metrics in `testlog/sqlite.db`.
+For that, SQLite database is used to store the metrics in `testlog/sqlite_{HOST_ID}.db`.
 The database is created in the `testlog` directory and contains the following tables:
 
 - `tests` - contains the list of tests that were executed with information about the test name, directory, architecture,
@@ -370,11 +354,9 @@ The database is created in the `testlog` directory and contains the following ta
 ## Automation, CI, and Jenkins
 
 If any of the tests fails, `test.py` returns a non-zero exit status.
-JUNIT and XUNIT execution status XML files can be found in
-`testlog/${mode}/xml/` directory. These files are used
-by Jenkins to produce formatted build reports. `test.py` will
-try to add as much context information, such as fragments of log
-files, exceptions, to the test XML output.
+A consolidated JUNIT XML report is written to
+`testlog/report/pytest_cpp_{HOST_ID}.xml`. This file is used
+by Jenkins to produce formatted build reports.
 
 If that's not enough, a debugging journey, similar to a local one, is
 available in CI if you navigate to 'Build artifacts' at the Jenkins build
@@ -405,7 +387,7 @@ So manual installation of allure is required.
 
 ### Basic allure usage
 
-1. Open directory with the Junit xml test results, e.g. testlog/dev/xml
+1. Open directory with the test results, e.g. testlog/report/
 2. Execute allure serve to show report
 ```shell
 $ allure serve -h localhost .
