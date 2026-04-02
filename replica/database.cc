@@ -1363,7 +1363,13 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
     }
+    co_await sharded_db.invoke_on_all([&] (database& db) {
+        db.get_user_sstables_manager().set_in_group0_drop_schema_trx(true);
+    });
     auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
+    co_await sharded_db.invoke_on_all([&] (database& db) {
+        db.get_user_sstables_manager().set_in_group0_drop_schema_trx(false);
+    });
     co_await smp::invoke_on_all([&] {
         return table_shards->stop();
     });
