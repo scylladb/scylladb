@@ -316,3 +316,81 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     cql.execute((f'CREATE KEYSPACE random_ks WITH'
                     f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
 
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_table_object_storage_no_deadlock(manager: ManagerClient, object_storage):
+    """
+    Verify DROP TABLE on an object-storage-backed keyspace does not deadlock
+    and that the on_before_drop_column_family listener atomically removes
+    sstables registry entries via a partition tombstone in the group0 command.
+
+    Without the listener, wipe() during schema merge would either deadlock
+    (trying to acquire the group0 operation mutex already held by the DROP
+    TABLE caller) or, with the in_group0_drop_schema_trx safety flag, silently
+    skip per-SSTable registry cleanup — leaking registry entries.
+
+    Part 1 enables an error injection that skips the tombstone, proving
+    that registry entries leak when the listener is bypassed.
+
+    Part 2 runs without the injection, proving that the listener correctly
+    cleans up registry entries and that DROP TABLE completes without deadlock.
+
+    Reproduces SCYLLADB-1004.
+    """
+    cfg = {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+        'experimental_features': ['keyspace-storage-options'],
+    }
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        # injection skips the tombstone — registry entries leak
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int)")
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        tid = await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't1'")
+        table_id = tid[0].id
+
+        # Verify registry entries exist before DROP
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Expected registry entries before DROP TABLE"
+
+        await manager.api.enable_injection(
+            server.ip_addr, "skip_sstables_registry_drop_tombstone", one_shot=False)
+
+        await asyncio.wait_for(
+            cql.run_async(f"DROP TABLE {ks}.t1"),
+            timeout=10)
+
+        # Without the tombstone, registry entries should still exist (leaked)
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Registry entries should leak when tombstone is skipped"
+
+        await manager.api.disable_injection(
+            server.ip_addr, "skip_sstables_registry_drop_tombstone")
+
+        # no injection — tombstone cleans up registry entries
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, v int)")
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.t2 (pk, v) VALUES ({i}, {i})")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        tid = await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't2'")
+        table_id = tid[0].id
+
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Expected registry entries before DROP TABLE"
+
+        await asyncio.wait_for(
+            cql.run_async(f"DROP TABLE {ks}.t2"),
+            timeout=10)
+
+        # With the tombstone, registry entries should be cleaned up
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) == 0, f"Registry entries should be cleaned up after DROP TABLE, found {len(rows)}"
