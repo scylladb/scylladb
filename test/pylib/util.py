@@ -64,11 +64,25 @@ async def wait_for(
     tag = label or getattr(pred, '__name__', 'unlabeled')
     start = time.time()
     retries = 0
+    last_exception: Exception | None = None
     while True:
         elapsed = time.time() - start
-        assert time.time() < deadline, \
-            f"wait_for({tag}) timed out after {elapsed:.2f}s ({retries} retries)"
-        res = await pred()
+        if time.time() >= deadline:
+            timeout_msg = f"wait_for({tag}) timed out after {elapsed:.2f}s ({retries} retries)"
+            if last_exception is not None:
+                timeout_msg += (
+                    f"; last exception: {type(last_exception).__name__}: {last_exception}"
+                )
+                raise AssertionError(timeout_msg) from last_exception
+            raise AssertionError(timeout_msg)
+
+        try:
+            res = await pred()
+            last_exception = None
+        except Exception as exc:
+            res = None
+            last_exception = exc
+
         if res is not None:
             if retries > 0:
                 logger.debug(f"wait_for({tag}) completed "
