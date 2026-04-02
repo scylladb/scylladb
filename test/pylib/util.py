@@ -55,11 +55,57 @@ def unique_name(unique_name_prefix = 'test_'):
 async def wait_for(
         pred: Callable[[], Awaitable[Optional[T]]],
         deadline: float,
+<<<<<<< HEAD
         period: float = 1,
         before_retry: Optional[Callable[[], Any]] = None) -> T:
+||||||| parent of 74542be5aa (test: pylib: Ignore exceptions in wait_for())
+        period: float = 0.1,
+        before_retry: Optional[Callable[[], Any]] = None,
+        backoff_factor: float = 1.5,
+        max_period: float = 1.0,
+        label: Optional[str] = None) -> T:
+    tag = label or getattr(pred, '__name__', 'unlabeled')
+    start = time.time()
+    retries = 0
+=======
+        period: float = 0.1,
+        before_retry: Optional[Callable[[], Any]] = None,
+        backoff_factor: float = 1.5,
+        max_period: float = 1.0,
+        label: Optional[str] = None) -> T:
+    tag = label or getattr(pred, '__name__', 'unlabeled')
+    start = time.time()
+    retries = 0
+    last_exception: Exception | None = None
+>>>>>>> 74542be5aa (test: pylib: Ignore exceptions in wait_for())
     while True:
+<<<<<<< HEAD
         assert(time.time() < deadline), "Deadline exceeded, failing test."
         res = await pred()
+||||||| parent of 74542be5aa (test: pylib: Ignore exceptions in wait_for())
+        elapsed = time.time() - start
+        assert time.time() < deadline, \
+            f"wait_for({tag}) timed out after {elapsed:.2f}s ({retries} retries)"
+        res = await pred()
+=======
+        elapsed = time.time() - start
+        if time.time() >= deadline:
+            timeout_msg = f"wait_for({tag}) timed out after {elapsed:.2f}s ({retries} retries)"
+            if last_exception is not None:
+                timeout_msg += (
+                    f"; last exception: {type(last_exception).__name__}: {last_exception}"
+                )
+                raise AssertionError(timeout_msg) from last_exception
+            raise AssertionError(timeout_msg)
+
+        try:
+            res = await pred()
+            last_exception = None
+        except Exception as exc:
+            res = None
+            last_exception = exc
+
+>>>>>>> 74542be5aa (test: pylib: Ignore exceptions in wait_for())
         if res is not None:
             return res
         await asyncio.sleep(period)
