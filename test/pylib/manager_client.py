@@ -799,9 +799,12 @@ class ManagerClient:
             return
         server_ip = await self.get_host_ip(server_id)
         async def _sees_min_others():
-            alive_nodes = await self.api.get_alive_endpoints(server_ip)
-            if len(alive_nodes) > count:
-                return True
+            try:
+                alive_nodes = await self.api.get_alive_endpoints(server_ip)
+                if len(alive_nodes) > count:
+                    return True
+            except Exception:
+                return None
         await wait_for(_sees_min_others, time() + interval, period=.5)
 
     async def server_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
