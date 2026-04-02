@@ -1,4 +1,4 @@
-type: Approval
+type: Python
 extra_scylla_cmdline_options:
   # required for cdc_compact_storage_test.cql
   - '--enable-create-table-with-compact-storage=true'
