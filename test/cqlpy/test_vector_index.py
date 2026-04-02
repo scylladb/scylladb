@@ -866,3 +866,31 @@ def test_ann_query_with_pk_restriction(cql, test_keyspace, skip_without_tablets)
     schema = 'p int primary key, q int, v vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+
+# Test that vector index creation is rejected when the primary key has
+# more than 255 columns, which is the limit of the vector-store InvariantKey
+# (VECTOR-553).
+def test_create_vector_index_rejects_too_many_partition_key_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
+    pk_cols = ', '.join([f'p{i} int' for i in range(256)])
+    pk_names = ', '.join([f'p{i}' for i in range(256)])
+    schema = f'{pk_cols}, v vector<float, 3>, PRIMARY KEY (({pk_names}))'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="Vector index requires at most 255 primary key columns"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+
+def test_create_vector_index_rejects_too_many_pk_and_ck_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
+    pk_cols = ', '.join([f'p{i} int' for i in range(128)])
+    pk_names = ', '.join([f'p{i}' for i in range(128)])
+    ck_cols = ', '.join([f'c{i} int' for i in range(128)])
+    ck_names = ', '.join([f'c{i}' for i in range(128)])
+    schema = f'{pk_cols}, {ck_cols}, v vector<float, 3>, PRIMARY KEY (({pk_names}), {ck_names})'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="Vector index requires at most 255 primary key columns"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+
+def test_create_vector_index_accepts_255_key_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
+    pk_cols = ', '.join([f'p{i} int' for i in range(255)])
+    pk_names = ', '.join([f'p{i}' for i in range(255)])
+    schema = f'{pk_cols}, v vector<float, 3>, PRIMARY KEY (({pk_names}))'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")

@@ -46,6 +46,7 @@ public:
 private:
     void check_cdc_not_explicitly_disabled(const schema& schema) const;
     void check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const;
+    void check_key_column_count(const schema& schema) const;
     void check_index_options(const cql3::statements::index_specific_prop_defs& properties) const;
 };
 
