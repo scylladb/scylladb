@@ -3764,7 +3764,32 @@ future<> repair_service::load_history() {
 
         rlogger.info("Loading repair history for keyspace={}, table={}, table_uuid={}",
                 table->schema()->ks_name(), table->schema()->cf_name(), table_uuid);
-        co_await _sys_ks.local().get_repair_history(table_uuid, [this] (const auto& entry) -> future<> {
+
+        // Collect entries into batches and flush each batch via a single
+        // copy-on-write update, avoiding O(N²) complexity when there are many
+        // repair history entries (SCYLLADB-104).  The batch size is bounded to
+        // limit peak memory usage: the repair history table currently has no
+        // bound on the number of entries and can grow large.
+        static constexpr size_t max_batch_size = 1000;
+        std::vector<shared_tombstone_gc_state::repair_time_update> updates;
+        updates.reserve(max_batch_size);
+
+        auto flush = [&] () -> future<> {
+            if (updates.empty()) {
+                co_return;
+            }
+            try {
+                co_await get_db().invoke_on_all([table_uuid, &updates] (replica::database& local_db) {
+                    auto& gc_state = local_db.get_compaction_manager().get_shared_tombstone_gc_state();
+                    gc_state.batch_update_repair_time(table_uuid, updates);
+                });
+            } catch (...) {
+                rlogger.warn("Failed to update repair history time for table_uuid={}: {}", table_uuid, std::current_exception());
+            }
+            updates.clear();
+        };
+
+        co_await _sys_ks.local().get_repair_history(table_uuid, [this, &updates, &flush] (const auto& entry) -> future<> {
             get_repair_module().check_in_shutdown();
             auto start = entry.range_start == std::numeric_limits<int64_t>::min() ? dht::minimum_token() : dht::token::from_int64(entry.range_start);
             auto end = entry.range_end == std::numeric_limits<int64_t>::min() ? dht::maximum_token() : dht::token::from_int64(entry.range_end);
@@ -3772,16 +3797,13 @@ future<> repair_service::load_history() {
             auto repair_time = to_gc_clock(entry.ts);
             rlogger.debug("Loading repair history for keyspace={}, table={}, table_uuid={}, repair_time={}, range={}",
                     entry.ks, entry.cf, entry.table_uuid, entry.ts, range);
-            try {
-                co_await get_db().invoke_on_all([table_uuid = entry.table_uuid, range, repair_time] (replica::database& local_db) {
-                    auto& gc_state = local_db.get_compaction_manager().get_shared_tombstone_gc_state();
-                    gc_state.update_repair_time(table_uuid, range, repair_time);
-                });
-            } catch (...) {
-                rlogger.warn("Failed to update repair history time for keyspace={}, table={}, range={}, repair_time={}",
-                        entry.ks, entry.cf, range, repair_time);
+            updates.emplace_back(range, repair_time);
+            if (updates.size() >= max_batch_size) {
+                co_await flush();
             }
         });
+
+        co_await flush();
     }));
   } catch (const abort_requested_exception&) {
     // Ignore

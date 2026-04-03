@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <span>
 #include <seastar/core/shared_ptr.hh>
 #include "gc_clock.hh"
 #include "dht/token.hh"
@@ -108,6 +109,14 @@ public:
     }
 
     void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
+
+    // A single (range, repair_time) pair used by batch_update_repair_time.
+    using repair_time_update = std::pair<dht::token_range, gc_clock::time_point>;
+
+    // Apply multiple repair-time updates for one table in a single copy-on-write
+    // operation, avoiding the O(N²) cost of calling update_repair_time() in a loop.
+    void batch_update_repair_time(table_id id, std::span<const repair_time_update> updates);
+
     void update_group0_refresh_time(gc_clock::time_point refresh_time);
 
     void drop_repair_history_for_table(const table_id& id);

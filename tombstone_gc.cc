@@ -241,6 +241,24 @@ void shared_tombstone_gc_state::update_repair_time(table_id id, const dht::token
     });
 }
 
+void shared_tombstone_gc_state::batch_update_repair_time(table_id id, std::span<const repair_time_update> updates) {
+    if (updates.empty()) {
+        return;
+    }
+    mutate_repair_history([id, updates] (per_table_history_maps& maps) {
+        auto [it, inserted] = maps.try_emplace(id, lw_shared_ptr<repair_history_map>(nullptr));
+        if (inserted || !it->second) {
+            it->second = seastar::make_lw_shared<repair_history_map>();
+        } else {
+            // Single COW copy of the per-table interval map for all updates.
+            it->second = seastar::make_lw_shared<repair_history_map>(*it->second);
+        }
+        for (const auto& [range, repair_time] : updates) {
+            *it->second += std::make_pair(locator::token_metadata::range_to_interval(range), repair_time);
+        }
+    });
+}
+
 void shared_tombstone_gc_state::insert_pending_repair_time_update(table_id id,
         const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard) {
     _pending_updates[id].push_back(range_repair_time{range, repair_time, shard});
