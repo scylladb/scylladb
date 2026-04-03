@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "utils/rjson.hh"
+#include "bytes_ostream.hh"
 #include "cql3/expr/expression.hh"
 
 namespace cql3 {
@@ -24,34 +24,31 @@ class statement_restrictions;
 
 namespace vector_search {
 
-struct prepared_rhs {
+/// Metadata for a bind marker in the cached JSON template.
+/// Contains the type and expression needed to evaluate the bind marker at execution time.
+struct bind_marker_metadata {
     data_type type;
     cql3::expr::expression expr;
 };
 
-struct prepared_restriction {
-    rjson::value type_json;
-    rjson::value lhs_json;
-    std::variant<rjson::value, prepared_rhs> rhs;
-
-    rjson::value rhs_to_json(const cql3::query_options& options) const;
-};
+/// A cache entry is either a literal JSON string or a bind marker to be substituted.
+using filter_cache_entry = std::variant<sstring, bind_marker_metadata>;
 
 class prepared_filter {
-    std::vector<prepared_restriction> _restrictions;
-    bool _allow_filtering;
-    // Cached JSON representation for filters without bind markers.
-    std::optional<rjson::value> _cached_json;
-
 public:
-    prepared_filter(std::vector<prepared_restriction> restrictions, bool allow_filtering, std::optional<rjson::value> cached_json = std::nullopt)
-        : _restrictions(std::move(restrictions))
-        , _allow_filtering(allow_filtering)
-        , _cached_json(std::move(cached_json)) {
+    using cache = std::vector<filter_cache_entry>;
+
+    explicit prepared_filter(cache cache)
+        : _cache(std::move(cache)) {
     }
 
-    /// Serializes the prepared filter to JSON compatible with the Vector Store service filtering API.
-    rjson::value to_json(const cql3::query_options& options) const;
+    /// Serializes the prepared filter to a JSON buffer compatible with the Vector Store service filtering API.
+    /// Bind marker placeholders in the cached template are substituted with actual values from `query_options`.
+    /// Returns a bytes_ostream that can be efficiently consumed without materialization.
+    bytes_ostream to_json(const cql3::query_options& options) const;
+
+private:
+    cache _cache;
 };
 
 /// Prepares a filter from CQL statement restrictions for use in Vector Store service.
