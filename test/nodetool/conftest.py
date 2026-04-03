@@ -40,33 +40,7 @@ class ServerAddress(NamedTuple):
     port: int
 
 
-@pytest.fixture(scope=testpy_test_fixture_scope)
-async def server_address(request, testpy_test: None|Test):
-    # unshare(1) -rn drops us in a new network namespace in which the "lo" is
-    # not up yet, so let's set it up first.
-    if request.config.getoption('--run-within-unshare', default=False):
-        try:
-            args = "ip link set lo up".split()
-            subprocess.run(args, check=True)
-        except FileNotFoundError:
-            args = "/sbin/ifconfig lo up".split()
-            subprocess.run(args, check=True)
-        # we use a fixed ip and port, because the network namespace is not shared
-        ip = '127.0.0.1'
-        port = 12345
-    else:
-        if testpy_test is not None:
-            ip = await testpy_test.suite.hosts.lease_host()
-        else:
-            ip = f"127.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
-        port = random.randint(10000, 65535)
-    yield ServerAddress(ip, port)
-    if testpy_test is not None:
-        await testpy_test.suite.hosts.release_host(ip)
-
-
-@pytest.fixture(scope=testpy_test_fixture_scope)
-def rest_api_mock_server(request, server_address):
+def _start_rest_api_mock(server_address):
     server_process = subprocess.Popen([sys.executable,
                                        os.path.join(os.path.dirname(__file__), "rest_api_mock.py"),
                                        server_address.ip,
@@ -94,12 +68,38 @@ def rest_api_mock_server(request, server_address):
         server_process.terminate()
         server_process.wait()
         raise subprocess.TimeoutExpired(server_process.args, timeout)
+    return server_address, server_process
 
+
+@pytest.fixture(scope=testpy_test_fixture_scope)
+async def rest_api_mock_server(request, testpy_test: None|Test):
+    # unshare(1) -rn drops us in a new network namespace in which the "lo" is
+    # not up yet, so let's set it up first.
+    if request.config.getoption('--run-within-unshare', default=False):
+        try:
+            args = "ip link set lo up".split()
+            subprocess.run(args, check=True)
+        except FileNotFoundError:
+            args = "/sbin/ifconfig lo up".split()
+            subprocess.run(args, check=True)
+        # we use a fixed ip and port, because the network namespace is not shared
+        ip = '127.0.0.1'
+        port = 12345
+    else:
+        if testpy_test is not None:
+            ip = await testpy_test.suite.hosts.lease_host()
+        else:
+            ip = f"127.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
+        port = random.randint(10000, 65535)
+    server_address = ServerAddress(ip, port)
+    server_address, server_process = _start_rest_api_mock(server_address)
     try:
         yield server_address
     finally:
         server_process.terminate()
         server_process.wait()
+        if testpy_test is not None:
+            await testpy_test.suite.hosts.release_host(ip)
 
 
 @pytest.fixture(scope=testpy_test_fixture_scope)
