@@ -2644,7 +2644,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
                 return rd;
             };
 
-            populate_range(cache, population_range);
+            {
+                memory::scoped_critical_alloc_section dfg;
+                populate_range(cache, population_range);
+            }
             auto rd1_v1 = assert_that(make_reader(population_range));
             mutation_reader_opt snap;
             auto close_snap = defer([&snap] {
