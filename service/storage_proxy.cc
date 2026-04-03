@@ -45,6 +45,7 @@
 #include <boost/intrusive/list.hpp>
 #include <boost/outcome/result.hpp>
 #include "utils/assert.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/latency.hh"
 #include "schema/schema.hh"
 #include "query_ranges_to_vnodes.hh"
@@ -5152,7 +5153,7 @@ private:
             _max_per_partition_live_count = reconciled_live_rows;
         }
     }
-    void find_short_partitions(const std::vector<mutation_and_live_row_count>& rp, const std::vector<std::vector<version>>& versions,
+    void find_short_partitions(const std::vector<mutation_and_live_row_count>& rp, const utils::chunked_vector<std::vector<version>>& versions,
                                uint64_t per_partition_limit, uint64_t row_limit, uint32_t partition_limit) {
         // Go through the partitions that weren't limited by the total row limit
         // and check whether we got enough rows to satisfy per-partition row
@@ -5181,7 +5182,7 @@ private:
     // the query.
     // versions is a table where rows are partitions in descending order and the columns identify the partition
     // sent by a particular replica.
-    static primary_key get_last_row(const schema& s, bool is_reversed, const std::vector<std::vector<version>>& versions, uint32_t replica) {
+    static primary_key get_last_row(const schema& s, bool is_reversed, const utils::chunked_vector<std::vector<version>>& versions, uint32_t replica) {
         const partition* last_partition = nullptr;
         // Versions are in the reversed order.
         for (auto&& pv : versions) {
@@ -5237,7 +5238,7 @@ private:
 
     bool got_incomplete_information_across_partitions(const schema& s, const query::read_command& cmd,
                                                       const primary_key& last_reconciled_row, std::vector<mutation_and_live_row_count>& rp,
-                                                      const std::vector<std::vector<version>>& versions, bool is_reversed) {
+                                                      const utils::chunked_vector<std::vector<version>>& versions, bool is_reversed) {
         bool short_reads_allowed = cmd.slice.options.contains<query::partition_slice::option::allow_short_read>();
         bool always_return_static_content = cmd.slice.options.contains<query::partition_slice::option::always_return_static_content>();
         primary_key::less_compare cmp(s, is_reversed);
@@ -5295,7 +5296,7 @@ private:
     }
 
     bool got_incomplete_information(const schema& s, const query::read_command& cmd, uint64_t original_row_limit, uint64_t original_per_partition_limit,
-                            uint64_t original_partition_limit, std::vector<mutation_and_live_row_count>& rp, const std::vector<std::vector<version>>& versions) {
+                            uint64_t original_partition_limit, std::vector<mutation_and_live_row_count>& rp, const utils::chunked_vector<std::vector<version>>& versions) {
         // We need to check whether the reconciled result contains all information from all available
         // replicas. It is possible that some of the nodes have returned less rows (because the limit
         // was set and they had some tombstones missing) than the others. In such cases we cannot just
@@ -5410,7 +5411,12 @@ public:
         };
 
         // this array will have an entry for each partition which will hold all available versions
-        std::vector<std::vector<version>> versions;
+        // Use chunked_vector to avoid a single large contiguous reallocation: when partitions are
+        // small (e.g. Alternator items), a 1 MB page can carry thousands of partitions.  A plain
+        // std::vector would double its buffer on overflow, easily producing a >128 KB allocation
+        // (the seastar large-allocation warning threshold).  chunked_vector caps each individual
+        // allocation at 128 KB regardless of the total number of partitions or replica divergence.
+        utils::chunked_vector<std::vector<version>> versions;
         versions.reserve(_data_results.front().result->partitions().size());
 
         for (auto& r : _data_results) {
