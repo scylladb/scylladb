@@ -54,9 +54,11 @@ def _start_rest_api_mock(server_address):
             # process terminated
             raise subprocess.CalledProcessError(returncode, server_process.args)
         try:
-            get_expected_requests(server_address)
+            get_expected_requests(server_address, timeout=interval)
             break
         except requests.exceptions.ConnectionError:
+            time.sleep(interval)
+        except requests.exceptions.ReadTimeout:
             time.sleep(interval)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:

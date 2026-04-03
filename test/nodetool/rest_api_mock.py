@@ -271,7 +271,7 @@ async def run_server(ip, port):
     await runner.cleanup()
 
 
-def get_expected_requests(server):
+def get_expected_requests(server, timeout=None):
     """Get the expected requests list from the server.
 
     This will contain all the unconsumed expected request currently on the
@@ -281,7 +281,7 @@ def get_expected_requests(server):
     * server - resolved `rest_api_mock_server` fixture (see conftest.py).
     """
     ip, port = server
-    r = requests.get(f"http://{ip}:{port}/{rest_server.EXPECTED_REQUESTS_PATH}")
+    r = requests.get(f"http://{ip}:{port}/{rest_server.EXPECTED_REQUESTS_PATH}", timeout=timeout)
     r.raise_for_status()
     try:
         return [_make_expected_request(r) for r in r.json()]
