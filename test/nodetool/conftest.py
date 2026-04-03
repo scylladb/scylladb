@@ -94,7 +94,15 @@ async def rest_api_mock_server(request, testpy_test: None|Test):
             ip = f"127.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
         port = random.randint(10000, 65535)
     server_address = ServerAddress(ip, port)
-    server_address, server_process = _start_rest_api_mock(server_address)
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            server_address, server_process = _start_rest_api_mock(server_address)
+            break
+        except subprocess.CalledProcessError:
+            if time.monotonic() > deadline:
+                raise
+            server_address = ServerAddress(ip, random.randint(10000, 65535))
     try:
         yield server_address
     finally:
