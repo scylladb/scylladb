@@ -204,6 +204,20 @@ public:
     }
 };
 
+// Returns a human-readable name for the given rjson type.
+inline std::string_view type_name(rjson::type t) {
+    switch (t) {
+    case rapidjson::kNullType: return "kNullType";
+    case rapidjson::kFalseType: return "kFalseType";
+    case rapidjson::kTrueType: return "kTrueType";
+    case rapidjson::kObjectType: return "kObjectType";
+    case rapidjson::kArrayType: return "kArrayType";
+    case rapidjson::kStringType: return "kStringType";
+    case rapidjson::kNumberType: return "kNumberType";
+    }
+    throw std::runtime_error("unknown rjson type provided");
+}
+
 // Parses a JSON value from given string or raw character array.
 // The string/char array liveness does not need to be persisted,
 // as parse() will allocate member names and values.
@@ -233,10 +247,13 @@ rjson::value parse_yieldable(chunked_content&&, size_t max_nested_level = defaul
 rjson::value from_string(const char* str, size_t size);
 rjson::value from_string(std::string_view view);
 
-// Returns a string_view to the string held in a JSON value (which is
-// assumed to hold a string, i.e., v.IsString() == true). This is a view
-// to the existing data - no copying is done.
+// Returns a string_view to the string held in a JSON value.
+// Throws if the value does not hold a string.
+// This is a view to the existing data - no copying is done.
 inline std::string_view to_string_view(const rjson::value& v) {
+    if (!v.IsString()) {
+        throw std::runtime_error(fmt::format("rjson::to_string_view expects a string value, got: {}", type_name(v.GetType())));
+    }
     return std::string_view(v.GetString(), v.GetStringLength());
 }
 
@@ -248,17 +265,29 @@ inline std::string_view to_string_view(const rjson::value& v) {
 // for string conversion because it needs to scan the string
 // unnecessarily and GetStringLength could be used to avoid that.
 inline sstring to_sstring(const rjson::value& str) {
+    if (!str.IsString()) {
+        throw std::runtime_error(fmt::format("rjson::to_sstring expects a string value, got: {}", type_name(str.GetType())));
+    }
     return sstring(str.GetString(), str.GetStringLength());
 }
 inline std::string to_string(const rjson::value& str) {
+    if (!str.IsString()) {
+        throw std::runtime_error(fmt::format("rjson::to_string expects a string value, got: {}", type_name(str.GetType())));
+    }
     return std::string(str.GetString(), str.GetStringLength());
 }
 // Helper for conversion to dht::token
 inline dht::token to_token(const rjson::value& v) {
+    if (!v.IsInt64()) {
+        throw std::runtime_error(fmt::format("rjson::to_token expects a 64-bit signed integer value, got: {}", type_name(v.GetType())));
+    }
     return dht::token::from_int64(v.GetInt64());
 }
 // Helper for conversion to sstables::sstable_id
 inline sstables::sstable_id to_sstable_id(const rjson::value& v) {
+    if (!v.IsString()) {
+        throw std::runtime_error(fmt::format("rjson::to_sstable_id expects a string value, got: {}", type_name(v.GetType())));
+    }
     return sstables::sstable_id(utils::UUID(rjson::to_string_view(v)));
 }
 // Returns a pointer to JSON member if it exists, nullptr otherwise
