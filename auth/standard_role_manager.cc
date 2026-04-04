@@ -141,8 +141,8 @@ future<> standard_role_manager::maybe_create_default_role_with_retries() {
             log.error("Failed to create default superuser role due to guard conflict.");
             co_return;
         } catch (const ::service::raft_operation_timeout_error& ex) {
-            log.error("Failed to create default superuser role due to exception: {}", ex.what());
-            co_return;
+            log.warn("Failed to create default superuser role due to raft timeout, will retry: {}", ex.what());
+            throw;
         }
     }
 }
