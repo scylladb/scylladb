@@ -76,6 +76,7 @@
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
+using custom_payload_t = std::unordered_map<sstring, bytes>;
 
 namespace cql_transport {
 
@@ -921,7 +922,7 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
     }
 }
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit) {
+    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit, uint8_t flags) {
     using auth_state = service::client_state::auth_state;
 
     auto cqlop = static_cast<cql_binary_opcode>(op);
@@ -947,7 +948,47 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
-    return futurize_invoke([this, cqlop, stream, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state] () mutable {
+
+    std::optional<custom_payload_t> custom_payload;
+        if ((flags & cql_frame_flags::custom_payload) && _version >= 4 && client_state.get_protocol_extensions().contains(
+               cql_protocol_extension::EXTENDED_CONSISTENCY)) {
+            if (cqlop == cql_binary_opcode::QUERY   ||
+                cqlop == cql_binary_opcode::EXECUTE ||
+                cqlop == cql_binary_opcode::PREPARE ||
+                cqlop == cql_binary_opcode::BATCH) {
+                custom_payload_t payload;
+
+                auto n_res = fbuf.read<uint16_t>();
+                if (!n_res) { std::rethrow_exception(n_res.assume_error()); }
+                uint16_t n = seastar::net::ntoh(n_res.assume_value());
+
+                for (uint16_t i = 0; i < n; ++i) {
+                    auto klen_res = fbuf.read<uint16_t>();
+                    if (!klen_res) { std::rethrow_exception(klen_res.assume_error()); }
+                    uint16_t klen = seastar::net::ntoh(klen_res.assume_value());
+
+                    auto kview_res = fbuf.read_bytes_view(klen, *linearization_buffer_ptr);
+                    if (!kview_res) { std::rethrow_exception(kview_res.assume_error()); }
+                    sstring key(reinterpret_cast<const char*>(kview_res.assume_value().data()), klen);
+
+                    auto vlen_res = fbuf.read<int32_t>();
+                    if (!vlen_res) { std::rethrow_exception(vlen_res.assume_error()); }
+                    int32_t vlen = seastar::net::ntoh(vlen_res.assume_value());
+
+                    bytes val;
+                    if (vlen >= 0) {
+                        auto vview_res = fbuf.read_bytes_view(static_cast<size_t>(vlen), *linearization_buffer_ptr);
+                        if (!vview_res) { std::rethrow_exception(vview_res.assume_error()); }
+                        auto vview = vview_res.assume_value();
+                        val = bytes(vview.data(), vview.size());
+                    }
+                    payload.emplace(std::move(key), std::move(val));
+                }
+                custom_payload = std::move(payload);
+            }
+    }
+
+    return futurize_invoke([this, cqlop, stream, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state, custom_payload = std::move(custom_payload)] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
@@ -1226,7 +1267,7 @@ future<> cql_server::connection::process_request() {
               return make_ready_future<>();
           }
           semaphore_units<> mem_permit = mem_permit_fut.get();
-          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit))] (fragmented_temporary_buffer buf) mutable {
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, flags, mem_permit = make_service_permit(std::move(mem_permit))] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._stats.requests_served;
             ++_server._stats.requests_serving;
@@ -1248,8 +1289,8 @@ future<> cql_server::connection::process_request() {
                     op == uint8_t(cql_binary_opcode::BATCH));
 
             future<foreign_ptr<std::unique_ptr<cql_server::response>>> request_process_future = should_paralelize ?
-                    _process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit) :
-                    process_request_one(istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit);
+                    _process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit, flags) :
+                    process_request_one(istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit, flags);
 
             future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave), stream] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
                 try {

@@ -303,7 +303,8 @@ private:
                 uint16_t,
                 service::client_state&,
                 tracing_request_type,
-                service_permit>;
+                service_permit,
+                uint8_t>;
         static thread_local execution_stage_type _process_request_stage;
     public:
         connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units);
@@ -318,7 +319,7 @@ private:
     private:
         friend class process_request_executor;
 
-        future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit, uint8_t flags);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
         utils::result_with_exception<cql_binary_frame_v3, exceptions::protocol_exception, class cql_frame_error> parse_frame(temporary_buffer<char> buf) const;
