@@ -24,6 +24,7 @@ try:
     setup.developerMode()
     setup.cpuSet()
     setup.io()
+    setup.coredumpSetup()
     setup.cqlshrc()
     setup.write_rackdc_properties()
     setup.arguments()

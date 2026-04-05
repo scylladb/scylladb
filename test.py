@@ -433,7 +433,7 @@ async def process_coverage(options):
     logger.debug(f"Binary ids map is: {files_to_ids_map}")
     logger.info("Done getting binary ids for coverage conversion")
     # get the suits that have actually been ran
-    suits_to_exclude = ["pylib_test", "nodetool"]
+    suits_to_exclude = ["pylib_test", "dist_test", "nodetool"]
     sources_to_exclude = [line for line in open("coverage_excludes.txt", 'r').read().split('\n') if line and not line.startswith('#')]
     ran_suites = list({test.suite for test in TestSuite.all_tests() if test.suite.need_coverage()})
 

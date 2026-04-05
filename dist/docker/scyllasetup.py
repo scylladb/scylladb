@@ -3,6 +3,7 @@ import logging
 import yaml
 import os
 import socket
+import errno
 
 def is_bind_mount(path):
     # Check if the file or its parent is a mount point (bind mount or otherwise)
@@ -47,6 +48,7 @@ class ScyllaSetup:
         self._dc = arguments.dc
         self._rack = arguments.rack
         self._blocked_reactor_notify_ms = arguments.blocked_reactor_notify_ms
+        self._coredump_dir = None
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -131,6 +133,70 @@ class ScyllaSetup:
         with open(rackdc_path, "w") as f:
             f.write(f"dc={dc}\n")
             f.write(f"rack={rack}\n")
+
+    CORE_PATTERN_PATH = '/proc/sys/kernel/core_pattern'
+
+    def _get_coredump_dir(self):
+        """Return the coredump directory, deriving it from scylla.yaml workdir if needed."""
+        if self._coredump_dir is not None:
+            return self._coredump_dir
+        conf_dir = "/etc/scylla"
+        try:
+            with open(os.path.join(conf_dir, "scylla.yaml")) as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception:
+            cfg = {}
+        workdir = cfg.get('workdir') or '/var/lib/scylla'
+        self._coredump_dir = os.path.join(workdir, 'coredump')
+        return self._coredump_dir
+
+    def coredumpSetup(self):
+        """Configure coredump handling for containers.
+
+        The host's kernel.core_pattern may pipe core dumps to a handler
+        (e.g. Ubuntu's apport) that does not exist or work correctly
+        inside the container.  This method tries to switch to a file-based
+        core_pattern so that coredumps are written directly to disk.
+
+        Writing to /proc/sys/kernel/core_pattern requires privileges
+        (root with CAP_SYS_ADMIN).  When the container lacks permission
+        a warning is logged with guidance for the operator.
+        """
+        coredump_dir = self._get_coredump_dir()
+
+        try:
+            os.makedirs(coredump_dir, exist_ok=True)
+        except OSError as e:
+            logging.warning('Could not create coredump directory %s: %s',
+                            coredump_dir, e)
+            return
+
+        try:
+            with open(self.CORE_PATTERN_PATH) as f:
+                current = f.read().strip()
+        except Exception as e:
+            logging.debug('Could not read %s: %s', self.CORE_PATTERN_PATH, e)
+            return
+
+        if not current.startswith('|'):
+            return
+
+        desired = f'{coredump_dir}/core.%e.%p.%t'
+        try:
+            with open(self.CORE_PATTERN_PATH, 'w') as f:
+                f.write(desired + '\n')
+            logging.info('kernel.core_pattern set to %s', desired)
+        except OSError as e:
+            if e.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+                logging.warning(
+                    'kernel.core_pattern pipes to a program that may not work '
+                    'inside the container, and we lack permission to override it. '
+                    'To fix this, either run with --privileged or set on the host: '
+                    'sysctl -w kernel.core_pattern="%s"', desired)
+            else:
+                logging.debug('Unexpected OSError setting core_pattern: %s', e)
+        except Exception as e:
+            logging.debug('Unexpected error in coredumpSetup: %s', e)
 
     def arguments(self):
         args = []
