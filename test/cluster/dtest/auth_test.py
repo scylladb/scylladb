@@ -1182,9 +1182,9 @@ class TestAuth(Tester):
     def get_session(self, node_idx=0, user=None, password=None, exclusive=True):
         node = self.cluster.nodelist()[node_idx]
         if exclusive:
-            conn = self.patient_exclusive_cql_connection(node, user=user, password=password, timeout=0.1)
+            conn = self.patient_exclusive_cql_connection(node, user=user, password=password)
         else:
-            conn = self.patient_cql_connection(node, user=user, password=password, timeout=0.1)
+            conn = self.patient_cql_connection(node, user=user, password=password)
         return conn
 
     def assert_permissions_listed(self, expected, session, query, include_superuser=False):
