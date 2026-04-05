@@ -8,7 +8,7 @@ from cassandra.protocol import InvalidRequest
 from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import get_topology_coordinator, new_test_keyspace
+from test.cluster.util import get_topology_coordinator, new_test_keyspace, make_cfg, make_ks_opts
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 import time
@@ -19,12 +19,12 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_migration(manager: ManagerClient):
+async def test_truncate_while_migration(manager: ManagerClient, tablet_storage):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
-            'error_injections_at_startup': ['migration_streaming_wait']
-            }
+    cfg = make_cfg(tablet_storage, extra={
+        'error_injections_at_startup': ['migration_streaming_wait']
+    })
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -32,7 +32,7 @@ async def test_truncate_while_migration(manager: ManagerClient):
     cql = manager.get_cql()
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
 
         keys = range(1024)
@@ -212,12 +212,12 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
+async def test_truncate_while_truncate_already_waiting(manager: ManagerClient, tablet_storage):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
-            'error_injections_at_startup': ['migration_streaming_wait']
-            }
+    cfg = make_cfg(tablet_storage, extra={
+        'error_injections_at_startup': ['migration_streaming_wait']
+    })
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -225,7 +225,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
     cql = manager.get_cql()
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
 
         keys = range(1024)
@@ -294,12 +294,12 @@ async def test_replay_position_check_during_truncate(manager):
         await truncate_task
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_parallel_truncate(manager: ManagerClient):
+async def test_parallel_truncate(manager: ManagerClient, tablet_storage):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
-            'error_injections_at_startup': ['migration_streaming_wait']
-            }
+    cfg = make_cfg(tablet_storage, extra={
+        'error_injections_at_startup': ['migration_streaming_wait']
+    })
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -307,7 +307,7 @@ async def test_parallel_truncate(manager: ManagerClient):
     cql = manager.get_cql()
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
         await cql.run_async(f'CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, c int);')
 
