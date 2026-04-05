@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import ssl
 import tempfile
 import platform
@@ -377,6 +378,54 @@ async def key_provider(request, tmpdir, scylla_binary):
     """Encryption providers fixture"""
     async with make_key_provider_factory(request.param, tmpdir, scylla_binary) as res:
         yield res
+
+
+@pytest.fixture(params=[None, 's3', 'gs'], ids=['local', 's3', 'gs'])
+async def tablet_storage(request, tmpdir):
+    """Parametrize tablet tests over local / S3 / GCS storage.
+
+    When tablet_storage is None the test runs with local (filesystem) storage.
+    Otherwise the fixture yields an object-storage server handle.  For S3 we
+    reuse the MinIO instance that test.py starts globally (its coordinates are
+    published through environment variables).  For GCS we start a local
+    fake-gcs-server container per test.
+    """
+    if request.param is None:
+        yield None
+        return
+
+    if request.param == 's3':
+        from test.pylib.minio_server import MinioServer
+        from test.cluster.object_store.conftest import S3_Server, MinioWrapper
+
+        address = os.environ.get(MinioServer.ENV_ADDRESS)
+        port = os.environ.get(MinioServer.ENV_PORT)
+
+        if address and port:
+            server = S3_Server(
+                tmpdir.strpath,
+                address,
+                int(port),
+                os.environ.get(MinioServer.ENV_ACCESS_KEY),
+                os.environ.get(MinioServer.ENV_SECRET_KEY),
+                MinioServer.DEFAULT_REGION,
+                os.environ.get(MinioServer.ENV_BUCKET))
+        else:
+            server = MinioWrapper(tmpdir.strpath)
+    else:
+        from test.cluster.object_store.conftest import GSServer
+        server = GSServer(tmpdir.strpath)
+
+    await server.start()
+    bucket_created = False
+    try:
+        server.create_test_bucket(request.node.name)
+        bucket_created = True
+        yield server
+    finally:
+        if bucket_created:
+            server.destroy_test_bucket()
+        await server.stop()
 
 
 @pytest.fixture(scope="function")
