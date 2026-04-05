@@ -542,7 +542,7 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
 
                     # Expect repair to fail when splitting new sstables
                     await log.wait_for("Repair for tablet migration of .* failed", from_mark=mark)
-                    await log.wait_for("Failed to load SSTable.*\(critical disk utilization\)", from_mark=mark)
+                    await log.wait_for(r"Failed to load SSTable.*\(critical disk utilization\)", from_mark=mark)
 
                     assert await log.grep(f"compaction.*Split {cf}", from_mark=mark) == []
 
