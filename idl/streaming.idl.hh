@@ -120,6 +120,17 @@ class stream_files_request {
     service::frozen_topology_guard topo_guard;
 };
 
+class clone_sstable_request {
+    streaming::file_stream_id ops_id;
+    table_id table;
+    utils::UUID generation;      // sstables::generation_type, encoded as its underlying UUID
+    int32_t version;             // cast from sstables::sstable_version_types
+    int32_t format;              // cast from sstables::sstable_format_types
+    int32_t sstable_state;
+    seastar::shard_id dst_shard_id;
+    service::frozen_topology_guard topo_guard;
+};
+
 class stream_files_response {
     size_t stream_bytes;
 };
@@ -130,5 +141,10 @@ verb [[with_client_info]] stream_mutation_done (streaming::plan_id plan_id, dht:
 verb [[with_client_info]] complete_message (streaming::plan_id plan_id, unsigned dst_cpu_id, bool failed [[version 2.1.0]]);
 
 verb [[with_client_info, cancellable]] tablet_stream_files (streaming::stream_files_request req) -> streaming::stream_files_response;
+// Not marked cancellable: clone_sstable performs a single server-side
+// CopyObject which is typically fast and cannot be interrupted mid-flight.
+// The topology_guard check inside the handler provides correctness if
+// the topology changes before the copy starts.
+verb [[with_client_info]] clone_sstable (streaming::clone_sstable_request req) -> streaming::stream_files_response;
 
 }

@@ -11,7 +11,9 @@
 #include <variant>
 #include <string>
 #include <chrono>
+#include <functional>
 
+#include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/semaphore.hh>
@@ -67,9 +69,12 @@ namespace utils::gcp::storage {
         class impl;
         class object_data_sink;
         class object_data_source;
+        class readable_file;
         shared_ptr<impl> _impl;
     public:
         static const std::string DEFAULT_ENDPOINT;
+        /// Factory for obtaining a shard-local client (used for cross-shard dup)
+        using shard_client_factory = std::function<shared_ptr<client>()>;
 
         client(client&&);
 
@@ -154,6 +159,15 @@ namespace utils::gcp::storage {
          * Creates a data_source for reading from a named object.
          */
         seekable_data_source create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* = nullptr) const;
+        /**
+         * Creates a readable file for a named object.
+         * Unlike create_download_source, the returned file supports concurrent
+         * read_dma calls because each read is a stateless HTTP range request.
+         * @shard_factory is used for cross-shard dup() support.
+         */
+        seastar::file make_readable_file(std::string_view bucket, std::string_view object_name,
+                                         shard_client_factory shard_factory = {},
+                                         seastar::abort_source* as = nullptr) const;
         /**
          * Checks if an object exists.
          */

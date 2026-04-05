@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from test.pylib.manager_client import ManagerClient
 from test.pylib.suite.python import add_s3_options
 from test.pylib.object_storage import (
     format_tuples,
@@ -29,7 +30,7 @@ def pytest_addoption(parser):
 
 
 @asynccontextmanager
-async def make_object_storage(kind, pytestconfig, tmpdir, test_name):
+async def make_object_storage(kind, pytestconfig, tmpdir, test_name, manager: ManagerClient | None = None):
     if kind == 'gs':
         server = create_gs_server(tmpdir)
     else:
@@ -42,18 +43,32 @@ async def make_object_storage(kind, pytestconfig, tmpdir, test_name):
         bucket_created = True
         yield server
     finally:
+        # Stop all running Scylla servers before destroying the bucket.
+        # Without this, in-flight operations (compaction, tablet migration) may
+        # still reference objects in the bucket, causing S3 404s that abort the
+        # node.  See SCYLLADB-2471.
+        if manager is not None:
+            try:
+                for srv in await manager.running_servers():
+                    await manager.server_stop(srv.server_id, convict=False)
+            except Exception:
+                pass  # Best effort — servers may already be stopped
         if bucket_created:
             server.destroy_test_bucket()
         await server.stop()
 
 
 @pytest.fixture(scope="function", params=['s3', 'gs'])
-async def object_storage(request, pytestconfig, tmpdir):
-    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name) as server:
+async def object_storage(request, pytestconfig, tmpdir, manager: ManagerClient):
+    """Object storage fixture. Depends on manager to stop servers before
+    bucket teardown (see SCYLLADB-2471)."""
+    async with make_object_storage(request.param, pytestconfig, tmpdir, request.node.name, manager) as server:
         yield server
 
 
 @pytest.fixture(scope="function")
-async def s3_storage(request, pytestconfig, tmpdir):
-    async with make_object_storage('s3', pytestconfig, tmpdir, request.node.name) as server:
+async def s3_storage(request, pytestconfig, tmpdir, manager: ManagerClient):
+    """S3 storage fixture. Depends on manager to stop servers before
+    bucket teardown (see SCYLLADB-2471)."""
+    async with make_object_storage('s3', pytestconfig, tmpdir, request.node.name, manager) as server:
         yield server

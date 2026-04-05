@@ -8,7 +8,7 @@ from cassandra.cluster import Session, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, start_writes
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, make_cfg, make_ks_opts
 
 
 import pytest
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_intranode_migration(manager: ManagerClient):
+async def test_intranode_migration(manager: ManagerClient, tablet_storage):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=trace',
@@ -31,12 +31,13 @@ async def test_intranode_migration(manager: ManagerClient):
         '--logger-log-level', 'tablets=trace',
         '--logger-log-level', 'database=trace',
     ]
-    servers = [await manager.server_add(cmdline=cmdline)]
+    cfg = make_cfg(tablet_storage)
+    servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=1)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         finish_writes = await start_writes(cql, ks, "test")
@@ -59,19 +60,20 @@ async def test_intranode_migration(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_crash_during_intranode_migration(manager: ManagerClient):
+async def test_crash_during_intranode_migration(manager: ManagerClient, tablet_storage):
     cmdline = [
         '--logger-log-level', 'tablets=trace',
         '--logger-log-level', 'database=trace',
         '--commitlog-sync', 'batch', # So that ACKed writes are not lost on crash
     ]
-    servers = [await manager.server_add(cmdline=cmdline)]
+    cfg = make_cfg(tablet_storage)
+    servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4}") as ks:
+    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=4)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         finish_writes = await start_writes(cql, ks, "test", ignore_errors=True)
@@ -110,7 +112,7 @@ async def test_crash_during_intranode_migration(manager: ManagerClient):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_cross_shard_migration(manager: ManagerClient):
+async def test_cross_shard_migration(manager: ManagerClient, tablet_storage):
     """
     Test scenario where writes are concurrently made with migration, where
     some of them are coordinated by the owning host and some by the non-owning host.
@@ -132,12 +134,13 @@ async def test_cross_shard_migration(manager: ManagerClient):
         '--logger-log-level', 'database=trace',
     ]
 
-    servers = await manager.servers_add(2, cmdline=cmdline)
+    cfg = make_cfg(tablet_storage)
+    servers = await manager.servers_add(2, config=cfg, cmdline=cmdline)
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+    async with new_test_keyspace(manager, make_ks_opts(tablet_storage, rf=1, initial_tablets=2)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         finish_writes = await start_writes(cql, ks, "test")

@@ -85,8 +85,57 @@ SStables, which does not require (de)serializing or processing mutation fragment
 As a result, less data is streamed over the network, and less CPU is consumed,
 especially for data models that contain small cells.
 
-File-based streaming is used for tablet migration in all 
+File-based streaming is used for tablet migration in all
 :ref:`keyspaces created with tablets enabled <tablets>`.
+
+Local-filesystem tables
+-----------------------
+
+For tables stored on local disks, the source node reads each SSTable component
+file and transfers its raw bytes to the destination over the internal streaming
+protocol (``TABLET_STREAM_FILES`` RPC verb). The destination writes the received
+bytes directly to disk and then loads the reconstructed SSTables into the table.
+
+Object-storage tables (S3 / GCS)
+---------------------------------
+
+For tables backed by object storage (S3 or GCS), the SSTable data already resides
+in the cloud — transferring the bytes over the network would be redundant and
+expensive. Instead, ScyllaDB uses a **server-side copy** (clone) approach:
+
+1. The source node takes a storage snapshot of the tablet's SSTables, holding
+   ``shared_sstable`` references that keep the original cloud objects alive even
+   if concurrent compaction would otherwise delete them.
+
+2. For each SSTable, the source sends a ``CLONE_SSTABLE`` RPC to the destination
+   node. The request carries the SSTable identity (generation, version, format)
+   rather than raw bytes.
+
+3. The destination node issues a server-side copy of every SSTable component
+   object (e.g. S3 ``CopyObject``), writing the copies to a fresh generation
+   owned by the destination, and then loads the cloned SSTables.
+
+No SSTable bytes traverse the network between source and destination. Only the
+small ``CLONE_SSTABLE`` control messages are exchanged.
+
+**Crash safety.** The migration protocol never marks source SSTables for
+deletion until the destination has confirmed that its clones are loaded and
+sealed.  Source SSTable cleanup (``wipe()`` → ``"removing"`` → ``destroy()``)
+only runs during ``cleanup_tablet()``, which is triggered exclusively after the
+topology coordinator advances to the ``cleanup`` stage — and that only happens
+after the destination node has successfully added the cloned SSTables to its
+table.  If a clone RPC fails, the coordinator retries the whole migration without
+touching the source SSTable registry; the source data is never at risk.
+
+The ``"removing"`` registry state also arises when compaction runs concurrently
+on the source *during* migration: ``wipe()`` marks the compacted-away SSTables
+as ``"removing"`` while the migration snapshot holds ``shared_sstable``
+references that keep their cloud objects alive.  If the node crashes before
+``destroy()`` completes the cloud cleanup, the ``"removing"`` entry survives and
+``garbage_collect()`` on the next startup retries the deletion before removing
+the entry.  The compacted data is not lost because compaction has already
+incorporated it into new SSTables; any in-progress migration retries against the
+current (post-compaction) SSTable set.
 
 .. _absolute-number-of-tablets:
 

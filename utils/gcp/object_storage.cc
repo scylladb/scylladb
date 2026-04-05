@@ -249,6 +249,171 @@ public:
     future<> close();
 };
 
+// A file implementation that does stateless HTTP range requests per read_dma
+// call, safe for concurrent reads (unlike seekable_data_source_file_impl which
+// has non-atomic seek+get).
+class utils::gcp::storage::client::readable_file : public file_impl {
+    shared_ptr<impl> _impl;
+    std::string _bucket;
+    std::string _object_name;
+    uint64_t _generation = 0;
+    uint64_t _size = 0;
+    std::chrono::system_clock::time_point _timestamp;
+    shard_client_factory _shard_factory;
+    seastar::abort_source* _as;
+
+    [[noreturn]] void unsupported() {
+        throw std::logic_error("unsupported operation on gcs readable file");
+    }
+
+    // Multiple concurrent read_dma coroutines can both see _size == 0 and
+    // issue parallel GET-metadata requests.  This is benign: every fetch
+    // returns the same immutable object metadata, so whichever write wins
+    // leaves the same values.  Same pattern as S3's maybe_update_stats().
+    future<> ensure_metadata() {
+        if (_size != 0) {
+            co_return;
+        }
+        auto path = fmt::format("/storage/v1/b/{}/o/{}", _bucket, seastar::http::internal::url_encode(_object_name));
+        auto res = co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_ONLY, ""s, ""s,
+                httpclient::method_type::GET, {}, _as);
+        if (res.result() != seastar::http::reply::status_type::ok) {
+            throw failed_operation(fmt::format("Could not query object {}:{} {}", _bucket, _object_name, res.result()));
+        }
+        auto item = rjson::parse(std::move(res.body()));
+        if (rjson::get<std::string>(item, "kind") != "storage#object"s) {
+            throw failed_operation("Malformed query object reply");
+        }
+        _size = std::stoull(rjson::get<std::string>(item, "size"));
+        _generation = std::stoull(rjson::get<std::string>(item, "generation"));
+        _timestamp = parse_rfc3339(rjson::get<std::string>(item, "updated"));
+    }
+
+public:
+    readable_file(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name,
+                  shard_client_factory shard_factory, seastar::abort_source* as)
+        : _impl(std::move(i))
+        , _bucket(bucket)
+        , _object_name(object_name)
+        , _shard_factory(std::move(shard_factory))
+        , _as(as)
+    {}
+
+    future<size_t> write_dma(uint64_t, const void*, size_t, io_intent*) override { unsupported(); }
+    future<size_t> write_dma(uint64_t, std::vector<iovec>, io_intent*) override { unsupported(); }
+    future<> truncate(uint64_t) override { unsupported(); }
+    subscription<directory_entry> list_directory(std::function<future<>(directory_entry)>) override { unsupported(); }
+    future<> flush() override { return make_ready_future<>(); }
+    future<> allocate(uint64_t, uint64_t) override { return make_ready_future<>(); }
+    future<> discard(uint64_t, uint64_t) override { return make_ready_future<>(); }
+
+    future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
+        co_await ensure_metadata();
+        if (pos >= _size) {
+            co_return 0;
+        }
+        auto to_read = std::min<uint64_t>(len, _size - pos);
+        auto path = fmt::format("/storage/v1/b/{}/o/{}?ifGenerationMatch={}&alt=media",
+                _bucket, seastar::http::internal::url_encode(_object_name), _generation);
+        auto range = fmt::format("bytes={}-{}", pos, pos + to_read - 1);
+        size_t result = 0;
+        co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_ONLY, ""s, ""s,
+                [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
+                    if (rep._status != seastar::http::reply::status_type::ok
+                            && rep._status != seastar::http::reply::status_type::partial_content) {
+                        throw failed_operation(fmt::format("Could not read object {}:{} ({}/{} - {})",
+                                _bucket, _object_name, pos, _size, int(rep._status)));
+                    }
+                    auto bufs = co_await util::read_entire_stream(in);
+                    auto dst = reinterpret_cast<char*>(buffer);
+                    for (auto& buf : bufs) {
+                        auto n = std::min(buf.size(), len - result);
+                        std::copy_n(buf.get(), n, dst + result);
+                        result += n;
+                    }
+                },
+                httpclient::method_type::GET,
+                rest::key_values({{ RANGE, range }}),
+                _as);
+        co_return result;
+    }
+
+    future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override {
+        size_t total_len = 0;
+        for (auto& v : iov) {
+            total_len += v.iov_len;
+        }
+        temporary_buffer<char> buf(total_len);
+        auto n = co_await read_dma(pos, buf.get_write(), total_len, nullptr);
+        size_t off = 0;
+        for (auto& v : iov) {
+            auto sz = std::min(v.iov_len, n - off);
+            if (sz == 0) {
+                break;
+            }
+            std::copy_n(buf.get() + off, sz, reinterpret_cast<char*>(v.iov_base));
+            off += sz;
+        }
+        co_return off;
+    }
+
+    future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
+        temporary_buffer<uint8_t> buf(range_size);
+        auto n = co_await read_dma(offset, buf.get_write(), range_size, intent);
+        buf.trim(n);
+        co_return buf;
+    }
+
+    future<uint64_t> size() override {
+        co_await ensure_metadata();
+        co_return _size;
+    }
+
+    future<struct stat> stat() override {
+        co_await ensure_metadata();
+        struct stat ret = {};
+        ret.st_nlink = 1;
+        ret.st_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
+        ret.st_size = _size;
+        ret.st_blksize = 1 << 10;
+        ret.st_blocks = _size >> 9;
+        ret.st_mtime = std::chrono::system_clock::to_time_t(_timestamp);
+        ret.st_ctime = ret.st_mtime;
+        co_return ret;
+    }
+
+    std::unique_ptr<file_handle_impl> dup() override {
+        if (!_shard_factory) {
+            throw std::logic_error("dup() not supported: no shard factory provided");
+        }
+        class gcs_file_handle_impl : public file_handle_impl {
+            shard_client_factory _factory;
+            std::string _bucket;
+            std::string _object_name;
+        public:
+            gcs_file_handle_impl(shard_client_factory f, std::string bucket, std::string object_name)
+                : _factory(std::move(f))
+                , _bucket(std::move(bucket))
+                , _object_name(std::move(object_name))
+            {}
+            std::unique_ptr<file_handle_impl> clone() const override {
+                return std::make_unique<gcs_file_handle_impl>(_factory, _bucket, _object_name);
+            }
+            shared_ptr<file_impl> to_file() && override {
+                auto cl = _factory();
+                // _as is nullptr because abort_source is shard-local; the
+                // dup'd file will live on a different shard.  Same as S3.
+                return seastar::make_shared<readable_file>(cl->_impl, _bucket, _object_name, _factory, nullptr);
+            }
+        };
+        return std::make_unique<gcs_file_handle_impl>(_shard_factory, _bucket, _object_name);
+    }
+
+    future<> close() override {
+        return make_ready_future<>();
+    }
+};
+
 future<> storage::client::impl::authorize(request_wrapper& req, const std::string& scope) {
     if (_credentials) {
         co_await _credentials->refresh(scope, &storage_scope_implies, _certs);
@@ -1170,6 +1335,11 @@ seastar::data_sink utils::gcp::storage::client::create_upload_sink(std::string_v
 
 seekable_data_source utils::gcp::storage::client::create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* as) const {
     return seekable_data_source(std::make_unique<object_data_source>(_impl, bucket, object_name, as));
+}
+
+seastar::file utils::gcp::storage::client::make_readable_file(std::string_view bucket, std::string_view object_name,
+                                                               shard_client_factory shard_factory, seastar::abort_source* as) const {
+    return seastar::file(seastar::make_shared<readable_file>(_impl, bucket, object_name, std::move(shard_factory), as));
 }
 
 future<bool> storage::client::object_exists(std::string_view bucket, std::string_view object_name, seastar::abort_source* as) const {
