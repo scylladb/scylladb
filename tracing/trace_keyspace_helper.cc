@@ -200,13 +200,13 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
     _metrics.add_group("tracing_keyspace_helper", {
         sm::make_counter("tracing_errors", [this] { return _stats.tracing_errors; },
                         sm::description("Counts a number of errors during writing to a system_traces keyspace. "
-                                        "One error may cause one or more tracing records to be lost.")),
+                                        "One error may cause one or more tracing records to be lost.")).set_skip_when_empty(),
 
         sm::make_counter("bad_column_family_errors", [this] { return _stats.bad_column_family_errors; },
                         sm::description("Counts a number of times write failed due to one of the tables in the system_traces keyspace has an incompatible schema. "
                                         "One error may result one or more tracing records to be lost. "
                                         "Non-zero value indicates that the administrator has to take immediate steps to fix the corresponding schema. "
-                                        "The appropriate error message will be printed in the syslog.")),
+                                        "The appropriate error message will be printed in the syslog.")).set_skip_when_empty(),
     });
 }
 
