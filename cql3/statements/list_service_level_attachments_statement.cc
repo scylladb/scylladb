@@ -8,7 +8,6 @@
 
 #include "seastarx.hh"
 #include "cql3/statements/list_service_level_attachments_statement.hh"
-#include "cql3/column_identifier.hh"
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/query_state.hh"
@@ -16,6 +15,15 @@
 namespace cql3 {
 
 namespace statements {
+
+shared_ptr<const cql3::metadata> list_service_level_attachments_statement::get_result_metadata() const {
+    static thread_local const std::vector<lw_shared_ptr<column_specification>> metadata({
+        make_column_spec("QOS", "service_levels_attachments", "role", utf8_type),
+        make_column_spec("QOS", "service_levels_attachments", "service_level", utf8_type)
+    });
+
+    return ::make_shared<cql3::metadata>(metadata);
+}
 
 list_service_level_attachments_statement::list_service_level_attachments_statement(sstring role_name) :
     _role_name(role_name), _describe_all(false) {
@@ -40,19 +48,7 @@ list_service_level_attachments_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &,
         std::optional<service::group0_guard> guard) const {
-
-    static auto make_column = [] (sstring name, const shared_ptr<const abstract_type> type) {
-        return make_lw_shared<column_specification>(
-                "QOS",
-                "service_levels_attachments",
-                ::make_shared<column_identifier>(std::move(name), true),
-                type);
-    };
-
-    static thread_local const std::vector<lw_shared_ptr<column_specification>> metadata({
-        make_column("role", utf8_type), make_column("service_level", utf8_type)
-    });
-
+    auto metadata = ::make_shared<cql3::metadata>(*get_result_metadata());
 
     return make_ready_future().then([this, &state] () {
         if (_describe_all) {
@@ -67,7 +63,7 @@ list_service_level_attachments_statement::execute(query_processor& qp,
             });
 
         }
-    }).then([] (std::unordered_map<sstring, sstring> roles_to_att_val) {
+    }).then([metadata = std::move(metadata)] (std::unordered_map<sstring, sstring> roles_to_att_val) {
 
         auto rs = std::make_unique<result_set>(metadata);
         for (auto&& role_to_sl : roles_to_att_val) {

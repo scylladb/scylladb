@@ -13,6 +13,7 @@
 
 #include "transport/request.hh"
 #include "transport/response.hh"
+#include "cql3/column_identifier.hh"
 #include "utils/memory_data_sink.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
@@ -163,4 +164,39 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     BOOST_CHECK_EQUAL(req.read_string().value(), "bar");
     BOOST_CHECK_EQUAL(req.read_short().value(), 1);
     BOOST_CHECK_EQUAL(req.read_string().value(), "zed");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_response_metadata_changed_for_empty_request_metadata_id) {
+    auto col = make_lw_shared<cql3::column_specification>(
+            "ks", "cf", ::make_shared<cql3::column_identifier>("v", true), utf8_type);
+    cql3::metadata m({col});
+    auto calculated_metadata_id = m.calculate_metadata_id();
+    auto expected_metadata_id = bytes(calculated_metadata_id._metadata_id);
+
+    auto res = cql_transport::response(0, cql_transport::cql_binary_opcode::RESULT, tracing::trace_state_ptr());
+    res.write(m, cql_transport::cql_metadata_id_wrapper(
+            cql3::cql_metadata_id_type(bytes{}),
+            cql3::cql_metadata_id_type(bytes(expected_metadata_id))), true);
+
+    memory_data_sink_buffers buffers;
+    {
+        output_stream<char> out(data_sink(std::make_unique<memory_data_sink>(buffers)));
+        res.write_message(out, 4, cql_transport::cql_compression::none, deleter()).get();
+    }
+    auto total_length = buffers.size();
+    auto fbufs = fragmented_temporary_buffer(buffers.buffers() | std::views::as_rvalue | std::ranges::to<std::vector>(), total_length);
+
+    bytes_ostream linearization_buffer;
+    auto req = cql_transport::request_reader(fbufs.get_istream(), linearization_buffer);
+    BOOST_REQUIRE(req.read_byte());
+    BOOST_REQUIRE(req.read_byte());
+    BOOST_REQUIRE(req.read_short());
+    BOOST_REQUIRE(req.read_byte());
+    BOOST_REQUIRE(req.read_int());
+
+    auto flags = req.read_int().value();
+    BOOST_CHECK(flags & cql3::metadata::flag_enum_set::mask_for<cql3::metadata::flag::METADATA_CHANGED>());
+    BOOST_CHECK(!(flags & cql3::metadata::flag_enum_set::mask_for<cql3::metadata::flag::NO_METADATA>()));
+    BOOST_CHECK_EQUAL(req.read_int().value(), 1);
+    BOOST_CHECK_EQUAL(req.read_short_bytes().value(), expected_metadata_id);
 }

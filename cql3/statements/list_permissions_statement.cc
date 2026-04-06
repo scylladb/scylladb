@@ -15,8 +15,17 @@
 #include "auth/authorizer.hh"
 #include "auth/common.hh"
 #include "cql3/result_set.hh"
-#include "cql3/column_identifier.hh"
+#include "db/system_keyspace.hh"
 #include "transport/messages/result_message.hh"
+
+shared_ptr<const cql3::metadata> cql3::statements::list_permissions_statement::get_result_metadata() const {
+    return ::make_shared<cql3::metadata>(
+            std::vector<lw_shared_ptr<cql3::column_specification>>{
+                    make_column_spec(db::system_keyspace::NAME, "permissions", "role", utf8_type),
+                    make_column_spec(db::system_keyspace::NAME, "permissions", "username", utf8_type),
+                    make_column_spec(db::system_keyspace::NAME, "permissions", "resource", utf8_type),
+                    make_column_spec(db::system_keyspace::NAME, "permissions", "permission", utf8_type)});
+}
 
 cql3::statements::list_permissions_statement::list_permissions_statement(
         auth::permission_set permissions,
@@ -80,18 +89,6 @@ cql3::statements::list_permissions_statement::execute(
         service::query_state& state,
         const query_options& options,
         std::optional<service::group0_guard> guard) const {
-    auto make_column = [auth_ks = auth::get_auth_ks_name(qp)](sstring name) {
-        return make_lw_shared<column_specification>(
-                auth_ks,
-                "permissions",
-                ::make_shared<column_identifier>(std::move(name), true),
-                utf8_type);
-    };
-
-    std::vector<lw_shared_ptr<column_specification>> metadata({
-        make_column("role"), make_column("username"), make_column("resource"), make_column("permission")
-    });
-
     const auto make_resource_filter = [this]()
             -> std::optional<std::pair<auth::resource, auth::recursive_permissions>> {
         if (!_resource) {
@@ -104,6 +101,7 @@ cql3::statements::list_permissions_statement::execute(
     };
 
     const auto& as = *state.get_client_state().get_auth_service();
+    auto metadata = ::make_shared<cql3::metadata>(*get_result_metadata());
 
     return do_with(make_resource_filter(), [this, &as, metadata = std::move(metadata)](const auto& resource_filter) mutable {
         return auth::list_filtered_permissions(

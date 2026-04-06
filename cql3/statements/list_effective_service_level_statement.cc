@@ -30,13 +30,14 @@ list_effective_service_level_statement::prepare(data_dictionary::database db, cq
     return std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_effective_service_level_statement>(*this));
 }
 
-static auto make_column(sstring name, const shared_ptr<const abstract_type> type) {
-    return make_lw_shared<column_specification>(
-        "QOS",
-        "effective_service_level",
-        ::make_shared<column_identifier>(std::move(name), true),
-        type);
-};
+shared_ptr<const cql3::metadata> list_effective_service_level_statement::get_result_metadata() const {
+    return ::make_shared<cql3::metadata>(
+            std::vector<lw_shared_ptr<column_specification>>{
+                    make_column_spec("QOS", "effective_service_level", "service_level_option", utf8_type),
+                    make_column_spec("QOS", "effective_service_level", "effective_service_level", utf8_type),
+                    make_column_spec("QOS", "effective_service_level", "value", utf8_type)
+            });
+}
 
 static bytes_opt decompose_timeout (const qos::service_level_options::timeout_type& duration) {
     return std::visit(overloaded_functor{
@@ -69,11 +70,6 @@ static bytes_opt decompose_shares(const qos::service_level_options::shares_type&
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 list_effective_service_level_statement::execute(query_processor& qp, service::query_state& state, const query_options&, std::optional<service::group0_guard>) const {
-    static thread_local const std::vector<lw_shared_ptr<column_specification>> metadata({
-        make_column("service_level_option", utf8_type),
-        make_column("effective_service_level", utf8_type),
-        make_column("value", utf8_type)
-    });
     auto& role_manager = state.get_client_state().get_auth_service()->underlying_role_manager();
 
     if (!co_await role_manager.exists(_role_name)) {
@@ -87,7 +83,7 @@ list_effective_service_level_statement::execute(query_processor& qp, service::qu
         throw exceptions::invalid_request_exception(format("Role {} doesn't have assigned any service level", _role_name));
     }
 
-    auto rs = std::make_unique<result_set>(metadata);
+    auto rs = std::make_unique<result_set>(::make_shared<cql3::metadata>(*get_result_metadata()));
     rs->add_row({
         utf8_type->decompose("workload_type"),
         utf8_type->decompose(slo->effective_names->workload),

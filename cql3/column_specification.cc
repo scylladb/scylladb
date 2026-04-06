@@ -10,6 +10,7 @@
 
 #include "utils/assert.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/column_identifier.hh"
 
 namespace cql3 {
 
@@ -29,6 +30,14 @@ bool column_specification::all_in_same_table(const std::vector<lw_shared_ptr<col
     return std::all_of(std::next(names.begin()), names.end(), [first] (auto&& spec) {
         return spec->ks_name == first->ks_name && spec->cf_name == first->cf_name;
     });
+}
+
+lw_shared_ptr<column_specification> make_column_spec(std::string_view ks_name, std::string_view cf_name, sstring name, data_type type) {
+    return make_lw_shared<column_specification>(
+            ks_name,
+            cf_name,
+            ::make_shared<column_identifier>(std::move(name), true),
+            std::move(type));
 }
 
 }
