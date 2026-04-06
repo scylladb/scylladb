@@ -1088,7 +1088,7 @@ void compaction_manager::register_metrics() {
         sm::make_gauge("normalized_backlog", [this] { return _last_backlog / available_memory(); },
                        sm::description("Holds the sum of normalized compaction backlog for all tables in the system. Backlog is normalized by dividing backlog by shard's available memory.")),
         sm::make_counter("validation_errors", [this] { return _validation_errors; },
-                       sm::description("Holds the number of encountered validation errors.")),
+                       sm::description("Holds the number of encountered validation errors.")).set_skip_when_empty(),
     });
 }
 
