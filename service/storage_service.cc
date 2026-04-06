@@ -4792,8 +4792,13 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
         }
     } catch (const raft::request_aborted& e) {
         rtlogger.warn("raft_topology_cmd {} failed with: {}", cmd.cmd, e);
+        result.error_message = e.what();
+    } catch (const std::exception& e) {
+        rtlogger.error("raft_topology_cmd {} failed with: {}", cmd.cmd, e);
+        result.error_message = e.what();
     } catch (...) {
         rtlogger.error("raft_topology_cmd {} failed with: {}", cmd.cmd, std::current_exception());
+        result.error_message = "unknown error";
     }
 
     rtlogger.info("topology cmd rpc {} completed with status={} index={}",

@@ -443,8 +443,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     co_await ser::storage_service_rpc_verbs::send_raft_topology_cmd(
                             &_messaging, to_host_id(id), id, _term, cmd_index, cmd);
         if (result.status == raft_topology_cmd_result::command_status::fail) {
+            auto msg = result.error_message.empty()
+                ? ::format("failed status returned from {}", id)
+                : ::format("failed status returned from {}: {}", id, result.error_message);
             co_await coroutine::exception(std::make_exception_ptr(
-                    std::runtime_error(::format("failed status returned from {}", id))));
+                    std::runtime_error(std::move(msg))));
         }
     };
 
@@ -3909,10 +3912,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     throw;
                 } catch (seastar::abort_requested_exception&) {
                     throw;
+                } catch (const std::exception& e) {
+                    rtlogger.error("send_raft_topology_cmd(stream_ranges) failed with exception"
+                                    " (node state is rebuilding): {}", e);
+                    rtbuilder.done(e.what());
+                    retake = true;
                 } catch (...) {
                     rtlogger.error("send_raft_topology_cmd(stream_ranges) failed with exception"
                                     " (node state is rebuilding): {}", std::current_exception());
-                    rtbuilder.done("streaming failed");
+                    rtbuilder.done("unknown error");
                     retake = true;
                 }
                 if (retake) {
