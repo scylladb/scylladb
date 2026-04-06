@@ -102,7 +102,9 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                         // first we need to report non-existing DCs, then if RFs aren't changed by too much.
                         continue;
                     }
-                    if (total_abs_rfs_diff += get_abs_rf_diff(old_rf, new_rf); total_abs_rfs_diff >= 2) {
+                    if (total_abs_rfs_diff += get_abs_rf_diff(old_rf, new_rf); total_abs_rfs_diff >= 2 &&
+                            !(qp.proxy().features().keyspace_multi_rf_change && locator::uses_rack_list_exclusively(current_rf_per_dc)
+                            && locator::uses_rack_list_exclusively(new_ks->strategy_options()))) {
                         throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
                     }
                 }

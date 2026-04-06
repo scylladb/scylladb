@@ -12,7 +12,9 @@ Schema:
 CREATE TABLE system_schema.keyspaces (
     keyspace_name text PRIMARY KEY,
     durable_writes boolean,
-    replication frozen<map<text, text>>
+    replication frozen<map<text, text>>,
+    replication_v2 frozen<map<text, text>>,
+    next_replication frozen<map<text, text>>
 )
 ```
 
@@ -31,6 +33,8 @@ Columns:
    stored as a flattened map of the extended options map (see below).
 
    For `SimpleStrategy` there is a single option `"replication_factor"` specifying the replication factor.
+* `next_replication` - the target replication factor for the keyspace during rf change.
+   If there is no ongoing rf change, `next_replication` value is not set.
 
 Extended options map used by NetworkTopologyStrategy is a map where values can be either strings or lists of strings.
 

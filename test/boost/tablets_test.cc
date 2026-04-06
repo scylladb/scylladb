@@ -1693,10 +1693,10 @@ static
 future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::topology& topology, shared_load_stats* load_stats) {
     for (auto&& mig : plan.migrations()) {
         co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (tablet_map& tmap) {
-            if (load_stats) {
+            if (load_stats && mig.src && mig.dst) {
                 global_tablet_id gid {mig.tablet.table, mig.tablet.tablet};
                 dht::token_range trange {tmap.get_token_range(mig.tablet.tablet)};
-                auto new_stats = load_stats->stats.migrate_tablet_size(mig.src.host, mig.dst.host, gid, trange);
+                auto new_stats = load_stats->stats.migrate_tablet_size(mig.src->host, mig.dst->host, gid, trange);
                 if (new_stats) {
                     load_stats->stats = std::move(*new_stats);
                 }
@@ -2211,13 +2211,13 @@ SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion) {
         for (auto& mig : plan.migrations()) {
             testlog.info("Rack list colocation migration: {}", mig);
             BOOST_REQUIRE(mig.kind == locator::tablet_transition_kind::migration);
-            BOOST_REQUIRE(mig.src.host == host3 || mig.src.host == host4);
-            if (mig.src.host == host3) {
+            BOOST_REQUIRE(mig.src && (mig.src->host == host3 || mig.src->host == host4));
+            if (mig.src->host == host3) {
                 BOOST_REQUIRE(mig.tablet.tablet == A);
-                BOOST_REQUIRE(mig.dst.host == host5 || mig.dst.host == host6);
+                BOOST_REQUIRE(mig.dst && (mig.dst->host == host5 || mig.dst->host == host6));
             } else {
                 BOOST_REQUIRE(mig.tablet.tablet == B);
-                BOOST_REQUIRE(mig.dst.host == host1 || mig.dst.host == host2);
+                BOOST_REQUIRE(mig.dst && (mig.dst->host == host1 || mig.dst->host == host2));
             }
         }
     }).get();
@@ -2257,8 +2257,9 @@ SEASTAR_THREAD_TEST_CASE(test_colocation_skipped_on_excluded_nodes) {
         rebalance_tablets_as_in_progress(e, topo.get_shared_load_stats(), [&] (const migration_plan& plan) {
             // Verify that only rebuilding migrations involve the excluded host.
             for (auto&& mig : plan.migrations()) {
-                BOOST_REQUIRE_NE(mig.dst.host, host1);
-                if (mig.src.host == host1) {
+                BOOST_REQUIRE(mig.src && mig.dst);
+                BOOST_REQUIRE_NE(mig.dst->host, host1);
+                if (mig.src->host == host1) {
                     BOOST_REQUIRE(mig.kind == tablet_transition_kind::rebuild_v2);
                 }
             }
@@ -2302,8 +2303,9 @@ SEASTAR_THREAD_TEST_CASE(test_no_intranode_migration_on_draining_node) {
         rebalance_tablets_as_in_progress(e, topo.get_shared_load_stats(), [&] (const migration_plan& plan) {
             // Verify no intra-node migrations on the draining host.
             for (auto&& mig : plan.migrations()) {
-                if (mig.src.host == host1) {
-                    BOOST_REQUIRE_NE(mig.dst.host, host1);
+                BOOST_REQUIRE(mig.src && mig.dst);
+                if (mig.src->host == host1) {
+                    BOOST_REQUIRE_NE(mig.dst->host, host1);
                 }
             }
             return false;
@@ -4440,7 +4442,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_ignores_hosts_with_incomplete_stats)
             BOOST_REQUIRE(!plan.empty());
             BOOST_REQUIRE(!plan.migrations().empty());
             for (auto&& mig : plan.migrations()) {
-                BOOST_REQUIRE_EQUAL(mig.src.host, host2);
+                BOOST_REQUIRE(mig.src);
+                BOOST_REQUIRE_EQUAL(mig.src->host, host2);
             }
         }
     }).get();

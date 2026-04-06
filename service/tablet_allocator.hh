@@ -10,6 +10,7 @@
 
 #include "replica/database_fwd.hh"
 #include "locator/tablets.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
@@ -181,6 +182,25 @@ struct tablet_rack_list_colocation_plan {
     }
 };
 
+struct rf_change_completion_info {
+    utils::UUID request_id;
+    sstring ks_name;
+    sstring error;
+    std::unordered_map<sstring, sstring> saved_ks_props;
+};
+
+struct keyspace_rf_change_plan {
+    std::optional<rf_change_completion_info> completion;
+
+    size_t size() const { return (completion ? 1 : 0); };
+
+    void merge(keyspace_rf_change_plan&& other) {
+        if (!completion) {
+            completion = std::move(other.completion);
+        }
+    }
+};
+
 class migration_plan {
 public:
     using migrations_vector = utils::chunked_vector<tablet_migration_info>;
@@ -189,19 +209,22 @@ private:
     table_resize_plan _resize_plan;
     tablet_repair_plan _repair_plan;
     tablet_rack_list_colocation_plan _rack_list_colocation_plan;
+    keyspace_rf_change_plan _rf_change_plan;
     bool _has_nodes_to_drain = false;
     std::vector<drain_failure> _drain_failures;
 public:
     /// Returns true iff there are decommissioning nodes which own some tablet replicas.
     bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
+    bool requires_schema_changes() const { return _rf_change_plan.size() > 0; }
 
     const migrations_vector& migrations() const { return _migrations; }
     bool empty() const { return !size(); }
-    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size() + _drain_failures.size(); }
+    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size() + _drain_failures.size() + _rf_change_plan.size(); }
     size_t tablet_migration_count() const { return _migrations.size(); }
     size_t resize_decision_count() const { return _resize_plan.size(); }
     size_t tablet_repair_count() const { return _repair_plan.size(); }
     size_t tablet_rack_list_colocation_count() const { return _rack_list_colocation_plan.size(); }
+    size_t keyspace_rf_change_count() const { return _rf_change_plan.size(); }
     const std::vector<drain_failure>& drain_failures() const { return _drain_failures; }
 
     void add(tablet_migration_info info) {
@@ -225,6 +248,7 @@ public:
         _resize_plan.merge(std::move(other._resize_plan));
         _repair_plan.merge(std::move(other._repair_plan));
         _rack_list_colocation_plan.merge(std::move(other._rack_list_colocation_plan));
+        _rf_change_plan.merge(std::move(other._rf_change_plan));
     }
 
     void set_has_nodes_to_drain(bool b) {
@@ -247,6 +271,12 @@ public:
 
     void set_rack_list_colocation_plan(tablet_rack_list_colocation_plan rack_list_colocation_plan) {
         _rack_list_colocation_plan = std::move(rack_list_colocation_plan);
+    }
+
+    const keyspace_rf_change_plan& rf_change_plan() const { return _rf_change_plan; }
+
+    void set_rf_change_plan(keyspace_rf_change_plan rf_change_plan) {
+        _rf_change_plan = std::move(rf_change_plan);
     }
 
     future<std::unordered_set<locator::global_tablet_id>> get_migration_tablet_ids() const;
@@ -316,6 +346,9 @@ future<bool> requires_rack_list_colocation(
         locator::token_metadata_ptr tmptr,
         db::system_keyspace* sys_ks,
         utils::UUID request_id);
+
+bool rf_count_per_dc_equals(const locator::replication_strategy_config_options& current, const locator::replication_strategy_config_options& next);
+std::unordered_map<sstring, std::vector<sstring>> subtract_replication(const std::unordered_map<sstring, std::vector<sstring>>& left, const std::unordered_map<sstring, std::vector<sstring>>& right);
 
 }
 
