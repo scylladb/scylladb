@@ -318,6 +318,9 @@ struct raft_topology_cmd_result {
         success
     };
     command_status status = command_status::fail;
+    // Carries the error description back to the topology coordinator
+    // when the command fails.
+    sstring error_message;
 };
 
 // This class is used in RPC's signatures to hold the topology_version of the caller.

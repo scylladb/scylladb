@@ -72,6 +72,7 @@ struct raft_topology_cmd_result {
         success
     };
     service::raft_topology_cmd_result::command_status status;
+    sstring error_message [[version 2026.2]];
 };
 
 struct raft_snapshot {
