@@ -2116,8 +2116,11 @@ class ScyllaClusterManager:
         assert server_id in self.cluster.running, "Can't rebuild not running node"
         server = self.cluster.running[server_id]
         expected_error = data["expected_error"]
+        source_dc = data.get("source_dc")
+        force = data.get("force", False)
         try:
-            await self.cluster.api.rebuild_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+            await self.cluster.api.rebuild_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT,
+                                                source_dc=source_dc, force=force)
         except (RuntimeError, HTTPError) as exc:
             if expected_error:
                 if expected_error not in str(exc):
@@ -2135,8 +2138,6 @@ class ScyllaClusterManager:
                 raise RuntimeError(
                     f"rebuild succeeded when it should have failed (server: {server},"
                     f" expected_error: \"{expected_error}\"), check log file at {server.log_filename}")
-
-        await self.cluster.server_stop(server_id, gracefully=True)
 
     async def _server_get_config(self, request: aiohttp.web.Request) -> dict[str, object]:
         """Get conf/scylla.yaml of the given server as a dictionary."""
