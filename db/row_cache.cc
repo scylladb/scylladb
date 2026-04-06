@@ -174,7 +174,7 @@ cache_tracker::setup_metrics() {
         sm::make_counter("sstable_reader_recreations", sm::description("number of times sstable reader was recreated due to memtable flush"), _stats.underlying_recreations),
         sm::make_counter("sstable_partition_skips", sm::description("number of times sstable reader was fast forwarded across partitions"), _stats.underlying_partition_skips),
         sm::make_counter("sstable_row_skips", sm::description("number of times sstable reader was fast forwarded within a partition"), _stats.underlying_row_skips),
-        sm::make_counter("pinned_dirty_memory_overload", sm::description("amount of pinned bytes that we tried to unpin over the limit. This should sit constantly at 0, and any number different than 0 is indicative of a bug"), _stats.pinned_dirty_memory_overload),
+        sm::make_counter("pinned_dirty_memory_overload", sm::description("amount of pinned bytes that we tried to unpin over the limit. This should sit constantly at 0, and any number different than 0 is indicative of a bug"), _stats.pinned_dirty_memory_overload).set_skip_when_empty(),
         sm::make_counter("rows_processed_from_memtable", _stats.rows_processed_from_memtable,
             sm::description("total number of rows in memtables which were processed during cache update on memtable flush")),
         sm::make_counter("rows_dropped_from_memtable", _stats.rows_dropped_from_memtable,

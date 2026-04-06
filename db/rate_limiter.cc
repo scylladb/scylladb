@@ -206,7 +206,7 @@ void rate_limiter_base::register_metrics() {
                 sm::description("Number of times a lookup returned an already allocated entry.")),
 
         sm::make_counter("failed_allocations", _metrics.failed_allocations,
-                sm::description("Number of times the rate limiter gave up trying to allocate.")),
+                sm::description("Number of times the rate limiter gave up trying to allocate.")).set_skip_when_empty(),
 
         sm::make_counter("probe_count", _metrics.probe_count,
                 sm::description("Number of probes made during lookups.")),

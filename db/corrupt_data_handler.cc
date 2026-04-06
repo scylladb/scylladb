@@ -22,7 +22,7 @@ corrupt_data_handler::corrupt_data_handler(register_metrics rm) {
         _metrics.add_group("corrupt_data", {
                 sm::make_counter("entries_reported", _stats.corrupt_data_reported,
                                sm::description("Counts the number of corrupt data instances reported to the corrupt data handler. "
-                                               "A non-zero value indicates that the database suffered data corruption."))
+                                                "A non-zero value indicates that the database suffered data corruption.")).set_skip_when_empty()
                 });
     }
 }

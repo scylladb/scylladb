@@ -186,7 +186,7 @@ void manager::register_metrics(const sstring& group_name) {
             sm::description("Number of unexpected errors during sending, sending will be retried later")),
 
         sm::make_counter("corrupted_files", _stats.corrupted_files,
-                        sm::description("Number of hints files that were discarded during sending because the file was corrupted.")),
+                        sm::description("Number of hints files that were discarded during sending because the file was corrupted.")).set_skip_when_empty(),
 
         sm::make_gauge("pending_drains",
                         sm::description("Number of tasks waiting in the queue for draining hints"),
