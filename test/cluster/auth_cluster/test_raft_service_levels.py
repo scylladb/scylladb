@@ -110,6 +110,27 @@ async def test_service_levels_upgrade(request, manager: ManagerClient, build_mod
     assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls + [sl_v2])
 
 @pytest.mark.asyncio
+async def test_service_levels_upgrade_with_empty_legacy_table(manager: ManagerClient):
+    cfg = {**auth_config, "force_gossip_topology_changes": True, "tablets_mode_for_new_keyspaces": "disabled"}
+
+    servers = [await manager.server_add(config=cfg)]
+    cfg.pop("force_gossip_topology_changes")
+    servers += [await manager.server_add(config=cfg) for _ in range(2)]
+
+    cql = manager.get_cql()
+    assert cql
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    rows = await cql.run_async("SELECT service_level FROM system_distributed.service_levels")
+    assert list(rows) == []
+
+    await manager.api.upgrade_to_raft_topology(hosts[0].address)
+    await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+
+    sl_version = await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'service_level_version'")
+    assert sl_version[0].value == "2"
+
+@pytest.mark.asyncio
 async def test_service_levels_work_during_recovery(manager: ManagerClient):
     # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.
     servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")

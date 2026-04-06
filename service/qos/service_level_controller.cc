@@ -880,10 +880,6 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
         qs,
         {},
         cql3::query_processor::cache_internal::no);
-    if (rows->empty()) {
-        co_return;
-    }
-    
 
     auto col_names = schema->all_columns() | std::views::transform([] (const auto& col) {return col.name_as_cql_string(); }) | std::ranges::to<std::vector<sstring>>();
     auto col_names_str = fmt::to_string(fmt::join(col_names, ", "));
