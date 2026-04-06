@@ -14,6 +14,7 @@ from functools import partial, partialmethod
 from typing import TYPE_CHECKING
 
 import requests
+from cassandra import AuthenticationFailed
 from cassandra.cluster import EXEC_PROFILE_DEFAULT, NoHostAvailable, default_lbp_factory
 from cassandra.cluster import Cluster as PyCluster
 from cassandra.policies import ExponentialReconnectionPolicy, WhiteListRoundRobinPolicy
@@ -49,6 +50,11 @@ logging.TRACE = 5
 logging.addLevelName(logging.TRACE, "TRACE")
 logging.Logger.trace = partialmethod(logging.Logger.log, logging.TRACE)
 logging.trace = partial(logging.log, logging.TRACE)
+
+
+def _should_retry_no_host(e):
+    """Don't retry NoHostAvailable if it wraps AuthenticationFailed."""
+    return not any(isinstance(err, AuthenticationFailed) for err in e.errors.values())
 
 
 class DTestSetup:
@@ -339,6 +345,7 @@ class DTestSetup:
                 port=port,
                 ssl_opts=ssl_opts,
                 bypassed_exception=NoHostAvailable,
+                should_retry=_should_retry_no_host,
                 **kwargs,
             )
 
@@ -374,6 +381,7 @@ class DTestSetup:
             port=port,
             ssl_opts=ssl_opts,
             bypassed_exception=NoHostAvailable,
+            should_retry=_should_retry_no_host,
             **kwargs,
         )
 

@@ -24,13 +24,14 @@ logger = logging.getLogger(__name__)
 def retry_till_success[T, **P](fun: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
     timeout = kwargs.pop("timeout", 60)
     bypassed_exception = kwargs.pop("bypassed_exception", Exception)
+    should_retry = kwargs.pop("should_retry", None)
 
     deadline = time.perf_counter() + timeout
     while True:
         try:
             return fun(*args, **kwargs)
-        except bypassed_exception:
-            if time.perf_counter() > deadline:
+        except bypassed_exception as e:
+            if (should_retry and not should_retry(e)) or time.perf_counter() > deadline:
                 raise
 
         # Brief pause before next attempt.
