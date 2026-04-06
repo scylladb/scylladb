@@ -635,8 +635,10 @@ database::setup_metrics() {
                        sm::description("Counts sstables that survived the clustering key filtering. "
                                        "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
 
+        // NOTE: dropped_view_updates is registered as a metric but never incremented in the current
+        // codebase. Consider removing it entirely if it is confirmed dead.
         sm::make_counter("dropped_view_updates", _cf_stats.dropped_view_updates,
-                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. "))(basic_level),
+                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. "))(basic_level).set_skip_when_empty(),
 
        sm::make_counter("view_building_paused", _cf_stats.view_building_paused,
                       sm::description("Counts the number of times view building process was paused (e.g. due to node unavailability). ")),
@@ -655,7 +657,7 @@ database::setup_metrics() {
                        sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached."))(basic_level),
 
         sm::make_counter("total_writes_rejected_due_to_out_of_space_prevention", _stats->total_writes_rejected_due_to_out_of_space_prevention,
-                       sm::description("Counts write operations which were rejected due to disabled user tables writes."))(basic_level),
+                       sm::description("Counts write operations which were rejected due to disabled user tables writes."))(basic_level).set_skip_when_empty(),
 
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
@@ -704,11 +706,13 @@ database::setup_metrics() {
         sm::make_counter("multishard_query_unpopped_bytes", _stats->multishard_query_unpopped_bytes,
                        sm::description("The total number of bytes that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
 
+        // NOTE: multishard_query_failed_reader_stops appears to have no increment site in the
+        // current codebase. Consider removing it entirely if it is confirmed dead.
         sm::make_counter("multishard_query_failed_reader_stops", _stats->multishard_query_failed_reader_stops,
-                       sm::description("The number of times the stopping of a shard reader failed.")),
+                       sm::description("The number of times the stopping of a shard reader failed.")).set_skip_when_empty(),
 
         sm::make_counter("multishard_query_failed_reader_saves", _stats->multishard_query_failed_reader_saves,
-                       sm::description("The number of times the saving of a shard reader failed.")),
+                       sm::description("The number of times the saving of a shard reader failed.")).set_skip_when_empty(),
 
         sm::make_total_operations("counter_cell_lock_acquisition", _cl_stats->lock_acquisitions,
                                  sm::description("The number of acquired counter cell locks.")),
