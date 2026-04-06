@@ -3900,7 +3900,7 @@ void storage_proxy::register_cdc_operation_result_tracker(const storage_proxy::u
 
     for (auto& id : ids) {
         auto& h = get_write_response_handler(id.id);
-        if (h->get_schema()->cdc_options().enabled()) {
+        if (cdc::cdc_enabled(*h->get_schema())) {
             h->set_cdc_operation_result_tracker(tracker);
         }
     }
