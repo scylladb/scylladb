@@ -170,10 +170,6 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
 
             return result;
         case tablet_transition_kind::rebuild_v2: {
-            if (!trinfo.pending_replica.has_value()) {
-                return result; // No nodes to stream to -> no nodes to stream from
-            }
-
             auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
             erase_if(s, [&] (const tablet_replica& r) {
                 auto* n = topo.find_node(r.host);
@@ -182,7 +178,9 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
             result.stream_weight = locator::tablet_migration_stream_weight_repair;
             result.read_from = s;
             result.written_to = std::move(s);
-            result.written_to.insert(*trinfo.pending_replica);
+            if (trinfo.pending_replica) {
+                result.written_to.insert(*trinfo.pending_replica);
+            }
 
             return result;
         }
