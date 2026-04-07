@@ -490,8 +490,8 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
         handling_node_bounce::yes));
 
     if (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&result)) {
-        auto host = (*bounce_msg)->move_to_host();
-        auto shard = (*bounce_msg)->move_to_shard().value();
+        auto host = (*bounce_msg)->target_host();
+        auto shard = (*bounce_msg)->target_shard();
         co_return forward_cql_execute_response{
             .status = forward_cql_status::redirect,
             .target_host = host,
@@ -1517,8 +1517,8 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     }
 
     return qp.local().execute_direct_without_checking_exception_message(query.assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
-        if (msg->move_to_shard()) {
-            return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
+        if (msg->as_bounce()) {
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
@@ -1635,8 +1635,8 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     tracing::trace(trace_state, "Processing a statement");
     return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
-        if (msg->move_to_shard()) {
-            return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
+        if (msg->as_bounce()) {
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
@@ -1774,8 +1774,8 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
     return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
             .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
-        if (msg->move_to_shard()) {
-            return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
+        if (msg->as_bounce()) {
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
@@ -1823,9 +1823,9 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,
         version, permit, trace_state, init_trace, {}, dialect));
     while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
-        auto shard = (*bounce_msg)->move_to_shard().value();
+        auto shard = (*bounce_msg)->target_shard();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
-        auto target_host = (*bounce_msg)->move_to_host();
+        auto target_host = (*bounce_msg)->target_host();
         auto my_host_id = _query_processor.local().proxy().get_token_metadata_ptr()->get_topology().my_host_id();
         if (target_host == my_host_id) {
             // Shard bounce

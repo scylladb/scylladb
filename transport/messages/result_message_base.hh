@@ -26,6 +26,16 @@ class result_message {
 public:
     class visitor;
     class visitor_base;
+    //
+    // Message types:
+    //
+    class void_message;
+    class set_keyspace;
+    class prepared;
+    class schema_change;
+    class rows;
+    class bounce;
+    class exception;
 
     virtual ~result_message() {}
 
@@ -61,8 +71,8 @@ public:
         return _custom_payload;
     }
 
-    virtual std::optional<unsigned> move_to_shard() const {
-        return std::nullopt;
+    virtual const result_message::bounce* as_bounce() const {
+        return nullptr;
     }
 
     virtual bool is_exception() const {
@@ -70,16 +80,6 @@ public:
     }
 
     virtual void throw_if_exception() const {}
-    //
-    // Message types:
-    //
-    class void_message;
-    class set_keyspace;
-    class prepared;
-    class schema_change;
-    class rows;
-    class bounce;
-    class exception;
 };
 
 std::ostream& operator<<(std::ostream& os, const result_message& msg);

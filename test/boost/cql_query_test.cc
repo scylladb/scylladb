@@ -4777,7 +4777,7 @@ static void prepared_on_shard(cql_test_env& e, const sstring& query,
 
             auto qo = q_serial_opts(std::move(raw_values), cl);
             auto msg = e.execute_prepared_with_qo(id, std::move(qo)).get();
-            if (!msg->move_to_shard()) {
+            if (!msg->as_bounce()) {
                 assert_that(msg).is_rows().with_rows_ignore_order(expected_rows);
             }
             return make_foreign(msg);
@@ -4785,8 +4785,8 @@ static void prepared_on_shard(cql_test_env& e, const sstring& query,
     };
 
     auto msg = execute().get();
-    if (msg->move_to_shard()) {
-        unsigned shard = *msg->move_to_shard();
+    if (auto bounce = msg->as_bounce()) {
+        unsigned shard = bounce->target_shard();
         smp::submit_to(shard, std::move(execute)).get();
     }
 }
