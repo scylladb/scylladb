@@ -235,7 +235,7 @@ SEASTAR_THREAD_TEST_CASE(multiple_outstanding_operations_on_failing_connection) 
     mylog.trace("multiple_outstanding_operations_on_failing_connection");
     with_ldap_connection(local_fail_inject_address, [] (ldap_connection& c) {
         mylog.trace("multiple_outstanding_operations_on_failing_connection: invoking bind");
-        bind(c).handle_exception(&ignore).get();;
+        bind(c).handle_exception(&ignore).get();
 
         std::vector<future<ldap_msg_ptr>> results_base;
         for (size_t i = 0; i < 10; ++i) {
@@ -289,5 +289,33 @@ SEASTAR_THREAD_TEST_CASE(severed_connection_yields_exceptional_future) {
                     .handle_exception_type([&] (std::runtime_error&) { up = 0; return ldap_msg_ptr(); })
                     .get();
         }
+    });
+}
+
+// Requires ASAN or valgrind to reliably detect the double-free.
+SEASTAR_THREAD_TEST_CASE(unregistered_msgid_double_free) {
+    set_defbase();
+    with_ldap_connection(local_ldap_address, [] (ldap_connection& c) {
+        const auto bind_res = bind(c).get();
+        BOOST_REQUIRE_EQUAL(LDAP_RES_BIND, ldap_msgtype(bind_res.get()));
+
+        // Bypass the public API to send a search without registering its
+        // message ID, so poll_results() hits the unregistered-ID branch.
+        int msgid = -1;
+        const int rc = ldap_search_ext(c.get_ldap(), const_cast<char*>(base_dn), LDAP_SCOPE_SUBTREE,
+                /*filter=*/nullptr,
+                /*attrs=*/nullptr,
+                /*attrsonly=*/0,
+                /*serverctrls=*/nullptr,
+                /*clientctrls=*/nullptr,
+                /*timeout=*/nullptr,
+                /*sizelimit=*/0, &msgid);
+        BOOST_REQUIRE_EQUAL(LDAP_SUCCESS, rc);
+        BOOST_REQUIRE_NE(-1, msgid);
+
+        // A public-API search forces poll_results() to process the
+        // unregistered response before returning.
+        const auto dummy = search(c, base_dn).get();
+        BOOST_REQUIRE(dummy.get());
     });
 }
