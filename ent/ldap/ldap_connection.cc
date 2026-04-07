@@ -437,7 +437,6 @@ void ldap_connection::poll_results() {
             const auto found = _msgid_to_promise.find(id);
             if (found == _msgid_to_promise.end()) {
                 mylog.error("poll_results: got valid result for unregistered id {}, dropping it", id);
-                ldap_msgfree(result);
             } else {
                 found->second.set_value(std::move(result_ptr));
                 _msgid_to_promise.erase(found);
