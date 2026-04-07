@@ -365,15 +365,32 @@ def test_mv_synchronous_updates(cql, test_keyspace, scylla_only):
             unwanted_trace1 = f"Forcing {async_mv} view update to be synchronous"
             unwanted_trace2 = f"Forcing {async_mv_altered} view update to be synchronous"
 
-            wanted_traces_were_found = [False, False]
-            for event in trace.events:
-                assert unwanted_trace1 not in event.description
-                assert unwanted_trace2 not in event.description
-                if wanted_trace1 in event.description:
-                    wanted_traces_were_found[0] = True
-                if wanted_trace2 in event.description:
-                    wanted_traces_were_found[1] = True
-            assert all(wanted_traces_were_found)
+            # Trace events are written asynchronously to system_traces.events.
+            # The trace session may be marked complete before all events are
+            # flushed, so the driver's get_query_trace() can return an
+            # incomplete set of events. Retry reading events directly until
+            # the expected ones appear.
+            deadline = time.time() + 30
+            while True:
+                rows = list(cql.execute(SimpleStatement(
+                    f"SELECT activity FROM system_traces.events WHERE session_id = {trace.trace_id}",
+                    consistency_level=ConsistencyLevel.ONE)))
+                activities = [row.activity for row in rows]
+
+                for activity in activities:
+                    assert unwanted_trace1 not in activity
+                    assert unwanted_trace2 not in activity
+
+                found = [
+                    any(wanted_trace1 in a for a in activities),
+                    any(wanted_trace2 in a for a in activities),
+                ]
+                if all(found):
+                    break
+
+                assert time.time() < deadline, \
+                    f"Timed out waiting for trace events"
+                time.sleep(0.1)
 
 # Reproduces #8627:
 # Whereas regular columns values are limited in size to 2GB, key columns are
