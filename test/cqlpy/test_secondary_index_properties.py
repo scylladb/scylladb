@@ -6,9 +6,11 @@
 
 import itertools
 import pytest
+import time
 import uuid
 
 from cassandra.protocol import SyntaxException, InvalidRequest, ConfigurationException
+from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.cqlpy.util import new_test_table, unique_name
 
 # Verify that creating a named index with simple valid view properties finishes successfully,
@@ -266,14 +268,27 @@ def test_create_index_synchronous_updates(cql, test_keyspace, scylla_only):
         wanted_trace = f"Forcing {test_keyspace}.{s_view_name} view update to be synchronous"
         unwanted_trace = f"Forcing {test_keyspace}.{as_view_name} view update to be synchronous"
 
-        found_wanted_trace = False
+        # Trace events are written asynchronously to system_traces.events.
+        # The trace session may be marked complete before all events are
+        # flushed, so the driver's get_query_trace() can return an incomplete
+        # set of events. Retry reading events directly until the expected
+        # one appears.
+        deadline = time.time() + 30
+        while True:
+            rows = list(cql.execute(SimpleStatement(
+                f"SELECT activity FROM system_traces.events WHERE session_id = {trace.trace_id}",
+                consistency_level=ConsistencyLevel.ONE)))
+            activities = [row.activity for row in rows]
 
-        for event in trace.events:
-            assert unwanted_trace not in event.description
-            if wanted_trace in event.description:
-                found_wanted_trace = True
+            for activity in activities:
+                assert unwanted_trace not in activity
 
-        assert found_wanted_trace
+            if any(wanted_trace in a for a in activities):
+                break
+
+            assert time.time() < deadline, \
+                f"Timed out waiting for trace event '{wanted_trace}'"
+            time.sleep(0.1)
 
 # Verify that we cannot create an index with CDC enabled.
 def test_create_index_cdc(cql, test_keyspace, scylla_only):
