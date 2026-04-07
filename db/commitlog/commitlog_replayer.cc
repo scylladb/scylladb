@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <ranges>
+#include "utils/chunked_vector.hh"
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
@@ -331,7 +332,7 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::
 }
 
 future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fname_prefix) {
-    using shard_file_map = std::unordered_multimap<unsigned, commitlog::descriptor>;
+    using shard_file_map = std::unordered_map<unsigned, utils::chunked_vector<commitlog::descriptor>>;
 
     rlogger.info("Replaying {}", fmt::join(files, ", "));
 
@@ -349,7 +350,7 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
  
         for (auto& d : descs) {
             replay_position p = d;
-            map.emplace(p.shard_id() % smp::count, std::move(d));
+            map[p.shard_id() % smp::count].push_back(std::move(d));
         }
     }
 
@@ -363,8 +364,11 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
                 // TODO: or something. For now, we do this serialized per shard,
                 // to reduce mutation congestion. We could probably (says avi)
                 // do 2 segments in parallel or something, but lets use this first.
-                auto range = map.equal_range(id);
-                for (auto& [id, d] : std::ranges::subrange(range.first, range.second)) {
+                auto it = map.find(id);
+                if (it == map.end()) {
+                    co_return total;
+                }
+                for (auto& d : it->second) {
                     auto f = d.filename();
                     rlogger.debug("Replaying {}", f);
                     auto stats = co_await _impl->recover(d, states[replay_position(d).shard_id()]);

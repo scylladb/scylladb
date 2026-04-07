@@ -93,7 +93,6 @@ async def test_reboot(request, manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Commitlog segments may be replayed out of order due to unordered_multimap")
 async def test_commitlog_segment_replay_order(manager: ManagerClient):
     """Test that commitlog segments are replayed in ascending ID order within a shard.
 
