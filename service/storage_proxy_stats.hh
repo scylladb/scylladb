@@ -146,6 +146,8 @@ struct stats : public write_stats {
 
     // number of read-repair data requests redirected to a spare replica
     uint64_t read_repair_spare_read_redirects = 0;
+    // number of read-repair write requests redirected to a spare replica
+    uint64_t read_repair_spare_write_redirects = 0;
 
     // number of mutations received as a coordinator
     uint64_t received_mutations = 0;
