@@ -3778,6 +3778,10 @@ data_value::data_value(empty_type_representation e) : data_value(make_new(empty_
 }
 
 sstring data_value::to_parsable_string() const {
+    if (is_null()) {
+        return "null";
+    }
+
     // For some reason trying to do it using fmt::format refuses to compile
     // auto to_parsable_str_transform = std::views::transform([](const data_value& dv) -> sstring {
     //     return dv.to_parsable_string();
