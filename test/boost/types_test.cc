@@ -57,6 +57,20 @@ BOOST_AUTO_TEST_CASE(test_null_is_not_empty) {
     BOOST_REQUIRE(empty != null);
 }
 
+BOOST_AUTO_TEST_CASE(test_null_data_value_to_parsable_string) {
+    auto null_utf8 = data_value::make_null(utf8_type);
+    BOOST_REQUIRE_EQUAL(null_utf8.to_parsable_string(), "null");
+
+    auto null_int = data_value::make_null(int32_type);
+    BOOST_REQUIRE_EQUAL(null_int.to_parsable_string(), "null");
+
+    auto null_list = data_value::make_null(list_type_impl::get_instance(int32_type, true));
+    BOOST_REQUIRE_EQUAL(null_list.to_parsable_string(), "null");
+
+    auto null_map = data_value::make_null(map_type_impl::get_instance(utf8_type, int32_type, true));
+    BOOST_REQUIRE_EQUAL(null_map.to_parsable_string(), "null");
+}
+
 BOOST_AUTO_TEST_CASE(test_bytes_type_string_conversions) {
     BOOST_REQUIRE(bytes_type->equal(bytes_type->from_string("616263646566"), bytes_type->decompose(data_value(bytes{"abcdef"}))));
 }
