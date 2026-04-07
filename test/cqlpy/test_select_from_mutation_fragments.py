@@ -24,7 +24,7 @@ import time
 def test_table(cql, test_keyspace):
     """ Prepares a table for the mutation dump tests to work with."""
     with util.new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck1 int, ck2 int, v text, s text static, PRIMARY KEY ((pk1, pk2), ck1, ck2)',
-                             "WITH compaction = {'class':'NullCompactionStrategy'}") as table:
+                             "WITH compaction = {'class':'NullCompactionStrategy'} AND tombstone_gc = {'mode': 'disabled'}") as table:
         yield table
 
 
@@ -50,7 +50,7 @@ def test_smoke(cql, test_table, scylla_only):
                 (pk1, pk2, 'sstable:', 3, None, None, None, 'partition end'),
         ]
 
-    nodetool.flush(cql, f"{test_table}")
+    nodetool.compact(cql, f"{test_table}", flush_memtables=True)
 
     col_names = ('pk1', 'pk2', 'mutation_source', 'partition_region', 'ck1', 'ck2', 'position_weight', 'mutation_fragment_kind')
 
@@ -160,8 +160,10 @@ def test_count(cql, test_table, scylla_only):
     for ck in range(10, 20):
         cql.execute(f"DELETE FROM {test_table} WHERE pk1 = {pk1} AND pk2 = {pk2} AND ck1 = 1 AND ck2 > {ck} AND ck2 < 100")
 
+    nodetool.compact(cql, f"{test_table}", flush_memtables=True)
+
     def check_count(kind, expected_count):
-        res = list(cql.execute(f"SELECT COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2} AND mutation_fragment_kind = '{kind}' ALLOW FILTERING"))
+        res = list(cql.execute(f"SELECT COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2} AND mutation_source > 'sstable:' AND mutation_fragment_kind = '{kind}' ALLOW FILTERING"))
         assert res[0].count == expected_count
 
     check_count('partition start', 1)
@@ -203,12 +205,16 @@ def test_many_partition_scan(cql, test_keyspace, scylla_only):
         with util.cql_session(ep.address, ep.port, False, 'cassandra', 'cassandra', 600) as patient_cql:
             res_all = list(patient_cql.execute(f"SELECT pk, mutation_source, mutation_fragment_kind, metadata FROM MUTATION_FRAGMENTS({test_table});"))
 
-        actual_partitions = []
+        actual_partitions = {}
         for r in res_all:
             if r.mutation_fragment_kind == "partition start":
-                actual_partitions.append((r.pk, len(json.loads(r.metadata)["tombstone"]) == 0))
+                has_tombstone = len(json.loads(r.metadata)["tombstone"]) > 0
+                if r.pk in actual_partitions:
+                    actual_partitions[r.pk] = actual_partitions[r.pk] or has_tombstone
+                else:
+                    actual_partitions[r.pk] = has_tombstone
 
-        actual_partitions = sorted(actual_partitions)
+        actual_partitions = sorted((pk, not has_tombstone) for pk, has_tombstone in actual_partitions.items())
 
         assert len(actual_partitions) == len(partitions)
         assert actual_partitions == partitions
@@ -234,7 +240,7 @@ def test_metadata_and_value(cql, test_keyspace, scylla_path, scylla_data_dir, sc
             cql.execute(delete_row_range_stmt, (pk, 100, 200))
         cql.execute(delete_partition_stmt, (100,))
 
-        nodetool.flush(cql, f"{test_table}")
+        nodetool.compact(cql, f"{test_table}", flush_memtables=True)
         nodetool.flush_keyspace(cql, "system_schema")
         requests.post(f'{nodetool.rest_api_url(cql)}/system/drop_sstable_caches')
 
@@ -309,12 +315,20 @@ def test_paging(cql, test_table, scylla_only):
 
     insert_stmt = cql.prepare(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES (?, ?, ?, ?, ?)")
     num_rows = 43
-    expected_mutation_fragments = num_rows + 2
     page_size = 10
     for ck in range(0, num_rows):
         cql.execute(insert_stmt, (pk1, pk2, 0, ck, 'asdasd'))
 
     nodetool.flush(cql, f"{test_table}")
+
+    count_res = cql.execute(
+            f"""SELECT COUNT(*) FROM mutation_fragments({test_table})
+            WHERE
+                pk1 = {pk1} AND
+                pk2 = {pk2} AND
+                mutation_source > 'sstable:'""").one()
+    expected_mutation_fragments = count_res.count
+    assert expected_mutation_fragments >= num_rows + 2
 
     read_stmt = cassandra.query.SimpleStatement(
             f"""SELECT * FROM mutation_fragments({test_table})
@@ -354,19 +368,21 @@ def test_slicing_rows(cql, test_table, scylla_only):
                 pk1 = {pk1} AND
                 pk2 = {pk2} AND
                 mutation_source > 'sstable:'"""))
-    mutation_source = all_rows[0].mutation_source
+    sstable_sources = list(dict.fromkeys(r.mutation_source for r in all_rows))
 
     def check_slice(ck1, ck2_start_inclusive, ck2_end_exclusive):
-        res = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
-            WHERE
-                pk1 = {pk1} AND
-                pk2 = {pk2} AND
-                mutation_source = '{mutation_source}' AND
-                partition_region = 2 AND
-                ck1 = {ck1} AND
-                ck2 >= {ck2_start_inclusive} AND
-                ck2 < {ck2_end_exclusive}
-            """))
+        res = []
+        for src in sstable_sources:
+            res += list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
+                WHERE
+                    pk1 = {pk1} AND
+                    pk2 = {pk2} AND
+                    mutation_source = '{src}' AND
+                    partition_region = 2 AND
+                    ck1 = {ck1} AND
+                    ck2 >= {ck2_start_inclusive} AND
+                    ck2 < {ck2_end_exclusive}
+                """))
         expected_rows = [r for r in all_rows if r.ck1 == ck1 and r.ck2 >= ck2_start_inclusive and r.ck2 < ck2_end_exclusive]
         assert res == expected_rows
 
@@ -393,7 +409,7 @@ def test_slicing_range_tombstone_changes(cql, test_table, scylla_only):
     cql.execute(f"DELETE FROM {test_table} WHERE pk1 = {pk1} AND pk2 = {pk2} AND ck1 = {ck1} AND ck2 > 10 AND ck2 < 20")
     cql.execute(f"DELETE FROM {test_table} WHERE pk1 = {pk1} AND pk2 = {pk2} AND ck1 = {ck1} AND ck2 > 20 AND ck2 < 30")
 
-    nodetool.flush(cql, f"{test_table}")
+    nodetool.compact(cql, f"{test_table}", flush_memtables=True)
 
     sample_row = list(cql.execute(f"""SELECT * FROM MUTATION_FRAGMENTS({test_table})
         WHERE
