@@ -461,7 +461,17 @@ public:
                     }
                 }
             } else {
-                _background_continuity = true; // Default continuity
+                if (_reversed) [[unlikely]] {
+                    if (!rows.empty()) {
+                        it = std::prev(rows.end());
+                        cont = is_continuous::yes;
+                        rt = {};
+                    } else {
+                        _background_continuity = true;
+                    }
+                } else {
+                    _background_continuity = true;
+                }
             }
 
             if (!it) {
