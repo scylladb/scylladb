@@ -1990,6 +1990,116 @@ SEASTAR_TEST_CASE(test_reverse_cursor_refreshing_on_nonevictable_snapshot_with_e
     });
 }
 
+// Reproducer for SCYLLADB-1253 (https://github.com/scylladb/scylladb/issues/18732)
+// A reversed query with many overlapping range tombstones and a single live row
+// near the end of the tombstone range fails to return the live row.
+//
+// The bug is in partition_snapshot_row_cursor::maybe_refresh(), in the
+// !is_in_latest_version() path. When the cursor is reversed and positioned
+// above all entries in the latest version (in table order), it incorrectly
+// removes the latest version's entry from the heap, causing the live row
+// to be skipped.
+//
+// This test creates a multi-version partition snapshot:
+//   - v0 (older): contains overlapping range tombstones
+//   - v1 (latest): contains the live row with a higher timestamp
+// and directly exercises the cursor to verify that advance+maybe_refresh
+// correctly keeps the live row in the heap during reversed traversal.
+SEASTAR_TEST_CASE(test_reversed_maybe_refresh_keeps_latest_version_entry) {
+    return seastar::async([] {
+        logalloc::region region;
+        mutation_application_stats app_stats;
+        mutation_cleaner cleaner(region, no_cache_tracker, app_stats);
+
+        simple_schema ss(simple_schema::with_static::no);
+        auto s = ss.schema();
+        auto rev_s = s->make_reversed();
+
+        const int num_tombstones = 100;
+        const int range_span = num_tombstones; // each range covers [i, i + range_span)
+        const int row_ck = 5; // below all range tombstone boundary entries
+
+        // Step 1: Create a partition_entry with all range tombstones.
+        auto pe_ptr = with_allocator(region.allocator(), [&] {
+            logalloc::allocating_section as;
+            return as(region, [&] () -> std::unique_ptr<partition_entry> {
+                mutation m(s, ss.make_pkey(0));
+                for (int i = 0; i < num_tombstones; ++i) {
+                    auto range = query::clustering_range::make(
+                        query::clustering_range::bound(ss.make_ckey(i), true),
+                        query::clustering_range::bound(ss.make_ckey(i + range_span), false));
+                    ss.delete_range(m, range);
+                }
+                return std::make_unique<partition_entry>(*s, std::move(m.partition()));
+            });
+        });
+
+        // Step 2: Take a snapshot to pin the current version (v0 with tombstones).
+        auto snap1 = with_allocator(region.allocator(), [&] {
+            logalloc::allocating_section as;
+            return as(region, [&] {
+                return pe_ptr->read(region, cleaner, no_cache_tracker);
+            });
+        });
+
+        // Step 3: Apply the live row. Since v0 is pinned by snap1,
+        // this creates v1 (latest version) with just the live row.
+        with_allocator(region.allocator(), [&] {
+            logalloc::allocating_section as;
+            as(region, [&] {
+                mutation m(s, ss.make_pkey(0));
+                ss.add_row(m, ss.make_ckey(row_ck), "live_value");
+                pe_ptr->apply(region, cleaner, *s, m.partition(), *m.schema(), app_stats);
+            });
+        });
+
+        // Step 4: Take a second snapshot (sees both versions) and test cursor.
+        auto snap2 = with_allocator(region.allocator(), [&] {
+            logalloc::allocating_section as;
+            return as(region, [&] {
+                return pe_ptr->read(region, cleaner, no_cache_tracker);
+            });
+        });
+
+        {
+            logalloc::reclaim_lock rl(region);
+
+            partition_snapshot_row_cursor cursor(*rev_s, *snap2, false /* unique_owner */, true /* reversed */);
+
+            // Position cursor at the very end (in reversed/query order, this means
+            // the highest table-order position).
+            cursor.maybe_advance_to(position_in_partition_view::before_all_clustered_rows());
+            bool has_row = cursor.at_a_row();
+
+            // Traverse all entries in reversed order, calling maybe_refresh()
+            // before processing each row. This simulates what
+            // partition_snapshot_reader::next_interval() does and is where
+            // the bug manifests.
+            bool found_live_row = false;
+            while (has_row) {
+                cursor.maybe_refresh();
+                if (!cursor.dummy()) {
+                    found_live_row = true;
+                    break;
+                }
+                has_row = cursor.next();
+            }
+
+            BOOST_REQUIRE_MESSAGE(found_live_row,
+                fmt::format("Reversed cursor failed to find the live row at ck={}. "
+                            "The !is_in_latest_version() path in maybe_refresh() "
+                            "incorrectly removed the latest version's entry from the heap.",
+                            row_ck));
+        }
+
+        // Cleanup
+        snap2 = {};
+        snap1 = {};
+        with_allocator(region.allocator(), [&] {
+            pe_ptr.reset();
+        });
+    });
+}
 
 SEASTAR_TEST_CASE(test_apply_to_incomplete_with_dummies) {
     return seastar::async([] {
