@@ -143,10 +143,18 @@ dht::token_range view_building_worker::get_tablet_token_range(table_id table_id,
 }
 
 future<> view_building_worker::drain() {
+    auto drain_started = std::exchange(_drain_started, started_drain::yes);
+    if (drain_started == started_drain::no) {
+        _drain_finished = shared_future(do_drain());
+    }
+    return _drain_finished.get_future();
+}
+
+future<> view_building_worker::do_drain() {
     if (!_as.abort_requested()) {
         _as.request_abort();
     }
-    _state._mutex.broken();
+    co_await _staging_sstables_mutex.wait();
     _staging_sstables_mutex.broken();
     _sstables_to_register_event.broken();
     if (this_shard_id() == 0) {
@@ -156,7 +164,9 @@ future<> view_building_worker::drain() {
         co_await std::move(state_observer);
         co_await _mnotifier.unregister_listener(this);
     }
-    co_await _state.clear();
+    co_await _state._mutex.wait();
+    _state._mutex.broken();
+    co_await _state.drain();
     co_await uninit_messaging_service();
 }
 
@@ -449,7 +459,17 @@ static std::unordered_set<table_id> get_ids_of_all_views(replica::database& db, 
     }) | std::ranges::to<std::unordered_set>();;
 }
 
-// If `state::processing_base_table` is diffrent that the `view_building_state::currently_processed_base_table`,
+void view_building_worker::state::start_batch(std::unique_ptr<batch> batch) {
+    if (_drained) {
+        on_internal_error(vbw_logger, "view_building_worker::state was already drained");
+    } else if (_batch) {
+        on_internal_error(vbw_logger, fmt::format("view_building_worker::state::start_batch(): some batch (tasks: {}) is already running", _batch->tasks | std::views::keys));
+    }
+    _batch = std::move(batch);
+    _batch->start();
+}
+
+// If `state::processing_base_table` is different that the `view_building_state::currently_processed_base_table`,
 // clear the state, save and flush new base table
 future<> view_building_worker::state::update_processing_base_table(replica::database& db, const view_building_state& building_state, abort_source& as) {
     if (processing_base_table != building_state.currently_processed_base_table) {
@@ -474,6 +494,10 @@ future<> view_building_worker::state::clean_up_after_batch() {
 
 // Flush base table, set is as currently processing base table and save which views exist at the time of flush
 future<> view_building_worker::state::flush_base_table(replica::database& db, table_id base_table_id, abort_source& as) {
+    if (_drained) {
+        on_internal_error(vbw_logger, "view_building_worker::state was already drained");
+    }
+
     auto cf = db.find_column_family(base_table_id).shared_from_this();
     co_await when_all(cf->await_pending_writes(), cf->await_pending_streams());
     co_await flush_base(cf, as);
@@ -490,6 +514,11 @@ future<> view_building_worker::state::clear() {
     processing_base_table.reset();
     completed_tasks.clear();
     flushed_views.clear();
+}
+
+future<> view_building_worker::state::drain() {
+    _drained = true;
+    co_await clear();
 }
 
 view_building_worker::batch::batch(sharded<view_building_worker>& vbw, std::unordered_map<utils::UUID, view_building_task> tasks, table_id base_id, locator::tablet_replica replica)
@@ -791,8 +820,8 @@ future<std::vector<utils::UUID>> view_building_worker::work_on_tasks(raft::term_
         }
 
         // Create and start the batch
-        _state._batch = std::make_unique<batch>(container(), std::move(tasks), *building_state.currently_processed_base_table, my_replica);
-        _state._batch->start();
+        auto batch = std::make_unique<view_building_worker::batch>(container(), std::move(tasks), *building_state.currently_processed_base_table, my_replica);
+        _state.start_batch(std::move(batch));
     }
 
     if (std::ranges::all_of(ids, [&] (auto& id) { return !_state._batch->tasks.contains(id); })) {
