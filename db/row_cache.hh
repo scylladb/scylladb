@@ -211,6 +211,10 @@ public:
         utils::timed_rate_moving_average misses;
         utils::timed_rate_moving_average reads_with_misses;
         utils::timed_rate_moving_average reads_with_no_misses;
+        uint64_t row_hits = 0;
+        uint64_t row_misses = 0;
+        uint64_t partition_hits = 0;
+        uint64_t partition_misses = 0;
     };
 private:
     cache_tracker& _tracker;
