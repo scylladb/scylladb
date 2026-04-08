@@ -14,6 +14,7 @@
 #include <seastar/core/shared_future.hh>
 #include <unordered_map>
 #include <unordered_set>
+#include <flat_set>
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
 #include "raft/raft.hh"
@@ -169,10 +170,15 @@ private:
     future<> do_process_staging(table_id base_id, dht::token last_token);
 
     future<> run_staging_sstables_registrator();
-    // Caller must hold units from `_staging_sstables_mutex`
+    // Acquires `_staging_sstables_mutex` on all shards internally,
+    // so callers must not hold `_staging_sstables_mutex` when invoking it.
     future<> create_staging_sstable_tasks();
     future<> discover_existing_staging_sstables();
     std::unordered_map<table_id, std::vector<staging_sstable_task_info>> discover_local_staging_sstables(building_tasks building_tasks);
+    // Acquire `_staging_sstables_mutex` on multiple shards in parallel.
+    // Must be called only from shard 0.
+    // Must be called ONLY by `create_staging_sstable_tasks()` and only once at a time to avoid deadlock.
+    future<std::vector<foreign_ptr<semaphore_units<>>>> lock_staging_mutex_on_multiple_shards(std::flat_set<shard_id> shards);
 
     void init_messaging_service();
     future<> uninit_messaging_service();
