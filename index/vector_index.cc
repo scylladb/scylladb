@@ -16,6 +16,7 @@
 #include "index/vector_index.hh"
 #include "index/secondary_index.hh"
 #include "index/secondary_index_manager.hh"
+#include "index/target_parser.hh"
 #include "types/concrete_types.hh"
 #include "types/types.hh"
 #include "utils/managed_string.hh"
@@ -103,6 +104,19 @@ const static std::unordered_map<sstring, std::function<void(const sstring&, cons
         // 'rescoring' enables recalculating of similarity scores of candidates retrieved from vector store when quantization is used.
         {"rescoring", std::bind_front(validate_enumerated_option, boolean_values)},
     };
+
+sstring get_vector_index_target_column(const sstring& targets) {
+    std::optional<rjson::value> json_value = rjson::try_parse(targets);
+    if (!json_value || !json_value->IsObject()) {
+        return target_parser::get_target_column_name_from_string(targets);
+    }
+
+    rjson::value* pk = rjson::find(*json_value, "pk");
+    if (pk && pk->IsArray() && !pk->Empty()) {
+        return sstring(rjson::to_string_view(pk->GetArray()[0]));
+    }
+    return target_parser::get_target_column_name_from_string(targets);
+}
 
 bool vector_index::is_rescoring_enabled(const index_options_map& properties) {
     auto q = properties.find("quantization");
@@ -320,12 +334,19 @@ bool vector_index::has_vector_index(const schema& s) {
 
 bool vector_index::has_vector_index_on_column(const schema& s, const sstring& target_name) {
     for (const auto& index : s.indices()) {
-        auto class_it = index.options().find(db::index::secondary_index::custom_class_option_name);
-        auto target_it = index.options().find(cql3_parser::index_target::target_option_name);
-        if (class_it != index.options().end() && target_it != index.options().end()) {
-            auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
-            return custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && target_it->second == target_name;
+        if (is_vector_index_on_column(index, target_name)) {
+            return true;
         }
+    }
+    return false;
+}
+
+bool vector_index::is_vector_index_on_column(const index_metadata& im, const sstring& target_name) {
+    auto class_it = im.options().find(db::index::secondary_index::custom_class_option_name);
+    auto target_it = im.options().find(cql3_parser::index_target::target_option_name);
+    if (class_it != im.options().end() && target_it != im.options().end()) {
+        auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
+        return custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && get_vector_index_target_column(target_it->second) == target_name;
     }
     return false;
 }
