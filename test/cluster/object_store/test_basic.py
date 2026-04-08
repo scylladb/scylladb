@@ -17,6 +17,7 @@ from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace
 from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.util import unique_name
 
 logger = logging.getLogger(__name__)
 
@@ -394,3 +395,106 @@ async def test_drop_table_object_storage_no_deadlock(manager: ManagerClient, obj
         # With the tombstone, registry entries should be cleaned up
         rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
         assert len(rows) == 0, f"Registry entries should be cleaned up after DROP TABLE, found {len(rows)}"
+
+
+@pytest.mark.asyncio
+async def test_drop_keyspace_object_storage_cleans_registry(manager: ManagerClient, object_storage):
+    """
+    Verify DROP KEYSPACE on an object-storage-backed keyspace cleans up
+    sstables registry entries for ALL tables in the keyspace.
+
+    The on_before_drop_keyspace listener iterates all tables in the
+    keyspace and adds partition tombstones for each table's registry
+    entries into the group0 command.  This test creates two tables,
+    verifies their registry entries exist, drops the keyspace, and
+    confirms that registry entries for both tables are gone.
+
+    Uses asyncio.wait_for with a timeout to detect a potential deadlock.
+    """
+    cfg = {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+        'experimental_features': ['keyspace-storage-options'],
+    }
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    ks = unique_name()
+    ks_opts = keyspace_options(object_storage)
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks} {ks_opts}")
+
+    await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int)")
+    await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, v int)")
+
+    for i in range(10):
+        await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+        await cql.run_async(f"INSERT INTO {ks}.t2 (pk, v) VALUES ({i}, {i})")
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+
+    tid1 = await cql.run_async(
+        f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't1'")
+    table_id1 = tid1[0].id
+    tid2 = await cql.run_async(
+        f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't2'")
+    table_id2 = tid2[0].id
+
+    rows1 = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id1])
+    assert len(rows1) > 0, "Expected registry entries for t1 before DROP KEYSPACE"
+    rows2 = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id2])
+    assert len(rows2) > 0, "Expected registry entries for t2 before DROP KEYSPACE"
+
+    await asyncio.wait_for(
+        cql.run_async(f"DROP KEYSPACE {ks}"),
+        timeout=10)
+
+    # After DROP KEYSPACE, registry entries for both tables should be gone
+    rows1 = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id1])
+    assert len(rows1) == 0, f"Registry entries for t1 should be cleaned up after DROP KEYSPACE, found {len(rows1)}"
+    rows2 = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id2])
+    assert len(rows2) == 0, f"Registry entries for t2 should be cleaned up after DROP KEYSPACE, found {len(rows2)}"
+  
+@pytest.mark.asyncio
+async def test_truncate_object_storage_cleans_registry(manager: ManagerClient, object_storage):
+    """
+    Verify TRUNCATE on an object-storage-backed table cleans up sstables
+    registry entries while keeping the table itself intact.
+    """
+    cfg = {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+        'experimental_features': ['keyspace-storage-options'],
+    }
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int)")
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        tid = await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't1'")
+        table_id = tid[0].id
+
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Expected registry entries before TRUNCATE"
+
+        await cql.run_async(f"TRUNCATE {ks}.t1")
+
+        # After truncate, registry entries should be cleaned up
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) == 0, f"Registry entries should be cleaned up after TRUNCATE, found {len(rows)}"
+
+        # Table should still exist but be empty
+        res = await cql.run_async(f"SELECT * FROM {ks}.t1")
+        assert len(res) == 0, f"Table should be empty after TRUNCATE, found {len(res)} rows"
+
+        # Verify the table is still functional: insert new data, flush, check new registry entries
+        for i in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Expected new registry entries after inserting into truncated table"
+
+        res = await cql.run_async(f"SELECT * FROM {ks}.t1")
+        assert len(res) == 5, f"Expected 5 rows after re-inserting into truncated table, found {len(res)}"
