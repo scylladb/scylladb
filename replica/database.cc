@@ -1882,6 +1882,13 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
     };
 
     try {
+        co_await utils::get_local_injector().inject("fail_mutation_query", [&s = query_schema] (auto& handler) -> future<> {
+            if (s->ks_name() != handler.get("ks_name") || s->cf_name() != handler.get("cf_name")) {
+                co_return;
+            }
+            throw std::runtime_error(format("injected failure in mutation_query for {}.{}", s->ks_name(), s->cf_name()));
+        });
+
         auto op = cf.read_in_progress();
 
         future<> f = make_ready_future<>();
