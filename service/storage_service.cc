@@ -6247,6 +6247,7 @@ void storage_service::init_messaging_service() {
                 if (ss._feature_service.client_routes) {
                     additional_tables.push_back(db::system_keyspace::client_routes()->id());
                 }
+                additional_tables.push_back(db::system_keyspace::sstables_registry()->id());
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
