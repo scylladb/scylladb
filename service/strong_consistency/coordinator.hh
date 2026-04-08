@@ -12,6 +12,7 @@
 #include "query/query-result.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 namespace gms {
 
@@ -25,6 +26,7 @@ class groups_manager;
 
 struct need_redirect {
     locator::tablet_replica target;
+    noncopyable_function<void(locator::host_id)> on_node_resolved;
 };
 template <typename T = std::monostate>
 using value_or_redirect = std::variant<T, need_redirect>;
@@ -61,7 +63,8 @@ private:
     struct operation_ctx;
     future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema,
         const dht::token& token,
-        abort_source& as);
+        abort_source& as,
+        bool use_leader_cache);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper);
 

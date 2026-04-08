@@ -29,6 +29,57 @@ namespace service::strong_consistency {
 
 class raft_server;
 
+/// A cache of leader locations for raft groups where this node is not a replica.
+/// Populated by the CQL transport layer after a redirect reveals the actual leader.
+///
+/// Uses a sweep-based eviction strategy tied to token_metadata updates:
+/// begin_sweep() before iterating tablets, mark_seen() for each existing group,
+/// end_sweep() to evict entries whose groups no longer exist.
+class tablet_group_leader_cache {
+    struct entry {
+        locator::host_id leader;
+        bool seen = false;
+    };
+    std::unordered_map<raft::group_id, entry> _entries;
+
+public:
+    void put(raft::group_id group, locator::host_id leader) {
+        auto [it, inserted] = _entries.try_emplace(group, entry{leader});
+        if (!inserted) {
+            it->second.leader = leader;
+        }
+    }
+
+    std::optional<locator::host_id> get(raft::group_id group) const {
+        auto it = _entries.find(group);
+        if (it != _entries.end()) {
+            return it->second.leader;
+        }
+        return std::nullopt;
+    }
+
+    void erase(raft::group_id group) {
+        _entries.erase(group);
+    }
+
+    void begin_sweep() {
+        for (auto& [_, e] : _entries) {
+            e.seen = false;
+        }
+    }
+
+    void mark_seen(raft::group_id group) {
+        auto it = _entries.find(group);
+        if (it != _entries.end()) {
+            it->second.seen = true;
+        }
+    }
+
+    void end_sweep() {
+        std::erase_if(_entries, [](const auto& p) { return !p.second.seen; });
+    }
+};
+
 /// A sharded service responsible for the lifecycle and access
 /// management of all Raft groups for strongly consistent tablets hosted on this node.
 ///
@@ -88,6 +139,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
 
+    tablet_group_leader_cache _leader_cache;
+
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
@@ -132,6 +185,8 @@ public:
     // until the raft groups for those tablets are started and ready to serve queries.
     // For the local node, waits directly without an RPC.
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
+
+    tablet_group_leader_cache& leader_cache() { return _leader_cache; }
 };
 
 /// A temporary, RAII-style handle to an active Raft group server instance,

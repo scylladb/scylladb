@@ -1289,9 +1289,14 @@ shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_s
     return ::make_shared<cql_transport::messages::result_message::bounce>(my_host_id, shard, std::move(cached_fn_calls));
 }
 
-shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_node(locator::tablet_replica replica, cql3::computed_function_values cached_fn_calls, seastar::lowres_clock::time_point timeout, bool is_write) {
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_node(
+        locator::tablet_replica replica,
+        cql3::computed_function_values cached_fn_calls,
+        seastar::lowres_clock::time_point timeout,
+        bool is_write,
+        noncopyable_function<void(locator::host_id)> on_node_resolved) {
     get_cql_stats().forwarded_requests++;
-    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write);
+    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write, std::move(on_node_resolved));
 }
 
 query_processor::consistency_level_set query_processor::to_consistency_level_set(const query_processor::cl_option_list& levels) {
