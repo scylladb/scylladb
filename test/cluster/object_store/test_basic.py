@@ -17,7 +17,9 @@ from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace
 from test.pylib.tablets import get_all_tablet_replicas
-from test.pylib.util import unique_name
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.rest_client import read_barrier
+from time import time
 
 logger = logging.getLogger(__name__)
 
@@ -498,3 +500,63 @@ async def test_truncate_object_storage_cleans_registry(manager: ManagerClient, o
 
         res = await cql.run_async(f"SELECT * FROM {ks}.t1")
         assert len(res) == 5, f"Expected 5 rows after re-inserting into truncated table, found {len(res)}"
+
+
+@pytest.mark.asyncio
+async def test_sstables_registry_replicated_across_nodes(manager: ManagerClient, object_storage):
+    """
+    Verify that sstables registry entries written through group0 Raft
+    replication are visible on ALL nodes in the cluster, not just the
+    node that performed the flush.
+
+    Starts a 2-node cluster with RF=1 object-storage-backed keyspace,
+    inserts data, flushes on both nodes (only the replica owner will
+    actually create SSTables), then verifies that both nodes see the
+    same set of registry entries in system.sstables.
+
+    This proves that system.sstables is replicated via Raft group0
+    rather than being local-only.
+
+    Related to SCYLLADB-1004.
+    """
+    cfg = {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+        'experimental_features': ['keyspace-storage-options'],
+    }
+    servers = await manager.servers_add(2, config=cfg)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
+
+    ks = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE {ks} {keyspace_options(object_storage, rf=1)}")
+    await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int)")
+    for i in range(10):
+        await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+
+    # Flush on both nodes — only the RF=1 replica owner creates SSTables,
+    # but flushing both ensures we don't need to figure out which node owns data.
+    for srv in servers:
+        await manager.api.flush_keyspace(srv.ip_addr, ks)
+
+    tid = await cql.run_async(
+        f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't1'")
+    table_id = tid[0].id
+
+    # Ensure Raft log is fully applied on both nodes before querying
+    for srv in servers:
+        await read_barrier(manager.api, srv.ip_addr)
+
+    rows_node0 = await cql.run_async(
+        "SELECT generation FROM system.sstables WHERE owner = %s",
+        parameters=[table_id], host=hosts[0])
+    rows_node1 = await cql.run_async(
+        "SELECT generation FROM system.sstables WHERE owner = %s",
+        parameters=[table_id], host=hosts[1])
+
+    gens_node0 = sorted(str(r.generation) for r in rows_node0)
+    gens_node1 = sorted(str(r.generation) for r in rows_node1)
+
+    assert len(gens_node0) > 0 or len(gens_node1) > 0, \
+        "Expected at least one node to have registry entries after flush"
+    assert gens_node0 == gens_node1, \
+        f"Registry entries differ between nodes: node0={gens_node0}, node1={gens_node1}"
