@@ -181,7 +181,24 @@ static locator::tablet_replica select_closest_replica(const gms::gossiper& gossi
     return *it;
 }
 
-auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as)
+static need_redirect redirect_to_leader(locator::tablet_replica target, groups_manager& gm, raft::group_id group_id) {
+    return {
+        .target = target,
+        // The `local()` here is needed to update the cache on the shard handling
+        // the client request which may be different from the shard currently
+        // executing the statement.
+        .on_node_resolved = [container = &gm.container(), group_id] (locator::host_id leader) {
+            container->local().leader_cache().put(group_id, leader);
+        },
+    };
+}
+
+static need_redirect redirect_to_replica(locator::tablet_replica target) {
+    // When redirecting to a replica, there's no need to update the leader cache
+    return { .target = target };
+}
+
+auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool use_leader_cache)
     -> future<value_or_redirect<operation_ctx>>
 {
     auto erm = schema.table().get_effective_replication_map();
@@ -204,14 +221,27 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(schema.id());
     const auto tablet_id = tablet_map.get_tablet_id(token);
     const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
+    const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
 
     if (!contains(tablet_info.replicas, this_replica)) {
-        co_return need_redirect {
-            select_closest_replica(_gossiper, tablet_info.replicas, token,
-                erm->get_token_metadata().get_topology())
-        };
+        // For writes, check the leader cache to avoid an extra roundtrip.
+        // For now, reads skip the cache because any replica can serve them.
+        if (use_leader_cache) {
+            if (const auto cached = _groups_manager.leader_cache().get(raft_info.group_id)) {
+                if (const auto* target = find_replica(tablet_info, *cached)) {
+                    co_return redirect_to_leader(*target, _groups_manager, raft_info.group_id);
+                }
+                // Cached leader is no longer a replica, evict it.
+                _groups_manager.leader_cache().erase(raft_info.group_id);
+            }
+        }
+        auto target = select_closest_replica(_gossiper, tablet_info.replicas, token,
+                erm->get_token_metadata().get_topology());
+        if (use_leader_cache) {
+            co_return redirect_to_leader(target, _groups_manager, raft_info.group_id);
+        }
+        co_return redirect_to_replica(target);
     }
-    const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
 
     co_await utils::get_local_injector().inject("sc_coordinator_wait_before_acquire_server",
             utils::wait_for_message(5min));
@@ -250,9 +280,9 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
     bool commit_status_unknown_ex = false;
 
     try {
-        auto op_result = co_await create_operation_ctx(*schema, token, aoe.abort_source());
-        if (const auto* redirect = get_if<need_redirect>(&op_result)) {
-            co_return *redirect;
+        auto op_result = co_await create_operation_ctx(*schema, token, aoe.abort_source(), true);
+        if (auto* redirect = get_if<need_redirect>(&op_result)) {
+            co_return std::move(*redirect);
         }
         auto& op = get<operation_ctx>(op_result);
 
@@ -270,7 +300,7 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                             schema->ks_name(), schema->cf_name(), op.tablet_id,
                             leader_host_id, op.tablet_info.replicas));
                 }
-                co_return need_redirect{*target};
+                co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
             }
             if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
                 co_await std::move(wait_for_leader->future);
@@ -373,9 +403,9 @@ auto coordinator::query(schema_ptr schema,
     auto mark_read_latency = defer([this, &lc] { _stats.read.mark(lc.stop().latency()); });
 
     try {
-        auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token(), aoe.abort_source());
-        if (const auto* redirect = get_if<need_redirect>(&op_result)) {
-            co_return *redirect;
+        auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token(), aoe.abort_source(), false);
+        if (auto* redirect = get_if<need_redirect>(&op_result)) {
+            co_return std::move(*redirect);
         }
         auto& op = get<operation_ctx>(op_result);
 

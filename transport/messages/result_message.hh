@@ -26,6 +26,7 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 namespace cql_transport {
 
@@ -100,15 +101,18 @@ class result_message::bounce : public result_message {
     cql3::computed_function_values _cached_fn_calls;
     std::optional<seastar::lowres_clock::time_point> _timeout;
     std::optional<bool> _is_write;
+    noncopyable_function<void(locator::host_id)> _on_node_resolved;
 
 public:
     bounce(locator::host_id host, unsigned shard, cql3::computed_function_values cached_fn_calls,
-           std::optional<seastar::lowres_clock::time_point> timeout = std::nullopt, std::optional<bool> is_write = std::nullopt)
+           std::optional<seastar::lowres_clock::time_point> timeout = std::nullopt, std::optional<bool> is_write = std::nullopt,
+           noncopyable_function<void(locator::host_id)> on_node_resolved = {})
         : _host(host)
         , _shard(shard)
         , _cached_fn_calls(std::move(cached_fn_calls))
         , _timeout(std::move(timeout))
         , _is_write(std::move(is_write))
+        , _on_node_resolved(std::move(on_node_resolved))
     {}
     virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
@@ -135,6 +139,10 @@ public:
 
     cql3::computed_function_values&& take_cached_pk_function_calls() {
         return std::move(_cached_fn_calls);
+    }
+
+    const noncopyable_function<void(locator::host_id)>& on_node_resolved() const {
+        return _on_node_resolved;
     }
 };
 

@@ -1367,3 +1367,102 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient)
         rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0", host=target_host)
         assert len(rows) == 1
         assert rows[0].v == 13
+
+async def test_leader_cache_eliminates_redirect(manager: ManagerClient):
+    """
+    Verify that after a non-replica node learns the leader location via a redirect,
+    subsequent write requests from that node go directly to the leader without a redirect.
+
+    Uses 4 nodes in 2 racks (2 per rack) with RF=2 and 1 tablet.
+    Tablet-aware replication places one replica per rack.
+    The non-replica node in the non-leader rack always picks the same-rack
+    (non-leader) replica as closest, causing a redirect to the leader.
+    After the first write populates the cache, subsequent writes skip the redirect.
+
+    We verify this via the scylla_transport_requests_forwarded_redirected metric
+    on the non-replica node.
+    """
+    cmdline = [
+        '--logger-log-level', 'cql_server=trace',
+        '--experimental-features', 'strongly-consistent-tables',
+    ]
+    # 2 racks with 2 nodes each
+    property_file = [
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack2"},
+        {"dc": "dc1", "rack": "rack2"},
+    ]
+    servers = await manager.servers_add(4, cmdline=cmdline, property_file=property_file)
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    def host_by_host_id(host_id):
+        for hid, host in zip(host_ids, hosts):
+            if hid == host_id:
+                return host
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}"
+               " AND tablets = {'initial': 1} AND consistency = 'global'")
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, value int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            try:
+                leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+            except:
+                leader_host_id = await wait_for_leader(manager, servers[1], group_id)
+
+            tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
+            assert len(tablet_replicas) == 2
+            replica_host_ids = [replica[0] for replica in tablet_replicas]
+
+            # Find the rack of the leader
+            leader_server = next(s for hid, s in zip(host_ids, servers) if str(hid) == leader_host_id)
+            leader_rack = leader_server.rack
+
+            # Pick the non-replica in the non-leader rack.
+            # This node's closest replica is the same-rack (non-leader) replica,
+            # so writes always cause a redirect on the first attempt.
+            non_replica_host_id = None
+            for hid, s in zip(host_ids, servers):
+                if str(hid) not in replica_host_ids and s.rack != leader_rack:
+                    non_replica_host_id = hid
+                    break
+            assert non_replica_host_id is not None, "Could not find non-replica in non-leader rack"
+            non_replica_server = next(s for hid, s in zip(host_ids, servers) if hid == non_replica_host_id)
+            non_replica_host = host_by_host_id(non_replica_host_id)
+
+            logger.info(f"Non-replica node: {non_replica_host} (rack {non_replica_server.rack}), leader: {leader_host_id} (rack {leader_rack})")
+
+            # Warmup phase: run enough requests to populate the leader cache
+            # on all shards of the non-replica node. The driver may distribute
+            # requests across multiple connections (shards), so we need to
+            # warm them all up. 20 requests should be enough to cover all shards.
+            for i in range(20):
+                await cql.run_async(f"INSERT INTO {table} (pk, value) VALUES ({i}, {i})", host=non_replica_host)
+
+            # Measure redirect counter after warmup (all shards should be warm).
+            metrics = await manager.metrics.query(non_replica_host.address)
+            redirects_before = metrics.get('scylla_transport_requests_forwarded_redirected') or 0
+
+            # Run another batch of requests; all should use the cached leader
+            # and NOT cause any redirects.
+            num_requests = 20
+            for i in range(20, 20 + num_requests):
+                await cql.run_async(f"INSERT INTO {table} (pk, value) VALUES ({i}, {i})", host=non_replica_host)
+
+            metrics = await manager.metrics.query(non_replica_host.address)
+            redirects_after = metrics.get('scylla_transport_requests_forwarded_redirected') or 0
+
+            new_redirects = redirects_after - redirects_before
+            logger.info(f"Redirects before: {redirects_before}, after: {redirects_after}, new: {new_redirects}")
+            assert new_redirects == 0, \
+                f"Expected no new redirects after cache warmup, but got {new_redirects}"
+
+            # Verify data correctness
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 25", host=non_replica_host)
+            assert len(rows) == 1
+            assert rows[0].value == 25

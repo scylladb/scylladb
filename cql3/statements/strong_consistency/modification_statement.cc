@@ -62,7 +62,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
 
-    const auto mutate_result = co_await coordinator.get().mutate(_statement->s,
+    auto mutate_result = co_await coordinator.get().mutate(_statement->s,
         keys[0].start()->value().token(),
         [&](api::timestamp_type ts) {
             const auto prefetch_data = update_parameters::prefetch_data(_statement->s);
@@ -78,9 +78,9 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         }, timeout, qs.get_client_state().get_abort_source());
 
     using namespace service::strong_consistency;
-    if (const auto* redirect = get_if<need_redirect>(&mutate_result)) {
+    if (auto* redirect = get_if<need_redirect>(&mutate_result)) {
         bool is_write = true;
-        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats());
+        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_node_resolved));
     }
     utils::get_local_injector().inject("sc_modification_statement_timeout", [&] {
         throw exceptions::mutation_write_timeout_exception{"", "", options.get_consistency(), 0, 0, db::write_type::SIMPLE};

@@ -48,28 +48,6 @@ public:
     }
 };
 
-static void for_each_sc_tablet(const token_metadata& tm,
-    noncopyable_function<void(global_tablet_id, raft::group_id)>&& func)
-{
-    const auto this_replica = locator::tablet_replica {
-        .host = tm.get_my_id(),
-        .shard = this_shard_id()
-    };
-    const auto& tablets = tm.tablets();
-    for (const auto& [table_id, _]: tablets.all_table_groups()) {
-        const auto& tablet_map = tablets.get_tablet_map(table_id);
-        if (!tablet_map.has_raft_info()) {
-            continue;
-        }
-        for (const auto& tablet_id: tablet_map.tablet_ids()) {
-            if (tablet_map.has_replica(tablet_id, this_replica)) {
-                const auto group_id = tablet_map.get_tablet_raft_info(tablet_id).group_id;
-                func(global_tablet_id{table_id, tablet_id}, group_id);
-            }
-        }
-    }
-}
-
 raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder holder)
     : _state(state)
     , _holder(std::move(holder))
@@ -368,44 +346,64 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         state.has_tablet = false;
     }
 
-    for_each_sc_tablet(*new_tm, [&](global_tablet_id tablet, raft::group_id id) {
-        auto& state = _raft_groups[id];
-        state.has_tablet = true;
-
-        // Don't start the raft server if it is already (started or starting) and not stopping.
-        if (state.gate && !state.gate->is_closed()) {
-            return;
+    const auto this_replica = locator::tablet_replica {
+        .host = new_tm->get_my_id(),
+        .shard = this_shard_id()
+    };
+    _leader_cache.begin_sweep();
+    const auto& tablets = new_tm->tablets();
+    for (const auto& [table_id, _]: tablets.all_table_groups()) {
+        const auto& tablet_map = tablets.get_tablet_map(table_id);
+        if (!tablet_map.has_raft_info()) {
+            continue;
         }
+        for (const auto& tid: tablet_map.tablet_ids()) {
+            const auto id = tablet_map.get_tablet_raft_info(tid).group_id;
+            const auto tablet = global_tablet_id{table_id, tid};
 
-        logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
-        state.gate = make_lw_shared<gate>();
-        _starting_groups.push_back(state);
-        state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm](this auto) -> future<> {
-            co_await state.server_control_op.get_future();
-            co_await start_raft_group(tablet, id, std::move(new_tm));
-            state.server = &_raft_gr.get_server(id);
-            state.leader_info_updater = leader_info_updater(state, tablet, id);
+            _leader_cache.mark_seen(id);
+            if (!tablet_map.has_replica(tid, this_replica)) {
+                continue;
+            }
+            auto& state = _raft_groups[id];
+            state.has_tablet = true;
 
-            // We want to make sure the server is ready to serve requests before
-            // we report it as started in wait_for_groups_to_start().
-            abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
-            while (true) {
-                auto srv = raft_server(state, state.gate->hold());
-                auto res = srv.begin_mutate(aoe.abort_source());
-                if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
-                    co_await std::move(w->future);
-                } else {
-                    break;
-                }
+            // Don't start the raft server if it is already (started or starting) and not stopping.
+            if (state.gate && !state.gate->is_closed()) {
+                continue;
             }
 
-            _starting_groups.erase(_starting_groups.iterator_to(state));
+            logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
+            state.gate = make_lw_shared<gate>();
+            _starting_groups.push_back(state);
+            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm](this auto) -> future<> {
+                co_await state.server_control_op.get_future();
+                co_await start_raft_group(tablet, id, std::move(new_tm));
+                state.server = &_raft_gr.get_server(id);
+                state.leader_info_updater = leader_info_updater(state, tablet, id);
 
-            logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
-        });
-    });
+                // We want to make sure the server is ready to serve requests before
+                // we report it as started in wait_for_groups_to_start().
+                abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
+                while (true) {
+                    auto srv = raft_server(state, state.gate->hold());
+                    auto res = srv.begin_mutate(aoe.abort_source());
+                    if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
+                        co_await std::move(w->future);
+                    } else {
+                        break;
+                    }
+                }
+
+                _starting_groups.erase(_starting_groups.iterator_to(state));
+
+                logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
+            });
+        }
+    }
 
     schedule_raft_groups_deletion(false);
+    _leader_cache.end_sweep();
 }
 
 future<raft_server> groups_manager::acquire_server(table_id table_id, raft::group_id group_id, abort_source& as) {
