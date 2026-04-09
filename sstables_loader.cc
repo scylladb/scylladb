@@ -28,6 +28,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "utils/error_injection.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -406,6 +407,9 @@ future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::
     size_t nr_sst_current = 0;
 
     while (!sstables.empty()) {
+        co_await utils::get_local_injector().inject("load_and_stream_before_streaming_batch",
+            utils::wait_for_message(60s));
+
         const size_t batch_sst_nr = std::min(16uz, sstables.size());
         auto sst_processed = sstables
             | std::views::reverse
@@ -575,6 +579,16 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     // streamer guarantees topology stability, for correctness, by holding effective_replication_map
     // throughout its lifetime.
     auto erm = co_await await_topology_quiesced_and_get_erm(table_id);
+
+    // Obtain a phaser guard to prevent the table from being destroyed
+    // while streaming is in progress.  table::stop() calls
+    // _pending_streams_phaser.close() which blocks until all outstanding
+    // stream_in_progress() guards are released, so holding this guard
+    // keeps the table alive for the entire streaming operation.
+    // find_column_family throws no_such_column_family if the table was
+    // already dropped before we got here.
+    auto& tbl = _db.local().find_column_family(table_id);
+    auto stream_guard = tbl.stream_in_progress();
 
     auto streamer = make_sstable_streamer(_db.local().find_column_family(table_id).uses_tablets(),
                                           _messaging, _db.local(), table_id, std::move(erm), std::move(sstables),
