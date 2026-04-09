@@ -254,6 +254,12 @@ void cql_sg_stats::register_metrics()
         );
     }
 
+    transport_metrics.emplace_back(
+            sm::make_gauge("cql_pending_response_memory", [this] { return _pending_response_memory; },
+                             sm::description("Holds the total memory in bytes consumed by responses waiting to be sent."),
+                             {{"scheduling_group_name", cur_sg_name}}).set_skip_when_empty()
+    );
+
     new_metrics.add_group("transport", std::move(transport_metrics));
     _metrics = std::exchange(new_metrics, {});
 }
@@ -843,6 +849,8 @@ future<> cql_server::connection::process_request() {
 
             future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave), stream] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
                 try {
+                    auto& sg_stats = _server.get_cql_sg_stats();
+                    size_t pending_response_size = 0;
                     if (response_f.failed()) {
                         const auto message = format("request processing failed, error [{}]", response_f.get_exception());
                         clogger.error("{}: {}", _client_state.get_remote_address(), message);
@@ -850,9 +858,22 @@ future<> cql_server::connection::process_request() {
                                                   message,
                                                   tracing::trace_state_ptr()));
                     } else {
-                        write_response(response_f.get(), std::move(mem_permit), _compression);
+                        auto response = response_f.get();
+                        // Account for response body size exceeding the initial estimate.
+                        auto resp_size = response->size();
+                        auto permit_size = mem_permit.count();
+                        if (resp_size > permit_size) {
+                            auto extra = resp_size - permit_size;
+                            auto extra_units = consume_units(_server._memory_available, extra);
+                            mem_permit.adopt(std::move(extra_units));
+                        }
+                        pending_response_size = resp_size;
+                        sg_stats._pending_response_memory += pending_response_size;
+                        write_response(std::move(response), _compression);
                     }
-                    _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
+                    _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave), permit = std::move(mem_permit), &sg_stats, pending_response_size] {
+                        sg_stats._pending_response_memory -= pending_response_size;
+                    });
                 } catch (...) {
                     clogger.error("{}: request processing failed: {}",
                                   _client_state.get_remote_address(), std::current_exception());
@@ -1816,9 +1837,9 @@ cql_server::connection::make_client_routes_change_event(const event::client_rout
     return response;
 }
 
-void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit, cql_compression compression)
+void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression)
 {
-    _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response), permit = std::move(permit)] () mutable {
+    _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
         cql_server::response& r = *response;
         auto del = make_deleter([response = std::move(response)] {});
         return r.write_message(_write_buf, _version, compression, std::move(del));

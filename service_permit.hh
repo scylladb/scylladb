@@ -18,6 +18,13 @@ class service_permit {
     friend service_permit empty_service_permit();
 public:
     size_t count() const { return _permit ? _permit->count() : 0; };
+    // Merge additional semaphore units into this permit.
+    // Used to grow the permit after the actual resource cost is known.
+    void adopt(seastar::semaphore_units<>&& units) {
+        if (_permit) {
+            _permit->adopt(std::move(units));
+        }
+    }
 };
 
 inline service_permit make_service_permit(seastar::semaphore_units<>&& permit) {

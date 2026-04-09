@@ -139,6 +139,10 @@ struct cql_sg_stats {
     request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) { return _cql_requests_stats[static_cast<uint8_t>(op)]; }
     void register_metrics();
     void rename_metrics();
+
+    // Track total memory consumed by responses waiting to be sent.
+    // Incremented when a response is queued, decremented when the write completes.
+    int64_t _pending_response_memory = 0;
 private:
     bool _use_metrics = false;
     seastar::metrics::metric_groups _metrics;
@@ -231,8 +235,11 @@ public:
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
     qos::qos_configuration_change_subscriber* get_qos_configuration_listener() const noexcept;
+    cql_sg_stats& get_cql_sg_stats() {
+        return scheduling_group_get_specific<cql_sg_stats>(_stats_key);
+    }
     cql_sg_stats::request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) {
-        return scheduling_group_get_specific<cql_sg_stats>(_stats_key).get_cql_opcode_stats(op);
+        return get_cql_sg_stats().get_cql_opcode_stats(op);
     }
 
     future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data();
@@ -361,7 +368,7 @@ private:
         process_on_shard(shard_id shard, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
                 tracing::trace_state_ptr trace_state, cql3::dialect dialect, cql3::computed_function_values&& cached_vals, Process process_fn);
 
-        void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
+        void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression = cql_compression::none);
         
         void update_user_scheduling_group_v1(const std::optional<auth::authenticated_user>& usr);
         void update_user_scheduling_group_v2(const std::optional<auth::authenticated_user>& usr);
