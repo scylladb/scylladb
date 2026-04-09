@@ -6982,26 +6982,32 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
     }
 
     std::unordered_set<sstables::generation_type> gens; // input sstable generations
+
+    // Pre-extract mutation pairs for parallel SSTable creation
+    std::vector<std::pair<mutation, mutation>> mutation_pairs;
+    mutation_pairs.reserve(sstables_nr);
     auto merged_it = merged.begin();
     for (unsigned i = 0; i < sstables_nr; i++) {
         auto mut1 = std::move(*merged_it);
         merged_it++;
         auto mut2 = std::move(*merged_it);
         merged_it++;
-        auto sst = make_sstable_containing(sst_gen, {
-            std::move(mut1),
-            std::move(mut2)
-        }).get();
-        // Force a new run_id to trigger offstrategy compaction
-        sstables::test(sst).set_run_identifier(run_id::create_random_id());
-        // Set level to 0 to trigger offstrategy compaction
-        sst->set_sstable_level(0);
+        mutation_pairs.emplace_back(std::move(mut1), std::move(mut2));
+    }
 
-        // every sstable will be eligible for cleanup, by having both an owned and unowned token.
-        owned_token_ranges.push_back(dht::token_range::make_singular(sst->get_last_decorated_key().token()));
+    ssts.resize(sstables_nr);
+    parallel_for_each(std::views::iota(size_t(0), sstables_nr), [&](size_t i) -> future<> {
+        ssts[i] = co_await make_sstable_containing(sst_gen, {
+            std::move(mutation_pairs[i].first),
+            std::move(mutation_pairs[i].second)
+        });
+        sstables::test(ssts[i]).set_run_identifier(run_id::create_random_id());
+        ssts[i]->set_sstable_level(0);
+    }).get();
 
-        gens.insert(sst->generation());
-        ssts.push_back(std::move(sst));
+    for (unsigned i = 0; i < sstables_nr; i++) {
+        owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_decorated_key().token()));
+        gens.insert(ssts[i]->generation());
     }
 
     {
