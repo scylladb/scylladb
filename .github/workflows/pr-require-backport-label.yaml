@@ -5,6 +5,8 @@ on:
     branches:
       - master
       - next
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   label:
     if: github.event.pull_request.draft == false
@@ -15,7 +17,7 @@ jobs:
     steps:
       - name: Wait for label to be added
         run: sleep 1m
-      - uses: mheap/github-action-required-labels@v5
+      - uses: mheap/github-action-required-labels@0ac283b4e65c1fb28ce6079dea5546ceca98ccbe # v5.5.2
         with:
           mode: minimum
           count: 1
