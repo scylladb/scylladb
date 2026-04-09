@@ -12,6 +12,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/coroutine.hh>
@@ -4939,7 +4940,7 @@ void test_twcs_partition_estimate_fn(test_env& env) {
 
     auto keys = tests::generate_partition_keys(4, s);
 
-    auto make_sstable = [&] (int sstable_idx) {
+    auto make_sstable = [&] (int sstable_idx) -> future<shared_sstable> {
         static thread_local int32_t value = 1;
 
         auto key = keys[sstable_idx];
@@ -4949,7 +4950,7 @@ void test_twcs_partition_estimate_fn(test_env& env) {
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
             m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_timestamp(sstable_idx, ck));
         }
-        return make_sstable_containing(sst_gen, {m}).get();
+        co_return co_await make_sstable_containing(sst_gen, {m});
     };
 
     auto cf = env.make_table_for_tests(s);
@@ -4978,12 +4979,10 @@ void test_twcs_partition_estimate_fn(test_env& env) {
         estimation_test(s, compaction::time_window_compaction_strategy::max_data_segregation_window_count);
     }
 
-    std::vector<shared_sstable> sstables_spanning_many_windows = {
-        make_sstable(0),
-        make_sstable(1),
-        make_sstable(2),
-        make_sstable(3),
-    };
+    std::vector<shared_sstable> sstables_spanning_many_windows(4);
+    parallel_for_each(std::views::iota(0, 4), [&](int i) -> future<> {
+        sstables_spanning_many_windows[i] = co_await make_sstable(i);
+    }).get();
 
     auto ret = compact_sstables(env, compaction::compaction_descriptor(sstables_spanning_many_windows), cf, sst_gen, replacer_fn_no_op()).get();
     // The real test here is that we don't SCYLLA_ASSERT() in
