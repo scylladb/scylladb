@@ -197,6 +197,7 @@ std::vector<db::object_storage_endpoint_param> make_storage_options_config(const
                     .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
                     .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
                     .region = tests::getenv_or_default("AWS_DEFAULT_REGION", "local"),
+                    .max_connections = 32,
                 });
             }
             if (os.type == data_dictionary::storage_options::GS_NAME) {
