@@ -158,6 +158,9 @@ public:
     void pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>&, api::timestamp_type);
 
     void before_create_column_family(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    // When in the context of a notification callback, call `before_create_column_family_in_notification`,
+    // and otherwise call 'before_create_column_family'.
+    void before_create_column_family_in_notification(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
     void before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>&, utils::chunked_vector<mutation>&, api::timestamp_type);
     void before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type);
     void before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);

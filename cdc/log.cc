@@ -265,7 +265,7 @@ public:
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
 
             if (!log_schema) {
-                db.get_notifier().before_create_column_family(*keyspace.metadata(), *new_log_schema, mutations, timestamp);
+                db.get_notifier().before_create_column_family_in_notification(*keyspace.metadata(), *new_log_schema, mutations, timestamp);
             }
         }
     }
