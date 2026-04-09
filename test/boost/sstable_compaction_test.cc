@@ -5489,8 +5489,7 @@ SEASTAR_FIXTURE_TEST_CASE(twcs_reshape_with_disjoint_set_gcs_test, gcs_fixture, 
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
-void stcs_reshape_overlapping_fn(test_env& env) {
-    static constexpr unsigned disjoint_sstable_count = 256;
+void stcs_reshape_overlapping_fn(test_env& env, unsigned disjoint_sstable_count = 256) {
     auto builder = schema_builder("tests", "stcs_reshape_test")
             .with_column("id", utf8_type, column_kind::partition_key)
             .with_column("cl", ::timestamp_type, column_kind::clustering_key)
@@ -5516,27 +5515,23 @@ void stcs_reshape_overlapping_fn(test_env& env) {
     auto sst_gen = env.make_sst_factory(s);
 
     {
-        // create set of 256 disjoint ssts and expect that stcs reshape allows them all to be compacted at once
+        // create set of disjoint ssts and expect that stcs reshape allows them all to be compacted at once
 
-        std::vector<sstables::shared_sstable> sstables;
-        sstables.reserve(disjoint_sstable_count);
-        for (unsigned i = 0; i < disjoint_sstable_count; i++) {
-            auto sst = make_sstable_containing(sst_gen, {make_row(i)}).get();
-            sstables.push_back(std::move(sst));
-        }
+        std::vector<sstables::shared_sstable> sstables(disjoint_sstable_count);
+        parallel_for_each(std::views::iota(0u, disjoint_sstable_count), [&](unsigned i) -> future<> {
+            sstables[i] = co_await make_sstable_containing(sst_gen, {make_row(i)});
+        }).get();
 
         BOOST_REQUIRE(get_reshaping_job(cs, sstables, s, compaction::reshape_mode::strict).sstables.size() == disjoint_sstable_count);
     }
 
     {
-        // create set of 256 overlapping ssts and expect that stcs reshape allows only 32 to be compacted at once
+        // create set of overlapping ssts and expect that stcs reshape allows only 32 to be compacted at once
 
-        std::vector<sstables::shared_sstable> sstables;
-        sstables.reserve(disjoint_sstable_count);
-        for (unsigned i = 0; i < disjoint_sstable_count; i++) {
-            auto sst = make_sstable_containing(sst_gen, {make_row(0)}).get();
-            sstables.push_back(std::move(sst));
-        }
+        std::vector<sstables::shared_sstable> sstables(disjoint_sstable_count);
+        parallel_for_each(std::views::iota(0u, disjoint_sstable_count), [&](unsigned i) -> future<> {
+            sstables[i] = co_await make_sstable_containing(sst_gen, {make_row(0)});
+        }).get();
 
         BOOST_REQUIRE(get_reshaping_job(cs, sstables, s, compaction::reshape_mode::strict).sstables.size() == uint64_t(s->max_compaction_threshold()));
     }
@@ -5547,11 +5542,11 @@ SEASTAR_TEST_CASE(stcs_reshape_overlapping_test) {
 }
 
 SEASTAR_TEST_CASE(stcs_reshape_overlapping_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
-    return test_env::do_with_async([](test_env& env) { stcs_reshape_overlapping_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
+    return test_env::do_with_async([](test_env& env) { stcs_reshape_overlapping_fn(env, 64); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
 SEASTAR_FIXTURE_TEST_CASE(stcs_reshape_overlapping_gcs_test, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
-    return test_env::do_with_async([](test_env& env) { stcs_reshape_overlapping_fn(env); }, test_env_config{.storage = make_test_object_storage_options("GS")});
+    return test_env::do_with_async([](test_env& env) { stcs_reshape_overlapping_fn(env, 64); }, test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
 // Regression test for #8432
