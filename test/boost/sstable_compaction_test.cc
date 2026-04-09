@@ -5262,8 +5262,12 @@ void test_offstrategy_sstable_compaction_fn(test_env& env) {
 
         cf->start();
 
-        for (auto i = 0; i < cf->schema()->max_compaction_threshold(); i++) {
-            auto sst = make_sstable_containing(sst_gen, {mut}).get();
+        auto threshold = cf->schema()->max_compaction_threshold();
+        std::vector<sstables::shared_sstable> ssts(threshold);
+        parallel_for_each(std::views::iota(0, threshold), [&](int i) -> future<> {
+            ssts[i] = co_await make_sstable_containing(sst_gen, {mut});
+        }).get();
+        for (auto& sst : ssts) {
             cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
         }
         BOOST_REQUIRE(cf->perform_offstrategy_compaction(tasks::task_info{}).get());
