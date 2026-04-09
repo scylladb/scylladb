@@ -34,6 +34,9 @@ This section describes the layouts and usage of `system.*` tables.
 - [system.peers](#systempeers)
 - [system.protocol_servers](#systemprotocol_servers)
 - [system.raft](#systemraft)
+- [system.raft_groups](#systemraft_groups)
+- [system.raft_groups_snapshot_config](#systemraft_groups_snapshot_config)
+- [system.raft_groups_snapshots](#systemraft_groups_snapshots)
 - [system.raft_snapshot_config](#systemraft_snapshot_config)
 - [system.raft_snapshots](#systemraft_snapshots)
 - [system.raft_state](#systemraft_state)
@@ -70,7 +73,7 @@ This section describes the layouts and usage of `system.*` tables.
 |----------|---------------|
 | **Core Cluster Information** | [local](#systemlocal), [peers](#systempeers), [scylla_local](#systemscylla_local) |
 | **Topology and Cluster Management** | [topology](#systemtopology), [topology_requests](#systemtopology_requests), [tablets](#systemtablets), [tablet_sizes](#systemtablet_sizes), [cluster_status](#systemcluster_status), [token_ring](#systemtoken_ring), [load_per_node](#systemload_per_node), [commitlog_cleanups](#systemcommitlog_cleanups), [discovery](#systemdiscovery) |
-| **Raft Consensus** | [raft](#systemraft), [raft_state](#systemraft_state), [raft_snapshots](#systemraft_snapshots), [raft_snapshot_config](#systemraft_snapshot_config), [group0_history](#systemgroup0_history) |
+| **Raft Consensus** | [raft](#systemraft), [raft_groups](#systemraft_groups), [raft_state](#systemraft_state), [raft_snapshots](#systemraft_snapshots), [raft_groups_snapshots](#systemraft_groups_snapshots), [raft_snapshot_config](#systemraft_snapshot_config), [raft_groups_snapshot_config](#systemraft_groups_snapshot_config), [group0_history](#systemgroup0_history) |
 | **CDC (Change Data Capture)** | [cdc_local](#systemcdc_local), [cdc_streams](#systemcdc_streams), [cdc_streams_history](#systemcdc_streams_history), [cdc_streams_state](#systemcdc_streams_state), [cdc_generations_v3](#systemcdc_generations_v3) |
 | **Materialized Views** | [views_builds_in_progress](#systemviews_builds_in_progress), [scylla_views_builds_in_progress](#systemscylla_views_builds_in_progress), [built_views](#systembuilt_views), [view_build_status_v2](#systemview_build_status_v2), [view_building_tasks](#systemview_building_tasks) |
 | **Lightweight Transactions (Paxos)** | [paxos](#systempaxos) |
@@ -979,6 +982,10 @@ Implemented by `protocol_servers_table` in `db/system_keyspace.cc`.
 
 Core Raft consensus state table. Holds information about Raft groups including the log entries.
 
+This table is authoritative for group0 Raft persistence. For strongly consistent
+tablet Raft groups, log entries are persisted in a dedicated commitlog domain,
+not in `system.raft_groups` rows.
+
 Schema:
 ```cql
 CREATE TABLE system.raft (
@@ -1005,6 +1012,103 @@ CREATE TABLE system.raft (
 - `commit_idx`: (static) Index of the last committed entry
 
 **Related tables:** [raft_state](#systemraft_state), [raft_snapshots](#systemraft_snapshots), [raft_snapshot_config](#systemraft_snapshot_config), [group0_history](#systemgroup0_history)
+
+---
+
+## system.raft_groups
+
+Shard-local metadata table for strongly consistent tablet Raft groups.
+
+Schema:
+```cql
+CREATE TABLE system.raft_groups (
+    shard smallint,
+    group_id timeuuid,
+    index bigint,
+    term bigint,
+    data blob,
+    vote_term bigint STATIC,
+    vote uuid STATIC,
+    snapshot_id uuid STATIC,
+    commit_idx bigint STATIC,
+    PRIMARY KEY ((shard, group_id), index)
+) WITH CLUSTERING ORDER BY (index ASC);
+```
+
+**Columns:**
+- `shard`: Shard-local placement key for tablet-group metadata
+- `group_id`: Identifier for the tablet Raft group
+- `index`: Legacy Raft log entry index (kept for upgrade import/cleanup)
+- `term`: Legacy Raft log entry term
+- `data`: Legacy serialized Raft log entry payload
+- `vote_term`: (static) Term of the last vote
+- `vote`: (static) Server ID that received the vote
+- `snapshot_id`: (static) ID of the current snapshot
+- `commit_idx`: (static) Index of the last committed entry
+
+**Authority and migration notes:**
+- After commitlog cutover, `term/index/data` rows are no longer the authoritative
+  source for strongly consistent tablet-group Raft log entries.
+- Startup can import missing legacy suffix entries from these rows into the
+  dedicated Raft commitlog domain, then delete imported legacy rows.
+- Static metadata columns (`vote_term`, `vote`, `snapshot_id`, `commit_idx`)
+  remain authoritative in this table.
+
+**Related tables:** [raft_groups_snapshots](#systemraft_groups_snapshots), [raft_groups_snapshot_config](#systemraft_groups_snapshot_config)
+
+---
+
+## system.raft_groups_snapshot_config
+
+Stores snapshot configuration for strongly consistent tablet Raft groups.
+
+Schema:
+```cql
+CREATE TABLE system.raft_groups_snapshot_config (
+    shard smallint,
+    group_id timeuuid,
+    disposition text,
+    server_id uuid,
+    can_vote boolean,
+    PRIMARY KEY ((shard, group_id), disposition, server_id)
+) WITH CLUSTERING ORDER BY (disposition ASC, server_id ASC);
+```
+
+**Columns:**
+- `shard`: Shard-local placement key
+- `group_id`: Identifier for the tablet Raft group
+- `disposition`: Configuration disposition (`CURRENT` or `PREVIOUS`)
+- `server_id`: ID of the server in snapshot configuration
+- `can_vote`: Whether this server can vote in the Raft group
+
+**Related tables:** [raft_groups](#systemraft_groups), [raft_groups_snapshots](#systemraft_groups_snapshots)
+
+---
+
+## system.raft_groups_snapshots
+
+Stores snapshot descriptor data for strongly consistent tablet Raft groups.
+
+Schema:
+```cql
+CREATE TABLE system.raft_groups_snapshots (
+    shard smallint,
+    group_id timeuuid,
+    snapshot_id uuid,
+    idx bigint,
+    term bigint,
+    PRIMARY KEY ((shard, group_id))
+);
+```
+
+**Columns:**
+- `shard`: Shard-local placement key
+- `group_id`: Identifier for the tablet Raft group
+- `snapshot_id`: Snapshot identifier
+- `idx`: Log index of the snapshot
+- `term`: Raft term of the snapshot
+
+**Related tables:** [raft_groups](#systemraft_groups), [raft_groups_snapshot_config](#systemraft_groups_snapshot_config)
 
 ---
 

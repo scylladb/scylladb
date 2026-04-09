@@ -93,8 +93,8 @@ bool hint_sender::can_send() noexcept {
     }
 }
 
-frozen_mutation_and_schema hint_sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
-    hint_entry_reader hr(buf);
+frozen_mutation_and_schema hint_sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf, uint32_t segment_version) {
+    hint_entry_reader hr(buf, segment_version);
     auto& fm = hr.mutation();
     auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
     auto schema = _db.find_schema(fm.column_family_id());
@@ -275,15 +275,15 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     });
 }
 
-future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
-    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
+future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, uint32_t segment_version, gc_clock::duration secs_since_file_mod, const sstring& fname) {
+    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, segment_version, ctx_ptr] (auto units) mutable {
         ctx_ptr->mark_hint_as_in_progress(rp);
 
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
         auto h = ctx_ptr->file_send_gate.hold();
-        (void)std::invoke([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
+        (void)std::invoke([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, segment_version, ctx_ptr] () mutable {
             try {
-                auto m = this->get_mutation(ctx_ptr, buf);
+                auto m = this->get_mutation(ctx_ptr, buf, segment_version);
                 gc_clock::duration gc_grace_sec = m.s->gc_grace_seconds();
 
                 // The hint is too old - drop it.
@@ -503,7 +503,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
                     co_await sleep(std::chrono::milliseconds(100));
                     continue;
                 } else {
-                    co_await send_one_hint(ctx_ptr, std::move(buf), rp, secs_since_file_mod, fname);
+                    co_await send_one_hint(ctx_ptr, std::move(buf), rp, buf_rp.segment_version, secs_since_file_mod, fname);
                     break;
                 }
             };

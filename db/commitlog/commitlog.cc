@@ -871,6 +871,9 @@ public:
     bool is_schema_version_known(schema_ptr s) {
         return _known_schema_versions.contains(s->version());
     }
+    uint32_t version() const {
+        return _desc.ver;
+    }
     void add_schema_version(schema_ptr s) {
         _known_schema_versions.emplace(s->version());
     }
@@ -3084,7 +3087,7 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
         }
         size_t size(segment& seg) override {
             _writer.set_with_schema(!seg.is_schema_version_known(_writer.schema()));
-            return _writer.size();
+            return _writer.size(seg.version());
         }
         size_t size(segment& seg, size_t) override {
             return size(seg);
@@ -3096,7 +3099,7 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
             if (_writer.with_schema()) {
                 seg.add_schema_version(_writer.schema());
             }
-            _writer.write(out);
+            _writer.write(out, seg.version());
         }
         void result(size_t, rp_handle h) override {
             res = std::move(h);
@@ -3139,7 +3142,7 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_w
                     _known.emplace(i->schema()->version());
                 }
                 i->set_with_schema(!known);
-                res += i->size();
+                res += i->size(seg.version());
             }
             _sizes_computed = &seg;
             return res;
@@ -3149,7 +3152,7 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_w
             if (_sizes_computed != &seg) {
                 w.set_with_schema(seg.is_schema_version_known(w.schema())); 
             }
-            return w.size();
+            return w.size(seg.version());
         }
         size_t size() const override {
             return std::accumulate(_writers.begin(), _writers.end(), size_t(0), [](size_t acc, const commitlog_entry_writer& w) {
@@ -3161,7 +3164,7 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_w
             if (w.with_schema()) {
                 seg.add_schema_version(w.schema());
             }
-            w.write(out);
+            w.write(out, seg.version());
         }
         void result(size_t i, rp_handle h) override {
             SCYLLA_ASSERT(i == res.size());
@@ -3351,6 +3354,7 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
         bool eof = false;
         bool header = true;
         bool failed = false;
+        uint32_t segment_version = 0;
         fragmented_temporary_buffer::reader frag_reader;
         fragmented_temporary_buffer buffer, initial;
 
@@ -3443,8 +3447,8 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
             if (magic != segment::segment_magic) {
                 throw invalid_segment_format();
             }
-            if (ver != descriptor::current_version) {
-                throw std::invalid_argument("Cannot replay old commitlog segments");
+            if (ver < descriptor::segment_version_4 || ver > descriptor::current_version) {
+                throw std::invalid_argument("Unsupported commitlog segment version");
             }
 
             crc32_nbo crc;
@@ -3461,6 +3465,7 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
             this->id = id;
             this->next = 0;
             this->alignment = alignment;
+            this->segment_version = ver;
             this->initial = std::move(buf);
             this->pos = this->initial.size_bytes();
         }
@@ -3748,7 +3753,7 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                 frag.offset = off;
                 frag.rem = rem;
                 frag.end = off + buf.size_bytes();
-                frag.rpbuf = buffer_and_replay_position{std::move(buf), rp};
+                frag.rpbuf = buffer_and_replay_position{std::move(buf), rp, segment_version};
 
                 clogger.debug("fragment id={} off={}, end={}, rem={} ", id, off, frag.end, rem);
 
@@ -3801,7 +3806,7 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
 
             buf = co_await read_data(size - entry_header_size);
 
-            co_await func({std::move(buf), rp});
+            co_await func({std::move(buf), rp, segment_version});
         }
 
         future<> read_file() {

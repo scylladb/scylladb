@@ -12,6 +12,10 @@
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "cql3/query_processor.hh"
+#include "db/commitlog/commitlog.hh"
+#include "service/strong_consistency/raft_groups_storage.hh"
+
+#include <unordered_set>
 
 namespace db {
 class system_keyspace;
@@ -79,6 +83,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     db::system_keyspace& _sys_ks;
     gms::feature_service& _features;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
+    std::unique_ptr<db::commitlog> _raft_commitlog;
+    std::unordered_map<raft::group_id, raft_groups_storage::group_replay_state> _raft_replay_state = {};
+    bool _raft_replay_had_errors = false;
+    std::unordered_set<raft::group_id> _started_groups = {};
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
 

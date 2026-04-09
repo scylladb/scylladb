@@ -30,6 +30,24 @@ related to writing metadata to all shards.
 
 ## Strongly consistent table persistence
 
+Raft persistence for strongly consistent tablet groups is split between commitlog
+and system tables:
+
+- Raft log entries are persisted in a dedicated commitlog domain
+  (`RaftGroupsLog-*`) and recovered from commitlog replay on startup.
+- Raft metadata remains in system tables:
+  - `system.raft_groups` static metadata (`vote_term`, `vote`, `commit_idx`, `snapshot_id`)
+  - `system.raft_groups_snapshots` snapshot descriptor (`idx`, `term`)
+  - `system.raft_groups_snapshot_config` snapshot configuration members
+
+On upgraded nodes, startup performs a one-way import from legacy
+`system.raft_groups` log-entry rows into commitlog-backed state when replayed
+commitlog data is behind legacy table data. After successful import,
+legacy log-entry rows are cleaned up and normal persistence remains
+commitlog-only for log entries.
+
+## Strongly consistent metadata tables
+
 We introduce a separate set of Raft system tables for strongly consistent tablets:
 
 - `system.raft_groups`

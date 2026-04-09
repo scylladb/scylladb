@@ -75,6 +75,7 @@ public:
     struct buffer_and_replay_position {
         fragmented_temporary_buffer buffer;
         replay_position position;
+        uint32_t segment_version;
     };
 private:
     ::shared_ptr<segment_manager> _segment_manager;
@@ -136,7 +137,8 @@ public:
         static inline constexpr uint32_t segment_version_2 = 2u;
         static inline constexpr uint32_t segment_version_3 = 3u;
         static inline constexpr uint32_t segment_version_4 = 4u;
-        static inline constexpr uint32_t current_version = segment_version_4;
+        static inline constexpr uint32_t segment_version_5 = 5u;
+        static inline constexpr uint32_t current_version = segment_version_5;
 
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;

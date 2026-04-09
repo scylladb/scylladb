@@ -10,6 +10,7 @@
 #include <seastar/core/coroutine.hh>
 
 #include "db/config.hh"
+#include "db/system_keyspace.hh"
 #include "raft/raft.hh"
 #include "utils/UUID_gen.hh"
 
@@ -19,8 +20,11 @@
 
 #include "test/lib/cql_test_env.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/values.hh"
 
 #include "gms/inet_address_serializer.hh"
+#include "idl/raft_storage.dist.hh"
+#include "idl/raft_storage.dist.impl.hh"
 
 namespace raft{
 
@@ -77,6 +81,37 @@ static std::vector<raft::log_entry_ptr> create_test_log() {
             .idx = raft::index_t(3),
             .data = raft::log_entry::dummy()})
     };
+}
+
+static future<> insert_legacy_group_rows(cql3::query_processor& qp, raft::group_id group_id, const std::vector<raft::log_entry_ptr>& entries) {
+    static const auto insert_cql = format("INSERT INTO system.{} (shard, group_id, term, \"index\", data) VALUES (?, ?, ?, ?, ?)",
+            db::system_keyspace::RAFT_GROUPS);
+    for (const auto& entry : entries) {
+        auto data = ser::serialize_to_buffer<bytes>(entry->data);
+        data_value_list values = {
+                data_value_or_unset(data_value(int16_t(test_shard))),
+                data_value_or_unset(data_value(group_id.id)),
+                data_value_or_unset(data_value(int64_t(entry->term.value()))),
+                data_value_or_unset(data_value(int64_t(entry->idx.value()))),
+                data_value_or_unset(data_value(std::move(data)))};
+        co_await qp.execute_internal(insert_cql,
+                db::consistency_level::ONE,
+                values,
+                cql3::query_processor::cache_internal::yes).discard_result();
+    }
+}
+
+static future<size_t> count_legacy_group_data_rows(cql3::query_processor& qp, raft::group_id group_id) {
+    static const auto load_cql = format("SELECT \"index\", data FROM system.{} WHERE shard = ? AND group_id = ?",
+            db::system_keyspace::RAFT_GROUPS);
+    auto rs = co_await qp.execute_internal(load_cql, {int16_t(test_shard), group_id.id}, cql3::query_processor::cache_internal::yes);
+    size_t count = 0;
+    for (const auto& row : *rs) {
+        if (row.has("data")) {
+            ++count;
+        }
+    }
+    co_return count;
 }
 
 // Factory functions to create storage instances with uniform interface
@@ -293,6 +328,168 @@ SEASTAR_TEST_CASE(test_groups_truncate_log) {
 
 SEASTAR_TEST_CASE(test_groups_store_snapshot_truncate_log_tail) {
     return test_store_snapshot_truncate_log_tail_impl(make_groups_storage);
+}
+
+SEASTAR_TEST_CASE(test_groups_store_snapshot_preserve_tail_restart_recovery) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id restart_gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage writer(qp, restart_gid, raft::server_id::create_random_id(), test_shard);
+        std::vector<raft::log_entry_ptr> entries = create_test_log();
+        co_await writer.store_log_entries(entries);
+
+        raft::term_t snp_term(3);
+        raft::index_t snp_idx(3);
+        raft::config_member srv{raft::server_address{
+                raft::server_id::create_random_id(),
+                ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
+            }, raft::is_voter::yes};
+        raft::configuration snp_cfg({std::move(srv)});
+        auto snp_id = raft::snapshot_id::create_random_id();
+
+        raft::snapshot_descriptor snp{
+            .idx = snp_idx,
+            .term = snp_term,
+            .config = std::move(snp_cfg),
+            .id = std::move(snp_id)};
+
+        static constexpr size_t preserve_log_entries = 2;
+        co_await writer.store_snapshot_descriptor(snp, preserve_log_entries);
+
+        raft_groups_storage reader(qp, restart_gid, raft::server_id::create_random_id(), test_shard);
+
+        raft_groups_storage::group_replay_state replay_state;
+        replay_state.log.emplace(entries[1]->idx, entries[1]);
+        replay_state.log.emplace(entries[2]->idx, entries[2]);
+        replay_state.replayed_max_idx = entries[2]->idx;
+        replay_state.replayed_seen_max_idx = entries[2]->idx;
+        replay_state.replayed_truncate_prefix_idx = raft::index_t(1);
+        replay_state.replayed_has_truncate = true;
+        reader.set_replayed_log_state(std::move(replay_state));
+
+        co_await reader.filter_replayed_log_with_snapshot();
+        auto loaded_entries = co_await reader.load_log();
+
+        BOOST_CHECK_EQUAL(loaded_entries.size(), preserve_log_entries);
+        for (size_t i = 0; i < loaded_entries.size(); ++i) {
+            BOOST_CHECK(*entries[i + 1] == *loaded_entries[i]);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_groups_store_snapshot_preserve_entries_underflow_guard) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id underflow_gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, underflow_gid, raft::server_id::create_random_id(), test_shard);
+        auto entries = create_test_log();
+        co_await storage.store_log_entries(entries);
+
+        raft::snapshot_descriptor snp{
+            .idx = raft::index_t(1),
+            .term = raft::term_t(1),
+            .id = raft::snapshot_id::create_random_id()};
+        snp.config = raft::configuration{};
+
+        static constexpr size_t preserve_log_entries = 10;
+        co_await storage.store_snapshot_descriptor(snp, preserve_log_entries);
+
+        auto loaded_entries = co_await storage.load_log();
+        BOOST_CHECK_EQUAL(loaded_entries.size(), entries.size());
+        for (size_t i = 0; i < loaded_entries.size(); ++i) {
+            BOOST_CHECK(*entries[i] == *loaded_entries[i]);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_groups_filter_replayed_truncate_prefix_without_snapshot) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id crash_window_gid{utils::UUID_gen::get_time_UUID()};
+
+        auto entries = create_test_log();
+        raft_groups_storage storage(qp, crash_window_gid, raft::server_id::create_random_id(), test_shard);
+
+        raft_groups_storage::group_replay_state replay_state;
+        replay_state.log.emplace(entries[1]->idx, entries[1]);
+        replay_state.log.emplace(entries[2]->idx, entries[2]);
+        replay_state.replayed_max_idx = entries[2]->idx;
+        replay_state.replayed_seen_max_idx = entries[2]->idx;
+        replay_state.replayed_truncate_prefix_idx = raft::index_t(1);
+        replay_state.replayed_has_truncate = true;
+        storage.set_replayed_log_state(std::move(replay_state));
+
+        co_await storage.filter_replayed_log_with_snapshot();
+
+        auto loaded_entries = co_await storage.load_log();
+        BOOST_CHECK_EQUAL(loaded_entries.size(), 2);
+        BOOST_CHECK(*entries[1] == *loaded_entries[0]);
+        BOOST_CHECK(*entries[2] == *loaded_entries[1]);
+    });
+}
+
+SEASTAR_TEST_CASE(test_groups_storage_legacy_table_import_once) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id legacy_gid{utils::UUID_gen::get_time_UUID()};
+
+        auto entries = create_test_log();
+        co_await insert_legacy_group_rows(qp, legacy_gid, entries);
+
+        raft_groups_storage storage(qp, legacy_gid, raft::server_id::create_random_id(), test_shard);
+        auto imported = co_await storage.import_legacy_log_entries();
+        BOOST_REQUIRE(imported);
+
+        auto loaded_entries = co_await storage.load_log();
+        BOOST_CHECK_EQUAL(loaded_entries.size(), entries.size());
+        for (size_t i = 0; i < loaded_entries.size(); ++i) {
+            BOOST_CHECK(*entries[i] == *loaded_entries[i]);
+        }
+
+        co_await storage.cleanup_legacy_log_entries();
+        auto legacy_rows_after_cleanup = co_await count_legacy_group_data_rows(qp, legacy_gid);
+        BOOST_CHECK_EQUAL(legacy_rows_after_cleanup, 0);
+
+        co_await storage.store_log_entries(entries);
+        co_await storage.truncate_log(raft::index_t(3));
+        auto legacy_rows_after_normal_flow = co_await count_legacy_group_data_rows(qp, legacy_gid);
+        BOOST_CHECK_EQUAL(legacy_rows_after_normal_flow, 0);
+    });
+}
+
+SEASTAR_TEST_CASE(test_groups_storage_legacy_import_restart_idempotent) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id legacy_gid{utils::UUID_gen::get_time_UUID()};
+
+        auto entries = create_test_log();
+        co_await insert_legacy_group_rows(qp, legacy_gid, entries);
+
+        raft_groups_storage storage1(qp, legacy_gid, raft::server_id::create_random_id(), test_shard);
+        auto imported1 = co_await storage1.import_legacy_log_entries();
+        BOOST_REQUIRE(imported1);
+
+        auto replayed_entries = co_await storage1.load_log();
+        raft_groups_storage::group_replay_state replay_state;
+        for (const auto& entry : replayed_entries) {
+            replay_state.log.emplace(entry->idx, entry);
+        }
+        replay_state.replayed_max_idx = replayed_entries.back()->idx;
+        replay_state.replayed_seen_max_idx = replayed_entries.back()->idx;
+
+        raft_groups_storage storage2(qp, legacy_gid, raft::server_id::create_random_id(), test_shard);
+        storage2.set_replayed_log_state(std::move(replay_state));
+
+        auto imported2 = co_await storage2.import_legacy_log_entries();
+        BOOST_CHECK(!imported2);
+        BOOST_CHECK(storage2.should_cleanup_legacy_log_entries());
+
+        co_await storage2.cleanup_legacy_log_entries();
+        auto legacy_rows_after_cleanup = co_await count_legacy_group_data_rows(qp, legacy_gid);
+        BOOST_CHECK_EQUAL(legacy_rows_after_cleanup, 0);
+    });
 }
 
 // Verify partitioner round-trip: token_for_shard -> shard_of returns the original shard

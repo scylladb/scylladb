@@ -16,6 +16,7 @@
 #include "service/storage_proxy.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "db/commitlog/commitlog.hh"
 
 namespace service::strong_consistency {
 
@@ -117,12 +118,40 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
-    auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id());
+    auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(), _raft_commitlog.get());
+
+    if (!_raft_commitlog) {
+        on_internal_error(logger, "raft commitlog is not initialized");
+    }
+
+    const auto already_started = _started_groups.contains(group_id);
+    if (auto it = _raft_replay_state.find(group_id); it != _raft_replay_state.end()) {
+        storage->set_replayed_log_state(std::move(it->second));
+        storage->set_replay_had_errors(_raft_replay_had_errors);
+        _raft_replay_state.erase(it);
+    } else {
+        auto replay_files = co_await _raft_commitlog->list_existing_segments();
+        co_await storage->replay_log_entries(std::move(replay_files));
+    }
+    co_await storage->filter_replayed_log_with_snapshot();
+
+    bool imported_legacy_entries = false;
+    if (!already_started) {
+        imported_legacy_entries = co_await storage->import_legacy_log_entries();
+    }
+    if (imported_legacy_entries || already_started || (!already_started && storage->has_commitlog_log_entries())) {
+        co_await storage->materialize_log_state_to_commitlog();
+    }
+    if (!already_started && imported_legacy_entries) {
+        co_await storage->cleanup_legacy_log_entries();
+    } else if (!already_started && storage->should_cleanup_legacy_log_entries()) {
+        co_await storage->cleanup_legacy_log_entries();
+    }
 
     // Store the initial configuration if this is the first time we create this group
     // on this node
     const auto snapshot = co_await storage->load_snapshot_descriptor();
-    if (!snapshot.id) {
+    if (!snapshot.id && !storage->has_commitlog_log_entries()) {
         const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
         const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
 
@@ -157,6 +186,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref
     });
+
+    _started_groups.emplace(group_id);
 }
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
@@ -176,8 +207,11 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         // We need to erase the raft group state only if we are still the last operation on it.
         // If another start arrived while we were stopping the raft server, a new gate
         // would have been assigned, and we should leave the state in the map.
-        if (state.gate.get() == g.get() && _raft_groups.erase(id) != 1) {
-            on_internal_error(logger, format("raft group {} is already deleted", id));
+        if (state.gate.get() == g.get()) {
+            if (_raft_groups.erase(id) != 1) {
+                on_internal_error(logger, format("raft group {} is already deleted", id));
+            }
+            _started_groups.erase(id);
         }
     });
 }
@@ -309,16 +343,40 @@ future<raft_server> groups_manager::acquire_server(raft::group_id group_id) {
 }
 
 future<> groups_manager::start() {
-    _started = true;
-
     if (!_features.strongly_consistent_tables) {
+        _started = true;
         co_return;
     }
+
+    db::commitlog::config cl_cfg;
+    cl_cfg.sched_group = _db.commitlog()->active_config().sched_group;
+    cl_cfg.commit_log_location = _db.get_config().commitlog_directory();
+    const auto total_space_mb = _db.get_config().commitlog_total_space_in_mb();
+    cl_cfg.commitlog_total_space_in_mb = total_space_mb >= 0
+            ? uint64_t(total_space_mb)
+            : _db.commitlog()->active_config().commitlog_total_space_in_mb;
+    cl_cfg.commitlog_segment_size_in_mb = _db.get_config().commitlog_segment_size_in_mb();
+    cl_cfg.commitlog_sync_period_in_ms = _db.get_config().commitlog_sync_period_in_ms();
+    cl_cfg.mode = _db.get_config().commitlog_sync() == "batch" ? db::commitlog::sync_mode::BATCH : db::commitlog::sync_mode::PERIODIC;
+    cl_cfg.extensions = &_db.get_config().extensions();
+    cl_cfg.use_o_dsync = _db.get_config().commitlog_use_o_dsync();
+    cl_cfg.allow_going_over_size_limit = true;
+    cl_cfg.allow_fragmented_entries = true;
+    cl_cfg.fname_prefix = raft_groups_storage::COMMITLOG_FILENAME_PREFIX;
+    _raft_commitlog = std::make_unique<db::commitlog>(co_await db::commitlog::create_commitlog(cl_cfg));
+
+    auto replay_files = co_await _raft_commitlog->list_existing_segments();
+    _raft_replay_had_errors = false;
+    _raft_replay_state = co_await raft_groups_storage::replay_log_entries_for_groups(_qp, std::move(replay_files), &_raft_replay_had_errors);
+
+    _started = true;
 
     if (_pending_tm) {
         update(std::move(_pending_tm));
         co_await wait_for_groups_to_start();
     }
+
+    _raft_replay_state.clear();
 }
 
 future<> groups_manager::stop() {
@@ -332,6 +390,16 @@ future<> groups_manager::stop() {
 
     while (!_raft_groups.empty()) {
         co_await _raft_groups.begin()->second.server_control_op.get_future();
+    }
+
+    _started_groups.clear();
+    _raft_replay_state.clear();
+    _raft_replay_had_errors = false;
+
+    if (_raft_commitlog) {
+        co_await _raft_commitlog->shutdown();
+        co_await _raft_commitlog->release();
+        _raft_commitlog.reset();
     }
 
     logger.info("stop() completed");

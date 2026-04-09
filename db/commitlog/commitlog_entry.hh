@@ -13,8 +13,10 @@
 
 #include "commitlog_types.hh"
 #include "mutation/frozen_mutation.hh"
+#include "raft/raft.hh"
 #include "schema/schema_fwd.hh"
 #include "replay_position.hh"
+#include "utils/UUID.hh"
 
 namespace detail {
 
@@ -83,6 +85,36 @@ public:
     frozen_mutation&& mutation() && { return std::move(_mutation); }
 };
 
+class raft_commit_log_entry {
+    utils::UUID _group_id;
+    std::optional<raft::log_entry> _entry;
+    std::optional<raft::index_t> _truncate_idx;
+    std::optional<raft::index_t> _truncate_prefix_idx;
+public:
+    raft_commit_log_entry(utils::UUID group_id, std::optional<raft::log_entry> entry, std::optional<raft::index_t> truncate_idx, std::optional<raft::index_t> truncate_prefix_idx)
+        : _group_id(group_id)
+        , _entry(std::move(entry))
+        , _truncate_idx(std::move(truncate_idx))
+        , _truncate_prefix_idx(std::move(truncate_prefix_idx)) {
+    }
+
+    raft_commit_log_entry(utils::UUID group_id, raft::log_entry entry)
+        : _group_id(group_id)
+        , _entry(std::move(entry)) {
+    }
+
+    raft_commit_log_entry(utils::UUID group_id, std::optional<raft::index_t> truncate_idx, std::optional<raft::index_t> truncate_prefix_idx)
+        : _group_id(group_id)
+        , _truncate_idx(std::move(truncate_idx))
+        , _truncate_prefix_idx(std::move(truncate_prefix_idx)) {
+    }
+
+    const utils::UUID& group_id() const { return _group_id; }
+    const std::optional<raft::log_entry>& entry() const { return _entry; }
+    const std::optional<raft::index_t>& truncate_idx() const { return _truncate_idx; }
+    const std::optional<raft::index_t>& truncate_prefix_idx() const { return _truncate_prefix_idx; }
+};
+
 class commitlog_entry_writer {
 public:
     using force_sync = db::commitlog_force_sync;
@@ -118,6 +150,8 @@ public:
         return _size;
     }
 
+    size_t size(uint32_t segment_version) const;
+
     size_t mutation_size() const {
         return _mutation.representation().size();
     }
@@ -128,14 +162,21 @@ public:
     using ostream = typename seastar::memory_output_stream<detail::sector_split_iterator>;
 
     void write(ostream& out) const;
+    void write(ostream& out, uint32_t segment_version) const;
+    commitlog_entry make_entry() const;
 };
 
 class commitlog_entry_reader {
-    commitlog_entry _ce;
+    std::optional<commitlog_entry> _ce;
+    std::optional<raft_commit_log_entry> _raft_ce;
 public:
     commitlog_entry_reader(const fragmented_temporary_buffer& buffer);
+    commitlog_entry_reader(const fragmented_temporary_buffer& buffer, uint32_t segment_version);
 
-    const std::optional<column_mapping>& get_column_mapping() const { return _ce.mapping(); }
-    const frozen_mutation& mutation() const & { return _ce.mutation(); }
-    frozen_mutation&& mutation() && { return std::move(_ce).mutation(); }
+    const std::optional<column_mapping>& get_column_mapping() const;
+    const frozen_mutation& mutation() const &;
+    frozen_mutation&& mutation() &&;
+    const raft_commit_log_entry* get_raft_entry() const {
+        return _raft_ce ? &*_raft_ce : nullptr;
+    }
 };

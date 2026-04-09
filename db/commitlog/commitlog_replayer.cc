@@ -208,7 +208,11 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
     auto&& rp = buf_rp.position;
     try {
 
-        commitlog_entry_reader cer(buf);
+        commitlog_entry_reader cer(buf, buf_rp.segment_version);
+        if (cer.get_raft_entry()) {
+            // Generic commitlog replay only applies mutation payloads.
+            co_return;
+        }
         auto& fm = cer.mutation();
 
         auto& local_cm = _column_mappings.local().map;
@@ -409,4 +413,3 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
 future<> db::commitlog_replayer::recover(sstring f, sstring fname_prefix) {
     return recover(std::vector<sstring>{ f }, std::move(fname_prefix));
 }
-

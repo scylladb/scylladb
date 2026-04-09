@@ -47,6 +47,10 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "utils/checked-file-impl.hh"
+#include "idl/commitlog.dist.hh"
+#include "idl/commitlog.dist.impl.hh"
+#include "utils/crc.hh"
+#include "db/schema_tables.hh"
 
 BOOST_AUTO_TEST_SUITE(commitlog_test)
 
@@ -80,6 +84,47 @@ static future<> cl_test(noncopyable_function<future<> (commitlog&)> f) {
 
 static table_id make_table_id() {
     return table_id(utils::UUID_gen::get_time_UUID());
+}
+
+static raft_commit_log_entry make_test_raft_entry(utils::UUID gid, raft::index_t idx) {
+    raft::command cmd;
+    ser::serialize(cmd, int32_t(idx.value()));
+    return raft_commit_log_entry(gid, raft::log_entry{.term = raft::term_t(1), .idx = idx, .data = std::move(cmd)});
+}
+
+static future<> rewrite_segment_header_version(const sstring& seg, uint32_t new_version) {
+    constexpr uint64_t ver_off = sizeof(uint32_t);
+    constexpr uint64_t id_off = 2 * sizeof(uint32_t);
+    constexpr uint64_t alignment_off = 2 * sizeof(uint32_t) + sizeof(uint64_t);
+    constexpr uint64_t checksum_off = 5 * sizeof(uint32_t);
+    constexpr uint64_t first_sector_size = 4096;
+    constexpr uint64_t first_sector_crc_off = first_sector_size - sizeof(uint32_t);
+
+    auto f = co_await open_file_dma(seg, open_flags::rw);
+    auto buf = co_await f.dma_read_exactly<char>(0, first_sector_size);
+
+    auto* p = buf.get_write();
+    const auto id = net::ntoh(*reinterpret_cast<uint64_t*>(p + id_off));
+    const auto alignment = net::ntoh(*reinterpret_cast<uint32_t*>(p + alignment_off));
+
+    auto ver_be = net::hton(new_version);
+    std::memcpy(p + ver_off, &ver_be, sizeof(ver_be));
+
+    utils::crc32 crc;
+    crc.process_be(new_version);
+    crc.process_be<int32_t>(id & 0xffffffff);
+    crc.process_be<int32_t>(id >> 32);
+    crc.process_be<uint32_t>(alignment);
+    auto checksum_be = net::hton(crc.get());
+    std::memcpy(p + checksum_off, &checksum_be, sizeof(checksum_be));
+
+    utils::crc32 sector_crc;
+    sector_crc.process(reinterpret_cast<const uint8_t*>(p), first_sector_crc_off);
+    auto sector_checksum_be = net::hton(sector_crc.get());
+    std::memcpy(p + first_sector_crc_off, &sector_checksum_be, sizeof(sector_checksum_be));
+
+    co_await f.dma_write(0, buf.get(), first_sector_size);
+    co_await f.close();
 }
 
 // just write in-memory...
@@ -362,7 +407,8 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
         size_t count = 0;
         try {
             co_await db::commitlog::read_log_file(path, db::commitlog::descriptor::FILENAME_PREFIX, [&count](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
-                auto&& [buf, rp] = buf_rp;
+                auto&& [buf, rp, segment_version] = buf_rp;
+                (void) segment_version;
                 auto linearization_buffer = bytes_ostream();
                 auto in = buf.get_istream();
                 auto str = to_string_view(in.read_bytes_view(buf.size_bytes(), linearization_buffer).value());
@@ -462,7 +508,8 @@ SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
                         auto seg = segments[0];
                         return corrupt_segment(seg, rps->at(1).pos + 4, 0x451234ab).then([seg, rps] {
                             return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [rps](db::commitlog::buffer_and_replay_position buf_rp) {
-                                auto&& [buf, rp] = buf_rp;
+                                auto&& [buf, rp, segment_version] = buf_rp;
+                                (void) segment_version;
                                 BOOST_CHECK_EQUAL(rp, rps->at(0));
                                 return make_ready_future<>();
                             }).then_wrapped([](auto&& f) {
@@ -1021,7 +1068,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entry) {
 
                 for (auto& seg : segments) {
                     db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
-                        commitlog_entry_reader r(buf_rp.buffer);
+                        commitlog_entry_reader r(buf_rp.buffer, buf_rp.segment_version);
                         auto& rp = buf_rp.position;
                         auto i = std::find(rps.begin(), rps.end(), rp);
                         // since we are looping, we can be reading last test cases 
@@ -1083,7 +1130,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
 
                 for (auto& seg : segments) {
                     db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
-                        commitlog_entry_reader r(buf_rp.buffer);
+                        commitlog_entry_reader r(buf_rp.buffer, buf_rp.segment_version);
                         auto& rp = buf_rp.position;
                         auto i = std::find(rps.begin(), rps.end(), rp);
                         // since we are looping, we can be reading last test cases 
@@ -1896,7 +1943,7 @@ static future<> do_test_oversized_entry(size_t max_size_mb) {
                 auto&& rp = buf_rp.position;
 
                 BOOST_CHECK(rp2mut.count(rp));
-                commitlog_entry_reader cer(buf);
+                commitlog_entry_reader cer(buf, buf_rp.segment_version);
                 auto& fm = cer.mutation();
                 auto m1 = fm.unfreeze(gen.schema());
                 auto m2 = rp2mut.at(rp).unfreeze(gen.schema());
@@ -2265,7 +2312,8 @@ SEASTAR_TEST_CASE(test_commitlog_release_large_mutation_segments) {
 SEASTAR_TEST_CASE(test_segment_end_on_entry_end) {
     static auto replay_segment = [] (sstring path) -> future<> {
         co_await db::commitlog::read_log_file(path, db::commitlog::descriptor::FILENAME_PREFIX, [](db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
-            auto&& [buf, rp] = buf_rp;
+            auto&& [buf, rp, segment_version] = buf_rp;
+            (void) segment_version;
             auto linearization_buffer = bytes_ostream();
             auto in = buf.get_istream();
             auto str = to_string_view(in.read_bytes_view(buf.size_bytes(), linearization_buffer).value());
@@ -2332,6 +2380,150 @@ SEASTAR_TEST_CASE(test_segment_end_on_entry_end) {
         co_await log.sync_all_segments();
         // Without the fix, this will throw.
         co_await replay_segment(segment_path);
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_mixed_v4_v5_replay_for_raft_entries) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.allow_fragmented_entries = true;
+
+    return cl_test(cfg, [] (commitlog& log) -> future<> {
+        auto raft_gid = utils::UUID_gen::get_time_UUID();
+
+        random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+        auto mutation = freeze(gen(1).front());
+        commitlog_entry_writer mut_writer(gen.schema(), mutation, db::commitlog::force_sync::no);
+        co_await log.add_entry(gen.schema()->id(), mut_writer, db::no_timeout);
+
+        co_await log.add_mutation(gen.schema()->id(), sizeof(uint8_t) + ser::get_sizeof(make_test_raft_entry(raft_gid, raft::index_t(11))), db::no_timeout,
+                db::commitlog::force_sync::no,
+                [raft_gid] (db::commitlog::output& out) {
+            ser::serialize(out, uint8_t(1));
+            ser::serialize(out, make_test_raft_entry(raft_gid, raft::index_t(11)));
+        });
+
+        co_await log.sync_all_segments();
+
+        std::vector<sstring> segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        bool saw_mutation = false;
+        bool saw_raft = false;
+        for (const auto& seg : segments) {
+            co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX,
+                    [&] (db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                commitlog_entry_reader r(buf_rp.buffer, buf_rp.segment_version);
+                if (r.get_raft_entry()) {
+                    saw_raft = true;
+                } else {
+                    saw_mutation = true;
+                }
+                co_return;
+            });
+        }
+
+        BOOST_CHECK(saw_mutation);
+        BOOST_CHECK(saw_raft);
+
+        auto downgraded_segment = segments.front();
+        co_await rewrite_segment_header_version(downgraded_segment, db::commitlog::descriptor::segment_version_4);
+
+        bool saw_v4 = false;
+        size_t entries_seen = 0;
+        co_await db::commitlog::read_log_file(downgraded_segment, db::commitlog::descriptor::FILENAME_PREFIX,
+                [&] (db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+            BOOST_CHECK_EQUAL(buf_rp.segment_version, db::commitlog::descriptor::segment_version_4);
+            saw_v4 = true;
+            ++entries_seen;
+            co_return;
+        });
+        BOOST_CHECK(saw_v4);
+        BOOST_CHECK_GT(entries_seen, 0);
+
+        auto v4_fm = freeze(gen(1).front());
+        commitlog_entry v4_entry(std::optional<column_mapping>(gen.schema()->get_column_mapping()), std::move(v4_fm));
+        auto v4_payload = ser::serialize_to_buffer<bytes>(v4_entry);
+        auto v4_buf = fragmented_temporary_buffer::allocate_to_fit(v4_payload.size());
+        auto v4_out = v4_buf.get_ostream();
+        v4_out.write(reinterpret_cast<const char*>(v4_payload.data()), v4_payload.size());
+        commitlog_entry_reader v4_reader(v4_buf, db::commitlog::descriptor::segment_version_4);
+        BOOST_CHECK(v4_reader.get_raft_entry() == nullptr);
+        (void) v4_reader.mutation();
+
+        auto v5_raft_payload = ser::serialize_to_buffer<bytes>(make_test_raft_entry(raft_gid, raft::index_t(12)));
+        auto v5_raft_buf = fragmented_temporary_buffer::allocate_to_fit(sizeof(uint8_t) + v5_raft_payload.size());
+        auto v5_raft_out = v5_raft_buf.get_ostream();
+        const uint8_t raft_tag = 1;
+        v5_raft_out.write(reinterpret_cast<const char*>(&raft_tag), sizeof(raft_tag));
+        v5_raft_out.write(reinterpret_cast<const char*>(v5_raft_payload.data()), v5_raft_payload.size());
+        commitlog_entry_reader v5_reader(v5_raft_buf, db::commitlog::descriptor::segment_version_5);
+        BOOST_REQUIRE(v5_reader.get_raft_entry());
+        BOOST_CHECK_EQUAL(v5_reader.get_raft_entry()->group_id(), raft_gid);
+    });
+}
+
+SEASTAR_TEST_CASE(test_schema_and_hints_commitlog_remain_mutation_only_under_sc_feature) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+        auto fm = freeze(gen(1).front());
+        commitlog_entry_writer cew(gen.schema(), fm, db::commitlog::force_sync::yes);
+
+        auto* schema_cl = env.local_db().schema_commitlog();
+        BOOST_REQUIRE(schema_cl);
+        auto h = schema_cl->add_entry(gen.schema()->id(), cew, db::no_timeout).get();
+        schema_cl->sync_all_segments().get();
+
+        auto paths = schema_cl->get_active_segment_names();
+        BOOST_REQUIRE(!paths.empty());
+
+        bool saw_schema_mutation = false;
+        for (const auto& p : paths) {
+            db::commitlog::read_log_file(p, db::schema_tables::COMMITLOG_FILENAME_PREFIX,
+                    [&saw_schema_mutation] (db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                saw_schema_mutation = true;
+                commitlog_entry_reader cer(buf_rp.buffer, buf_rp.segment_version);
+                BOOST_CHECK(cer.get_raft_entry() == nullptr);
+                (void) cer.mutation();
+                co_return;
+            }).get();
+        }
+        BOOST_CHECK(saw_schema_mutation);
+
+        rp_set set;
+        set.put(std::move(h));
+    }).then([] {
+        commitlog::config cfg;
+        cfg.fname_prefix = "HintsLog-";
+        cfg.metrics_category_name = "commitlog";
+        cfg.commitlog_segment_size_in_mb = 1;
+
+        return cl_test(cfg, [] (commitlog& log) -> future<> {
+            random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+            auto fm = freeze(gen(1).front());
+            commitlog_entry_writer cew(gen.schema(), fm, db::commitlog::force_sync::yes);
+            auto h = co_await log.add_entry(gen.schema()->id(), cew, db::no_timeout);
+            co_await log.sync_all_segments();
+
+            auto paths = log.get_active_segment_names();
+            BOOST_REQUIRE(!paths.empty());
+
+            bool saw_hints_mutation = false;
+            for (const auto& p : paths) {
+                co_await db::commitlog::read_log_file(p, "HintsLog-",
+                        [&saw_hints_mutation] (db::commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                    saw_hints_mutation = true;
+                    commitlog_entry_reader cer(buf_rp.buffer, buf_rp.segment_version);
+                    BOOST_CHECK(cer.get_raft_entry() == nullptr);
+                    (void) cer.mutation();
+                    co_return;
+                });
+            }
+            BOOST_CHECK(saw_hints_mutation);
+
+            rp_set set;
+            set.put(std::move(h));
+        });
     });
 }
 
