@@ -113,6 +113,21 @@
          ]
       },
       {
+         "path":"/v2/error_injection/events",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Subscribe to Server-Sent Events stream of error injection events",
+               "type":"void",
+               "nickname":"injection_events",
+               "produces":[
+                  "text/event-stream"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/v2/error_injection/disconnect/{ip}",
          "operations":[
             {
