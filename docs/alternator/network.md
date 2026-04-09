@@ -31,7 +31,7 @@ was used. Alternator currently supports two compression algorithms, `gzip`
 and `deflate`, both standardized in ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html)).
 Other standard compression types which are listed in
 [IANA's HTTP Content Coding Registry](https://www.iana.org/assignments/http-parameters/http-parameters.xhtml#content-coding),
-including `zstd` ([RFC 8878][https://www.rfc-editor.org/rfc/rfc8878.html]),
+including `zstd` ([RFC 8878](https://www.rfc-editor.org/rfc/rfc8878.html)),
 are not yet supported by Alternator.
 
 Note that HTTP's compression only compresses the request's _body_ - not the
