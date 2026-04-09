@@ -18,6 +18,7 @@ env:
   BUILD_TYPE: RelWithDebInfo
   BUILD_DIR: build
   CLANG_TIDY_CHECKS: '-*,bugprone-use-after-move'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions: {}
 
@@ -42,7 +43,7 @@ jobs:
           IMAGE: ${{ needs.read-toolchain.image }}
         run: |
           echo ${{ needs.read-toolchain.image }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: true
       - run: |
