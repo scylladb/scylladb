@@ -478,6 +478,14 @@ void migration_notifier::before_drop_column_family(const schema& schema,
     });
 }
 
+void migration_notifier::before_drop_column_family_in_notification(const schema& schema,
+        utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
+    _listeners.thread_for_each_nested([&mutations, &schema, ts] (migration_listener* listener) {
+        // allow exceptions. so a listener can effectively kill a drop-column
+        listener->on_before_drop_column_family(schema, mutations, ts);
+    });
+}
+
 void migration_notifier::before_drop_keyspace(const sstring& keyspace_name,
         utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
     _listeners.thread_for_each([&mutations, &keyspace_name, ts] (migration_listener* listener) {
