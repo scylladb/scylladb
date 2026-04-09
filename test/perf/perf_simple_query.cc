@@ -301,6 +301,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("audit-keyspaces", bpo::value<std::string>(), "value for audit_keyspaces config entry")
         ("audit-tables", bpo::value<std::string>(), "value for audit_tables config entry")
         ("audit-categories", bpo::value<std::string>(), "value for audit_categories config entry")
+        ("audit-unix-socket-path", bpo::value<std::string>(), "value for audit_unix_socket_path config entry")
         ;
 
     set_abort_on_internal_error(true);
@@ -339,6 +340,7 @@ int scylla_simple_query_main(int argc, char** argv) {
             set_from_cli("audit-keyspaces", app, cfg.db_config->audit_keyspaces);
             set_from_cli("audit-tables", app, cfg.db_config->audit_tables);
             set_from_cli("audit-categories", app, cfg.db_config->audit_categories);
+            set_from_cli("audit-unix-socket-path", app, cfg.db_config->audit_unix_socket_path);
           return do_with_cql_env_thread([&app] (auto&& env) {
             auto cfg = test_config();
             cfg.partitions = app.configuration()["partitions"].as<unsigned>();
