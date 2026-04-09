@@ -281,7 +281,7 @@ public:
                 auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
                 mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
 
-                db.get_notifier().before_drop_column_family(*log_schema, mutations, timestamp);
+                db.get_notifier().before_drop_column_family_in_notification(*log_schema, mutations, timestamp);
             }
         }
 
