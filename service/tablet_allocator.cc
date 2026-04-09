@@ -1469,9 +1469,8 @@ public:
 
         const locator::topology& topo = _tm->get_topology();
 
-        auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
         auto colocation_state = co_await find_required_rack_list_colocations(_db, _tm, _sys_ks,
-            _topology->paused_rf_change_requests, std::move(migration_tablet_ids));
+            _topology->paused_rf_change_requests, _scheduled_tablets);
 
         node_load_map nodes;
         topo.for_each_node([&] (const locator::node& node) {
@@ -1486,7 +1485,6 @@ public:
         // Consider load that is about to be scheduled.
         co_await consider_planned_load(nodes, mplan);
 
-        std::unordered_set<global_tablet_id> colocation_tablet_ids;
         for (auto& [dc_rack, colocation_sources] : colocation_state.dst_dc_rack_to_tablets) {
             auto nodes_by_load_dst = nodes | std::views::filter([&] (const auto& host_load) {
                 auto& [host, load] = host_load;
@@ -1512,7 +1510,8 @@ public:
 
             const tablet_metadata& tmeta = _tm->tablets();
             for (colocation_source& source : colocation_sources) {
-                if (colocation_tablet_ids.contains(source.gid)) {
+                co_await coroutine::maybe_yield();
+                if (_scheduled_tablets.contains(source.gid)) {
                     lblogger.debug("Skipped colocation of replica {} of tablet={}, another replica of which is about to be colocated", source.replica, source.gid);
                     continue;
                 }
@@ -1551,7 +1550,6 @@ public:
                     mark_as_scheduled(mig);
                     for (auto& m : mig) {
                         plan.add(std::move(m));
-                        colocation_tablet_ids.insert(m.tablet);
                     }
                 }
                 update_node_load_on_migration(nodes, src, dst, source_tablets);
