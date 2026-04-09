@@ -6247,10 +6247,9 @@ SEASTAR_FIXTURE_TEST_CASE(simple_backlog_controller_test_incremental_gcs, gcs_fi
     return run_controller_test(compaction::compaction_strategy_type::incremental, test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
-void test_compaction_strategy_cleanup_method_fn(test_env& env) {
-    constexpr size_t all_files = 64;
+void test_compaction_strategy_cleanup_method_fn(test_env& env, size_t all_files = 64) {
 
-    auto get_cleanup_jobs = [&env] (compaction::compaction_strategy_type compaction_strategy_type,
+    auto get_cleanup_jobs = [&env, all_files] (compaction::compaction_strategy_type compaction_strategy_type,
                                                 std::map<sstring, sstring> strategy_options = {},
                                                 const api::timestamp_clock::duration step_base = 0ms,
                                                 unsigned sstable_level = 0) {
@@ -6281,14 +6280,13 @@ void test_compaction_strategy_cleanup_method_fn(test_env& env) {
             return m;
         };
 
-        std::vector<sstables::shared_sstable> candidates;
-        candidates.reserve(all_files);
-        for (size_t i = 0; i < all_files; i++) {
+        std::vector<sstables::shared_sstable> candidates(all_files);
+        parallel_for_each(std::views::iota(size_t(0), all_files), [&](size_t i) -> future<> {
             auto current_step = duration_cast<microseconds>(step_base) * i;
-            auto sst = make_sstable_containing(sst_gen, {make_mutation(i, next_timestamp(current_step))}).get();
+            auto sst = co_await make_sstable_containing(sst_gen, {make_mutation(i, next_timestamp(current_step))});
             sst->set_sstable_level(sstable_level);
-            candidates.push_back(std::move(sst));
-        }
+            candidates[i] = std::move(sst);
+        }).get();
 
         auto strategy = cf->get_compaction_strategy();
         auto jobs = strategy.get_cleanup_compaction_jobs(cf.as_compaction_group_view(), candidates);
