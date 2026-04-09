@@ -16,6 +16,7 @@
 
 #include "service/query_state.hh"
 #include "seastarx.hh"
+#include "raft_commitlog.hh"
 
 namespace cql3 {
 
@@ -38,6 +39,7 @@ namespace service::strong_consistency {
 // have a (shard, group_id) composite partition key allowing data to reside
 // on the same shard as the tablet replica.
 class raft_groups_storage : public raft::persistence {
+    raft_commitlog _raft_commitlog;
     raft::group_id _group_id;
     raft::server_id _server_id;
     uint16_t _shard;
@@ -55,7 +57,8 @@ class raft_groups_storage : public raft::persistence {
     const size_t _max_mutation_size;
 
 public:
-    explicit raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard);
+    explicit raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard,
+        db::commitlog& commit_log, table_id target_table_id, replayed_data_per_group replayed_data);
 
     future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override;
     future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override;
@@ -84,6 +87,8 @@ public:
     // re-apply already applied entries on restart. Only writes if the new
     // index is higher than the existing one (safe to call on repeated replays).
     static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
+
+    std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 
 private:
 

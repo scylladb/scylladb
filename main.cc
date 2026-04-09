@@ -113,6 +113,7 @@
 #include "db/virtual_tables.hh"
 
 #include "service/strong_consistency/groups_manager.hh"
+#include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -1981,10 +1982,19 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 client_routes.stop().get();
             });
 
+            // Create per-shard buffer to collect raft log entries during commitlog replay.
+            // These entries are later consumed by tablet raft groups when they start.
+            static seastar::sharded<db::raft_commitlog_replay_buffer> raft_replay_buffer;
+            raft_replay_buffer.start().get();
+            auto stop_raft_replay_buffer = defer_verbose_shutdown("raft_replay_buffer", [&] {
+                raft_replay_buffer.stop().get();
+            });
+
             checkpoint(stop_signal, "initializing strongly consistent groups manager");
             sharded<service::strong_consistency::groups_manager> groups_manager;
             groups_manager.start(std::ref(messaging), std::ref(raft_gr), std::ref(qp), 
-                std::ref(db), std::ref(mm), std::ref(sys_ks), std::ref(feature_service), std::ref(gossiper)).get();
+                std::ref(db), std::ref(mm), std::ref(sys_ks), std::ref(feature_service), std::ref(gossiper),
+                std::ref(raft_replay_buffer)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
                 groups_manager.stop().get();
             });
@@ -2147,8 +2157,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     checkpoint(stop_signal, "replaying commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get();
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer).get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+
+                    // Process raft replay buffer: apply committed mutations to memtables,
+                    // rewrite uncommitted entries to the new commitlog,
+                    // and discard entries that precede the last snapshot index.
+                    // Must happen after replay (entries are in the buffer) but before flushing
+                    // and deleting old segments (committed mutations need to be flushed,
+                    // uncommitted entries are now in new segments).
+                    supervisor::notify("processing raft replay buffer");
+                    raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
+                        if (buffer.remaining_groups()) {
+                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
+                        }
+                        return make_ready_future<>();
+                    }).get();
+
                     startlog.info("replaying commit log - flushing memtables");
                     db.invoke_on_all(&replica::database::flush_all_memtables).get();
                     supervisor::notify("replaying commit log - removing old commitlog segments");

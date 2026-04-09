@@ -75,6 +75,7 @@
 #include "db/virtual_tables.hh"
 #include "service/strong_consistency/groups_manager.hh"
 #include "service/strong_consistency/coordinator.hh"
+#include "service/strong_consistency/raft_groups_storage.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/paxos/paxos_state.hh"
@@ -170,6 +171,7 @@ private:
     sharded<compaction::compaction_manager> _cm;
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
+    sharded<db::raft_commitlog_replay_buffer> _raft_replay_buffer;
     sharded<service::strong_consistency::groups_manager> _groups_manager;
     sharded<service::strong_consistency::coordinator> _sc_coordinator;
     sharded<service::storage_service> _ss;
@@ -462,6 +464,10 @@ public:
 
     virtual sharded<vector_search::vector_store_client>& vector_store_client() override {
         return _vector_store_client;
+    }
+
+    virtual sharded<db::raft_commitlog_replay_buffer>& raft_replay_buffer() override {
+        return _raft_replay_buffer;
     }
 
     static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
@@ -978,8 +984,12 @@ private:
             _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
+            _raft_replay_buffer.start().get();
+            auto stop_raft_replay_buffer = defer_verbose_shutdown("raft_replay_buffer", [this] { _raft_replay_buffer.stop().get(); });
+
             _groups_manager.start(std::ref(_ms), std::ref(_group0_registry), std::ref(_qp), 
-                std::ref(_db), std::ref(_mm), std::ref(_sys_ks), std::ref(_feature_service), std::ref(_gossiper)).get();
+                std::ref(_db), std::ref(_mm), std::ref(_sys_ks), std::ref(_feature_service), std::ref(_gossiper),
+                std::ref(_raft_replay_buffer)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] { _groups_manager.stop().get(); });
 
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper)).get();

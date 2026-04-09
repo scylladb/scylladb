@@ -103,7 +103,7 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
-        gms::gossiper& gossiper)
+        gms::gossiper& gossiper, db::raft_commitlog_replay_buffer& raft_replay_buffer)
     : _ms(ms)
     , _raft_gr(raft_gr)
     , _qp(qp)
@@ -112,6 +112,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _sys_ks(sys_ks)
     , _features(features)
     , _gossiper(gossiper)
+    , _raft_replay_buffer(raft_replay_buffer)
 {
     init_messaging_service();
 }
@@ -122,12 +123,18 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 {
     const auto my_id = to_server_id(tm->get_my_id());
 
-    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks);
+
+    auto* commitlog = _db.commitlog();
+    SCYLLA_ASSERT(commitlog);
+    auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
+        *commitlog, tablet.table, _raft_replay_buffer.take_replayed_group_entries(group_id));
+
+    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
+
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
-    auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id());
 
     // Store the initial configuration if this is the first time we create this group
     // on this node

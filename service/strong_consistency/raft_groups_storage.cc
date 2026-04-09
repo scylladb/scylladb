@@ -31,8 +31,10 @@ namespace service::strong_consistency {
 
 logging::logger rgslog("raft_groups_storage");
 
-raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard)
-    : _group_id(std::move(gid))
+raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard, db::commitlog& commit_log,
+        table_id target_table_id, replayed_data_per_group replayed_data)
+    : _raft_commitlog(gid, commit_log, target_table_id, std::move(replayed_data))
+    , _group_id(std::move(gid))
     , _server_id(std::move(server_id))
     , _qp(qp)
     , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
@@ -101,29 +103,7 @@ future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor
 }
 
 future<raft::log_entries> raft_groups_storage::load_log() {
-    static const auto load_cql = format("SELECT term, \"index\", data FROM system.{} WHERE shard = ? AND group_id = ?", db::system_keyspace::RAFT_GROUPS);
-    ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
-
-    raft::log_entries log;
-    for (const cql3::untyped_result_set_row& row : *rs) {
-        if (!row.has("data")) {
-            // The partition only contains static cells, the log
-            // is empty.
-            break;
-        }
-        raft::term_t term = raft::term_t(row.get_as<int64_t>("term"));
-        raft::index_t idx = raft::index_t(row.get_as<int64_t>("index"));
-        auto raw_data = row.get_view("data");
-        auto in = ser::as_input_stream(raw_data);
-        using data_variant_type = decltype(raft::log_entry::data);
-        data_variant_type data = ser::deserialize(in, std::type_identity<data_variant_type>());
-
-        log.emplace_back(make_lw_shared<const raft::log_entry>(
-            raft::log_entry{.term = term, .idx = idx, .data = std::move(data)}));
-
-        co_await coroutine::maybe_yield();
-    }
-    co_return log;
+    return make_ready_future<raft::log_entries>(_raft_commitlog.load_log());
 }
 
 future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor() {
@@ -194,6 +174,10 @@ future<> raft_groups_storage::store_snapshot_descriptor(const raft::snapshot_des
         }
 
         co_await update_snapshot_and_truncate_log_tail(snap, preserve_log_entries);
+        // Also remove the corresponding replay position handles from raft_commitlog
+        // so that commitlog segments can be reclaimed.
+        raft::index_t log_tail_index(snap.idx.value() - preserve_log_entries);
+        _raft_commitlog.truncate_log_tail(log_tail_index);
     });
 }
 
@@ -289,17 +273,12 @@ future<> raft_groups_storage::do_store_log_entries(const std::vector<raft::log_e
 }
 
 future<> raft_groups_storage::store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
-    return execute_with_linearization_point([this, &entries] {
-        return do_store_log_entries(entries);
-    });
+    return _raft_commitlog.store_log_entries(entries);
 }
 
 future<> raft_groups_storage::truncate_log(raft::index_t idx) {
-    return execute_with_linearization_point([this, idx] {
-        static const auto truncate_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ? AND \"index\" >= ?",
-            db::system_keyspace::RAFT_GROUPS);
-        return _qp.execute_internal(truncate_cql, {int16_t(_shard), _group_id.id, int64_t(idx.value())}, cql3::query_processor::cache_internal::yes).discard_result();
-    });
+    _raft_commitlog.truncate_log(idx);
+    return make_ready_future<>();
 }
 
 future<> raft_groups_storage::abort() {
@@ -372,6 +351,10 @@ future<> raft_groups_storage::bootstrap(raft::configuration initial_configuation
     snapshot.id = raft::snapshot_id::create_random_id();
     snapshot.config = std::move(initial_configuation);
     co_await store_snapshot_descriptor(snapshot, 0);
+}
+
+std::vector<index_and_replay_position> raft_groups_storage::acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries) {
+    return _raft_commitlog.acquire_replay_position_handles_for(entries);
 }
 
 } // namespace service::strong_consistency

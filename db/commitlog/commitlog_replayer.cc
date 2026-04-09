@@ -28,6 +28,8 @@
 #include "validation.hh"
 #include "mutation/mutation_partition_view.hh"
 #include <seastar/core/on_internal_error.hh>
+#include "locator/tablet_replication_strategy.hh"
+#include "raft_commitlog_replay_buffer.hh"
 
 static logging::logger rlogger("commitlog_replayer");
 
@@ -46,7 +48,7 @@ class db::commitlog_replayer::impl {
 
     friend class db::commitlog_replayer;
 public:
-    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks);
+    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer);
 
     future<> init();
 
@@ -114,14 +116,17 @@ public:
 
     seastar::sharded<replica::database>& _db;
     seastar::sharded<db::system_keyspace>& _sys_ks;
+    seastar::sharded<raft_commitlog_replay_buffer>* _raft_buffer;
     shard_rpm_map _rpm;
     db::system_keyspace::commitlog_cleanup_map _cleanup_map;
     shard_rp_map _min_pos;
 };
 
-db::commitlog_replayer::impl::impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks)
+db::commitlog_replayer::impl::impl(
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
     : _db(db)
     , _sys_ks(sys_ks)
+    , _raft_buffer(raft_buffer)
 {}
 
 future<> db::commitlog_replayer::impl::init() {
@@ -225,7 +230,11 @@ future<> db::commitlog_replayer::impl::process(
         const auto& read_entry = cer.entry().item;
 
         if (std::holds_alternative<raft_commitlog_entry>(read_entry)) {
-            rlogger.debug("Skipping raft log entry");
+            const auto& raft_entry = std::get<raft_commitlog_entry>(read_entry);
+            SCYLLA_ASSERT(_raft_buffer);
+            rlogger.debug("Adding raft log entry for group {} at {} to replay buffer", raft_entry.group_id, rp);
+            _raft_buffer->local().add(raft_entry.group_id, raft_entry.entry);
+            co_return;
         } else if (std::holds_alternative<mutation_entry>(read_entry)) {
             const auto& mut_entry = std::get<mutation_entry>(read_entry);
 
@@ -333,8 +342,9 @@ future<> db::commitlog_replayer::impl::process(
     }
 }
 
-db::commitlog_replayer::commitlog_replayer(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks)
-    : _impl(std::make_unique<impl>(db, sys_ks))
+db::commitlog_replayer::commitlog_replayer(
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
+    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer))
 {}
 
 db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
@@ -344,8 +354,9 @@ db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
 db::commitlog_replayer::~commitlog_replayer()
 {}
 
-future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks) {
-    return do_with(commitlog_replayer(db, sys_ks), [](auto&& rp) {
+future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer) {
+    return do_with(commitlog_replayer(db, sys_ks, raft_buffer), [](auto&& rp) {
         auto f = rp._impl->init();
         return f.then([rp = std::move(rp)]() mutable {
             return make_ready_future<commitlog_replayer>(std::move(rp));
