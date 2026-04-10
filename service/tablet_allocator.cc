@@ -1457,23 +1457,17 @@ public:
         return tablet_group_size;
     }
 
-    future<migration_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
-        lblogger.debug("In make_rack_list_colocation_plan");
-
+    future<migration_plan> make_rack_list_colocation_plan_for_dc(
+            const sstring& dc,
+            const std::map<sstring, colocation_source_set>& racks,
+            const std::unordered_map<sstring, std::unordered_set<utils::UUID>>& requests_for_dc,
+            const migration_plan& mplan) {
         migration_plan plan;
-        tablet_rack_list_colocation_plan rack_list_plan;
-        if (!ongoing_rack_list_colocation() || utils::get_local_injector().enter("wait_with_rack_list_colocation")) {
-            co_return plan;
-        }
-
         const locator::topology& topo = _tm->get_topology();
-
-        auto colocation_state = co_await find_required_rack_list_colocations(_db, _tm, _sys_ks,
-            _topology->paused_rf_change_requests, _scheduled_tablets);
 
         node_load_map nodes;
         topo.for_each_node([&] (const locator::node& node) {
-            if (node.get_state() == locator::node::state::normal && !node.is_excluded()) {
+            if (node.get_state() == locator::node::state::normal && !node.is_excluded() && node.dc_rack().dc == dc) {
                 ensure_node(nodes, node.host_id());
             }
         });
@@ -1484,7 +1478,6 @@ public:
         // Consider load that is about to be scheduled.
         co_await consider_planned_load(nodes, mplan);
 
-        for (auto& [dc, racks] : colocation_state.dst_dc_rack_to_tablets) {
         for (auto& [rack, colocation_sources] : racks) {
             auto dc_rack = locator::endpoint_dc_rack{dc, rack};
             auto nodes_by_load_dst = nodes | std::views::filter([&] (const auto& host_load) {
@@ -1495,10 +1488,8 @@ public:
 
             if (nodes_by_load_dst.empty()) {
                 lblogger.warn("No target nodes available for RF change colocation plan in dc {}, rack {}", dc, rack);
-                if (auto dc_it = colocation_state.dst_to_requests.find(dc); dc_it != colocation_state.dst_to_requests.end()) {
-                    if (auto rack_it = dc_it->second.find(rack); rack_it != dc_it->second.end()) {
-                        rack_list_plan.maybe_add_request_to_resume(*rack_it->second.begin());
-                    }
+                if (auto rack_it = requests_for_dc.find(rack); rack_it != requests_for_dc.end()) {
+                    plan.maybe_add_rack_list_request_to_resume(*rack_it->second.begin());
                 }
                 continue;
             }
@@ -1512,7 +1503,7 @@ public:
             std::make_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
 
             const tablet_metadata& tmeta = _tm->tablets();
-            for (colocation_source& source : colocation_sources) {
+            for (const colocation_source& source : colocation_sources) {
                 co_await coroutine::maybe_yield();
                 if (_scheduled_tablets.contains(source.gid)) {
                     lblogger.debug("Skipped colocation of replica {} of tablet={}, another replica of which is about to be colocated", source.replica, source.gid);
@@ -1558,11 +1549,28 @@ public:
                 update_node_load_on_migration(nodes, src, dst, source_tablets);
             }
         }
+        co_return plan;
+    }
+
+    future<migration_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
+        lblogger.debug("In make_rack_list_colocation_plan");
+
+        migration_plan plan;
+        if (!ongoing_rack_list_colocation() || utils::get_local_injector().enter("wait_with_rack_list_colocation")) {
+            co_return plan;
         }
+
+        auto colocation_state = co_await find_required_rack_list_colocations(_db, _tm, _sys_ks,
+            _topology->paused_rf_change_requests, _scheduled_tablets);
+
+        for (auto& [dc, racks] : colocation_state.dst_dc_rack_to_tablets) {
+            auto requests_it = colocation_state.dst_to_requests.find(dc);
+            plan.merge(co_await make_rack_list_colocation_plan_for_dc(dc, racks, requests_it != colocation_state.dst_to_requests.end() ? requests_it->second : std::unordered_map<sstring, std::unordered_set<utils::UUID>>{}, mplan));
+        }
+
         if (colocation_state.request_to_resume) {
-            rack_list_plan.maybe_add_request_to_resume(colocation_state.request_to_resume);
+            plan.maybe_add_rack_list_request_to_resume(colocation_state.request_to_resume);
         }
-        plan.set_rack_list_colocation_plan(std::move(rack_list_plan));
         co_return std::move(plan);
     }
 
