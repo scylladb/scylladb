@@ -203,8 +203,6 @@ add_scylla_test(rolling_max_tracker_test
   KIND BOOST)
 add_scylla_test(rest_client_test
   KIND SEASTAR)
-add_scylla_test(rolling_max_tracker_test
-  KIND BOOST)
 add_scylla_test(rust_test
   KIND BOOST
   LIBRARIES inc)
