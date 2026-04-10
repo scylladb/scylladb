@@ -7,6 +7,7 @@
  */
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/on_internal_error.hh>
 #include <seastar/core/coroutine.hh>
 
 #include "db/config.hh"
@@ -451,50 +452,65 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
     });
 }
 
-// Test static load_commit_idx and load_snapshot_descriptor methods.
-// These are used during commitlog replay when a full raft_groups_storage is not available.
-SEASTAR_TEST_CASE(test_groups_static_load_commit_idx_and_snapshot) {
+// Test store_snapshot_index: advances persisted snapshot index atomically,
+// and refuses to go backwards (guard against repeated replays).
+SEASTAR_TEST_CASE(test_groups_store_snapshot_index) {
     return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
         cql3::query_processor& qp = env.local_qp();
         auto& cl = *env.local_db().commitlog();
         auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
-        raft::group_id static_gid{utils::UUID_gen::get_time_UUID()};
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
 
-        raft_groups_storage storage(qp, static_gid, raft::server_id::create_random_id(), test_shard,
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
                 cl, dummy_table, {});
 
-        // Store commit index via instance method
-        co_await storage.store_commit_idx(raft::index_t(55));
+        // Initially no snapshot
+        auto snp0 = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(!snp0.id);
 
-        // Read it back via the static method
-        auto loaded_idx = co_await raft_groups_storage::load_commit_idx(qp, static_gid, test_shard);
-        BOOST_CHECK_EQUAL(loaded_idx, raft::index_t(55));
-
-        // Verify static returns 0 for a group that has no data
-        raft::group_id unknown_gid{utils::UUID_gen::get_time_UUID()};
-        auto zero_idx = co_await raft_groups_storage::load_commit_idx(qp, unknown_gid, test_shard);
-        BOOST_CHECK_EQUAL(zero_idx, raft::index_t(0));
-
-        // Bootstrap + store a snapshot, then read via static method
-        raft::config_member srv{raft::server_address{
-                raft::server_id::create_random_id(), {}
-            }, raft::is_voter::yes};
-        raft::snapshot_descriptor snp{
+        // Advance snapshot index to 10
+        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
             .idx = raft::index_t(10),
-            .term = raft::term_t(2),
-            .config = raft::configuration({srv}),
-            .id = raft::snapshot_id::create_random_id()};
+            .term = raft::term_t(3),
+            .id = raft::snapshot_id(utils::make_random_uuid()),
+        });
 
-        co_await storage.store_snapshot_descriptor(snp, 0);
+        auto snp1 = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK_EQUAL(snp1.idx, raft::index_t(10));
+        BOOST_CHECK_EQUAL(snp1.term, raft::term_t(3));
 
-        auto loaded_snp = co_await raft_groups_storage::load_snapshot_descriptor(qp, static_gid, test_shard);
-        BOOST_CHECK_EQUAL(loaded_snp.idx, raft::index_t(10));
-        BOOST_CHECK_EQUAL(loaded_snp.term, raft::term_t(2));
-        BOOST_CHECK_EQUAL(loaded_snp.config.current.size(), 1);
+        // Advance further to 20
+        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
+            .idx = raft::index_t(20),
+            .term = raft::term_t(4),
+            .id = raft::snapshot_id(utils::make_random_uuid()),
+        });
 
-        // Verify static returns empty snapshot for unknown group
-        auto empty_snp = co_await raft_groups_storage::load_snapshot_descriptor(qp, unknown_gid, test_shard);
-        BOOST_CHECK(!empty_snp.id);
+        auto snp2 = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK_EQUAL(snp2.idx, raft::index_t(20));
+        BOOST_CHECK_EQUAL(snp2.term, raft::term_t(4));
+
+        // Attempt to go backwards to 15 — should be a no-op
+        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
+            .idx = raft::index_t(15),
+            .term = raft::term_t(3),
+            .id = raft::snapshot_id(utils::make_random_uuid()),
+        });
+
+        auto snp3 = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK_EQUAL(snp3.idx, raft::index_t(20));
+        BOOST_CHECK_EQUAL(snp3.term, raft::term_t(4));
+
+        // Same index — should also be a no-op
+        co_await raft_groups_storage::store_snapshot_index(qp, gid, test_shard, raft::snapshot_descriptor{
+            .idx = raft::index_t(20),
+            .term = raft::term_t(5),
+            .id = raft::snapshot_id(utils::make_random_uuid()),
+        });
+
+        auto snp4 = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK_EQUAL(snp4.idx, raft::index_t(20));
+        BOOST_CHECK_EQUAL(snp4.term, raft::term_t(4));
     });
 }
 
@@ -551,5 +567,146 @@ SEASTAR_TEST_CASE(test_groups_get_partial_replay_positions) {
         auto handles2 = storage.acquire_replay_position_handles_for(entries_batch2);
         BOOST_CHECK_EQUAL(handles2.size(), 1);
         BOOST_CHECK_EQUAL(handles2[0].index, raft::index_t(3));
+    });
+}
+
+// Test that acquire_replay_position_handles_for correctly handles non-contiguous
+// command entries when configuration/dummy entries are interleaved.
+// This simulates what happens in practice: the raft server filters out non-command
+// entries before calling state_machine::apply(), so acquire_replay_position_handles_for
+// receives only command entries which may have gaps in their indices.
+SEASTAR_TEST_CASE(test_groups_acquire_handles_skips_non_command_entries) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        // Create a log with interleaved entry types:
+        // idx=1: command, idx=2: configuration, idx=3: command, idx=4: dummy, idx=5: command
+        raft::command cmd1, cmd3, cmd5;
+        ser::serialize(cmd1, 100);
+        ser::serialize(cmd3, 300);
+        ser::serialize(cmd5, 500);
+
+        std::vector<raft::log_entry_ptr> entries = {
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(1), .data = std::move(cmd1)}),
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(2),
+                .data = raft::configuration{{raft::config_member{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes}}}}),
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(3), .data = std::move(cmd3)}),
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(4), .data = raft::log_entry::dummy()}),
+            make_lw_shared(raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(5), .data = std::move(cmd5)}),
+        };
+
+        co_await storage.store_log_entries(entries);
+
+        // Simulate what the raft server does: filter only command entries for apply().
+        raft::log_entry_ptr_list command_entries;
+        for (auto& e : entries) {
+            if (std::holds_alternative<raft::command>(e->data)) {
+                command_entries.push_back(e);
+            }
+        }
+        BOOST_CHECK_EQUAL(command_entries.size(), 3);
+
+        // acquire_replay_position_handles_for should succeed even though
+        // the command indices (1, 3, 5) are not contiguous in the replay position list.
+        auto handles = storage.acquire_replay_position_handles_for(command_entries);
+        BOOST_CHECK_EQUAL(handles.size(), 3);
+        BOOST_CHECK_EQUAL(handles[0].index, raft::index_t(1));
+        BOOST_CHECK_EQUAL(handles[1].index, raft::index_t(3));
+        BOOST_CHECK_EQUAL(handles[2].index, raft::index_t(5));
+    });
+}
+
+// Test truncate_log (head truncation) then verify remaining handles.
+// Store 3 entries, truncate at idx 2 (removes entries with idx >= 2),
+// verify only entry 1 can produce a valid handle, and entries 2-3 cannot.
+SEASTAR_TEST_CASE(test_groups_truncate_log_then_get_handles_for_remaining) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        std::vector<raft::log_entry_ptr> entries = create_test_log();
+        co_await storage.store_log_entries(entries);
+
+        // Truncate at idx 2 — entries with idx >= 2 should be removed.
+        co_await storage.truncate_log(raft::index_t(2));
+
+        // Entry 1 should still have a valid handle.
+        raft::log_entry_ptr_list first_entry = {entries[0]};
+        auto handles = storage.acquire_replay_position_handles_for(first_entry);
+        BOOST_CHECK_EQUAL(handles.size(), 1);
+        BOOST_CHECK_EQUAL(handles[0].index, raft::index_t(1));
+
+        // Entries 2-3 should trigger an error (their replay positions were removed).
+        {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            raft::log_entry_ptr_list truncated_entries(entries.begin() + 1, entries.end());
+            try {
+                storage.acquire_replay_position_handles_for(truncated_entries);
+                BOOST_FAIL("Expected on_internal_error for truncated entries");
+            } catch (...) {
+                // Expected — entries 2-3 were truncated.
+            }
+        }
+    });
+}
+
+// Test store_snapshot_descriptor (which truncates the log tail) then verify handles.
+// Store 3 entries, store a snapshot at idx 2 with preserve_log_entries=1
+// (which truncates entries with idx <= 2-1 = 1), verify entry 1 is gone
+// but entries 2-3 are still accessible.
+SEASTAR_TEST_CASE(test_groups_store_snapshot_truncate_tail_then_get_handles) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+
+        // Bootstrap so we can store a snapshot later.
+        raft::config_member srv{raft::server_address{
+                raft::server_id::create_random_id(), {}
+            }, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        std::vector<raft::log_entry_ptr> entries = create_test_log();
+        co_await storage.store_log_entries(entries);
+
+        // Store snapshot at idx=2 with preserve_log_entries=1.
+        // This truncates the tail: entries with idx <= (2 - 1) = 1 are removed.
+        raft::snapshot_descriptor snp{
+            .idx = raft::index_t(2),
+            .term = raft::term_t(2),
+            .config = raft::configuration({srv}),
+            .id = raft::snapshot_id::create_random_id()};
+        co_await storage.store_snapshot_descriptor(snp, 1 /* preserve_log_entries */);
+
+        // Entries 2-3 should still have valid handles.
+        raft::log_entry_ptr_list remaining(entries.begin() + 1, entries.end());
+        auto handles = storage.acquire_replay_position_handles_for(remaining);
+        BOOST_CHECK_EQUAL(handles.size(), 2);
+        BOOST_CHECK_EQUAL(handles[0].index, raft::index_t(2));
+        BOOST_CHECK_EQUAL(handles[1].index, raft::index_t(3));
+
+        // Entry 1 should trigger an error (tail-truncated by snapshot).
+        {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            raft::log_entry_ptr_list truncated_entry = {entries[0]};
+            try {
+                storage.acquire_replay_position_handles_for(truncated_entry);
+                BOOST_FAIL("Expected on_internal_error for tail-truncated entry");
+            } catch (...) {
+                // Expected — entry 1 was tail-truncated by snapshot.
+            }
+        }
     });
 }
