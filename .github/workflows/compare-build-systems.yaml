@@ -1,0 +1,38 @@
+name: Compare Build Systems
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'configure.py'
+      - '**/CMakeLists.txt'
+      - 'cmake/**'
+      - 'scripts/compare_build_systems.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# cancel the in-progress run upon a repush
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  read-toolchain:
+    uses: ./.github/workflows/read-toolchain.yaml
+  compare:
+    name: Compare configure.py vs CMake
+    needs:
+      - read-toolchain
+    runs-on: ubuntu-latest
+    container: ${{ needs.read-toolchain.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Compare build systems
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+          python3 scripts/compare_build_systems.py --ci
