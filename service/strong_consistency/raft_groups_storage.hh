@@ -76,6 +76,10 @@ public:
     // To be called before start for the new group.
     future<> bootstrap(raft::configuration initial_configuation, bool nontrivial_snapshot);
 
+    // Static version that doesn't require constructing a full raft_groups_storage object.
+    // Useful during commitlog replay when only read access to metadata is needed.
+    static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+
 private:
 
     future<size_t> do_store_log_entries_one_batch(const std::vector<raft::log_entry_ptr>& entries, size_t start_idx);

@@ -87,8 +87,12 @@ future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
 }
 
 future<raft::index_t> raft_groups_storage::load_commit_idx() {
+    return load_commit_idx(_qp, _group_id, _shard);
+}
+
+future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
     static const auto load_cql = format("SELECT commit_idx FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
-    ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
+    ::shared_ptr<cql3::untyped_result_set> rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
     if (rs->empty()) {
         co_return raft::index_t(0);
     }
