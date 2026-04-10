@@ -15,6 +15,8 @@
 #include "db/commitlog/commitlog.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 
+#include <seastar/core/semaphore.hh>
+
 #include <unordered_set>
 
 namespace db {
@@ -87,8 +89,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     std::unordered_map<raft::group_id, raft_groups_storage::group_replay_state> _raft_replay_state = {};
     bool _raft_replay_had_errors = false;
     std::unordered_set<raft::group_id> _started_groups = {};
+    semaphore _raft_commitlog_init_sem{1};
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
+
+    future<> ensure_raft_commitlog_initialized();
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,

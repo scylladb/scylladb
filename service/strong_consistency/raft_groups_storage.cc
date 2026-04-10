@@ -88,6 +88,35 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_
     _shard = static_cast<uint16_t>(shard);
 }
 
+namespace {
+
+raft::index_t clamp_commit_idx_to_replayed_log(raft::index_t commit_idx,
+        const std::optional<raft::index_t>& replayed_max_idx,
+        raft::index_t commit_idx_floor,
+        const std::optional<raft::index_t>& replayed_truncate_prefix_idx,
+        bool replay_state_loaded) {
+    if (!replay_state_loaded) {
+        return commit_idx;
+    }
+
+    auto floor_idx = replayed_truncate_prefix_idx.value_or(raft::index_t{0});
+    if (commit_idx_floor > floor_idx) {
+        floor_idx = commit_idx_floor;
+    }
+    auto stable_idx = replayed_max_idx.value_or(floor_idx);
+
+    if (stable_idx < floor_idx) {
+        stable_idx = floor_idx;
+    }
+
+    if (commit_idx > stable_idx) {
+        return stable_idx;
+    }
+    return commit_idx;
+}
+
+}
+
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard)
     : raft_groups_storage(qp, std::move(gid), std::move(server_id), shard, qp.proxy().local_db().commitlog()) {
 }
@@ -116,12 +145,20 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
     return execute_with_linearization_point([this, idx] {
+        static const auto load_cql = format("SELECT commit_idx FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
         static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
-        return _qp.execute_internal(
+        return _qp.execute_internal(load_cql, {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes).then([this, idx] (auto rs) {
+            auto persisted_idx = raft::index_t(0);
+            if (!rs->empty()) {
+                persisted_idx = raft::index_t(rs->one().template get_or<int64_t>("commit_idx", raft::index_t{}.value()));
+            }
+            auto to_store = std::max(idx, persisted_idx);
+            return _qp.execute_internal(
             store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(idx.value())},
+            {int16_t(_shard), _group_id.id, int64_t(to_store.value())},
             cql3::query_processor::cache_internal::yes).discard_result();
+        });
     });
 }
 
@@ -129,10 +166,34 @@ future<raft::index_t> raft_groups_storage::load_commit_idx() {
     static const auto load_cql = format("SELECT commit_idx FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
     if (rs->empty()) {
-        co_return raft::index_t(0);
+        co_return clamp_commit_idx_to_replayed_log(raft::index_t(0), _replayed_max_idx, _commit_idx_floor, _replayed_truncate_prefix_idx, _replay_state_loaded);
     }
     const auto& static_row = rs->one();
-    co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
+    auto persisted_commit_idx = raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
+    auto commit_idx_floor = _commit_idx_floor;
+    if (_replay_state_loaded
+            && !_replayed_max_idx
+            && !_replayed_truncate_prefix_idx
+            && commit_idx_floor == raft::index_t{0}
+            && persisted_commit_idx > raft::index_t{0}) {
+        auto snap = co_await load_snapshot_descriptor();
+        if (snap.id && snap.idx > commit_idx_floor) {
+            commit_idx_floor = snap.idx;
+        }
+    }
+
+    auto commit_idx = clamp_commit_idx_to_replayed_log(persisted_commit_idx, _replayed_max_idx, commit_idx_floor, _replayed_truncate_prefix_idx, _replay_state_loaded);
+    if (commit_idx.value() != persisted_commit_idx.value()) {
+        const auto replayed_max_idx = _replayed_max_idx ? format("{}", *_replayed_max_idx) : sstring("none");
+        const auto replayed_truncate_prefix_idx = _replayed_truncate_prefix_idx ? format("{}", *_replayed_truncate_prefix_idx) : sstring("none");
+        rgslog.warn("Clamping commit index for group {} from {} to {} (replayed_max_idx={}, replayed_truncate_prefix_idx={})",
+            _group_id,
+            persisted_commit_idx,
+            commit_idx,
+            replayed_max_idx,
+            replayed_truncate_prefix_idx);
+    }
+    co_return commit_idx;
 }
 
 future<raft::log_entries> raft_groups_storage::load_log() {
@@ -309,6 +370,18 @@ future<> raft_groups_storage::abort() {
     } catch (...) {
         pending_error = std::current_exception();
     }
+
+    if (_commitlog && has_commitlog_log_entries()) {
+        try {
+            co_await materialize_log_state_to_commitlog();
+            co_await _commitlog->sync_all_segments();
+        } catch (...) {
+            if (!pending_error) {
+                pending_error = std::current_exception();
+            }
+        }
+    }
+
     _entry_rp_handles.clear();
     _truncate_tail_rp_handle.reset();
     _truncate_prefix_rp_handle.reset();
@@ -324,6 +397,10 @@ future<> raft_groups_storage::update_snapshot_and_truncate_log_tail(const raft::
         store_latest_id_cql,
         {int16_t(_shard), _group_id.id, snap.id.id},
         cql3::query_processor::cache_internal::yes).discard_result();
+
+    if (_commit_idx_floor < snap.idx) {
+        _commit_idx_floor = snap.idx;
+    }
 
     if (preserve_log_entries >= snap.idx.value()) {
         co_return;
@@ -405,7 +482,9 @@ raft_groups_storage::replay_log_entries_for_groups(cql3::query_processor& qp, st
     ordered_files.reserve(files.size());
     for (auto& file : files) {
         try {
-            db::commitlog::descriptor d(file, COMMITLOG_FILENAME_PREFIX);
+            const auto slash_pos = file.find_last_of('/');
+            const sstring filename = slash_pos == sstring::npos ? file : file.substr(slash_pos + 1);
+            db::commitlog::descriptor d(filename, COMMITLOG_FILENAME_PREFIX);
             ordered_files.emplace_back(d.id, std::move(file));
         } catch (const std::domain_error&) {
             continue;
@@ -474,6 +553,10 @@ void raft_groups_storage::set_replayed_log_state(group_replay_state state) {
     _replayed_truncate_idx = state.replayed_truncate_idx;
     _replayed_truncate_prefix_idx = state.replayed_truncate_prefix_idx;
     _replayed_has_truncate = state.replayed_has_truncate;
+    if (_replayed_truncate_prefix_idx && _commit_idx_floor < *_replayed_truncate_prefix_idx) {
+        _commit_idx_floor = *_replayed_truncate_prefix_idx;
+    }
+    _replay_state_loaded = true;
 }
 
 void raft_groups_storage::set_replay_had_errors(bool had_errors) {

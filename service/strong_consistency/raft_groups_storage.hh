@@ -73,6 +73,8 @@ private:
     std::optional<raft::index_t> _replayed_truncate_idx;
     std::optional<raft::index_t> _replayed_truncate_prefix_idx;
     bool _replayed_has_truncate = false;
+    bool _replay_state_loaded = false;
+    raft::index_t _commit_idx_floor = raft::index_t{0};
     bool _allow_legacy_cleanup = false;
     bool _replay_had_errors = false;
 

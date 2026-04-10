@@ -111,6 +111,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
         token_metadata_ptr tm)
 {
+    co_await ensure_raft_commitlog_initialized();
+
     const auto my_id = to_server_id(tm->get_my_id());
 
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks);
@@ -348,6 +350,28 @@ future<> groups_manager::start() {
         co_return;
     }
 
+    co_await ensure_raft_commitlog_initialized();
+
+    _started = true;
+
+    if (_pending_tm) {
+        update(std::move(_pending_tm));
+        co_await wait_for_groups_to_start();
+    }
+
+    _raft_replay_state.clear();
+}
+
+future<> groups_manager::ensure_raft_commitlog_initialized() {
+    if (!_features.strongly_consistent_tables || _raft_commitlog) {
+        co_return;
+    }
+
+    auto units = co_await get_units(_raft_commitlog_init_sem, 1);
+    if (_raft_commitlog) {
+        co_return;
+    }
+
     db::commitlog::config cl_cfg;
     cl_cfg.sched_group = _db.commitlog()->active_config().sched_group;
     cl_cfg.commit_log_location = _db.get_config().commitlog_directory();
@@ -368,15 +392,6 @@ future<> groups_manager::start() {
     auto replay_files = co_await _raft_commitlog->list_existing_segments();
     _raft_replay_had_errors = false;
     _raft_replay_state = co_await raft_groups_storage::replay_log_entries_for_groups(_qp, std::move(replay_files), &_raft_replay_had_errors);
-
-    _started = true;
-
-    if (_pending_tm) {
-        update(std::move(_pending_tm));
-        co_await wait_for_groups_to_start();
-    }
-
-    _raft_replay_state.clear();
 }
 
 future<> groups_manager::stop() {

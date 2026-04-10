@@ -553,3 +553,70 @@ SEASTAR_TEST_CASE(test_groups_storage_shard_isolation) {
         BOOST_CHECK_EQUAL(raft::index_t(0), idx1);
     });
 }
+
+SEASTAR_TEST_CASE(test_groups_storage_load_commit_idx_clamped_to_replayed_stable_idx) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id clamp_gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, clamp_gid, raft::server_id::create_random_id(), test_shard);
+        co_await storage.store_commit_idx(raft::index_t(42));
+
+        raft_groups_storage::group_replay_state replay_state;
+        replay_state.log[raft::index_t(1)] = make_lw_shared<const raft::log_entry>(raft::log_entry{
+                .term = raft::term_t(1),
+                .idx = raft::index_t(1),
+                .data = raft::log_entry::dummy()});
+        replay_state.log[raft::index_t(2)] = make_lw_shared<const raft::log_entry>(raft::log_entry{
+                .term = raft::term_t(1),
+                .idx = raft::index_t(2),
+                .data = raft::log_entry::dummy()});
+        replay_state.log[raft::index_t(3)] = make_lw_shared<const raft::log_entry>(raft::log_entry{
+                .term = raft::term_t(1),
+                .idx = raft::index_t(3),
+                .data = raft::log_entry::dummy()});
+        replay_state.replayed_max_idx = raft::index_t(3);
+        replay_state.replayed_seen_max_idx = raft::index_t(3);
+
+        storage.set_replayed_log_state(std::move(replay_state));
+
+        auto commit_idx = co_await storage.load_commit_idx();
+        BOOST_CHECK_EQUAL(commit_idx, raft::index_t(3));
+    });
+}
+
+SEASTAR_TEST_CASE(test_groups_storage_store_commit_idx_is_monotonic) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id monotonic_gid{utils::UUID_gen::get_time_UUID()};
+        raft_groups_storage storage(qp, monotonic_gid, raft::server_id::create_random_id(), test_shard);
+
+        co_await storage.store_commit_idx(raft::index_t(10));
+        co_await storage.store_commit_idx(raft::index_t(2));
+
+        auto commit_idx = co_await storage.load_commit_idx();
+        BOOST_CHECK_EQUAL(commit_idx, raft::index_t(10));
+    });
+}
+
+SEASTAR_TEST_CASE(test_groups_storage_load_commit_idx_preserves_metadata_when_replay_empty_with_snapshot) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id preserve_gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, preserve_gid, raft::server_id::create_random_id(), test_shard);
+        co_await storage.store_commit_idx(raft::index_t(9));
+
+        raft::snapshot_descriptor snp{
+            .idx = raft::index_t(9),
+            .term = raft::term_t(1),
+            .id = raft::snapshot_id::create_random_id()};
+        snp.config = raft::configuration{};
+        co_await storage.store_snapshot_descriptor(snp, 9);
+
+        storage.set_replayed_log_state({});
+
+        auto commit_idx = co_await storage.load_commit_idx();
+        BOOST_CHECK_EQUAL(commit_idx, raft::index_t(9));
+    });
+}
