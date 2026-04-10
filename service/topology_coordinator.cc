@@ -4350,6 +4350,8 @@ bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr 
         rtlogger.debug("topology change coordinator fiber aborted");
     } catch (seastar::abort_requested_exception&) {
         rtlogger.debug("topology change coordinator fiber aborted");
+    } catch (raft::maybe_applied_via_snapshot&) {
+        rtlogger.debug("topology change coordinator fiber got maybe_applied_via_snapshot");
     } catch (raft::commit_status_unknown&) {
         rtlogger.warn("topology change coordinator fiber got commit_status_unknown");
     } catch (group0_concurrent_modification&) {

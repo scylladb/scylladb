@@ -182,6 +182,11 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
                 logger.warn("add_entry: returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
                         e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
                 retry = true;
+            } catch (const raft::maybe_applied_via_snapshot& e) {
+                // The entry was committed and applied (either via apply() or via snapshot).
+                // This is equivalent to success — no need to retry.
+                logger.info("add_entry: returned \"{}\". Treating as success (prev_state_id: {}, new_state_id: {})",
+                        e, group0_cmd.prev_state_id, group0_cmd.new_state_id);
             } catch (const raft::commit_status_unknown& e) {
                 logger.warn("add_entry: returned \"{}\". Retrying the command (prev_state_id: {}, new_state_id: {})",
                         e, group0_cmd.prev_state_id, group0_cmd.new_state_id);

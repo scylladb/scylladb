@@ -241,6 +241,12 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                         ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
 
                     continue;
+                } else if (try_catch<raft::maybe_applied_via_snapshot>(ex)) {
+                    // The entry was committed and applied (either via apply() or via snapshot).
+                    // This is equivalent to success for our purposes.
+                    logger.debug("mutate(): add_entry, got maybe_applied_via_snapshot {}, table {}.{}, tablet {}, term {}",
+                        ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
+                    co_return std::monostate{};
                 } else if (try_catch<raft::commit_status_unknown>(ex)) {
                     logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, tablet {}, term {}",
                         ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);

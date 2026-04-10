@@ -88,6 +88,8 @@ void view_building_coordinator::handle_coordinator_error(std::exception_ptr eptr
         vbc_logger.debug("view building coordinator got raft::request_aborted");
     } catch (service::term_changed_error&) {
         vbc_logger.debug("view building coordinator notices term change {} -> {}", _term, _raft.get_current_term());
+    } catch (raft::maybe_applied_via_snapshot&) {
+        vbc_logger.debug("view building coordinator got raft::maybe_applied_via_snapshot");
     } catch (raft::commit_status_unknown&) {
         vbc_logger.warn("view building coordinator got raft::commit_status_unknown");
     } catch (...) {
@@ -158,6 +160,8 @@ future<> view_building_coordinator::finished_task_gc_fiber() {
             vbc_logger.debug("view_building_coordinator::finished_task_gc_fiber got raft::request_aborted");
         } catch (service::term_changed_error&) {
             vbc_logger.debug("view_building_coordinator::finished_task_gc_fiber notices term change {} -> {}", _term, _raft.get_current_term());
+        } catch (raft::maybe_applied_via_snapshot&) {
+            vbc_logger.debug("view_building_coordinator::finished_task_gc_fiber got raft::maybe_applied_via_snapshot");
         } catch (raft::commit_status_unknown&) {
             vbc_logger.warn("view_building_coordinator::finished_task_gc_fiber got raft::commit_status_unknown");
         } catch (...) {
