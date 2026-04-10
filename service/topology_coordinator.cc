@@ -274,7 +274,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // cancel_requests - no request can be started so cancel the queue
     // start_vnodes_cleanup - cleanup needs to be started
     // node_to_work_on - the node the topology coordinator should work on
-    std::variant<group0_guard, cancel_requests, start_vnodes_cleanup, node_to_work_on> get_next_task(group0_guard guard) {
+    std::variant<group0_guard, cancel_requests, start_vnodes_cleanup, node_to_work_on> get_next_task(group0_guard guard, bool warn = true) {
         auto& topo = _topo_sm._topology;
 
         if (topo.transition_nodes.size() != 0) {
@@ -325,7 +325,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
             // We did not find a request that has enough live node to proceed
             // Cancel all requests to let admin know that no operation can succeed
-            rtlogger.warn("topology coordinator: cancel request queue because no request can proceed. Dead nodes: {}", dead_nodes);
+            if (warn) {
+                rtlogger.warn("topology coordinator: cancel request queue because no request can proceed. Dead nodes: {}", dead_nodes);
+            }
             return cancel_requests{std::move(guard), std::move(dead_nodes)};
         }
 
@@ -2583,7 +2585,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // on the fact that the block which calls this is atomic.
     // FIXME: Don't take the ownership of the guard to make the above guarantee explicit.
     std::pair<bool, group0_guard> should_preempt_balancing(group0_guard guard) {
-        auto work = get_next_task(std::move(guard));
+        // Cancellation won't be acted upon here - it will be performed by handle_topology_transition()
+        // when called from the main loop. Suppress the warning to avoid duplicate messages.
+        auto work = get_next_task(std::move(guard), false /* warn */);
         if (auto* node = std::get_if<node_to_work_on>(&work)) {
             return std::make_pair(true, std::move(node->guard));
         }
