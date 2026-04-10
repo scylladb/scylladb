@@ -223,7 +223,7 @@ raft::command make_command(const cmd_id_t& cmd_id, const Input& input) {
 
 // TODO: handle other errors?
 template <PureStateMachine M>
-using call_result_t = std::variant<typename M::output_t, timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::stopped_error, raft::not_a_member>;
+using call_result_t = std::variant<typename M::output_t, timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::maybe_applied_via_snapshot, raft::stopped_error, raft::not_a_member>;
 
 // Wait for a future `f` to finish, but keep the result inside a `future`.
 // Works for `future<void>` as well as for `future<T>`.
@@ -334,6 +334,8 @@ future<call_result_t<M>> call(
         } catch (raft::dropped_entry& e) {
             return make_ready_future<call_result_t<M>>(e);
         } catch (raft::commit_status_unknown& e) {
+            return make_ready_future<call_result_t<M>>(e);
+        } catch (raft::maybe_applied_via_snapshot& e) {
             return make_ready_future<call_result_t<M>>(e);
         } catch (raft::stopped_error& e) {
             return make_ready_future<call_result_t<M>>(e);
@@ -1251,7 +1253,7 @@ private:
 };
 
 using reconfigure_result_t = std::variant<std::monostate,
-    timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress, raft::stopped_error, raft::not_a_member>;
+    timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::maybe_applied_via_snapshot, raft::conf_change_in_progress, raft::stopped_error, raft::not_a_member>;
 
 future<reconfigure_result_t> reconfigure(
         const std::vector<std::pair<raft::server_id, raft::is_voter>>& ids,
@@ -1273,6 +1275,8 @@ future<reconfigure_result_t> reconfigure(
     } catch (raft::dropped_entry e) {
         co_return e;
     } catch (raft::commit_status_unknown e) {
+        co_return e;
+    } catch (raft::maybe_applied_via_snapshot e) {
         co_return e;
     } catch (raft::conf_change_in_progress e) {
         co_return e;
@@ -1312,6 +1316,8 @@ future<reconfigure_result_t> modify_config(
     } catch (raft::dropped_entry e) {
         co_return e;
     } catch (raft::commit_status_unknown e) {
+        co_return e;
+    } catch (raft::maybe_applied_via_snapshot e) {
         co_return e;
     } catch (raft::conf_change_in_progress e) {
         co_return e;
@@ -3513,6 +3519,10 @@ SEASTAR_TEST_CASE(basic_generator_test) {
                     [this] (raft::commit_status_unknown& e) {
                         // TODO SCYLLA_ASSERT: only allowed if reconfigurations happen?
                         // SCYLLA_ASSERT(false); TODO debug this
+                        ++_stats.failures;
+                    },
+                    [this] (raft::maybe_applied_via_snapshot& e) {
+                        // The entry was applied (via snapshot) but we don't have the output.
                         ++_stats.failures;
                     },
                     [this] (auto&) {

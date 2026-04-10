@@ -957,6 +957,11 @@ future<> raft_cluster<Clock>::add_entry(size_t val, std::optional<size_t> server
             auto& at = _servers[server ? *server : _leader].server;
             co_await at->add_entry(create_command(val), raft::wait_type::committed, nullptr);
             break;
+        } catch (raft::maybe_applied_via_snapshot& e) {
+            // The entry was committed and applied (via snapshot). Treat as success.
+            tlogger.info("replication_test: got `maybe_applied_via_snapshot` from `add_entry`"
+                    ", val: {}, server: {}", val, server);
+            break;
         } catch (raft::commit_status_unknown& e) {
             // FIXME: in some cases when we get `commit_status_unknown` the entry may have been applied.
             // Retrying it could lead to double application which causes hard to debug failures, e.g. #14029.
@@ -1218,6 +1223,8 @@ future<> raft_cluster<Clock>::change_configuration(set_config sc) {
                 raft::wait_type::committed, nullptr);
     } catch (raft::not_a_leader& e) {
         // leader stepped down, implying config fully changed
+    } catch (raft::maybe_applied_via_snapshot& e) {
+        // The entry was committed and applied. Treat as success.
     } catch (raft::commit_status_unknown& e) {}
 
     // Stop nodes no longer in configuration
