@@ -180,6 +180,7 @@ public:
     gms::feature tablets_intermediate_fallback_cleanup { *this, "TABLETS_INTERMEDIATE_FALLBACK_CLEANUP"sv };
     gms::feature batchlog_v2 { *this, "BATCHLOG_V2"sv };
     gms::feature vnodes_to_tablets_migrations { *this, "VNODES_TO_TABLETS_MIGRATIONS"sv };
+    gms::feature unified_group0_change { *this, "UNIFIED_GROUP0_CHANGE"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

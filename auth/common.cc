@@ -75,7 +75,7 @@ static future<> announce_mutations_with_guard(
         seastar::abort_source& as,
         std::optional<::service::raft_timeout> timeout) {
     auto group0_cmd = group0_client.prepare_command(
-        ::service::write_mutations{
+        ::service::mixed_change{
             .mutations{std::move(muts)},
         },
         group0_guard,

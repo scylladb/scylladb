@@ -404,7 +404,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         try {
             rtlogger.info("updating topology state: {}", reason);
             rtlogger.trace("update_topology_state mutations: {}", updates);
-            topology_change change{std::move(updates)};
+            mixed_change change{std::move(updates)};
             group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         } catch (group0_concurrent_modification&) {

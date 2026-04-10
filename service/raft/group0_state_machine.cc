@@ -54,6 +54,19 @@ namespace service {
 
 static logging::logger slogger("group0_raft_sm");
 
+const std::unordered_set<table_id>& get_topology_table_ids() {
+    static const std::unordered_set<table_id> ids = {
+        db::system_keyspace::topology()->id(),
+        db::system_keyspace::topology_requests()->id(),
+        db::system_keyspace::tablets()->id(),
+        db::system_keyspace::cdc_generations_v3()->id(),
+        // scylla_local is read by topology_state_load() (e.g. view_builder_version),
+        // so mutations to it must trigger topology_state_load().
+        db::system_keyspace::scylla_local()->id(),
+    };
+    return ids;
+}
+
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
         gms::gossiper& gossiper, gms::feature_service& feat)
     : _client(client), _mm(mm), _sp(sp), _ss(ss)
@@ -286,27 +299,46 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     modules_to_reload modules_to_reload;
 
     co_await std::visit(make_visitor(
-    [&] (schema_change& chng) -> future<> {
-        modules_to_reload = get_modules_to_reload(chng.mutations);
-        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+    [&] (schema_change&) -> future<> {
+        on_internal_error(slogger, "schema_change should have been converted to mixed_change");
     },
     [&] (broadcast_table_query& query) -> future<> {
         auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
         _client.set_query_result(cmd.new_state_id, std::move(result));
     },
-    [&] (topology_change& chng) -> future<> {
-        modules_to_reload = get_modules_to_reload(chng.mutations);
-        topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(chng.mutations)};
-        co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
+    [&] (topology_change&) -> future<> {
+        on_internal_error(slogger, "topology_change should have been converted to mixed_change");
     },
     [&] (mixed_change& chng) -> future<> {
         modules_to_reload = get_modules_to_reload(chng.mutations);
-        topology_state_change_hint.emplace();
-        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+
+        bool has_schema_mutations = false;
+        auto& topology_ids = get_topology_table_ids();
+        utils::chunked_vector<canonical_mutation> topology_mutations;
+
+        for (auto& cm : chng.mutations) {
+            auto tid = cm.column_family_id();
+            if (_sp.data_dictionary().find_schema(tid)->ks_name() == db::schema_tables::v3::NAME) {
+                has_schema_mutations = true;
+            } else if (topology_ids.contains(tid)) {
+                topology_mutations.push_back(cm);
+            }
+        }
+
+        if (!topology_mutations.empty()) {
+            topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(topology_mutations)};
+        }
+        // Use merge_schema_from for all mutations if any schema mutations are present,
+        // to avoid partial application if one of two separate calls fails.
+        // merge_schema_from applies all mutations to the database, not only schema ones.
+        if (has_schema_mutations) {
+            co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, chng.mutations);
+        } else {
+            co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
+        }
     },
-    [&] (write_mutations& muts) -> future<> {
-        modules_to_reload = get_modules_to_reload(muts.mutations);
-        co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(muts.mutations));
+    [&] (write_mutations&) -> future<> {
+        on_internal_error(slogger, "write_mutations should have been converted to mixed_change");
     }
     ), cmd.change);
 
@@ -360,6 +392,26 @@ static void ensure_group0_schema(const group0_command& cmd, data_dictionary::dat
 }
 #endif
 
+static group0_change_type convert_to_mixed_change(group0_change_type change) {
+    return std::visit(overloaded_functor{
+        [](schema_change& chng) -> group0_change_type {
+            return mixed_change{std::move(chng.mutations)};
+        },
+        [](broadcast_table_query& q) -> group0_change_type {
+            return std::move(q);
+        },
+        [](topology_change& chng) -> group0_change_type {
+            return mixed_change{std::move(chng.mutations)};
+        },
+        [](write_mutations& chng) -> group0_change_type {
+            return mixed_change{std::move(chng.mutations)};
+        },
+        [](mixed_change& chng) -> group0_change_type {
+            return std::move(chng);
+        },
+    }, change);
+}
+
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
     slogger.trace("apply() is called with {} commands", command.size());
 
@@ -381,6 +433,11 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         // This validation is supposed to be only performed in tests, so it is skipped in the release mode.
         ensure_group0_schema(cmd, _sp.data_dictionary());
 #endif
+
+        // Convert old change types to mixed_change for unified handling.
+        // During rolling upgrades, old nodes may still send schema_change,
+        // topology_change, or write_mutations types.
+        cmd.change = convert_to_mixed_change(std::move(cmd.change));
 
         slogger.trace("cmd: prev_state_id: {}, new_state_id: {}, creator_addr: {}, creator_id: {}",
                 cmd.prev_state_id, cmd.new_state_id, cmd.creator_addr, cmd.creator_id);

@@ -71,7 +71,7 @@ future<> view_building_coordinator::await_event() {
 
 future<> view_building_coordinator::commit_mutations(service::group0_guard guard, utils::chunked_vector<mutation> mutations, std::string_view description) {
     utils::chunked_vector<canonical_mutation> cmuts = {mutations.begin(), mutations.end()};
-    auto cmd = _group0.client().prepare_command(service::write_mutations{
+    auto cmd = _group0.client().prepare_command(service::mixed_change{
         .mutations{std::move(cmuts)}
     }, guard, description);
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);

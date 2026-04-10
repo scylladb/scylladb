@@ -926,7 +926,7 @@ future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> s
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
 
     auto group0_cmd = _group0_client.prepare_command(
-        mutation_type {
+        mixed_change {
                 .mutations{adjusted_schema.begin(), adjusted_schema.end()},
         },
         guard, std::move(description));

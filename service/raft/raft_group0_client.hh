@@ -36,6 +36,7 @@ class system_keyspace;
 
 namespace gms {
 class gossiper;
+class feature_service;
 }
 
 namespace locator {
@@ -84,6 +85,7 @@ public:
 class raft_group0_client {
     service::raft_group_registry& _raft_gr;
     gms::gossiper& _gossiper;
+    gms::feature_service& _feature_service;
     db::system_keyspace& _sys_ks;
     locator::shared_token_metadata& _token_metadata;
 
@@ -119,7 +121,7 @@ class raft_group0_client {
     void validate_change(const Command& change);
 
 public:
-    raft_group0_client(service::raft_group_registry&, gms::gossiper&,
+    raft_group0_client(service::raft_group_registry&, gms::gossiper&, gms::feature_service&,
                        db::system_keyspace&, locator::shared_token_metadata&, maintenance_mode_enabled);
 
     future<> add_entry(group0_command group0_cmd, group0_guard guard, seastar::abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);

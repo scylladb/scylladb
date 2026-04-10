@@ -288,7 +288,7 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     }
 
     vbw_logger.debug("Creating {} process_staging view_building_tasks", cmuts.size());
-    auto cmd = _group0.client().prepare_command(service::write_mutations{std::move(cmuts)}, guard, "create view building tasks");
+    auto cmd = _group0.client().prepare_command(service::mixed_change{std::move(cmuts)}, guard, "create view building tasks");
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
 
     // Move staging sstables from `_sstables_to_register` (on shard0) to `_staging_sstables` on corresponding shards.

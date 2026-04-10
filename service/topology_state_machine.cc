@@ -383,7 +383,7 @@ future<> topology_state_machine::abort_request(service::raft_group0& group0,
             throw std::runtime_error(format("Don't know how to abort {}", request_id));
         }
 
-        topology_change change{std::move(muts)};
+        mixed_change change{std::move(muts)};
         group0_command cmd = group0.client().prepare_command(std::move(change), guard,
                                                               ::format("aborting topology request {}", request_id));
 
