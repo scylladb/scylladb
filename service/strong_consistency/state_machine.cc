@@ -76,7 +76,7 @@ public:
         } catch (replica::no_such_column_family&) {
             // If the table doesn't exist, it means it was already dropped.
             // This cannot happen if the table wasn't created yet on the node
-            // because the state machine is created only after the table is created 
+            // because the state machine is created only after the table is created
             // (see `schema_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
             // In this case, we should just ignore mutations without throwing an error.
             logger.log(log_level::warn, rate_limit, "apply(): table {} was already dropped, ignoring mutations", _tablet.table);
@@ -138,90 +138,90 @@ public:
     }
 };
 
-        using column_mappings_cache = utils::loading_cache<table_schema_version, column_mapping>;
-        using schema_entry = std::pair<schema_ptr, column_mappings_cache::value_ptr>;
+using column_mappings_cache = utils::loading_cache<table_schema_version, column_mapping>;
+using schema_entry = std::pair<schema_ptr, column_mappings_cache::value_ptr>;
 
 future<std::vector<schema_ptr>> resolve_and_upgrade_mutations(utils::chunked_vector<frozen_mutation>& muts, table_id table, replica::database& db,
         db::system_keyspace& sys_ks, std::function<future<>()> barrier_trigger) {
-        // Cache column mappings to avoid querying `system.scylla_table_schema_history` multiple times.
-        static thread_local column_mappings_cache column_mapping_cache(std::numeric_limits<size_t>::max(), 1h, logger);
-        using schema_store = std::unordered_map<table_schema_version, schema_entry>;
-        // Stores schema pointer and optional column mapping for each schema version present in the mutations
-        schema_store schema_mappings;
-        bool barrier_executed = false;
+    // Cache column mappings to avoid querying `system.scylla_table_schema_history` multiple times.
+    static thread_local column_mappings_cache column_mapping_cache(std::numeric_limits<size_t>::max(), 1h, logger);
+    using schema_store = std::unordered_map<table_schema_version, schema_entry>;
+    // Stores schema pointer and optional column mapping for each schema version present in the mutations
+    schema_store schema_mappings;
+    bool barrier_executed = false;
 
-        auto get_schema = [&] (table_schema_version schema_version) -> future<schema_entry> {
-            if (utils::get_local_injector().enter("sc_state_machine_return_empty_schema")) {
-                co_return schema_entry{nullptr, nullptr};
-            }
-
-            auto schema = local_schema_registry().get_or_null(schema_version);
-            if (schema) {
-                co_return schema_entry{std::move(schema), nullptr};
-            }
-
-            // `db.find_schema()` may throw `replica::no_such_column_family` if the table was already dropped.
-            schema = db.find_schema(table);
-            // The column mapping may be already present in the cache from another call
-            auto cm_ptr = column_mapping_cache.find(schema_version);
-            if (cm_ptr) {
-                co_return schema_entry{std::move(schema), std::move(cm_ptr)};
-            }
-
-            // We may not find the column mapping if the mutation schema is newer than the present schema.
-            // In this case, we should trigger the barrier to wait for the schema to be updated and then try again.
-            auto cm_opt = co_await db::schema_tables::get_column_mapping_if_exists(sys_ks, table, schema_version);
-            if (!cm_opt) {
-                co_return schema_entry{nullptr, nullptr};
-            }
-
-            cm_ptr = co_await column_mapping_cache.get_ptr(schema_version, [cm = std::move(*cm_opt)] (auto schema_version) -> future<column_mapping> {
-                co_return std::move(cm);
-            });
-            co_return schema_entry{std::move(schema), std::move(cm_ptr)};
-        };
-
-        auto resolve_schema = [&] (const frozen_mutation& mut) -> future<const schema_store::mapped_type*> {
-            auto schema_version = mut.schema_version();
-            auto it = schema_mappings.find(schema_version);
-            if (it != schema_mappings.end()) {
-                co_return &it->second;
-            }
-
-            auto schema_cm = co_await get_schema(schema_version);
-            if (!schema_cm.first && barrier_trigger && !barrier_executed) {
-                co_await barrier_trigger();
-                barrier_executed = true;
-                schema_cm = co_await get_schema(schema_version);
-            }
-
-            if (schema_cm.first) {
-                const auto [it, _] = schema_mappings.insert({schema_version, std::move(schema_cm)});
-                co_return &it->second;
-            }
-            co_return nullptr;
-        };
-
-        // Build parallel vector of schema pointers (one per mutation).
-        // We can't return the map keyed by schema_version because upgrade
-        // changes a mutation's schema_version to the current one.
-        std::vector<schema_ptr> result;
-        result.reserve(muts.size());
-        for (auto& m: muts) {
-            auto entry = co_await resolve_schema(m);
-            if (!entry) {
-                // Old schema are TTLed after 10 days (see comment in `schema_applier::finalize_tables_and_views()`),
-                // so this error theoretically  may be triggered if a node is stuck longer than this.
-                // But in practice we should do a snapshot much earlier, that's why `on_internal_error()` here.
-                // And if the table was already dropped, `no_such_column_family` will be thrown earlier.
-                on_internal_error(logger, fmt::format("couldn't find schema for table {} and mutation schema version {}", table, m.schema_version()));
-            }
-            if (entry->second) {
-                m = freeze(m.unfreeze_upgrading(entry->first, *entry->second));
-            }
-            result.push_back(entry->first);
+    auto get_schema = [&] (table_schema_version schema_version) -> future<schema_entry> {
+        if (utils::get_local_injector().enter("sc_state_machine_return_empty_schema")) {
+            co_return schema_entry{nullptr, nullptr};
         }
-        co_return std::move(result);
+
+        auto schema = local_schema_registry().get_or_null(schema_version);
+        if (schema) {
+            co_return schema_entry{std::move(schema), nullptr};
+        }
+
+        // `db.find_schema()` may throw `replica::no_such_column_family` if the table was already dropped.
+        schema = db.find_schema(table);
+        // The column mapping may be already present in the cache from another call
+        auto cm_ptr = column_mapping_cache.find(schema_version);
+        if (cm_ptr) {
+            co_return schema_entry{std::move(schema), std::move(cm_ptr)};
+        }
+
+        // We may not find the column mapping if the mutation schema is newer than the present schema.
+        // In this case, we should trigger the barrier to wait for the schema to be updated and then try again.
+        auto cm_opt = co_await db::schema_tables::get_column_mapping_if_exists(sys_ks, table, schema_version);
+        if (!cm_opt) {
+            co_return schema_entry{nullptr, nullptr};
+        }
+
+        cm_ptr = co_await column_mapping_cache.get_ptr(schema_version, [cm = std::move(*cm_opt)](auto schema_version) -> future<column_mapping> {
+            co_return std::move(cm);
+        });
+        co_return schema_entry{std::move(schema), std::move(cm_ptr)};
+    };
+
+    auto resolve_schema = [&] (const frozen_mutation& mut) -> future<const schema_store::mapped_type*> {
+        auto schema_version = mut.schema_version();
+        auto it = schema_mappings.find(schema_version);
+        if (it != schema_mappings.end()) {
+            co_return &it->second;
+        }
+
+        auto schema_cm = co_await get_schema(schema_version);
+        if (!schema_cm.first && barrier_trigger && !barrier_executed) {
+            co_await barrier_trigger();
+            barrier_executed = true;
+            schema_cm = co_await get_schema(schema_version);
+        }
+
+        if (schema_cm.first) {
+            const auto [it, _] = schema_mappings.insert({schema_version, std::move(schema_cm)});
+            co_return &it->second;
+        }
+        co_return nullptr;
+    };
+
+    // Build parallel vector of schema pointers (one per mutation).
+    // We can't return the map keyed by schema_version because upgrade
+    // changes a mutation's schema_version to the current one.
+    std::vector<schema_ptr> result;
+    result.reserve(muts.size());
+    for (auto& m : muts) {
+        auto entry = co_await resolve_schema(m);
+        if (!entry) {
+            // Old schema are TTLed after 10 days (see comment in `schema_applier::finalize_tables_and_views()`),
+            // so this error theoretically may be triggered if a node is stuck longer than this.
+            // But in practice we should do a snapshot much earlier, that's why `on_internal_error()` here.
+            // And if the table was already dropped, `no_such_column_family` will be thrown earlier.
+            on_internal_error(logger, fmt::format("couldn't find schema for table {} and mutation schema version {}", table, m.schema_version()));
+        }
+        if (entry->second) {
+            m = freeze(m.unfreeze_upgrading(entry->first, *entry->second));
+        }
+        result.push_back(entry->first);
+    }
+    co_return std::move(result);
 }
 
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
