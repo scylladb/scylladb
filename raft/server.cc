@@ -239,7 +239,11 @@ private:
 
     // Drop waiter that we lost track of, can happen due to a snapshot transfer,
     // or a leader removed from cluster while some entries added on it are uncommitted.
-    void drop_waiters(std::optional<index_t> idx = {});
+    // When `snap_term` is provided (snapshot case), waiters whose term matches the
+    // snapshot term are resolved with `maybe_applied_via_snapshot` instead of
+    // `commit_status_unknown`, since the snapshot-term match proves they were committed
+    // and included in the snapshot.
+    void drop_waiters(std::optional<index_t> idx = {}, std::optional<term_t> snap_term = {});
 
     // Wake up all waiter that wait for entries with idx smaller of equal to the one provided
     // to be applied.
@@ -556,12 +560,20 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
                 auto snap_term = _fsm->log_term_for(snap_idx);
                 SCYLLA_ASSERT(snap_term);
                 SCYLLA_ASSERT(snap_idx >= eid.idx);
-                if (type == wait_type::committed && snap_term == eid.term) {
+                if (snap_term == eid.term) {
+                    if (type == wait_type::committed) {
+                        logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away, but has the snapshot's term"
+                                     " (snapshot index: {})", id(), eid.term, eid.idx, snap_idx);
+                        co_return;
+                    }
+                    // wait_type::applied: the entry was committed and included in a snapshot
+                    // that has been applied to the state machine (either via apply() or via
+                    // load_snapshot()). We can't guarantee that state_machine::apply() was
+                    // called locally for this specific entry, but the state machine's state
+                    // includes its effects.
                     logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away, but has the snapshot's term"
-                                 " (snapshot index: {})", id(), eid.term, eid.idx, snap_idx);
-                    co_return;
-
-                    // We don't do this for `wait_type::applied` - see below why.
+                                 " (snapshot index: {}), throwing maybe_applied_via_snapshot", id(), eid.term, eid.idx, snap_idx);
+                    throw maybe_applied_via_snapshot();
                 }
 
                 logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away", id(), eid.term, eid.idx);
@@ -573,17 +585,14 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
             }
 
             if (type == wait_type::applied && _fsm->log_last_snapshot_idx() >= eid.idx) {
-                // We know the entry was committed but the wait type is `applied`
-                // and we don't know if the entry was applied with `state_machine::apply`
-                // (we may've loaded a snapshot before we managed to apply the entry).
-                // As specified by `add_entry`, throw `commit_status_unknown` in this case.
-                //
-                // FIXME: replace this with a different exception type - `commit_status_unknown`
-                // gives too much uncertainty while we know that the entry was committed
-                // and had to be applied on at least one server. Some callers of `add_entry`
-                // need to know only that the current state includes that entry, whether it was done
-                // through `apply` on this server or through receiving a snapshot.
-                throw commit_status_unknown();
+                // We know the entry was committed (term matches) but the wait type
+                // is `applied` and a snapshot has been loaded past this entry's index.
+                // We can't guarantee that state_machine::apply() was called locally
+                // for this specific entry — it may have been subsumed by a
+                // load_snapshot() call. However, the entry's effects are included
+                // in the state machine's state, and at least one node must have
+                // applied it via apply() (the one that produced the snapshot).
+                throw maybe_applied_via_snapshot();
             }
 
             co_return;
@@ -995,7 +1004,7 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
     }
 }
 
-void server_impl::drop_waiters(std::optional<index_t> idx) {
+void server_impl::drop_waiters(std::optional<index_t> idx, std::optional<term_t> snap_term) {
     auto drop = [&] (std::map<index_t, op_status>& waiters) {
         while (waiters.size() != 0) {
             auto it = waiters.begin();
@@ -1004,7 +1013,14 @@ void server_impl::drop_waiters(std::optional<index_t> idx) {
             }
             auto [entry_idx, status] = std::move(*it);
             waiters.erase(it);
-            status.done.set_exception(commit_status_unknown());
+            if (snap_term && status.term == *snap_term) {
+                // The waiter's term matches the snapshot term. By the Log Matching
+                // Property (same reasoning as in wait_for_entry), the entry was
+                // committed and included in the snapshot.
+                status.done.set_exception(maybe_applied_via_snapshot());
+            } else {
+                status.done.set_exception(commit_status_unknown());
+            }
             _stats.waiters_dropped++;
         }
     };
@@ -1431,7 +1447,7 @@ future<> server_impl::applier_fiber() {
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);
                 co_await _state_machine->load_snapshot(snp.id);
-                drop_waiters(snp.idx);
+                drop_waiters(snp.idx, snp.term);
                 _applied_idx = snp.idx;
                 _applied_index_changed.broadcast();
                 _stats.sm_load_snapshot++;

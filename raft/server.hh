@@ -95,6 +95,10 @@ public:
     //     Thrown if the leader has changed and the log entry has either
     //     been replaced by the new leader or the server has lost track of it.
     //     It may also be thrown in case of a transport error while forwarding add_entry to the leader.
+    // raft::maybe_applied_via_snapshot
+    //     Thrown if the entry was committed but may have been applied via a snapshot load rather than
+    //     a local `state_machine::apply()` call. The entry's effects are in the state machine's state.
+    //     Callers can treat this as success if they don't need a guarantee of local `apply()`.
     // raft::dropped_entry
     //     Thrown if the entry was replaced because of a leader change.
     // raft::request_aborted
