@@ -82,15 +82,19 @@ public:
     // Successful `add_entry` with `wait_type::committed` does not guarantee that `state_machine::apply` will be called
     // locally for this entry. Between the commit and the application we may receive a snapshot containing this entry,
     // so the state machine's state 'jumps' forward in time, skipping the entry application.
-    // However, for `wait_type::applied`, we guarantee that the entry will be applied locally with `state_machine::apply`.
-    // If a snapshot causes the state machine to jump over the entry, `add_entry` will return `commit_status_unknown`
-    // (even if the snapshot included that entry).
+    // For `wait_type::applied`, we normally guarantee that the entry will be applied locally with `state_machine::apply`.
+    // However, if a snapshot causes the state machine to jump over the entry, `add_entry` will throw
+    // `maybe_applied_via_snapshot` instead of resolving successfully. This means the entry was committed and its
+    // effects are included in the state machine's state (via the snapshot), but `state_machine::apply` may not have
+    // been called locally for this specific entry. At least one node in the configuration applied it via `apply()`
+    // (the one that produced the snapshot). Callers that only need to know "the entry was applied to the state
+    // machine" can treat this exception as success.
     //
     // Exceptions:
     // raft::commit_status_unknown
     //     Thrown if the leader has changed and the log entry has either
     //     been replaced by the new leader or the server has lost track of it.
-    //     It may also be thrown in case of a transport error while forwarding add_entry to the leader.L
+    //     It may also be thrown in case of a transport error while forwarding add_entry to the leader.
     // raft::dropped_entry
     //     Thrown if the entry was replaced because of a leader change.
     // raft::request_aborted
