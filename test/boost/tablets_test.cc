@@ -2719,6 +2719,7 @@ SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion) {
         e.execute_cql(format("INSERT INTO system.topology_requests (id, request_type, done, new_keyspace_rf_change_ks_name, new_keyspace_rf_change_data) VALUES ({}, 'keyspace_rf_change', False, '{}', {})",
             id, ks_name, rf_change_data_cql)).get();
         auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
         auto& talloc = e.get_tablet_allocator().local();
         talloc.set_load_stats(topo.get_load_stats());
         auto& sys_ks = e.get_system_keyspace().local();
@@ -2971,9 +2972,10 @@ SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion_with_two_replicas_in_rack) {
         e.execute_cql(format("INSERT INTO system.topology_requests (id, request_type, done, new_keyspace_rf_change_ks_name, new_keyspace_rf_change_data) VALUES ({}, 'keyspace_rf_change', False, '{}', {})",
             id, ks_name, rf_change_data_cql)).get();
         auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
         auto& topology = e.get_topology_state_machine().local()._topology;
         topology.paused_rf_change_requests.insert(id);
-        rebalance_tablets(e);
+        rebalance_tablets(e, &topo.get_shared_load_stats());
         check_rack_list(stm.get()->get_topology(), stm.get()->tablets().get_tablet_map(table1), dc1, {rack1.rack, rack2.rack});
     }).get();
 }

@@ -1432,6 +1432,15 @@ public:
         // Consider load that is about to be scheduled.
         co_await consider_planned_load(nodes, mplan);
 
+        // Rebuild the load sketch for this DC so that get_least_loaded_shard()
+        // returns accurate results for nodes in this DC. Without this, the sketch
+        // may contain stale data from the last DC processed by make_plan(), causing
+        // shard 0 to always be selected for nodes in other DCs.
+        _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
+        _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
+        _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        co_await _load_sketch->populate_dc(dc);
+
         for (auto& [rack, colocation_sources] : racks) {
             auto dc_rack = locator::endpoint_dc_rack{dc, rack};
             auto nodes_by_load_dst = nodes | std::views::filter([&] (const auto& host_load) {
