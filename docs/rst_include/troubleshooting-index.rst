@@ -38,8 +38,6 @@
 
 * :doc:`Time Range Queries Do Not Return Some or All of the Data </troubleshooting/time-zone>`
 
-* :doc:`A change in EPEL broke ScyllaDB Python Script </troubleshooting/python-error-no-module-named-yaml>`
-
 * :doc:`Node Joined With No Data </troubleshooting/node-joined-without-any-data>`
 
 * :doc:`ScyllaDB Manager is reporting REST API status of healthy nodes as down </troubleshooting/reverse-dns-sshd>`
