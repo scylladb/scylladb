@@ -2783,6 +2783,82 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_map_layout) {
     }, std::move(cfg)).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion_shard_distribution) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        auto dc1 = topo.dc();
+        auto rack1 = topo.rack();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto rack2 = topo.start_new_rack();
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+        auto rack3 = topo.start_new_rack();
+        [[maybe_unused]] auto host3 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 2}}, 2);
+        auto table1 = add_table(e, ks_name).get();
+
+        // shard         0 1
+        // rack1: host1:
+        // rack2: host2: A B
+        // rack3: host3: B A
+        tablet_id A{0}, B{0};
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(2);
+            auto tid = tmap.first_tablet();
+            A = tid;
+            tmap.set_tablet(tid, tablet_info {  // A
+                tablet_replica_set {
+                    tablet_replica{host2, 0},
+                    tablet_replica{host3, 1},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            B = tid;
+            tmap.set_tablet(tid, tablet_info {  // B
+                tablet_replica_set {
+                    tablet_replica{host2, 1},
+                    tablet_replica{host3, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto id = utils::UUID_gen::get_time_UUID();
+        // Build the map literal for CQL
+        auto rf_change_data_cql = format("{{'replication:class': 'NetworkTopologyStrategy', 'replication:{}:0': '{}', 'replication:{}:1': '{}'}}",
+            dc1, rack1.rack, dc1, rack3.rack);
+
+        e.execute_cql(format("INSERT INTO system.topology_requests (id, request_type, done, new_keyspace_rf_change_ks_name, new_keyspace_rf_change_data) VALUES ({}, 'keyspace_rf_change', False, '{}', {})",
+            id, ks_name, rf_change_data_cql)).get();
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        topology.paused_rf_change_requests.insert(id);
+        migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+
+        BOOST_REQUIRE_EQUAL(plan.migrations().size(), 2);
+        // A and B both move host2 -> host1. They must land on different shards
+        // so that host1's shards are loaded evenly. Count migrations per shard.
+        std::unordered_map<shard_id, unsigned> shard_migrations;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Rack list colocation migration: {}", mig);
+            BOOST_REQUIRE(mig.kind == locator::tablet_transition_kind::migration);
+            BOOST_REQUIRE(mig.src->host == host2);
+            BOOST_REQUIRE(mig.dst->host == host1);
+            shard_migrations[mig.dst->shard] += 1;
+        }
+        // Each of host1's two shards receives exactly one tablet.
+        BOOST_REQUIRE_EQUAL(shard_migrations[0], 1);
+        BOOST_REQUIRE_EQUAL(shard_migrations[1], 1);
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_colocation_skipped_on_excluded_nodes) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
