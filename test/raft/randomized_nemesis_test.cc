@@ -1832,6 +1832,12 @@ public:
         return n._server->is_leader();
     }
 
+    const state_t& state(raft::server_id id) {
+        auto& n = _routes.at(id);
+        SCYLLA_ASSERT(n._server);
+        return n._server->state();
+    }
+
     future<call_result_t<M>> call(
             raft::server_id id,
             typename M::input_t input,
@@ -2253,7 +2259,15 @@ SEASTAR_TEST_CASE(test_frequent_snapshotting) {
 
         co_await call(ExReg::exchange{0}, 100_t);
         for (int i = 1; i <= 100; ++i) {
-            SCYLLA_ASSERT(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
+            auto r = co_await call(ExReg::exchange{i}, 100_t);
+            if (std::holds_alternative<raft::maybe_applied_via_snapshot>(r)) {
+                // The entry was applied via snapshot — apply() wasn't called
+                // locally so the output channel wasn't filled.
+                // We need to look at the state directly instead.
+                SCYLLA_ASSERT(env.state(leader_id) == i);
+            } else {
+                SCYLLA_ASSERT(eq(r, ExReg::ret{i - 1}));
+            }
         }
 
         tlogger.debug("100 exchanges - three servers - passed");
@@ -2265,7 +2279,13 @@ SEASTAR_TEST_CASE(test_frequent_snapshotting) {
             co_await timer.sleep(2_t);
         }
         for (int i = 0; i < 100; ++i) {
-            SCYLLA_ASSERT(eq(co_await std::move(futs[i]), ExReg::ret{100}));
+            auto r = co_await std::move(futs[i]);
+            if (std::holds_alternative<raft::maybe_applied_via_snapshot>(r)) {
+                // Same as above.
+                SCYLLA_ASSERT(env.state(leader_id) == 100);
+            } else {
+                SCYLLA_ASSERT(eq(r, ExReg::ret{100}));
+            }
         }
 
         tlogger.debug("100 concurrent reads - three servers - passed");
