@@ -269,6 +269,20 @@ struct commit_status_unknown : public error {
     commit_status_unknown() : error("Commit status of the entry is unknown") {}
 };
 
+// Thrown by `add_entry` when the entry is known to be committed but we cannot
+// guarantee that `state_machine::apply` was called locally for this entry.
+// This happens when a snapshot is loaded that includes the entry, so the state
+// machine's state already contains the entry's effects (either via a prior
+// `apply()` call or via `load_snapshot()`). At least one node in the
+// configuration must have applied the entry via `apply()` (the one that
+// produced the snapshot).
+//
+// Callers that only need to know "the entry was applied to the state machine"
+// can treat this exception as success.
+struct maybe_applied_via_snapshot : public error {
+    maybe_applied_via_snapshot() : error("Entry was committed but may have been applied via snapshot rather than apply()") {}
+};
+
 struct stopped_error : public error {
     explicit stopped_error(const sstring& reason = "")
             : error(!reason.empty()
