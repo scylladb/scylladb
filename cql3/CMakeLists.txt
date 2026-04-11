@@ -23,7 +23,7 @@ set_property(
       $<$<CONFIG:${unoptimized_modes}>:-O1>
       # use-after-scope sanitizer also uses large amount of stack space
       # and overflows the stack of CqlParser
-      $<$<CONFIG:${sanitized_modes}>:-fsanitize-address-use-after-scope>)
+      $<$<CONFIG:${sanitized_modes}>:-fno-sanitize-address-use-after-scope>)
 
 add_library(cql3 STATIC)
 target_sources(cql3
