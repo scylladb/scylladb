@@ -116,10 +116,9 @@ future<> disk_space_monitor::poll() {
             auto passed = clock_type::now() - now;
             auto interval = get_polling_interval();
             if (interval > passed) {
-                try {
-                    co_await _poll_cv.wait(interval - passed);
-                } catch (const seastar::condition_variable_timed_out&) {
-                }
+                seastar::timer<clock_type> timer([this] { _poll_cv.broadcast(); });
+                timer.arm(interval - passed);
+                co_await _poll_cv.wait();
             }
         }
     } catch (const sleep_aborted&) {
