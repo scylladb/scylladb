@@ -1157,7 +1157,7 @@ async def test_abort_forwarded_write_upon_shutdown(manager: ManagerClient):
             await stop_fut
 
 
-@pytest.mark.skip(reason="SCYLLADB-1056")
+@pytest.mark.skip_bug(reason="SCYLLADB-1056")
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerClient):
     """
@@ -1225,7 +1225,7 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerCl
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="SCYLLADB-1056")
+@pytest.mark.skip_bug(reason="SCYLLADB-1056")
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient):
     """

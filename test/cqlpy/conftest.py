@@ -259,7 +259,7 @@ def skip_without_tablets(scylla_only, has_tablets):
 @pytest.fixture(scope="function")
 def skip_on_scylla_vnodes(cql, has_tablets):
     if is_scylla(cql) and not has_tablets:
-        pytest.skip("Test needs tablets experimental feature on")
+        skip_env("Test needs tablets experimental feature on")
 
 # Recent versions of Scylla deprecated the "WITH COMPACT STORAGE" feature,
 # but it can be enabled temporarily for a test. So to keep our old compact
