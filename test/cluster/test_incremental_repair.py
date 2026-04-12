@@ -911,18 +911,27 @@ async def test_incremental_repair_race_window_promotes_unrepaired_data(manager: 
     )
     task_id = repair_response['tablet_task_id']
 
-    # "Finished tablet repair" is logged once per tablet after mark_sstable_as_repaired()
-    # has completed on all replicas for that tablet.  With tablets=2 the coordinator logs
-    # this message twice (once per tablet).  We must wait for BOTH before writing
-    # post-repair keys; waiting for only the first leaves the second tablet's repair in
-    # progress, which can flush the memtable and mark newly-flushed sstables as repaired,
-    # contaminating servers[0] and servers[2] with post-repair data in repaired sstables.
+    # The topology coordinator logs "Finished tablet repair host=..." once per tablet
+    # after mark_sstable_as_repaired() has completed on all replicas for that tablet.
+    # With tablets=2, the coordinator logs this message twice (once per tablet).
+    # We must wait for BOTH before writing post-repair keys; waiting for only the
+    # first leaves the second tablet's repair in progress, which can flush the
+    # memtable and mark newly-flushed sstables as repaired, contaminating servers[0]
+    # and servers[2] with post-repair data in repaired sstables.
+    #
+    # IMPORTANT: We match "Finished tablet repair host=" specifically to avoid
+    # matching the repair module's "Finished tablet repair for table=..." message
+    # (repair/repair.cc), which is also logged on this node when the coordinator
+    # happens to be a repair replica.  Both messages appear for the same tablet,
+    # so the generic "Finished tablet repair" pattern would consume two messages
+    # for one tablet and miss the second tablet entirely.
+    #
     # After both tablets complete, S1 is fully rewritten as S1'(repaired_at=2,
-    # being_repaired=null) on every replica, but sstables_repaired_at in system.tablets is
+    # being_repaired=session_id) on every replica, but sstables_repaired_at in system.tablets is
     # still 1, so is_repaired(1, S1'{repaired_at=2}) == false and S1' lands in the
     # UNREPAIRED compaction view on every replica. The race window is now open.
-    pos, _ = await coord_log.wait_for("Finished tablet repair", from_mark=coord_mark)
-    await coord_log.wait_for("Finished tablet repair", from_mark=pos)
+    pos, _ = await coord_log.wait_for("Finished tablet repair host=", from_mark=coord_mark)
+    await coord_log.wait_for("Finished tablet repair host=", from_mark=pos)
 
     # --- Race window is open ---
     # Write post-repair keys 20-29.  All nodes receive the writes into their memtables
