@@ -1716,7 +1716,7 @@ future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref 
         auto key = w.writer.record().key;
         log_location prev_loc = co_await std::move(w.loc);
 
-        auto& index = w.cg->get_logstor_index();
+        auto* index_ptr = &w.cg->get_logstor_index();
         auto& buf = w.cg->get_separator_buffer(w.writer.size());
 
         // the separator buffer holds a reference to the segment.
@@ -1730,8 +1730,8 @@ future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref 
         }
 
         buf.pending_updates.push_back(
-            buf.write(std::move(w.writer)).then_unpack([this, &index, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
-                if (index.update_record_location(key, prev_loc, new_loc)) {
+            buf.write(std::move(w.writer)).then_unpack([this, index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
+                if (index_ptr->update_record_location(key, prev_loc, new_loc)) {
                     free_record(prev_loc);
                 } else {
                     free_record(new_loc);
@@ -1743,7 +1743,7 @@ future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref 
 
 void segment_manager_impl::write_to_separator(table& t, log_location prev_loc, log_record record, segment_ref seg_ref) {
     auto key = record.key;
-    auto& index = t.logstor_index();
+    auto* index_ptr = &t.logstor_index();
     log_record_writer writer(std::move(record));
 
     auto& buf = t.get_logstor_separator_buffer(key.dk.token(), writer.size());
@@ -1753,8 +1753,8 @@ void segment_manager_impl::write_to_separator(table& t, log_location prev_loc, l
     }
 
     buf.pending_updates.push_back(
-        buf.write(std::move(writer)).then_unpack([this, &index, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
-            if (index.update_record_location(key, prev_loc, new_loc)) {
+        buf.write(std::move(writer)).then_unpack([this, index_ptr, key = std::move(key), prev_loc] (log_location new_loc, seastar::gate::holder op) {
+            if (index_ptr->update_record_location(key, prev_loc, new_loc)) {
                 free_record(prev_loc);
             } else {
                 free_record(new_loc);
