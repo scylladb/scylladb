@@ -1106,7 +1106,8 @@ void compaction_manager::enable() {
 
     _compaction_submission_timer.cancel();
     _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
-    _waiting_reevalution = postponed_compactions_reevaluation();
+    throwing_assert(!_waiting_reevaluation);
+    _waiting_reevaluation.emplace(postponed_compactions_reevaluation());
     cmlog.info("Enabled");
 }
 
@@ -1152,6 +1153,16 @@ future<> compaction_manager::postponed_compactions_reevaluation() {
 
 void compaction_manager::reevaluate_postponed_compactions() noexcept {
     _postponed_reevaluation.signal();
+}
+
+future<> compaction_manager::stop_postponed_compactions() noexcept {
+    auto waiting_reevaluation = std::exchange(_waiting_reevaluation, std::nullopt);
+    if (!waiting_reevaluation) {
+        return make_ready_future();
+    }
+    // Trigger a signal to properly exit from postponed_compactions_reevaluation() fiber
+    reevaluate_postponed_compactions();
+    return std::move(*waiting_reevaluation);
 }
 
 void compaction_manager::postpone_compaction_for_table(compaction_group_view* t) {
@@ -1237,8 +1248,7 @@ future<> compaction_manager::drain() {
     _compaction_submission_timer.cancel();
     // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
     co_await stop_ongoing_compactions("drain");
-    // Trigger a signal to properly exit from postponed_compactions_reevaluation() fiber
-    reevaluate_postponed_compactions();
+    co_await stop_postponed_compactions();
     cmlog.info("Drained");
 }
 
@@ -1282,8 +1292,7 @@ future<> compaction_manager::really_do_stop() noexcept {
     if (!_tasks.empty()) {
         on_fatal_internal_error(cmlog, format("{} tasks still exist after being stopped", _tasks.size()));
     }
-    reevaluate_postponed_compactions();
-    co_await std::move(_waiting_reevalution);
+    co_await stop_postponed_compactions();
     co_await _sys_ks.close();
     _weight_tracker.clear();
     _compaction_submission_timer.cancel();

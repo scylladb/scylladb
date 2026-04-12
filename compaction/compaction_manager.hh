@@ -128,7 +128,7 @@ private:
     // a sstable from being compacted twice.
     std::unordered_set<sstables::shared_sstable> _compacting_sstables;
 
-    future<> _waiting_reevalution = make_ready_future<>();
+    std::optional<future<>> _waiting_reevaluation;
     condition_variable _postponed_reevaluation;
     // tables that wait for compaction but had its submission postponed due to ongoing compaction.
     std::unordered_set<compaction::compaction_group_view*> _postponed;
@@ -231,6 +231,7 @@ private:
 
     future<> postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions() noexcept;
+    future<> stop_postponed_compactions() noexcept;
     // Postpone compaction for a table that couldn't be executed due to ongoing
     // similar-sized compaction.
     void postpone_compaction_for_table(compaction::compaction_group_view* t);
