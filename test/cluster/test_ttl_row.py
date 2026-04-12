@@ -19,6 +19,7 @@ import time
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
+from cassandra.auth import PlainTextAuthProvider
 
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace, new_test_table
@@ -63,9 +64,23 @@ async def test_row_ttl_scheduling_group(manager: ManagerClient):
     """
     config = {
         'alternator_ttl_period_in_seconds': '0.5',
+        'authenticator': 'PasswordAuthenticator',
+        'authorizer': 'CassandraAuthorizer',
     }
-    servers = await manager.servers_add(3, config=config, auto_rack_dc='dc1')
+    servers = await manager.servers_add(3, config=config, auto_rack_dc='dc1',
+        driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')})
     cql = manager.get_cql()
+    # We need to run "ALTER TABLE" below to enable TTL on the table only after
+    # we get the "before" CPU metrics, to ensure that we account all TTL work.
+    # But we don't want the "ALTER TABLE" operation itself to be accounted as
+    # work in the statement scheduling group (sl:default). So we create here
+    # a dedicated service level and role so that ALTER TABLE runs in a
+    # separate scheduling group (sl:ttl_mgmt_sl), not in sl:default.
+    await cql.run_async("CREATE SERVICE LEVEL ttl_mgmt_sl")
+    await cql.run_async("CREATE ROLE ttl_mgmt WITH SUPERUSER = true AND PASSWORD = 'secret' AND LOGIN = true")
+    await cql.run_async("ATTACH SERVICE LEVEL ttl_mgmt_sl TO ttl_mgmt")
+    cql_mgmt = await manager.get_cql_exclusive(servers[0],
+        auth_provider=PlainTextAuthProvider(username='ttl_mgmt', password='secret'))
     ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 }"
     async with new_test_keyspace(manager, ksdef) as keyspace:
         # Create a test table with attribute "e" that will later function
@@ -78,13 +93,25 @@ async def test_row_ttl_scheduling_group(manager: ManagerClient):
             # statement scheduling group.
             e = int(time.time()) - 10
             N = 200
-            for p in range(N):
-                await cql.run_async(SimpleStatement(f'INSERT INTO {table} (p, e) VALUES ({p}, {e})', consistency_level=ConsistencyLevel.ALL))
+            stmt = cql.prepare(f'INSERT INTO {table} (p, e) VALUES (?, ?)')
+            stmt.consistency_level = ConsistencyLevel.ALL
+            ms_streaming_before_write, ms_statement_before_write, items_deleted_before_write = await get_cpu_metrics(manager)
+            await asyncio.gather(*[cql.run_async(stmt, [p, e]) for p in range(N)])
 
             ms_streaming_before, ms_statement_before, items_deleted_before = await get_cpu_metrics(manager)
+            # Sanity check: the normal user writes that we did above did some
+            # work in the statement scheduling group. This check shows that our
+            # test is measuring the right schedling group - and when below
+            # see TTL doing 0 work in the same scheduling group, it proves it
+            # really doesn't work in the same scheduling group as user writes.
+            assert ms_statement_before_write < ms_statement_before
+
             # Only now, after getting the metrics, enable TTL, so the
             # expiration scanner is guaranteed to run after this point.
-            await cql.run_async(f'ALTER TABLE {table} TTL e')
+            # Use cql_mgmt (which runs in sl:ttl_mgmt_sl, not sl:default)
+            # so the ALTER TABLE work doesn't pollute the ms_statement
+            # measurement.
+            await cql_mgmt.run_async(f'ALTER TABLE {table} TTL e')
             # Wait until all rows expire (this should happen very quicky),
             # and get the CPU metrics again.
             timeout = time.time() + 60
@@ -99,16 +126,19 @@ async def test_row_ttl_scheduling_group(manager: ManagerClient):
 
     # Between the calls to get_cpu_metrics() above, at least one expiration
     # scan took place and also all the items got deleted. We expect all
-    # that work to have happened in the streaming group, not statement group,
-    # so "ratio" calculate below should be very small. It is not zero because
-    # we did some work (ALTER TABLE and REST API) in the statement group.
-    # But issue #18719 was fixed, it was fairly large - 0.58.
-    # Let's assert it is <0.2 instead of zero.
+    # that work to have happened in the streaming group, not statement group.
+    # Because we made sure to finish all writes before starting to measure,
+    # and we ran the "ALTER TABLE" in a separate scheduling group, and REST
+    # API also doesn't go to sl:default - we expect the work in sl:default
+    # to be exactly zero, not just small. However, unfortunately in practice
+    # it seems there's often some tiny amount of work appearing in sl:default,
+    # perhaps due to some internal background tasks. So instead of checking
+    # that ms_statement is exactly 0, we check that it's much smaller than
+    # ms_streaming.
     ms_streaming = ms_streaming_after - ms_streaming_before
-    assert ms_streaming > 0 # sanity check
     ms_statement = ms_statement_after - ms_statement_before
-    ratio = ms_statement / ms_streaming
-    assert ratio < 0.2, f'statement {ms_statement} streaming {ms_streaming} ratio {ratio}'
+    assert ms_streaming > 0, f'expected some streaming-group work, got 0 (statement: {ms_statement} ms)'
+    assert ms_statement < ms_streaming * 0.1, f'expected negligible statement-group work, got {ms_statement} ms (streaming: {ms_streaming} ms)'
 
 @pytest.mark.parametrize("with_down_node", [False, True], ids=["all_nodes_up", "one_node_down"])
 async def test_row_ttl_multinode_expiration(manager: ManagerClient, with_down_node):
