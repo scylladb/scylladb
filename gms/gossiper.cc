@@ -2138,7 +2138,12 @@ future<> gossiper::do_stop_gossiping() {
     }
 
     auto my_ep_state = get_this_endpoint_state_ptr();
-    if (my_ep_state && _topo_sm._topology.normal_nodes.contains(raft::server_id(my_host_id().uuid()))) {
+    auto my_id = raft::server_id(my_host_id().uuid());
+    if (my_ep_state) {
+        auto it = _topo_sm._topology.find(my_id);
+        logger.info("My topology state = {}", it ? fmt::format("{}", it->second.state) : "not found");
+    }
+    if (my_ep_state && !_topo_sm._topology.left_nodes.contains(my_id)) {
         auto local_generation = my_ep_state->get_heart_beat_state().get_generation();
         logger.info("Announcing shutdown");
         co_await add_local_application_state(application_state::STATUS, versioned_value::shutdown(true));
