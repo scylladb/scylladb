@@ -270,6 +270,7 @@ seastar::file create_file_for_seekable_source(seekable_data_source src, seekable
                     break;
                 }
                 res += n;
+                pos += n;
             }
             co_return res;
         }
