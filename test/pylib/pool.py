@@ -163,3 +163,15 @@ class Pool(Generic[T]):
                 self.cond.notify()
             raise
         return obj
+
+    async def close(self) -> None:
+        """Destroy all objects currently in the pool.
+           Only destroys idle (non-leased) objects. After close(),
+           the pool is empty but can still be used.
+        """
+        async with self.cond:
+            objects = list(self.pool)
+            self.pool.clear()
+            self.total -= len(objects)
+        for obj in objects:
+            await self.destroy(obj)

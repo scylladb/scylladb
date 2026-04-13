@@ -281,6 +281,14 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # Check if test.py has already prepared the environment, so it should clean up
 
     if is_xdist_worker or TESTPY_PREPARED_ENVIRONMENT in os.environ:
+        # In xdist workers (or when test.py prepared the env), drain cluster
+        # pools so that idle clusters are destroyed and their directories
+        # cleaned up. Without this, the last cluster per suite per worker
+        # would leak its directory until the process exits.
+        if session.testsfailed == 0 and not session.config.getoption("--save-log-on-success"):
+            for suite in TestSuite.suites.values():
+                if hasattr(suite, 'clusters'):
+                    asyncio.run(suite.clusters.close())
         return
     # we only clean up when running with pure pytest
     if getattr(TestSuite, "artifacts", None) is not None:
