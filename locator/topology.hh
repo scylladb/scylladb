@@ -15,6 +15,7 @@
 #include <functional>
 #include <unordered_set>
 #include <unordered_map>
+#include <boost/unordered/unordered_flat_map.hpp>
 #include <iostream>
 #include <random>
 
@@ -432,7 +433,7 @@ private:
     config _cfg;
     const node* _this_node = nullptr;
     std::vector<node_holder> _nodes;
-    std::unordered_map<host_id, std::reference_wrapper<const node>> _nodes_by_host_id;
+    boost::unordered_flat_map<host_id, std::reference_wrapper<const node>, std::hash<host_id>> _nodes_by_host_id;
 
     std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>> _dc_nodes;
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>>> _dc_rack_nodes;
