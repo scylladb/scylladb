@@ -68,8 +68,10 @@ _pytest_config: pytest.Config | None = None
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
                      help="Run only tests for given build mode(s)")
-    parser.addoption('--tmpdir', action='store', default=str(TOP_SRC_DIR / 'testlog'),
-                     help='Path to temporary test data and log files.  The data is further segregated per build mode.')
+    parser.addoption('--test-artifact-dir', '--tmpdir', action='store', default=str(TOP_SRC_DIR / 'testlog'),
+                     dest='test_artifact_dir',
+                     help='Path to the top-level test work and log directory.  The data is further segregated per build mode.  '
+                          '--tmpdir is a deprecated alias for --test-artifact-dir.')
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
     parser.addoption('--byte-limit', action="store", default=randint(0, 2000), type=int,
                      help="Specific byte limit for failure injection (random by default)")
@@ -93,7 +95,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Save test log output on success and skip cleanup before the run.")
     parser.addoption('--coverage', action='store_true', default=False,
                      help="When running code instrumented with coverage support"
-                          "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
+                          "Will route the profiles to `test_artifact_dir`/mode/coverage/`suite` and post process them in order to generate "
                           "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
                           "The lcov files can eventually be used for generating coverage reports")
     parser.addoption("--coverage-mode", action='append', type=str, dest="coverage_modes",
@@ -190,10 +192,10 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     # Run stuff just once for the main pytest process (not in xdist workers).
     if not is_xdist_worker:
-        temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
+        artifact_dir = pathlib.Path(session.config.getoption("--test-artifact-dir")).absolute()
 
         prepare_environment(
-            tempdir_base=temp_dir,
+            test_artifact_dir=artifact_dir,
             modes=get_modes_to_run(session.config),
             gather_metrics=session.config.getoption("--gather-metrics"),
             save_log_on_success=session.config.getoption("--save-log-on-success"),
@@ -276,7 +278,7 @@ def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
 
-    pytest_log_dir = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_LOG_FOLDER
+    pytest_log_dir = pathlib.Path(_pytest_config.getoption("--test-artifact-dir")).absolute() / PYTEST_LOG_FOLDER
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
     # If this is an xdist worker, set up logging to a separate file for this worker. Otherwise, set up logging for the main process.
     if worker_id is not None:
@@ -366,7 +368,7 @@ def pytest_runtest_makereport(item, call):
 
     rep = outcome.get_result()
     # we only look at actual failing test calls, not setup/teardown
-    pytest_tests_logs = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_TESTS_LOGS_FOLDER
+    pytest_tests_logs = pathlib.Path(_pytest_config.getoption("--test-artifact-dir")).absolute() / PYTEST_TESTS_LOGS_FOLDER
     if rep.failed or (_pytest_config.getoption("--save-log-on-success") and rep.when == "teardown"):
         mode = "a" if os.path.exists(pytest_tests_logs) else "w"
         with open(pytest_tests_logs/ f"{item._nodeid.replace("::", "-").replace("/", "-")}-{rep.when}-{HOST_ID}.log",mode) as f:
