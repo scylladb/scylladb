@@ -37,8 +37,8 @@ selectable_processes_selection(const expr::expression& selectable) {
         [&] (const expr::conjunction& conj) -> bool {
             on_internal_error(slogger, "no way to express 'SELECT a AND b' in the grammar yet");
         },
-        [&] (const expr::binary_operator& conj) -> bool {
-            on_internal_error(slogger, "no way to express 'SELECT a binop b' in the grammar yet");
+        [&] (const expr::binary_operator&) -> bool {
+            return true;
         },
         [] (const expr::subscript&) -> bool {
             return true;
@@ -68,13 +68,13 @@ selectable_processes_selection(const expr::expression& selectable) {
             on_internal_error(slogger, "untyped_constant found its way to selector context");
         },
         [&] (const expr::tuple_constructor&) -> bool {
-            on_internal_error(slogger, "tuple_constructor found its way to selector context");
+            return true;
         },
         [&] (const expr::collection_constructor&) -> bool {
-            on_internal_error(slogger, "collection_constructor found its way to selector context");
+            return true;
         },
         [&] (const expr::usertype_constructor&) -> bool {
-            on_internal_error(slogger, "collection_constructor found its way to selector context");
+            on_internal_error(slogger, "usertype_constructor found its way to selector context");
         },
         [&] (const expr::temporary& t) -> bool {
             // Well it doesn't process the selection, but it's not bypasses the selection completely

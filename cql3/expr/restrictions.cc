@@ -27,6 +27,38 @@ bool is_legal_relation_for_non_frozen_collection(oper_t oper, bool is_lhs_col_in
     return oper == oper_t::CONTAINS_KEY || oper == oper_t::CONTAINS || (oper == oper_t::EQ && is_lhs_col_indexed);
 }
 
+// Returns the flipped comparison operator for operand swapping, or std::nullopt
+// if the operator is asymmetric (e.g. IN, CONTAINS, LIKE) and cannot be swapped.
+// Symmetric operators: EQ, NEQ (unchanged), LT <-> GT, LTE <-> GTE.
+std::optional<oper_t> flip_operator(oper_t op) {
+    switch (op) {
+    case oper_t::EQ:
+        return oper_t::EQ;
+    case oper_t::NEQ:
+        return oper_t::NEQ;
+    case oper_t::LT:
+        return oper_t::GT;
+    case oper_t::LTE:
+        return oper_t::GTE;
+    case oper_t::GT:
+        return oper_t::LT;
+    case oper_t::GTE:
+        return oper_t::LTE;
+    default:
+        return std::nullopt;
+    }
+}
+
+// Returns true if the expression is (or contains) a column reference,
+// i.e. a column_value, subscript, tuple of columns, or token function call.
+bool has_column_reference(const expression& e) {
+    return find_in_expression<column_value>(e,
+                   [](const column_value&) {
+                       return true;
+                   }) != nullptr ||
+           is_token_function(e);
+}
+
 void validate_single_column_relation(const column_value& lhs, oper_t oper, const schema& schema, bool is_lhs_subscripted) {
     using namespace statements::request_validations; // used for check_false and check_true
 
@@ -184,6 +216,20 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     // Prepare the restriction
     binary_operator prepared_binop = prepare_binary_operator(restriction, db, *schema);
     expr::verify_no_aggregate_functions(prepared_binop, "WHERE clause");
+
+    // Canonicalize: if the LHS has no column reference but the RHS does,
+    // swap the operands so that the column ends up on the LHS (e.g. `4 = col` -> `col = 4`).
+    // This is only valid for symmetric operators (EQ, NEQ, LT, LTE, GT, GTE).
+    // Asymmetric operators (IN, CONTAINS, CONTAINS_KEY, LIKE, IS_NOT) require
+    // a column on the LHS and cannot be swapped.
+    if (!has_column_reference(prepared_binop.lhs) && has_column_reference(prepared_binop.rhs)) {
+        auto flipped = flip_operator(prepared_binop.op);
+        if (!flipped) {
+            throw exceptions::invalid_request_exception(fmt::format("{} requires a column reference on the left-hand side", prepared_binop.op));
+        }
+        std::swap(prepared_binop.lhs, prepared_binop.rhs);
+        prepared_binop.op = *flipped;
+    }
 
     // Fill prepare context
     const column_value* lhs_pk_col_search_res = find_in_expression<column_value>(prepared_binop.lhs,

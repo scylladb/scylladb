@@ -18,6 +18,7 @@ options {
 @parser::includes {
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/statements/raw/select_statement.hh"
+#include "cql3/statements/raw/select_no_from_statement.hh"
 #include "cql3/statements/alter_keyspace_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/alter_view_statement.hh"
@@ -375,7 +376,7 @@ useStatement returns [std::unique_ptr<raw::use_statement> stmt]
  * LIMIT <NUMBER>
  * [USING TIMEOUT <duration>];
  */
-selectStatement returns [std::unique_ptr<raw::select_statement> expr]
+selectStatement returns [std::unique_ptr<raw::parsed_statement> expr]
     @init {
         bool is_distinct = false;
         std::optional<expression> limit;
@@ -387,6 +388,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         auto attrs = std::make_unique<cql3::attributes::raw>();
         expression wclause = conjunction{};
         bool is_ann_ordering = false;
+        bool has_from = false;
     }
     : K_SELECT (
                 ( (K_JSON K_DISTINCT)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
@@ -395,23 +397,29 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
                 ( (K_DISTINCT selectClause K_FROM)=> K_DISTINCT { is_distinct = true; } )?
                 sclause=selectClause
                )
-      K_FROM (
-                cf=columnFamilyName
-                | K_MUTATION_FRAGMENTS '(' cf=columnFamilyName ')' { statement_subtype = raw::select_statement::parameters::statement_subtype::MUTATION_FRAGMENTS; }
-             )
-      ( K_WHERE w=whereClause { wclause = std::move(w); } )?
-      ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
-      ( K_ORDER K_BY orderByClause[orderings, is_ann_ordering] ( ',' orderByClause[orderings, is_ann_ordering] )* )?
-      ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = std::move(rows); } )?
-      ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
-      ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
-      ( K_BYPASS K_CACHE { bypass_cache = true; })?
-      ( usingTimeoutServiceLevelClause[attrs] )?
+      ( K_FROM { has_from = true; }
+        (
+            cf=columnFamilyName
+            | K_MUTATION_FRAGMENTS '(' cf=columnFamilyName ')' { statement_subtype = raw::select_statement::parameters::statement_subtype::MUTATION_FRAGMENTS; }
+        )
+        ( K_WHERE w=whereClause { wclause = std::move(w); } )?
+        ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
+        ( K_ORDER K_BY orderByClause[orderings, is_ann_ordering] ( ',' orderByClause[orderings, is_ann_ordering] )* )?
+        ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = std::move(rows); } )?
+        ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
+        ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
+        ( K_BYPASS K_CACHE { bypass_cache = true; })?
+        ( usingTimeoutServiceLevelClause[attrs] )?
+      )?
       {
-          auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
-          $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
-            std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit),
-            std::move(gbcolumns), std::move(attrs));
+          if (has_from) {
+            auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
+            $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
+              std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit),
+              std::move(gbcolumns), std::move(attrs));
+          } else {
+            $expr = std::make_unique<raw::select_no_from_statement>(std::move(sclause));
+          }
       }
     ;
 
@@ -426,18 +434,25 @@ selector returns [shared_ptr<raw_selector> s]
     ;
 
 unaliasedSelector returns [uexpression tmp]
-    :  ( c=cident                                  { tmp = unresolved_identifier{std::move(c)}; }
-       | v=value                                   { tmp = std::move(v); }
-       | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
-       | K_WRITETIME '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
+    : lhs=selectorAtom { tmp = std::move(lhs); }
+      ( op=relationType rhs=selectorAtom
+        { tmp = binary_operator(std::move(tmp), op, std::move(rhs)); }
+      )?
+    ;
+
+selectorAtom returns [uexpression e]
+    :  ( c=cident                                  { e = unresolved_identifier{std::move(c)}; }
+       | v=value                                   { e = std::move(v); }
+       | K_COUNT '(' countArgument ')'             { e = make_count_rows_function_expression(); }
+       | K_WRITETIME '(' c=cident ')'              { e = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
                                                                                               unresolved_identifier{std::move(c)}}; }
-       | K_TTL       '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
+       | K_TTL       '(' c=cident ')'              { e = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
                                                                                               unresolved_identifier{std::move(c)}}; }
-       | f=functionName args=selectionFunctionArgs { tmp = function_call{std::move(f), std::move(args)}; }
-       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = cast{.style = cast::cast_style::sql, .arg = std::move(arg), .type = std::move(t)}; }
+       | f=functionName args=selectionFunctionArgs { e = function_call{std::move(f), std::move(args)}; }
+       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { e = cast{.style = cast::cast_style::sql, .arg = std::move(arg), .type = std::move(t)}; }
        )
-       ( '.' fi=cident { tmp = field_selection{std::move(tmp), std::move(fi)}; }
-       | '[' sub=term ']' { tmp = subscript{std::move(tmp), std::move(sub)}; }
+       ( '.' fi=cident { e = field_selection{std::move(e), std::move(fi)}; }
+       | '[' sub=term ']' { e = subscript{std::move(e), std::move(sub)}; }
        )*
     ;
 
@@ -1683,6 +1698,17 @@ value returns [uexpression value]
     | e=marker             { $value = std::move(e); }
     ;
 
+// Like value, but without tupleLiteral. Used for the LHS of reversed
+// restrictions (e.g. "4 = col") to avoid grammar ambiguity with tuple
+// and parenthesized-relation alternatives.
+nonTupleValue returns [uexpression value]
+    : c=constant           { $value = std::move(c); }
+    | l=collectionLiteral  { $value = std::move(l); }
+    | u=usertypeLiteral    { $value = std::move(u); }
+    | K_NULL               { $value = make_untyped_null(); }
+    | e=marker             { $value = std::move(e); }
+    ;
+
 marker returns [uexpression value]
     : ':' id=ident         { $value = new_bind_variables(id); }
     | QMARK                { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
@@ -1826,6 +1852,12 @@ columnCondition returns [uexpression e]
                             std::move(values));
                 }
         )
+    | v=nonTupleValue op=relationType key=subscriptExpr {
+                    e = binary_operator(
+                            std::move(v),
+                            op,
+                            std::move(key));
+                }
     ;
 
 properties[cql3::statements::property_definitions& props]
@@ -1948,6 +1980,8 @@ relation returns [uexpression e]
           }
       )
     | '(' e1=relation ')' { $e = std::move(e1); }
+    | v=nonTupleValue type=relationType name=cident
+        { $e = binary_operator(std::move(v), type, unresolved_identifier{std::move(name)}); }
     ;
 
 tupleOfIdentifiers returns [tuple_constructor tup]

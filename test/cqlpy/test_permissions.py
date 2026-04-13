@@ -859,3 +859,25 @@ def test_select_system_table(cql):
             eventually_unauthorized(lambda: user1_session.execute(f'SELECT * FROM {roles_table}'))
             grant(cql, 'SELECT', roles_table, user1)
             eventually_authorized(lambda: user1_session.execute(f'SELECT * FROM {roles_table}'))
+
+# Test that EXECUTE permission is enforced for user-defined functions called
+# in SELECT without FROM (a ScyllaDB CQL extension). Since there is no
+# table, only EXECUTE on the function is required (no SELECT on any table).
+def test_udf_permissions_select_without_from(cql, scylla_only):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
+        fun_body = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return i + 1;'"
+        with new_function(cql, keyspace, fun_body) as fun:
+            with new_user(cql) as username:
+                with new_session(cql, username) as user_session:
+                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                        check_enforced(cql, username, permission='EXECUTE', resource=resource,
+                                function=lambda: user_session.execute(f"SELECT {keyspace}.{fun}(1)"))
+
+# Test that native functions (like now(), count()) do not require EXECUTE
+# permission when used in SELECT without FROM.
+def test_native_functions_select_without_from(cql, scylla_only):
+    with new_user(cql) as username:
+        with new_session(cql, username) as user_session:
+            # A user with no special permissions should be able to call
+            # native functions in SELECT without FROM.
+            eventually_authorized(lambda: user_session.execute("SELECT now()"))
