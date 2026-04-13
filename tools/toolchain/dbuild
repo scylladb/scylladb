@@ -248,6 +248,7 @@ docker_common_args+=(
        --security-opt label=disable \
        --privileged \
        --network host \
+       --shm-size 1G \
        --ulimit nofile=$(ulimit -Sn):$hard_limit \
        -v "$PWD:$PWD" \
        -v "$tmpdir:/tmp" \
