@@ -11,6 +11,7 @@
 #pragma once
 
 #include <variant>
+#include <boost/unordered/unordered_flat_map.hpp>
 #include "cdc/log.hh"
 #include "inet_address_vectors.hh"
 #include "replica/database_fwd.hh"
@@ -213,7 +214,7 @@ private:
         response_id_type release();
     };
     using unique_response_handler_vector = utils::small_vector<unique_response_handler, 1>;
-    using response_handlers_map = std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>>;
+    using response_handlers_map = boost::unordered_flat_map<response_id_type, ::shared_ptr<abstract_write_response_handler>>;
 
 public:
     static const sstring COORDINATOR_STATS_CATEGORY;
