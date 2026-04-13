@@ -1991,6 +1991,39 @@ public:
     const schema_ptr& get_schema() const {
         return _mutation_holder->schema();
     }
+    void report_write_failure(locator::host_id ep, storage_proxy::response_id_type response_id,
+                              size_t failure_count, std::exception_ptr eptr) {
+        auto schema = get_schema();
+        ++stats().writes_errors.get_ep_stat(_effective_replication_map_ptr->get_topology(), ep);
+        error err = error::FAILURE;
+        std::optional<sstring> msg;
+
+        if (try_catch<replica::rate_limit_exception>(eptr)) {
+            // There might be a lot of those, so ignore
+            err = error::RATE_LIMIT;
+        } else if (const auto* stale = try_catch<replica::stale_topology_exception>(eptr)) {
+            msg = stale->what();
+        } else if (try_catch_nested<rpc::closed_error>(eptr)) {
+            // ignore, disconnect will be logged by gossiper
+        } else if (const auto* e = try_catch_nested<seastar::gate_closed_exception>(eptr)) {
+            // may happen during shutdown, log and ignore it
+            slogger.warn("gate_closed_exception during mutation write to {}.{} on {}: {}",
+                schema->ks_name(), schema->cf_name(), ep, e->what());
+        } else if (try_catch<timed_out_error>(eptr)) {
+            // from local mutations. Ignore so that logs are not flooded.
+            // database total_writes_timedout counter was incremented.
+            // It needs to be recorded that the timeout occurred locally though.
+            err = error::TIMEOUT;
+        } else if (auto* e = try_catch<db::virtual_table_update_exception>(eptr)) {
+            msg = e->grab_cause();
+        } else if (auto* e = try_catch<replica::critical_disk_utilization_exception>(eptr)) {
+            msg = e->what();
+        } else {
+            slogger.error("exception during mutation write to {}.{} on {}: {}",
+                schema->ks_name(), schema->cf_name(), ep, eptr);
+        }
+        _proxy->got_failure_response(response_id, ep, failure_count, std::nullopt, err, std::move(msg));
+    }
     size_t get_mutation_size() const {
         return _mutation_holder->size();
     }
@@ -4653,7 +4686,6 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
     auto& global_stats = handler._proxy->_global_stats;
-    auto schema = handler_ptr->get_schema();
 
     if (handler.get_targets().size() == 0) {
         // Usually we remove the response handler when receiving responses from all targets.
@@ -4749,36 +4781,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         }
 
         // Waited on indirectly.
-        (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats, schema] (std::exception_ptr eptr) {
-            ++stats.writes_errors.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
-            error err = error::FAILURE;
-            std::optional<sstring> msg;
-
-            if (try_catch<replica::rate_limit_exception>(eptr)) {
-                // There might be a lot of those, so ignore
-                err = error::RATE_LIMIT;
-            } else if (const auto* stale = try_catch<replica::stale_topology_exception>(eptr)) {
-                msg = stale->what();
-            } else if (try_catch_nested<rpc::closed_error>(eptr)) {
-                // ignore, disconnect will be logged by gossiper
-            } else if (const auto* e = try_catch_nested<seastar::gate_closed_exception>(eptr)) {
-                // may happen during shutdown, log and ignore it
-                slogger.warn("gate_closed_exception during mutation write to {}.{} on {}: {}",
-                    schema->ks_name(), schema->cf_name(), coordinator, e->what());
-            } else if (try_catch<timed_out_error>(eptr)) {
-                // from lmutate(). Ignore so that logs are not flooded
-                // database total_writes_timedout counter was incremented.
-                // It needs to be recorded that the timeout occurred locally though.
-                err = error::TIMEOUT;
-            } else if (auto* e = try_catch<db::virtual_table_update_exception>(eptr)) {
-                msg = e->grab_cause();
-            } else if (auto* e = try_catch<replica::critical_disk_utilization_exception>(eptr)) {
-                msg = e->what();
-            } else {
-                slogger.error("exception during mutation write to {}.{} on {}: {}",
-                    schema->ks_name(), schema->cf_name(), coordinator, eptr);
-            }
-            p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err, std::move(msg));
+        (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr] (std::exception_ptr eptr) {
+            handler_ptr->report_write_failure(coordinator, response_id, forward_size + 1, std::move(eptr));
         });
     }
 }
