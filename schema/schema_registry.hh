@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <unordered_map>
+#include <boost/unordered/unordered_flat_map.hpp>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/shared_future.hh>
@@ -110,7 +110,7 @@ public:
 //
 // Schemas of views returned by this registry always have base_info set.
 class schema_registry {
-    std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
+    boost::unordered_flat_map<table_schema_version, lw_shared_ptr<schema_registry_entry>, std::hash<table_schema_version>> _entries;
     std::unique_ptr<db::schema_ctxt> _ctxt;
 
     friend class schema_registry_entry;
