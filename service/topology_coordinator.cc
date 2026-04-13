@@ -1419,6 +1419,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 .build());
     }
 
+    // Drops the request paused for rack_list colocation without queueing it again
+    // and reports the error to the client.
+    // The keyspace metadata is not touched, as it is not modified before the colocation is done.
+    void generate_rack_list_colocation_failure_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const rack_list_colocation_failure& failure) {
+        rtlogger.warn("Failing request {} paused for rack_list colocation: {}", failure.request_id, failure.error);
+        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                .resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, failure.request_id)
+                .build());
+        out.emplace_back(topology_request_tracking_mutation_builder(failure.request_id)
+                .done(failure.error)
+                .build());
+    }
+
     future<> generate_migration_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
         if (plan.resize_plan().finalize_resize.empty() || plan.has_nodes_to_drain()) {
             // schedule tablet migration only if there are no pending resize finalisations or if the node is draining.
@@ -1440,6 +1453,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             if (auto request_to_resume = plan.rack_list_colocation_plan().request_to_resume(); request_to_resume) {
                 generate_rf_change_resume_update(out, guard, request_to_resume);
+            }
+
+            if (const auto& request_to_fail = plan.rack_list_colocation_plan().request_to_fail(); request_to_fail) {
+                generate_rack_list_colocation_failure_update(out, guard, *request_to_fail);
             }
         }
 
