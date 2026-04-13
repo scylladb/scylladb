@@ -1455,9 +1455,22 @@ public:
             }
             auto t2 = *t2_opt;
 
+            // Use the optimistic replica view (same as the load balancer uses for load accounting)
+            // instead of committed ti.replicas. This avoids a false non-co-located window that
+            // occurs when the two del_transition commits of a colocated LB migration land in
+            // different Raft rounds: after the first commit, ti.replicas diverge temporarily even
+            // though both tablets are still heading to the same shard. Using the optimistic view
+            // keeps finalize_resize populated throughout the migration and prevents the load
+            // balancer from starting cascading migrations in that window.
+            auto with_optimistic_replicas = [this](const tablet_desc& t) {
+                auto info = *t.info;
+                info.replicas = get_replicas_for_tablet_load(*t.info, t.transition);
+                return info;
+            };
+
             // Sibling tablets cannot be considered co-located if their tablet info is temporarily unmergeable.
-            // It can happen either has active repair task for example.
-            all_colocated &= bool(merge_tablet_info(*t1.info, *t2.info));
+            // It can happen if either has an active repair task, for example.
+            all_colocated &= bool(merge_tablet_info(with_optimistic_replicas(t1), with_optimistic_replicas(t2)));
             return make_ready_future<>();
         });
         if (all_colocated) {
@@ -3828,8 +3841,11 @@ public:
                     total_tablet_count += tids.size();
                     total_tablet_sizes += tablet_sizes_sum;
                     if (tmap.needs_merge() && tids.size() == 2) {
-                        // Exclude both sibling tablets if either haven't finished migration yet. That's to prevent balancer from
-                        // un-doing the colocation.
+                        // Exclude both sibling tablets if either hasn't finished migration yet. That's to prevent
+                        // the load balancer from un-doing co-location while it's still in progress.
+                        // Once both are stable, allow load balancing to act on the co-located pair.
+                        // During drain, we similarly wait for both to finish migrating and then add them as
+                        // a candidate so drain can migrate the co-located pair together off the draining node.
                         if (!migrating(t1) && !migrating(t2)) {
                             auto candidate = colocated_tablets{global_tablet_id{table, t1.tid}, global_tablet_id{table, t2->tid}};
                             add_candidate(shard_load_info, migration_tablet_set{std::move(candidate), tablet_sizes_sum});
