@@ -1964,8 +1964,6 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
                 logger.debug("Got get_endpoint_states response from {}, response={}", node, response.endpoint_state_map);
                 responses.push_back(std::move(response));
                 nodes_talked.insert(node);
-
-                utils::get_local_injector().inject("stop_during_gossip_shadow_round", [] { std::raise(SIGSTOP); });
             } catch (seastar::rpc::unknown_verb_error&) {
                 auto err = format("Node {} does not support get_endpoint_states verb", node);
                 logger.error("{}", err);
