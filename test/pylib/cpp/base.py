@@ -92,7 +92,7 @@ class CppFile(pytest.File, ABC):
 
     @cached_property
     def log_dir(self) -> pathlib.Path:
-        return pathlib.Path(self.config.getoption("--tmpdir")).joinpath(self.build_mode).absolute()
+        return pathlib.Path(self.config.getoption("--workdir")).joinpath(self.build_mode).absolute()
 
     @cached_property
     def exe_path(self) -> pathlib.Path:

@@ -36,8 +36,8 @@ def keyspace_options(object_storage, rf=1):
 
 
 class S3_Server:
-    def __init__(self, tempdir: str, address: str, port: int, acc_key: str, secret_key: str, region: str, bucket_name):
-        self.tempdir = tempdir
+    def __init__(self, workdir: str, address: str, port: int, acc_key: str, secret_key: str, region: str, bucket_name):
+        self.workdir = workdir
         self.ip = address
         self.port = port
         self.address = f'http://{self.ip}:{self.port}'
@@ -74,12 +74,12 @@ class S3_Server:
         pass
 
 class MinioWrapper(S3_Server):
-    def __init__(self, tempdir):
-        self.server = MinioServer(tempdir,
+    def __init__(self, workdir):
+        self.server = MinioServer(workdir,
                                   '127.0.0.1',
                                   logging.getLogger('minio'))
         super().__init__(
-                tempdir,
+                workdir,
                 self.server.address,
                 self.server.port,
                 self.server.access_key,
@@ -112,9 +112,9 @@ def create_s3_server(pytestconfig, tmpdir):
     default_region = MinioServer.DEFAULT_REGION
     default_bucket = os.environ.get(MinioServer.ENV_BUCKET)
 
-    tempdir = tmpdir.strpath
+    workdir = tmpdir.strpath
     if s3_server_address:
-        server = S3_Server(tempdir,
+        server = S3_Server(workdir,
                            s3_server_address,
                            s3_server_port,
                            aws_acc_key,
@@ -122,7 +122,7 @@ def create_s3_server(pytestconfig, tmpdir):
                            aws_region,
                            s3_server_bucket)
     elif default_address:
-        server = S3_Server(tempdir,
+        server = S3_Server(workdir,
                            default_address,
                            int(default_port),
                            default_acc_key,
@@ -130,7 +130,7 @@ def create_s3_server(pytestconfig, tmpdir):
                            default_region,
                            default_bucket)
     else:
-        server = MinioWrapper(tempdir)
+        server = MinioWrapper(workdir)
     return server
 
 @pytest.fixture(scope="function")
@@ -187,7 +187,7 @@ class GSServer(GSFront):
                       'GS_BUCKET_FOR_TEST': attrgetter('bucket_name'), 
                       'GS_CREDENTIALS_FILE': attrgetter('credentials_file'), 
                       }
-        self.tmpdir = tmpdir
+        self.workdir = tmpdir
 
     def publish(self):
         self.endpoint = f'http://{self.host}:{self.port}'
@@ -211,7 +211,7 @@ class GSServer(GSFront):
         return ["-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', '127.0.0.1']
 
     async def start(self):
-        self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.52.3", self.tmpdir, 
+        self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.52.3", self.workdir, 
                                        logfilenamebase="fake-gcs-server",
                                        image_args=self._image_args,
                                        success_string="server started at",

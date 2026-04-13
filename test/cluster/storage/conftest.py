@@ -23,7 +23,7 @@ from test.pylib.util import gather_safely
 @pytest.fixture(scope="function")
 def volumes_factory(pytestconfig, build_mode, request):
     hash = str(uuid.uuid4())
-    base = pathlib.Path(f"{pytestconfig.getoption("tmpdir")}/{build_mode}/volumes/{hash}")
+    base = pathlib.Path(f"{pytestconfig.getoption("workdir")}/{build_mode}/volumes/{hash}")
     volumes = []
 
     @dataclass

@@ -22,7 +22,7 @@ class DockerizedServer:
 
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
-    def __init__(self, image, tmpdir, logfilenamebase, 
+    def __init__(self, image, workdir, logfilenamebase, 
                  success_string : Callable[[str, int], bool] | str,
                  failure_string : Callable[[str, int], bool] | str,
                  docker_args : Callable[[str, int], list[str]] | list[str] = [],
@@ -31,7 +31,7 @@ class DockerizedServer:
                  port = None):
         self.image = image
         self.host = host
-        self.tmpdir = tmpdir
+        self.workdir = workdir
         self.logfilenamebase = logfilenamebase
         self.docker_args: Callable[[str, int], list[str]] = (lambda host,port : docker_args) if isinstance(docker_args, list) else docker_args
         self.image_args: Callable[[str, int], list[str]] = (lambda host,port : image_args) if isinstance(image_args, list) else image_args
@@ -50,7 +50,7 @@ class DockerizedServer:
                                                 if exe is not None)).resolve()
         sid = f"{os.getpid()}-{DockerizedServer.newid()}"
         name = f'{self.logfilenamebase}-{sid}'
-        logfilename = (pathlib.Path(self.tmpdir) / name).with_suffix(".log")
+        logfilename = (pathlib.Path(self.workdir) / name).with_suffix(".log")
         self.logfile = logfilename.open("wb")
 
         docker_args = self.docker_args(self.host, self.service_port)

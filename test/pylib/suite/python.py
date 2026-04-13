@@ -189,7 +189,7 @@ class PythonTest(Test):
             "-rs",
             "--run_id={}".format(self.id),
             "--mode={}".format(self.mode),
-            "--tmpdir={}".format(options.tmpdir),
+            "--workdir={}".format(options.workdir),
         ]
         if options.gather_metrics:
             self.args.append("--gather-metrics")

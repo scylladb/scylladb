@@ -29,9 +29,9 @@ class KeyProvider(Enum):
 
 class KeyProviderFactory:
     """Base class for provider factories"""
-    def __init__(self, key_provider : KeyProvider, tmpdir):
+    def __init__(self, key_provider : KeyProvider, workdir):
         self.key_provider = key_provider
-        self.system_key_location = os.path.join(tmpdir, "resources/system_keys")
+        self.system_key_location = os.path.join(workdir, "resources/system_keys")
 
     async def __aenter__(self):
         return self
@@ -61,9 +61,9 @@ class KeyProviderFactory:
 
 class LocalFileSystemKeyProviderFactory(KeyProviderFactory):
     """LocalFileSystemKeyProviderFactory proxy"""
-    def __init__(self, tmpdir):
-        super(LocalFileSystemKeyProviderFactory, self).__init__(KeyProvider.local, tmpdir)
-        self.secret_file = os.path.join(tmpdir, "test/node1/conf/data_encryption_keys")
+    def __init__(self, workdir):
+        super(LocalFileSystemKeyProviderFactory, self).__init__(KeyProvider.local, workdir)
+        self.secret_file = os.path.join(workdir, "test/node1/conf/data_encryption_keys")
 
     def additional_cf_options(self) -> dict[str, str]:
         """scylla.conf entries for provider"""
@@ -71,8 +71,8 @@ class LocalFileSystemKeyProviderFactory(KeyProviderFactory):
 
 class ReplicatedKeyProviderFactory(KeyProviderFactory):
     """ReplicatedKeyProviderFactory proxy"""
-    def __init__(self, tmpdir, scylla_exe):
-        super(ReplicatedKeyProviderFactory, self).__init__(KeyProvider.replicated, tmpdir)
+    def __init__(self, workdir, scylla_exe):
+        super(ReplicatedKeyProviderFactory, self).__init__(KeyProvider.replicated, workdir)
         self.system_key_file_name = "system_key"
         self.scylla_exe = scylla_exe
 
@@ -90,9 +90,9 @@ class ReplicatedKeyProviderFactory(KeyProviderFactory):
 
 class KmipKeyProviderFactory(KeyProviderFactory):
     """KmipKeyProviderFactory proxy"""
-    def __init__(self, tmpdir):
-        super(KmipKeyProviderFactory, self).__init__(KeyProvider.kmip, tmpdir)
-        self.tmpdir = tmpdir
+    def __init__(self, workdir):
+        super(KmipKeyProviderFactory, self).__init__(KeyProvider.kmip, workdir)
+        self.workdir = workdir
         self.kmip_server_wrapper = None
         self.kmip_host = "kmip_test"
         self.kmip_port = 0
@@ -131,13 +131,13 @@ class KmipKeyProviderFactory(KeyProviderFactory):
             hostname="127.0.0.1",
             config_path=None,
             certificate_path=self.certs["certfile"],
-            policy_path=self.tmpdir.strpath,
+            policy_path=self.workdir.strpath,
             key_path=self.certs["keyfile"],
             ca_path=self.certs["truststore"],
             auth_suite="TLS1.2",
             database_path=':memory:',
             logging_level='DEBUG',
-            log_path=os.path.join(self.tmpdir, "pykmip.log"),
+            log_path=os.path.join(self.workdir, "pykmip.log"),
             enable_tls_client_auth=False,
         )
         self.kmip_server_wrapper.start()
@@ -170,9 +170,9 @@ class KmipKeyProviderFactory(KeyProviderFactory):
 
 class KMSKeyProviderFactory(KeyProviderFactory):
     """KMSKeyProviderFactory proxy"""
-    def __init__(self, tmpdir):
-        super(KMSKeyProviderFactory, self).__init__(KeyProvider.kms, tmpdir)
-        self.tmpdir = tmpdir
+    def __init__(self, workdir):
+        super(KMSKeyProviderFactory, self).__init__(KeyProvider.kms, workdir)
+        self.workdir = workdir
         self.master_key = "alias/Scylla-test"
         self.kms_host = "kms_test"
         self.endpoint_url = None
@@ -184,7 +184,7 @@ class KMSKeyProviderFactory(KeyProviderFactory):
         aws_region = os.getenv('KMS_AWS_REGION')
  
         if master_key is None:
-            self.server = DockerizedServer("docker.io/nsmithuk/local-kms:3", self.tmpdir,
+            self.server = DockerizedServer("docker.io/nsmithuk/local-kms:3", self.workdir,
                                            logfilenamebase="local-kms",
                                            success_string="Local KMS started on",
                                            failure_string="address already in use",
@@ -248,9 +248,9 @@ class KMSKeyProviderFactory(KeyProviderFactory):
 
 class AzureKeyProviderFactory(KeyProviderFactory):
     """AzureKeyProviderFactory proxy"""
-    def __init__(self, tmpdir):
-        super(AzureKeyProviderFactory, self).__init__(KeyProvider.azure, tmpdir)
-        self.tmpdir = tmpdir
+    def __init__(self, workdir):
+        super(AzureKeyProviderFactory, self).__init__(KeyProvider.azure, workdir)
+        self.workdir = workdir
         self.azure_host = "azure_test"
         self.azure_server = None
         self.host = None;
@@ -286,19 +286,19 @@ class AzureKeyProviderFactory(KeyProviderFactory):
     def require_restart(self):
         return True
 
-def make_key_provider_factory(provider: KeyProvider, tmpdir, scylla_exe):
+def make_key_provider_factory(provider: KeyProvider, workdir, scylla_exe):
     """Create key provider factory for enum"""
     res = None
     if provider == KeyProvider.local:
-        res = LocalFileSystemKeyProviderFactory(tmpdir)
+        res = LocalFileSystemKeyProviderFactory(workdir)
     elif provider == KeyProvider.replicated:
-        res = ReplicatedKeyProviderFactory(tmpdir, scylla_exe)
+        res = ReplicatedKeyProviderFactory(workdir, scylla_exe)
     elif provider == KeyProvider.kmip:
-        res = KmipKeyProviderFactory(tmpdir)
+        res = KmipKeyProviderFactory(workdir)
     elif provider == KeyProvider.kms:
-        res = KMSKeyProviderFactory(tmpdir)
+        res = KMSKeyProviderFactory(workdir)
     elif provider == KeyProvider.azure:
-        res = AzureKeyProviderFactory(tmpdir)
+        res = AzureKeyProviderFactory(workdir)
     else:
         raise RuntimeError(f'Unknown key_provider: {provider}')
 

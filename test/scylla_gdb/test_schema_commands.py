@@ -38,7 +38,7 @@ def test_schema(gdb_cmd, command):
 
 
 def test_generate_object_graph(gdb_cmd, request):
-    tmpdir = request.config.getoption("--tmpdir")
+    tmpdir = request.config.getoption("--workdir")
     result = execute_gdb_command(
         gdb_cmd, f"generate-object-graph -o {tmpdir}/og.dot -d 2 -t 10 $get_schema()"
     )

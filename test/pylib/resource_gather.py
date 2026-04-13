@@ -310,9 +310,9 @@ def setup_cgroup(is_required: bool) -> None:
                 f.write(controllers)
 
 
-async def monitor_resources(cancel_event: Event, stop_event: Event, tmpdir: Path) -> None:
+async def monitor_resources(cancel_event: Event, stop_event: Event, workdir: Path) -> None:
     """Continuously monitors CPU and memory utilization."""
-    sqlite_writer = SQLiteWriter(tmpdir / DEFAULT_DB_NAME)
+    sqlite_writer = SQLiteWriter(workdir / DEFAULT_DB_NAME)
     while not cancel_event.is_set() and not stop_event.is_set():
         timeline_record = SystemResourceMetric(
             host_id=HOST_ID,
@@ -331,7 +331,7 @@ async def no_monitor() -> None:
     pass
 
 
-def run_resource_watcher(is_required: bool, cancel_event: Event, stop_event:Event, tmpdir: str) -> Task:
+def run_resource_watcher(is_required: bool, cancel_event: Event, stop_event:Event, workdir: str) -> Task:
     if is_required:
-        return asyncio.create_task(monitor_resources(cancel_event, stop_event, Path(tmpdir)))
+        return asyncio.create_task(monitor_resources(cancel_event, stop_event, Path(workdir)))
     return asyncio.create_task(no_monitor())
