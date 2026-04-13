@@ -39,6 +39,7 @@ class MinioServer:
         self.srv_exe = shutil.which('minio')
         self.address = address
         self.port = None
+        self.tempdir_base = pathlib.Path(tempdir_base)
         tempdir = tempfile.mkdtemp(dir=tempdir_base, prefix="minio-")
         self.tempdir = pathlib.Path(tempdir)
         self.rootdir = self.tempdir / 'minio_root'
@@ -50,7 +51,7 @@ class MinioServer:
         self.bucket_name = 'testbucket'
         self.access_key = os.environ.get(self.ENV_ACCESS_KEY, ''.join(random.choice(string.hexdigits) for i in range(16)))
         self.secret_key = os.environ.get(self.ENV_SECRET_KEY, ''.join(random.choice(string.hexdigits) for i in range(32)))
-        self.log_filename = (self.tempdir / 'minio').with_suffix(".log")
+        self.log_filename = (self.tempdir_base / 'minio').with_suffix(".log")
         self.old_env = dict()
         self.default_config = None
 
