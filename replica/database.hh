@@ -28,6 +28,7 @@
 #include <seastar/core/sharded.hh>
 #include <functional>
 #include <unordered_map>
+#include <boost/unordered/unordered_flat_map.hpp>
 #include <set>
 #include <boost/functional/hash.hpp>
 #include <optional>
@@ -1593,7 +1594,7 @@ public:
         std::unordered_map<ks_cf_t, table_id, utils::tuple_hash, string_pair_eq>;
     class tables_metadata {
         rwlock _cf_lock;
-        std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
+        boost::unordered_flat_map<table_id, lw_shared_ptr<column_family>, std::hash<table_id>> _column_families;
         ks_cf_to_uuid_t _ks_cf_to_uuid;
     private:
         void add_table_helper(database& db, keyspace& ks, table& cf, schema_ptr s);
@@ -1616,7 +1617,7 @@ public:
         void for_each_table_id(std::function<void(const ks_cf_t&, table_id)> f) const;
         future<> for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<table>)> f);
         future<> parallel_for_each_table(std::function<future<>(table_id, lw_shared_ptr<table>)> f);
-        const std::unordered_map<table_id, lw_shared_ptr<table>> get_column_families_copy() const;
+        const boost::unordered_flat_map<table_id, lw_shared_ptr<table>, std::hash<table_id>> get_column_families_copy() const;
 
         auto filter(std::function<bool(std::pair<table_id, lw_shared_ptr<table>>)> f) const {
             return _column_families | std::views::filter(std::move(f));

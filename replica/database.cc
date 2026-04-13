@@ -1688,7 +1688,7 @@ future<database::created_keyspace_per_shard> database::prepare_create_keyspace_o
 
 future<>
 database::drop_caches() const {
-    std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_tables_metadata().get_column_families_copy();
+    auto tables = get_tables_metadata().get_column_families_copy();
     for (auto&& e : tables) {
         table& t = *e.second;
         co_await t.get_row_cache().invalidate(row_cache::external_updater([] {}));
@@ -3511,7 +3511,7 @@ future<> database::tables_metadata::parallel_for_each_table(std::function<future
     });
 }
 
-const std::unordered_map<table_id, lw_shared_ptr<table>> database::tables_metadata::get_column_families_copy() const {
+const boost::unordered_flat_map<table_id, lw_shared_ptr<table>, std::hash<table_id>> database::tables_metadata::get_column_families_copy() const {
     return _column_families;
 }
 
