@@ -163,22 +163,41 @@ struct tablet_repair_plan {
     }
 };
 
+struct rack_list_colocation_failure {
+    utils::UUID request_id;
+    sstring error;
+};
+
 struct tablet_rack_list_colocation_plan {
     utils::UUID _request_to_resume;
+    std::optional<rack_list_colocation_failure> _request_to_fail;
 
     const utils::UUID& request_to_resume() const noexcept {
         return _request_to_resume;
     }
 
-    size_t size() const { return _request_to_resume ? 1 : 0; };
+    const std::optional<rack_list_colocation_failure>& request_to_fail() const noexcept {
+        return _request_to_fail;
+    }
+
+    size_t size() const { return (_request_to_resume ? 1 : 0) + (_request_to_fail ? 1 : 0); };
 
     void merge(tablet_rack_list_colocation_plan&& other) {
         _request_to_resume = _request_to_resume ? _request_to_resume : other._request_to_resume;
+        if (!_request_to_fail) {
+            _request_to_fail = std::move(other._request_to_fail);
+        }
     }
 
     void maybe_add_request_to_resume(const utils::UUID& id) {
         if (!_request_to_resume) {
             _request_to_resume = id;
+        }
+    }
+
+    void maybe_add_request_to_fail(const utils::UUID& id, sstring error) {
+        if (!_request_to_fail) {
+            _request_to_fail = rack_list_colocation_failure{id, std::move(error)};
         }
     }
 };
@@ -289,6 +308,34 @@ public:
         _rf_change_plan = std::move(rf_change_plan);
     }
 
+<<<<<<< HEAD
+||||||| parent of 3cdc66f874 (tablet_allocator: fix livelock in rack_list colocation when target rack has no available nodes)
+    const std::vector<restore_completion_info>& restore_completions() const { return _restore_completions; }
+
+    void add_restore_completion(restore_completion_info info) {
+        _restore_completions.emplace_back(std::move(info));
+    }
+
+    void maybe_add_rack_list_request_to_resume(const utils::UUID& id) {
+        _rack_list_colocation_plan.maybe_add_request_to_resume(id);
+    }
+
+=======
+    const std::vector<restore_completion_info>& restore_completions() const { return _restore_completions; }
+
+    void add_restore_completion(restore_completion_info info) {
+        _restore_completions.emplace_back(std::move(info));
+    }
+
+    void maybe_add_rack_list_request_to_resume(const utils::UUID& id) {
+        _rack_list_colocation_plan.maybe_add_request_to_resume(id);
+    }
+
+    void maybe_add_rack_list_request_to_fail(const utils::UUID& id, sstring error) {
+        _rack_list_colocation_plan.maybe_add_request_to_fail(id, std::move(error));
+    }
+
+>>>>>>> 3cdc66f874 (tablet_allocator: fix livelock in rack_list colocation when target rack has no available nodes)
     future<std::unordered_set<locator::global_tablet_id>> get_migration_tablet_ids() const;
 };
 
