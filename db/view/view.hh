@@ -203,14 +203,14 @@ class view_update_builder {
     const replica::table& _base;
     schema_ptr _schema; // The base schema
     std::vector<view_updates> _view_updates;
-    mutation_reader _updates;
-    mutation_reader_opt _existings;
+    mutation_reader _update_reader;
+    mutation_reader_opt _existing_reader;
     tombstone _update_partition_tombstone;
     tombstone _update_current_tombstone;
     tombstone _existing_partition_tombstone;
     tombstone _existing_current_tombstone;
-    mutation_fragment_v2_opt _update;
-    mutation_fragment_v2_opt _existing;
+    mutation_fragment_v2_opt _update_fragment;
+    mutation_fragment_v2_opt _existing_fragment;
     gc_clock::time_point _now;
     partition_key _key = partition_key::make_empty();
     bool _skip_row_updates = false;
@@ -225,8 +225,8 @@ public:
             , _base(base)
             , _schema(std::move(s))
             , _view_updates(std::move(views_to_update))
-            , _updates(std::move(updates))
-            , _existings(std::move(existings))
+            , _update_reader(std::move(updates))
+            , _existing_reader(std::move(existings))
             , _now(now) {
     }
     view_update_builder(view_update_builder&& other) noexcept = default;
