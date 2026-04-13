@@ -1419,6 +1419,177 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 .build());
     }
 
+<<<<<<< HEAD
+||||||| parent of 2ac2cc07bb (tablet_allocator: fix livelock in rack_list colocation when target rack has no available nodes)
+    // Updates keyspace properties; removes system_schema.keyspaces::next_replication;
+    // finishes RF change request; Removes request from system.topology::ongoing_rf_changes.
+    void generate_rf_change_completion_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const rf_change_completion_info& completion) {
+        if (rtlogger.is_enabled(seastar::log_level::debug)) {
+            sstring props_str;
+            for (const auto& [key, value] : completion.saved_ks_props) {
+                props_str += fmt::format(" {}={};", key, value);
+            }
+            rtlogger.debug("generate_rf_change_completion_update: request_id={}, ks_name={}, error='{}', saved_ks_props:{}",
+                           completion.request_id, completion.ks_name, completion.error, props_str);
+        }
+        sstring error = completion.error;
+        if (_db.has_keyspace(completion.ks_name)) {
+            auto& ks = _db.find_keyspace(completion.ks_name);
+            if (error.empty()) {
+                cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{completion.saved_ks_props.begin(), completion.saved_ks_props.end()}};
+                new_ks_props.validate();
+                auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *get_token_metadata_ptr(), _db.features(), _db.get_config());
+                ks_md->clear_next_strategy_options();
+
+                auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                for (auto& m: schema_muts) {
+                    out.emplace_back(m);
+                }
+            } else {
+                auto ks_md = make_lw_shared<data_dictionary::keyspace_metadata>(*ks.metadata());
+                ks_md->clear_next_strategy_options();
+
+                auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                for (auto& m: schema_muts) {
+                    out.emplace_back(m);
+                }
+            }
+        }
+
+        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                .finish_rf_change_migrations(_topo_sm._topology.ongoing_rf_changes, completion.request_id)
+                .build());
+
+        out.push_back(canonical_mutation(topology_request_tracking_mutation_builder(completion.request_id)
+                .done(error)
+                .build()));
+    }
+
+    // Sets next_replication to current_replication and sets error on the topology request.
+    // Similar to storage_service::abort_rf_change for the ongoing_rf_changes case.
+    void generate_rf_change_abort_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const rf_change_abort_info& abort_info) {
+        rtlogger.debug("generate_rf_change_abort_update: request_id={}, ks_name={}, error='{}'", abort_info.request_id, abort_info.ks_name, abort_info.error);
+
+        if (!_db.has_keyspace(abort_info.ks_name)) {
+            return;
+        }
+
+        auto& ks = _db.find_keyspace(abort_info.ks_name);
+        auto ks_md = make_lw_shared<data_dictionary::keyspace_metadata>(*ks.metadata());
+        ks_md->set_next_strategy_options(abort_info.current_replication);
+
+        auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+        for (auto& m : schema_muts) {
+            out.emplace_back(m);
+        }
+
+        out.push_back(canonical_mutation(topology_request_tracking_mutation_builder(abort_info.request_id)
+                .abort(abort_info.error)
+                .build()));
+    }
+
+    future<> generate_rf_change_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const keyspace_rf_change_plan& rf_change_plan) {
+        for (const auto& abort_info : rf_change_plan.aborts) {
+            co_await coroutine::maybe_yield();
+            generate_rf_change_abort_update(out, guard, abort_info);
+        }
+        if (rf_change_plan.completion.has_value()) {
+            generate_rf_change_completion_update(out, guard, *rf_change_plan.completion);
+        }
+    }
+
+=======
+    // Drops the request paused for rack_list colocation without queueing it again
+    // and reports the error to the client.
+    // The keyspace metadata is not touched, as it is not modified before the colocation is done.
+    void generate_rack_list_colocation_failure_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const rack_list_colocation_failure& failure) {
+        rtlogger.warn("Failing request {} paused for rack_list colocation: {}", failure.request_id, failure.error);
+        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                .resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, failure.request_id)
+                .build());
+        out.emplace_back(topology_request_tracking_mutation_builder(failure.request_id)
+                .done(failure.error)
+                .build());
+    }
+
+    // Updates keyspace properties; removes system_schema.keyspaces::next_replication;
+    // finishes RF change request; Removes request from system.topology::ongoing_rf_changes.
+    void generate_rf_change_completion_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const rf_change_completion_info& completion) {
+        if (rtlogger.is_enabled(seastar::log_level::debug)) {
+            sstring props_str;
+            for (const auto& [key, value] : completion.saved_ks_props) {
+                props_str += fmt::format(" {}={};", key, value);
+            }
+            rtlogger.debug("generate_rf_change_completion_update: request_id={}, ks_name={}, error='{}', saved_ks_props:{}",
+                           completion.request_id, completion.ks_name, completion.error, props_str);
+        }
+        sstring error = completion.error;
+        if (_db.has_keyspace(completion.ks_name)) {
+            auto& ks = _db.find_keyspace(completion.ks_name);
+            if (error.empty()) {
+                cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{completion.saved_ks_props.begin(), completion.saved_ks_props.end()}};
+                new_ks_props.validate();
+                auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *get_token_metadata_ptr(), _db.features(), _db.get_config());
+                ks_md->clear_next_strategy_options();
+
+                auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                for (auto& m: schema_muts) {
+                    out.emplace_back(m);
+                }
+            } else {
+                auto ks_md = make_lw_shared<data_dictionary::keyspace_metadata>(*ks.metadata());
+                ks_md->clear_next_strategy_options();
+
+                auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                for (auto& m: schema_muts) {
+                    out.emplace_back(m);
+                }
+            }
+        }
+
+        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                .finish_rf_change_migrations(_topo_sm._topology.ongoing_rf_changes, completion.request_id)
+                .build());
+
+        out.push_back(canonical_mutation(topology_request_tracking_mutation_builder(completion.request_id)
+                .done(error)
+                .build()));
+    }
+
+    // Sets next_replication to current_replication and sets error on the topology request.
+    // Similar to storage_service::abort_rf_change for the ongoing_rf_changes case.
+    void generate_rf_change_abort_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const rf_change_abort_info& abort_info) {
+        rtlogger.debug("generate_rf_change_abort_update: request_id={}, ks_name={}, error='{}'", abort_info.request_id, abort_info.ks_name, abort_info.error);
+
+        if (!_db.has_keyspace(abort_info.ks_name)) {
+            return;
+        }
+
+        auto& ks = _db.find_keyspace(abort_info.ks_name);
+        auto ks_md = make_lw_shared<data_dictionary::keyspace_metadata>(*ks.metadata());
+        ks_md->set_next_strategy_options(abort_info.current_replication);
+
+        auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+        for (auto& m : schema_muts) {
+            out.emplace_back(m);
+        }
+
+        out.push_back(canonical_mutation(topology_request_tracking_mutation_builder(abort_info.request_id)
+                .abort(abort_info.error)
+                .build()));
+    }
+
+    future<> generate_rf_change_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const keyspace_rf_change_plan& rf_change_plan) {
+        for (const auto& abort_info : rf_change_plan.aborts) {
+            co_await coroutine::maybe_yield();
+            generate_rf_change_abort_update(out, guard, abort_info);
+        }
+        if (rf_change_plan.completion.has_value()) {
+            generate_rf_change_completion_update(out, guard, *rf_change_plan.completion);
+        }
+    }
+
+>>>>>>> 2ac2cc07bb (tablet_allocator: fix livelock in rack_list colocation when target rack has no available nodes)
     future<> generate_migration_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
         if (plan.resize_plan().finalize_resize.empty() || plan.has_nodes_to_drain()) {
             // schedule tablet migration only if there are no pending resize finalisations or if the node is draining.
@@ -1441,6 +1612,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             if (auto request_to_resume = plan.rack_list_colocation_plan().request_to_resume(); request_to_resume) {
                 generate_rf_change_resume_update(out, guard, request_to_resume);
             }
+<<<<<<< HEAD
+||||||| parent of 2ac2cc07bb (tablet_allocator: fix livelock in rack_list colocation when target rack has no available nodes)
+
+            co_await generate_rf_change_updates(out, guard, plan.rf_change_plan());
+=======
+
+            if (const auto& request_to_fail = plan.rack_list_colocation_plan().request_to_fail(); request_to_fail) {
+                generate_rack_list_colocation_failure_update(out, guard, *request_to_fail);
+            }
+
+            co_await generate_rf_change_updates(out, guard, plan.rf_change_plan());
+>>>>>>> 2ac2cc07bb (tablet_allocator: fix livelock in rack_list colocation when target rack has no available nodes)
         }
 
         auto sched_time = db_clock::now();
