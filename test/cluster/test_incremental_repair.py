@@ -258,14 +258,28 @@ async def test_tablet_incremental_repair_error(manager: ManagerClient):
     token = -1
     map0 = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
 
-    # Repair should not finish with error
+    # Repair should not finish while the injection is enabled. We abort the task
+    # before turning the injection off, otherwise it may continue in background
+    # and increase sstables_repaired_at.
     await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
     try:
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental', timeout=10)
-        assert False # Check the tablet repair is not supposed to finish
-    except TimeoutError:
-        logger.info("Repair timeout as expected")
-    await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+        repair_response = await manager.api.tablet_repair(
+            servers[0].ip_addr,
+            ks,
+            "test",
+            token,
+            await_completion=False,
+            incremental_mode='incremental',
+        )
+        task_id = repair_response['tablet_task_id']
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(manager.api.wait_task(servers[0].ip_addr, task_id), timeout=10)
+
+        await manager.api.abort_task(servers[0].ip_addr, task_id)
+        await manager.api.wait_task(servers[0].ip_addr, task_id)
+    finally:
+        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
 
     map1 = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
 
