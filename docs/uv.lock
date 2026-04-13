@@ -491,7 +491,7 @@ requires-dist = [
     { name = "sphinx", specifier = ">=9.0" },
     { name = "sphinx-autobuild", specifier = ">=2025.8.25" },
     { name = "sphinx-collapse", specifier = ">=0.1.3" },
-    { name = "sphinx-multiversion-scylla", specifier = ">=0.3.7" },
+    { name = "sphinx-multiversion-scylla", specifier = ">=0.3.8" },
     { name = "sphinx-scylladb-markdown", specifier = ">=0.1.4" },
     { name = "sphinx-scylladb-theme", specifier = ">=1.9.1" },
     { name = "sphinx-sitemap", specifier = ">=2.9.0" },
@@ -629,14 +629,14 @@ wheels = [
 
 [[package]]
 name = "sphinx-multiversion-scylla"
-version = "0.3.7"
+version = "0.3.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "sphinx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/55/b1/83fb37f6c9038469b3bd01453875bb2127b3c03f9f41247394ad2063645c/sphinx_multiversion_scylla-0.3.7.tar.gz", hash = "sha256:fc1ddd58e82cfd8810c1be6db8717a244043c04c1c632e9bd1436415d1db0d3b", size = 12665, upload-time = "2026-02-27T18:43:17.849Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/b7/ca070ac96cbca8b91c499827790ca4816a259b9259a961108a3fd9fa470c/sphinx_multiversion_scylla-0.3.8.tar.gz", hash = "sha256:418b563afd3c75c40f096b614cb4c595928692fb0b340762e5fd19c876567040", size = 12749, upload-time = "2026-04-13T16:45:16.119Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/94/f5b6219ca1136dc0305aaf3fb6c96aa2dfe65224d6dc147e00a6485a1a22/sphinx_multiversion_scylla-0.3.7-py3-none-any.whl", hash = "sha256:6205d261a77c90b7ea3105311d1d56014736a5148966133c34344512bb8c4e4f", size = 12558, upload-time = "2026-02-27T18:43:16.988Z" },
+    { url = "https://files.pythonhosted.org/packages/67/1d/c4dea80220e2cab5dc326da2369ecac60b5fc71cb0643df698ef76bb14bb/sphinx_multiversion_scylla-0.3.8-py3-none-any.whl", hash = "sha256:a3a16724eb5ec76563f12dd66efb2e7c5d9aa2ddf5e8bb755e817f9973b44ffd", size = 12675, upload-time = "2026-04-13T16:45:14.859Z" },
 ]
 
 [[package]]
