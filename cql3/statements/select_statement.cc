@@ -2994,7 +2994,10 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
     }
     // In general it's not a good idea to use the default dialect, but here the database is talking to
     // itself, so we can hope the dialects are mutually compatible here.
-    return do_with_parser(out.str(), dialect{}, std::mem_fn(&cql3_parser::CqlParser::selectStatement));
+    // build_select_statement always generates a query with FROM, so the result is always a select_statement.
+    std::unique_ptr<cql3::statements::raw::parsed_statement> parsed = do_with_parser(out.str(), dialect{}, std::mem_fn(&cql3_parser::CqlParser::selectStatement));
+    return std::unique_ptr<cql3::statements::raw::select_statement>(
+            static_cast<cql3::statements::raw::select_statement*>(parsed.release()));
 }
 
 }

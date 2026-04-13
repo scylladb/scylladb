@@ -1605,9 +1605,9 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_no_receiver) {
 
     expression untyped = make_int_untyped("1337");
 
-    // Can't infer type
-    BOOST_REQUIRE_THROW(prepare_expression(untyped, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(untyped, db, "test_ks", table_schema.get(), nullptr);
+    BOOST_REQUIRE(expr::type_of(prepared) == int32_type);
+    BOOST_REQUIRE_EQUAL(prepared, make_int_const(1337));
 }
 
 BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bool) {
@@ -1696,7 +1696,7 @@ BOOST_AUTO_TEST_CASE(prepare_untyped_constant_bad_int) {
                         exceptions::invalid_request_exception);
 }
 
-BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver_fails) {
+BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
@@ -1709,8 +1709,9 @@ BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_no_receiver_fails) {
             },
         .type = nullptr};
 
-    BOOST_REQUIRE_THROW(prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(tup, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = tuple_type_impl::get_instance({int32_type, int32_type, utf8_type});
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_tuple_constructor) {
@@ -1850,10 +1851,9 @@ BOOST_AUTO_TEST_CASE(prepare_list_or_vector_collection_constructor_no_receiver) 
             },
         .type = nullptr};
 
-    data_type list_type = list_type_impl::get_instance(long_type, true);
-
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = list_type_impl::get_instance(int32_type, false);
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_bind_var) {
@@ -2029,8 +2029,9 @@ BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_no_receiver) {
             },
         .type = nullptr};
 
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = set_type_impl::get_instance(int32_type, false);
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor_with_bind_var) {
@@ -2185,8 +2186,9 @@ BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_no_receiver) {
                 },
             .type = nullptr};
 
-    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr),
-                        exceptions::invalid_request_exception);
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), nullptr);
+    data_type expected_type = map_type_impl::get_instance(int32_type, int32_type, false);
+    BOOST_REQUIRE(expr::type_of(prepared) == expected_type);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_map_collection_constructor_with_bind_var_key) {
@@ -2605,9 +2607,10 @@ BOOST_AUTO_TEST_CASE(prepare_constant_with_receiver) {
 
     BOOST_REQUIRE_EQUAL(int_const, prepared_int_const);
 
-    // Preparing an int32 with int64 receiver fails
-    BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(long_type)),
-                        exceptions::invalid_request_exception);
+    // Preparing an int32 with int64 receiver succeeds — int32 is widenable to int64
+    expression prepared_int_long =
+        prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(long_type));
+    BOOST_REQUIRE(expr::type_of(prepared_int_long) == long_type);
 
     // Preparing an int32 with text receiver fails
     BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(utf8_type)),

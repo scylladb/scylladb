@@ -358,6 +358,12 @@ The ``count`` function can be used to count the rows returned by a query. Exampl
     SELECT COUNT (*) FROM plays;
     SELECT COUNT (1) FROM plays;
 
+Any literal can be used as an argument to ``COUNT``. Since the argument is a constant
+(never null), every row is counted, equivalent to ``COUNT(*)``::
+
+    SELECT COUNT (0) FROM plays;
+    SELECT COUNT ('any') FROM plays;
+
 It also can be used to count the non-null value of a given column::
 
     SELECT COUNT (scores) FROM plays;
