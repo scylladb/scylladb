@@ -137,6 +137,24 @@ endfunction()
 
 option(Scylla_WITH_DEBUG_INFO "Enable debug info" OFF)
 
+# Time trace profiling: adds -ftime-trace to all C++ compilations (Clang only).
+# Each .o produces a companion .json file in the build directory that can be
+# analyzed with ClangBuildAnalyzer or loaded in chrome://tracing.
+#
+# Usage:
+#   cmake -DScylla_TIME_TRACE=ON ...
+#   ninja
+#   # Analyze results (requires ClangBuildAnalyzer):
+#   ClangBuildAnalyzer --all <build-dir> capture.bin
+#   ClangBuildAnalyzer --analyze capture.bin
+option(Scylla_TIME_TRACE "Enable Clang -ftime-trace for build profiling" OFF)
+if(Scylla_TIME_TRACE)
+  if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    message(FATAL_ERROR "Scylla_TIME_TRACE requires Clang (found ${CMAKE_CXX_COMPILER_ID})")
+  endif()
+  add_compile_options(-ftime-trace)
+endif()
+
 macro(update_build_flags config)
   cmake_parse_arguments (
     parsed_args

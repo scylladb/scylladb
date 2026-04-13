@@ -853,6 +853,10 @@ arg_parser.add_argument('--coverage', action = 'store_true', help = 'Compile scy
 arg_parser.add_argument('--build-dir', action='store', default='build',
                         help='Build directory path')
 arg_parser.add_argument('--disable-precompiled-header', action='store_true', default=False, help='Disable precompiled header for scylla binary')
+arg_parser.add_argument('--time-trace', action='store_true', default=False,
+                        help='Enable Clang -ftime-trace for build profiling. '
+                             'Each .o produces a .json file analyzable with '
+                             'ClangBuildAnalyzer or chrome://tracing')
 arg_parser.add_argument('-h', '--help', action='store_true', help='show this help message and exit')
 args = arg_parser.parse_args()
 if args.help:
@@ -1961,6 +1965,9 @@ user_cflags += ' -fextend-variable-liveness=none'
 
 if args.target != '':
     user_cflags += ' -march=' + args.target
+
+if args.time_trace:
+    user_cflags += ' -ftime-trace'
 
 for mode in modes:
     # Those flags are passed not only to Scylla objects, but also to libraries
