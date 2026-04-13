@@ -11,6 +11,7 @@
 #include <memory>
 #include <functional>
 #include <unordered_map>
+#include <boost/unordered/unordered_flat_map.hpp>
 #include "gms/inet_address.hh"
 #include "locator/token_range_splitter.hh"
 #include "dht/token-sharding.hh"
@@ -62,7 +63,7 @@ struct replication_strategy_params {
         std::optional<data_dictionary::consistency_config_option> c) noexcept : options(o), initial_tablets(it), consistency(c) {}
 };
 
-using replication_map = std::unordered_map<token, host_id_vector_replica_set>;
+using replication_map = boost::unordered_flat_map<token, host_id_vector_replica_set, std::hash<token>>;
 
 using host_id_set = utils::basic_sequenced_set<locator::host_id, host_id_vector_replica_set>;
 
