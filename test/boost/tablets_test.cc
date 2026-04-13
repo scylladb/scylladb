@@ -2070,6 +2070,9 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::top
     if (auto request_id = plan.rack_list_colocation_plan().request_to_resume(); request_id) {
         topology.paused_rf_change_requests.erase(request_id);
     }
+    if (const auto& failure = plan.rack_list_colocation_plan().request_to_fail(); failure) {
+        topology.paused_rf_change_requests.erase(failure->request_id);
+    }
     co_await apply_repair_transitions(tm, plan);
 }
 
