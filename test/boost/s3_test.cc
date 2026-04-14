@@ -166,9 +166,12 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
     auto close = seastar::deferred_close(out);
 
     static constexpr unsigned chunk_size = 1000;
+    // ~11 MiB -- just above two 5 MiB minimum parts, enough to exercise
+    // multipart upload without writing 128 MiB to disk on every run.
+    static constexpr unsigned nr_chunks = 11 * 1024;
     auto rnd = tests::random::get_bytes(chunk_size);
     uint64_t object_size = 0;
-    for (unsigned ch = 0; ch < 128 * 1024; ch++) {
+    for (unsigned ch = 0; ch < nr_chunks; ch++) {
         out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
         object_size += rnd.size();
     }
@@ -634,7 +637,7 @@ SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
                 jumbo ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name));
 
             constexpr unsigned chunk_size = 1000;
-            constexpr unsigned writes = 128 * 1024;
+            constexpr unsigned writes = 11 * 1024;
             auto rnd = tests::random::get_bytes(chunk_size);
             uint64_t object_size = 0;
             for (unsigned ch = 0; ch < writes; ch++) {
@@ -686,7 +689,7 @@ void test_download_data_source(const client_maker_function& client_maker, bool i
 }
 
 SEASTAR_THREAD_TEST_CASE(test_download_data_source_minio) {
-    test_download_data_source(make_minio_client, false, 128 * 1024);
+    test_download_data_source(make_minio_client, false, 11 * 1024);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_download_data_source_proxy) {
@@ -694,7 +697,7 @@ SEASTAR_THREAD_TEST_CASE(test_download_data_source_proxy) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_minio) {
-    test_download_data_source(make_minio_client, true, 128 * 1024);
+    test_download_data_source(make_minio_client, true, 11 * 1024);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_proxy) {
@@ -770,11 +773,11 @@ void test_chunked_download_data_source(const client_maker_function& client_maker
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_minio) {
-    test_chunked_download_data_source(make_minio_client, 20_MiB);
+    test_chunked_download_data_source(make_minio_client, 6_MiB);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_proxy) {
-    test_chunked_download_data_source(make_proxy_client, 20_MiB);
+    test_chunked_download_data_source(make_proxy_client, 6_MiB);
 }
 
 void do_test_chunked_download_data_source_memory(const client_maker_function& client_maker, size_t object_size) {
@@ -826,7 +829,7 @@ void do_test_chunked_download_data_source_memory(const client_maker_function& cl
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_memory) {
-    do_test_chunked_download_data_source_memory(make_minio_client, 20_MiB);
+    do_test_chunked_download_data_source_memory(make_minio_client, 6_MiB);
 }
 
 void test_object_copy(const client_maker_function& client_maker, size_t chunk_size, size_t chunks) {

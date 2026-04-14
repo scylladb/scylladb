@@ -94,7 +94,9 @@ future<> test_file_upload(test_env_config cfg, size_t size) {
     }, std::move(cfg));
 }
 
-constexpr auto large_size = 256 * 1024 * 1024 + 351;
+// ~11 MiB -- enough to exercise multipart upload (>2 parts at 5 MiB minimum)
+// without writing 256 MiB to the S3 backend on every run.
+constexpr auto large_size = 11 * 1024 * 1024 + 351;
 
 SEASTAR_TEST_CASE(test_large_file_upload_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
     return test_file_upload(test_env_config{ .storage = make_test_object_storage_options("S3") }, large_size);
