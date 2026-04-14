@@ -28,6 +28,8 @@
 #include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
 #include "sstables/generation_type.hh"
+#include "sstables/sstable_version.hh"
+#include "sstables/object_storage_client.hh"
 
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
@@ -352,6 +354,22 @@ public:
             }
         }
     }
+
+    // Delete S3/GCS objects for all SSTables still tracked in the registry.
+    // Called during test teardown so that tests don't leak objects in the bucket.
+    void cleanup_objects(shared_ptr<sstables::object_storage_client> client, const std::string& bucket) {
+        for (auto& [key, e] : _entries) {
+            auto& gen = key.second;
+            auto& comp_map = sstable_version_constants::get_component_map(e.desc.version);
+            for (auto& [type, suffix] : comp_map) {
+                try {
+                    client->delete_object(object_name(bucket, gen, suffix)).get();
+                } catch (...) {
+                    // Ignore errors -- component may not exist (e.g., optional components)
+                }
+            }
+        }
+    }
 };
 
 future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg) {
@@ -361,13 +379,26 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
         db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
         db_cfg->object_storage_endpoints(make_storage_options_config(cfg.storage));
         return seastar::async([func = std::move(func), cfg = std::move(cfg), db_cfg = std::move(db_cfg)] () mutable {
+            // Extract bucket and endpoint before cfg is moved into test_env
+            auto& os = std::get<data_dictionary::storage_options::object_storage>(cfg.storage.value);
+            auto bucket = os.bucket;
+            auto endpoint = os.endpoint;
+
             sharded<sstables::storage_manager> sstm;
             sstm.start(std::ref(*db_cfg), sstables::storage_manager::config{}).get();
             auto stop_sstm = defer([&] { sstm.stop().get(); });
             auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+            auto registry = std::make_unique<mock_sstables_registry>();
+            auto* registry_ptr = registry.get();
             test_env env(std::move(cfg), *scf, &sstm.local());
             auto close_env = defer([&] { env.stop().get(); });
-            env.manager().plug_sstables_registry(std::make_unique<mock_sstables_registry>());
+            env.manager().plug_sstables_registry(std::move(registry));
+            // Clean up any S3/GCS objects left behind when the test completes.
+            // Runs before close_env (defers execute in reverse order), so the
+            // S3 client and registry are still alive.
+            auto cleanup = defer([&] {
+                registry_ptr->cleanup_objects(sstm.local().get_endpoint_client(endpoint), bucket);
+            });
             func(env);
         });
     }
