@@ -1029,6 +1029,11 @@ query_processor::execute_batch_without_checking_exception_message(
         query_options& options,
         std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
     auto access_future = co_await coroutine::as_future(batch->check_access(*this, query_state.get_client_state()));
+    bool failed = access_future.failed();
+    co_await audit::inspect(batch, query_state, options, failed);
+    if (failed) {
+        std::rethrow_exception(access_future.get_exception());
+    }
     co_await coroutine::parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) -> future<> {
             try {
                 co_await _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second));
@@ -1036,11 +1041,6 @@ query_processor::execute_batch_without_checking_exception_message(
                 log.error("failed to cache the entry: {}", std::current_exception());
             }
         });
-    bool failed = access_future.failed();
-    co_await audit::inspect(batch, query_state, options, failed);
-    if (access_future.failed()) {
-        std::rethrow_exception(access_future.get_exception());
-    }
     batch->validate();
     batch->validate(*this, query_state.get_client_state());
     _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();

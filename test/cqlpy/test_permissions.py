@@ -10,6 +10,7 @@ import pytest
 import time
 from . import rest_api
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, ConfigurationException
+from cassandra.query import BatchStatement, BatchType
 from .util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type, new_materialized_view, is_scylla
 from contextlib import contextmanager
 
@@ -859,3 +860,35 @@ def test_select_system_table(cql):
             eventually_unauthorized(lambda: user1_session.execute(f'SELECT * FROM {roles_table}'))
             grant(cql, 'SELECT', roles_table, user1)
             eventually_authorized(lambda: user1_session.execute(f'SELECT * FROM {roles_table}'))
+
+# Reproducer for SCYLLADB-1221: a non-privileged user could bypass
+# authorization by exploiting the BATCH prepared cache population bug.
+# A failed BATCH execution was incorrectly populating the
+# authorized_prepared_cache, allowing subsequent direct executions of
+# the same prepared statement to skip the authorization check.
+def test_batch_prepared_auth_cache_bypass(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, val text") as table:
+        with new_user(cql) as username:
+            with new_session(cql, username) as user_session:
+                # The unprivileged user prepares an INSERT. Preparation itself
+                # succeeds — authorization is checked at execution time.
+                user_prepared = user_session.prepare(
+                    f"INSERT INTO {table} (pk, val) VALUES (?, ?)")
+
+                # Step 1: Verify direct execution is blocked (sanity check)
+                with pytest.raises(Unauthorized):
+                    user_session.execute(user_prepared, [42, "hacked"])
+
+                # Step 2: Execute via BATCH — this must fail with Unauthorized,
+                # but the bug causes the cache to be poisoned
+                batch = BatchStatement(batch_type=BatchType.LOGGED)
+                batch.add(user_prepared, [42, "hacked"])
+                with pytest.raises(Unauthorized):
+                    user_session.execute(batch)
+
+                # Step 3: Now execute the same prepared statement directly
+                # again. With the bug, the authorized_prepared_cache was
+                # populated during the failed BATCH, so no auth check
+                # happens and this succeeds.
+                with pytest.raises(Unauthorized):
+                    user_session.execute(user_prepared, [42, "hacked"])
