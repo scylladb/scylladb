@@ -18,6 +18,7 @@ options {
 @parser::includes {
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/statements/raw/select_statement.hh"
+#include "cql3/statements/raw/select_no_from_statement.hh"
 #include "cql3/statements/alter_keyspace_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/alter_view_statement.hh"
@@ -375,7 +376,7 @@ useStatement returns [std::unique_ptr<raw::use_statement> stmt]
  * LIMIT <NUMBER>
  * [USING TIMEOUT <duration>];
  */
-selectStatement returns [std::unique_ptr<raw::select_statement> expr]
+selectStatement returns [std::unique_ptr<raw::parsed_statement> expr]
     @init {
         bool is_distinct = false;
         std::optional<expression> limit;
@@ -387,6 +388,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         auto attrs = std::make_unique<cql3::attributes::raw>();
         expression wclause = conjunction{};
         bool is_ann_ordering = false;
+        bool has_from = false;
     }
     : K_SELECT (
                 ( (K_JSON K_DISTINCT)=> K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; }
@@ -395,23 +397,29 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
                 ( (K_DISTINCT selectClause K_FROM)=> K_DISTINCT { is_distinct = true; } )?
                 sclause=selectClause
                )
-      K_FROM (
-                cf=columnFamilyName
-                | K_MUTATION_FRAGMENTS '(' cf=columnFamilyName ')' { statement_subtype = raw::select_statement::parameters::statement_subtype::MUTATION_FRAGMENTS; }
-             )
-      ( K_WHERE w=whereClause { wclause = std::move(w); } )?
-      ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
-      ( K_ORDER K_BY orderByClause[orderings, is_ann_ordering] ( ',' orderByClause[orderings, is_ann_ordering] )* )?
-      ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = std::move(rows); } )?
-      ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
-      ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
-      ( K_BYPASS K_CACHE { bypass_cache = true; })?
-      ( usingTimeoutServiceLevelClause[attrs] )?
+      ( K_FROM { has_from = true; }
+        (
+            cf=columnFamilyName
+            | K_MUTATION_FRAGMENTS '(' cf=columnFamilyName ')' { statement_subtype = raw::select_statement::parameters::statement_subtype::MUTATION_FRAGMENTS; }
+        )
+        ( K_WHERE w=whereClause { wclause = std::move(w); } )?
+        ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
+        ( K_ORDER K_BY orderByClause[orderings, is_ann_ordering] ( ',' orderByClause[orderings, is_ann_ordering] )* )?
+        ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = std::move(rows); } )?
+        ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
+        ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
+        ( K_BYPASS K_CACHE { bypass_cache = true; })?
+        ( usingTimeoutServiceLevelClause[attrs] )?
+      )?
       {
-          auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
-          $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
-            std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit),
-            std::move(gbcolumns), std::move(attrs));
+          if (has_from) {
+            auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
+            $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
+              std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit),
+              std::move(gbcolumns), std::move(attrs));
+          } else {
+            $expr = std::make_unique<raw::select_no_from_statement>(std::move(sclause));
+          }
       }
     ;
 

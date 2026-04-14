@@ -25,6 +25,7 @@
 #include "cql3/CqlParser.hpp"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/raw/select_no_from_statement.hh"
 #include "cql3/util.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
@@ -784,6 +785,10 @@ query_processor::get_statement(const std::string_view& query, const service::cli
     auto cf_stmt = dynamic_cast<raw::cf_statement*>(statement.get());
     if (cf_stmt) {
         cf_stmt->prepare_keyspace(client_state);
+    } else if (auto no_from_stmt = dynamic_cast<raw::select_no_from_statement*>(statement.get())) {
+        // Propagate session keyspace for SELECT without FROM, so that
+        // unqualified UDF names can be resolved against the current keyspace.
+        no_from_stmt->set_keyspace(client_state.get_raw_keyspace());
     }
     ++_stats.prepare_invocations;
     auto p = statement->prepare(_db, _cql_stats);
