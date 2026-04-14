@@ -513,8 +513,17 @@ void client_list_objects(const client_maker_function& client_maker) {
 
     // Put extra object to check list-by-prefix filters it out
     temporary_buffer<char> data = sstring("1234567890").release();
-    client->put_object(format("/{}/extra-{}", bucket, ::getpid()), std::move(data)).get();
+    auto extra_name = format("/{}/extra-{}", bucket, ::getpid());
+    client->put_object(extra_name, std::move(data)).get();
+    auto delete_extra = deferred_delete_object(client, extra_name);
     auto names = populate_bucket(client, bucket, prefix, 12);
+
+    // Clean up all created objects when done
+    auto cleanup = seastar::defer([&] {
+        for (auto& n : names) {
+            client->delete_object(format("/{}/{}{}", bucket, prefix, n)).get();
+        }
+    });
 
     s3::client::bucket_lister lister(client, bucket, prefix, 5);
     auto close_lister = deferred_close(lister);
@@ -543,7 +552,14 @@ void client_list_objects_incomplete(const client_maker_function& client_maker) {
     auto client = client_maker(mem);
     auto close_client = deferred_close(*client);
 
-    populate_bucket(client, bucket, prefix, 8);
+    auto all_names = populate_bucket(client, bucket, prefix, 8);
+
+    // Clean up all created objects when done
+    auto cleanup = seastar::defer([&] {
+        for (auto& n : all_names) {
+            client->delete_object(format("/{}/{}{}", bucket, prefix, n)).get();
+        }
+    });
 
     s3::client::bucket_lister lister(client, bucket, prefix, 9, 2);
     auto close_lister = deferred_close(lister);
