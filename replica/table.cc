@@ -1016,6 +1016,11 @@ bool storage_group::set_split_mode() {
         return false;
     }
     if (!splitting_mode()) {
+        // Don't create new compaction groups if the main cg has compaction disabled
+        if (_main_cg->compaction_disabled()) {
+            tlogger.debug("storage_group::set_split_mode: split ready groups not created due to compaction disabled on the main group");
+            return false;
+        }
         auto create_cg = [this] () -> compaction_group_ptr {
             // TODO: use the actual sub-ranges instead, to help incremental selection on the read path.
             return compaction_group::make_empty_group(*_main_cg);

@@ -6058,6 +6058,8 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
         });
     };
 
+    co_await utils::get_local_injector().inject("tablet_split_monitor_wait", utils::wait_for_message(1min));
+
     exponential_backoff_retry split_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
 
     while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
