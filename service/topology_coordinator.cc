@@ -325,7 +325,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
             // We did not find a request that has enough live node to proceed
             // Cancel all requests to let admin know that no operation can succeed
-            rtlogger.warn("topology coordinator: cancel request queue because no request can proceed. Dead nodes: {}", dead_nodes);
+            rtlogger.info("topology coordinator: no request can proceed. Dead nodes: {}", dead_nodes);
             return cancel_requests{std::move(guard), std::move(dead_nodes)};
         }
 
@@ -2655,6 +2655,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (_topo_sm._topology.requests.empty()) {
             co_return;
         }
+        rtlogger.warn("topology coordintator: cancel all requests because non can proceed");
         for (auto& [id, req] : _topo_sm._topology.requests) {
             auto done_msg = fmt::format("Canceled. Dead nodes: {}", dead_nodes);
             _topo_sm.generate_cancel_request_update(muts, _feature_service, guard, id, done_msg);
