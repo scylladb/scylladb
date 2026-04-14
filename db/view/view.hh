@@ -249,11 +249,13 @@ public:
 private:
     void generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
     void generate_update(static_row&& update, const tombstone& update_tomb, std::optional<static_row>&& existing, const tombstone& existing_tomb);
-    future<stop_iteration> on_results();
 
-    future<stop_iteration> advance_all();
-    future<stop_iteration> advance_updates();
-    future<stop_iteration> advance_existings();
+    // generate updates from the read fragments and read new fragments for the next iteration
+    future<stop_iteration> generate_updates();
+
+    future<stop_iteration> read_both_next_fragments();
+    future<stop_iteration> read_next_update_fragment();
+    future<stop_iteration> read_next_existing_fragment();
 
     future<stop_iteration> stop() const;
 };

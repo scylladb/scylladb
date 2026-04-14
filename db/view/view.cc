@@ -1348,7 +1348,7 @@ future<> view_update_builder::close() noexcept {
     return when_all_succeed(_update_reader.close(), _existing_reader->close()).discard_result();
 }
 
-future<stop_iteration> view_update_builder::advance_all() {
+future<stop_iteration> view_update_builder::read_both_next_fragments() {
     auto existings_f = _existing_reader ? (*_existing_reader)() : make_ready_future<mutation_fragment_v2_opt>();
     return when_all(_update_reader(), std::move(existings_f)).then([this] (auto&& fragments) mutable {
         _update_fragment = std::move(std::get<0>(fragments).get());
@@ -1357,14 +1357,14 @@ future<stop_iteration> view_update_builder::advance_all() {
     });
 }
 
-future<stop_iteration> view_update_builder::advance_updates() {
+future<stop_iteration> view_update_builder::read_next_update_fragment() {
     return _update_reader().then([this] (auto&& update) mutable {
         _update_fragment = std::move(update);
         return stop_iteration::no;
     });
 }
 
-future<stop_iteration> view_update_builder::advance_existings() {
+future<stop_iteration> view_update_builder::read_next_existing_fragment() {
     if (!_existing_reader) {
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
@@ -1379,7 +1379,7 @@ future<stop_iteration> view_update_builder::stop() const {
 }
 
 future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_update_builder::build_some() {
-    (void)co_await advance_all();
+    (void)co_await read_both_next_fragments();
     if (!_update_fragment && !_existing_fragment) {
         // Tell the caller there is no more data to build.
         co_return std::nullopt;
@@ -1406,9 +1406,9 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
         do_advance_existings = true;
     }
     if (do_advance_updates) {
-        co_await (do_advance_existings ? advance_all() : advance_updates());
+        co_await (do_advance_existings ? read_both_next_fragments() : read_next_update_fragment());
     } else if (do_advance_existings) {
-        co_await advance_existings();
+        co_await read_next_existing_fragment();
     }
     if (utils::get_local_injector().enter("keep_mv_read_semaphore_units_10ms_longer") && _existing_fragment && _existing_fragment->is_clustering_row()) {
         co_await seastar::sleep(std::chrono::milliseconds(10));
@@ -1420,7 +1420,7 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
         _skip_row_updates = true;
     }
 
-    while (!_skip_row_updates && co_await on_results() == stop_iteration::no) {};
+    while (!_skip_row_updates && co_await generate_updates() == stop_iteration::no) {};
 
     utils::chunked_vector<frozen_mutation_and_schema> mutations;
     for (auto& update : _view_updates) {
@@ -1488,7 +1488,7 @@ void view_update_builder::generate_update(static_row&& update, const tombstone& 
     }
 }
 
-future<stop_iteration> view_update_builder::on_results() {
+future<stop_iteration> view_update_builder::generate_updates() {
     constexpr size_t max_rows_for_view_updates = 100;
     auto should_stop_updates = [this] () -> bool {
         size_t rows_for_view_updates = std::accumulate(_view_updates.begin(), _view_updates.end(), 0, [] (size_t acc, const view_updates& vu) {
@@ -1518,7 +1518,7 @@ future<stop_iteration> view_update_builder::on_results() {
                               : std::nullopt;
                 generate_update(std::move(update), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
             }
-            return should_stop_updates() ? stop() : advance_updates();
+            return should_stop_updates() ? stop() : read_next_update_fragment();
         }
         if (cmp > 0) {
             // We have something existing but no update (which will happen either because it's a range tombstone marker in
@@ -1554,7 +1554,7 @@ future<stop_iteration> view_update_builder::on_results() {
                     generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
                 }
             }
-            return should_stop_updates() ? stop () : advance_existings();
+            return should_stop_updates() ? stop () : read_next_existing_fragment();
         }
         // We're updating a row that had pre-existing data
         if (_update_fragment->is_range_tombstone_change()) {
@@ -1578,7 +1578,7 @@ future<stop_iteration> view_update_builder::on_results() {
             generate_update(std::move(*_update_fragment).as_static_row(), _update_partition_tombstone, { std::move(*_existing_fragment).as_static_row() }, _existing_partition_tombstone);
 
         }
-        return should_stop_updates() ? stop() : advance_all();
+        return should_stop_updates() ? stop() : read_both_next_fragments();
     }
 
     auto tombstone = std::max(_update_partition_tombstone, _update_current_tombstone);
@@ -1595,7 +1595,7 @@ future<stop_iteration> view_update_builder::on_results() {
             auto update = static_row();
             generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
         }
-        return should_stop_updates() ? stop() : advance_existings();
+        return should_stop_updates() ? stop() : read_next_existing_fragment();
     }
 
     if (_update_fragment && !_update_fragment->is_end_of_partition()) {
@@ -1617,7 +1617,7 @@ future<stop_iteration> view_update_builder::on_results() {
                           : std::nullopt;
             generate_update(std::move(*_update_fragment).as_static_row(), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
         }
-        return should_stop_updates() ? stop() : advance_updates();
+        return should_stop_updates() ? stop() : read_next_update_fragment();
     }
 
     return stop();
