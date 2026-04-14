@@ -91,6 +91,8 @@ future<> test_file_upload(test_env_config cfg, size_t size) {
         is1.close().get();
         is2.close().get();
 
+        client->delete_object(name).get();
+
     }, std::move(cfg));
 }
 
