@@ -9,7 +9,7 @@ from test.pylib.manager_client import ManagerClient
 from test.topology.conftest import skip_mode
 from test.topology.util import get_topology_coordinator, new_test_keyspace
 from test.pylib.tablets import get_all_tablet_replicas
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 import time
 import pytest
 import logging
@@ -248,3 +248,71 @@ async def test_replay_position_check_during_truncate(manager):
         await manager.api.message_injection(server.ip_addr, "database_truncate_wait")
         await s1_log.wait_for(f"database_truncate_wait: message received", from_mark=s1_mark)
         await truncate_task
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_split_emitted_during_truncate(manager: ManagerClient):
+    """Tests that truncation handles new compaction groups introduced by tablet
+    split after compaction was already disabled on existing groups.
+
+    The scenario:
+    1. Truncation disables compaction on all existing compaction groups, then pauses.
+    2. While paused, tablet split creates new (split-ready) compaction groups.
+    3. Truncation resumes and runs discard_sstables(), which encounters groups
+       that don't have compaction disabled.
+
+    Without the fix, discard_sstables() would fire on_internal_error because the
+    new groups don't have compaction disabled. With the fix, it tolerates them as
+    long as they contain no sstables older than the truncation time.
+    """
+    logger.info("Bootstrapping cluster")
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
+            'tablet_load_stats_refresh_interval_in_seconds': 1,
+            'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+          }
+    cmdline = [
+        '--target-tablet-size-in-bytes', '1024',
+        '--logger-log-level', 'table=debug',
+        '--logger-log-level', 'load_balancer=debug',
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        await manager.api.enable_injection(server.ip_addr, "database_truncate_wait", True)
+        await manager.api.enable_injection(server.ip_addr, "tablet_split_monitor_wait", True)
+
+        # Flush so sstables exist on disk, exercising the discard logic more thoroughly
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        await log.wait_for("tablet_split_monitor_wait: waiting", from_mark=mark)
+
+        truncate_task = cql.run_async(f"TRUNCATE {ks}.test")
+
+        # Wait for truncation to disable compaction on existing groups and pause
+        await log.wait_for("database_truncate_wait: waiting", from_mark=mark)
+
+        # Release split monitor so it calls set_split_mode(), creating new compaction groups
+        await manager.api.message_injection(server.ip_addr, "tablet_split_monitor_wait")
+
+        # Wait for set_split_mode to create the new groups before releasing truncation
+        await log.wait_for('storage_group::set_split_mode', from_mark=mark)
+
+        # Now release truncation - discard_sstables() will see the new groups
+        await manager.api.message_injection(server.ip_addr, "database_truncate_wait")
+
+        await truncate_task
+
+        # Verify truncation actually removed the data
+        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
+        assert row[0].count == 0
