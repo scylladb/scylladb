@@ -292,6 +292,20 @@ def test_table_sn(dynamodb):
     yield table
     table.delete()
 @pytest.fixture(scope=dynamic_scope())
+def test_table_n(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' } ])
+    yield table
+    table.delete()
+@pytest.fixture(scope=dynamic_scope())
+def test_table_nn(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'N' }, { 'AttributeName': 'c', 'AttributeType': 'N' } ])
+    yield table
+    table.delete()
+@pytest.fixture(scope=dynamic_scope())
 def test_table_ss(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],

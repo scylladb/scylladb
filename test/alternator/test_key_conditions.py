@@ -9,6 +9,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
+from decimal import Decimal
 
 from test.alternator.util import random_string, random_bytes, full_query, multiset
 
@@ -416,7 +417,20 @@ def test_key_conditions_hash_only_b(test_table_b):
         'p' : {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
     assert(got_items == [item])
 
-# TODO: add a test_table_n fixture, and test this case too.
+# Reproduces SCYLLADB-1575
+@pytest.mark.xfail(reason="SCYLLADB-1575")
+def test_key_conditions_hash_only_n(test_table_n):
+    p = 1000
+    item = {'p': p, 'val': 'hello'}
+    test_table_n.put_item(Item=item)
+    got_items = full_query(test_table_n, KeyConditions={
+        'p' : {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    assert(got_items == [item])
+    # Decimal('1e3') is serialized by boto3 as "1E+3" on the wire, a
+    # different representation of the same number 1000.
+    got_items = full_query(test_table_n, KeyConditions={
+        'p' : {'AttributeValueList': [Decimal('1e3')], 'ComparisonOperator': 'EQ'}})
+    assert(got_items == [item])
 
 # Demonstrate that issue #6573 was not a bug for KeyConditions: binary
 # strings are ordered as unsigned bytes, i.e., byte 128 comes after 127,

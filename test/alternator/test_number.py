@@ -327,3 +327,284 @@ def test_number_in_json(test_table_s):
                 UpdateExpression='SET a = :vgood',
                 ConditionExpression='a < :vbad',
                 ExpressionAttributeValues={':vgood': {'N': '1'}, ':vbad': {'N': 123}})
+
+# Verify that Number RANGE (sort) keys use value-based comparison: different
+# string representations of the same number ("1000" vs "1e3") are treated as
+# the same sort key. A second PutItem with a different representation
+# overwrites the first, and GetItem with any representation
+# finds the item.
+#
+# Additionally, verify that the sort key is returned in canonical
+# (normalized) form regardless of what representation was used to write it.
+#
+# This is consistent with DynamoDB behaviour. We use client_no_transform()
+# to send exact string representations and avoid boto3's own Decimal
+# normalization.
+def test_number_range_key_representation(test_table_sn):
+    p = random_string()
+    with client_no_transform(test_table_sn.meta.client) as client:
+        # Write an item with sort key "1000".
+        client.put_item(TableName=test_table_sn.name,
+            Item={'p': {'S': p}, 'c': {'N': '1000'}, 'v': {'S': 'first'}})
+        # Sanity: reading with the same representation works.
+        got = client.get_item(TableName=test_table_sn.name,
+            Key={'p': {'S': p}, 'c': {'N': '1000'}},
+            ConsistentRead=True)
+        assert got['Item']['v']['S'] == 'first'
+        # Reading with a different representation of the same value should
+        # also find the item (RANGE key comparison is value-based).
+        got2 = client.get_item(TableName=test_table_sn.name,
+            Key={'p': {'S': p}, 'c': {'N': '1e3'}},
+            ConsistentRead=True)
+        assert got2['Item']['v']['S'] == 'first'
+        # Overwrite with a different representation.
+        client.put_item(TableName=test_table_sn.name,
+            Item={'p': {'S': p}, 'c': {'N': '1e3'}, 'v': {'S': 'second'}})
+        # There should be exactly one item in this partition (overwritten,
+        # not a second item).
+        result = client.query(TableName=test_table_sn.name,
+            KeyConditionExpression='p = :p',
+            ExpressionAttributeValues={':p': {'S': p}},
+            ConsistentRead=True)
+        assert result['Count'] == 1
+        assert result['Items'][0]['v']['S'] == 'second'
+        # All representations of the same value find the single item.
+        # Includes exponent notation, trailing fractional zero, leading
+        # zeros, and explicit plus sign.
+        for n in ['1000', '1e3', '1E+3', '1000.0', '001000', '+1000']:
+            got3 = client.get_item(TableName=test_table_sn.name,
+                Key={'p': {'S': p}, 'c': {'N': n}},
+                ConsistentRead=True)
+            assert got3['Item']['v']['S'] == 'second'
+            # The returned sort key should be in canonical form ("1000")
+            # regardless of what representation was used for the lookup.
+            assert got3['Item']['c']['N'] == '1000'
+
+# Verify that Number HASH (partition) keys are normalized: different string
+# representations of the same number ("1000" vs "1e3") should refer to the
+# same item, just like in DynamoDB.  Also verify that the returned key is
+# in canonical (normalized) form.
+#
+# DynamoDB normalizes Numbers on write, so "1e3" and "1000" are the same
+# partition key. Alternator currently does NOT normalize — different
+# representations produce different (scale, unscaled) byte pairs, different
+# Murmur3 tokens, and end up in different partitions.
+# Reproduces SCYLLADB-1575
+@pytest.mark.xfail(reason="SCYLLADB-1575")
+def test_number_hash_key_representation(test_table_n):
+    with client_no_transform(test_table_n.meta.client) as client:
+        # Write an item with HASH key "1000".
+        client.put_item(TableName=test_table_n.name,
+            Item={'p': {'N': '1000'}, 'v': {'S': 'first'}})
+        # Sanity: reading with the same representation works.
+        got = client.get_item(TableName=test_table_n.name,
+            Key={'p': {'N': '1000'}},
+            ConsistentRead=True)
+        assert got['Item']['v']['S'] == 'first'
+        # The returned key should be in canonical form.
+        assert got['Item']['p']['N'] == '1000'
+        # In DynamoDB, reading with a different representation of the
+        # same number should find the same item. In Alternator, this
+        # currently fails (SCYLLADB-1575: returns no item) because the
+        # representations serialize to different bytes → different
+        # tokens → different partitions.
+        got2 = client.get_item(TableName=test_table_n.name,
+            Key={'p': {'N': '1e3'}},
+            ConsistentRead=True)
+        assert 'Item' in got2
+        assert got2['Item']['v']['S'] == 'first'
+        # Even when looked up via '1e3', the returned key should be
+        # in canonical form ('1000'), not the lookup representation.
+        assert got2['Item']['p']['N'] == '1000'
+        # Writing with a different representation should overwrite, not
+        # create a second item.
+        client.put_item(TableName=test_table_n.name,
+            Item={'p': {'N': '1e3'}, 'v': {'S': 'second'}})
+        got3 = client.get_item(TableName=test_table_n.name,
+            Key={'p': {'N': '1000'}},
+            ConsistentRead=True)
+        assert got3['Item']['v']['S'] == 'second'
+        got4 = client.get_item(TableName=test_table_n.name,
+            Key={'p': {'N': '1e3'}},
+            ConsistentRead=True)
+        assert got4['Item']['v']['S'] == 'second'
+        # All these representations should find the same item and
+        # return the key in canonical form.
+        for n in ['1000', '1e3', '1E+3', '1000.0', '001000', '+1000']:
+            got5 = client.get_item(TableName=test_table_n.name,
+                Key={'p': {'N': n}},
+                ConsistentRead=True)
+            assert got5['Item']['v']['S'] == 'second'
+            assert got5['Item']['p']['N'] == '1000'
+
+# DynamoDB normalizes Number values on write: it strips leading zeros,
+# trailing fractional zeros, converts exponent notation to plain decimal
+# form (within the representable range), and removes explicit plus signs.
+# The following table lists (input_string, expected_canonical_output)
+# pairs that document DynamoDB's exact normalization rules.
+_NORMALIZATION_CASES = [
+    # Basic integers — no change expected.
+    ('1', '1'),
+    ('123', '123'),
+    ('-5', '-5'),
+    ('0', '0'),
+    ('10', '10'),
+    ('100', '100'),
+    ('1000', '1000'),
+
+    # Leading zeros — stripped.
+    ('007', '7'),
+    ('001.23', '1.23'),
+    ('00', '0'),
+
+    # Explicit plus sign — stripped.
+    ('+3', '3'),
+    ('+0', '0'),
+    ('+1.5', '1.5'),
+
+    # Trailing fractional zeros — stripped.
+    ('1.0', '1'),
+    ('1.00', '1'),
+    ('1.10', '1.1'),
+    ('100.000', '100'),
+    ('0.0', '0'),
+    ('0.10', '0.1'),
+
+    # Exponent notation — expanded to plain decimal.
+    ('1e3', '1000'),
+    ('1E3', '1000'),
+    ('1e+3', '1000'),
+    ('1E+3', '1000'),
+    ('5e1', '50'),
+    ('-3e2', '-300'),
+    ('1.5e2', '150'),
+    ('1.23e4', '12300'),
+
+    # Negative exponent — expanded to plain decimal.
+    ('1e-3', '0.001'),
+    ('5e-1', '0.5'),
+    ('123e-2', '1.23'),
+    ('1.23e-1', '0.123'),
+
+    # Exponent + trailing zeros — both normalized.
+    ('1.0e3', '1000'),
+    ('1.00e2', '100'),
+    ('1.0e-1', '0.1'),
+
+    # Negative zero — sign stripped.
+    ('-0', '0'),
+    ('-0.0', '0'),
+
+    # Zero with exponent — simplified to '0'.
+    ('0e5', '0'),
+    ('0.0e3', '0'),
+    ('0e-5', '0'),
+
+    # Fractional without leading zero — leading zero added.
+    ('.5', '0.5'),
+    ('.123', '0.123'),
+    ('-.5', '-0.5'),
+
+    # Large magnitude within DynamoDB bounds.
+    # The normalized form is always plain decimal, never scientific notation.
+    ('1e20', '100000000000000000000'),
+    ('9.9e10', '99000000000'),
+    ('1e125', '1' + '0' * 125),
+
+    # Small values — expanded to plain decimal.
+    ('1e-20', '0.00000000000000000001'),
+
+    # Values that are already in canonical form — no change.
+    ('3.14159', '3.14159'),
+    ('-273.15', '-273.15'),
+    ('0.001', '0.001'),
+]
+
+# Verify that DynamoDB returns Number attribute values in canonical
+# (normalized) form regardless of what string representation was used
+# to write them. This test probes the exact normalization rules listed
+# in _NORMALIZATION_CASES.
+#
+# Uses client_no_transform() to send exact Number strings and inspect
+# the exact strings returned, bypassing boto3's own Decimal normalization.
+def test_number_output_normalization(test_table_s):
+    with client_no_transform(test_table_s.meta.client) as client:
+        failures = []
+        for i, (input_num, expected) in enumerate(_NORMALIZATION_CASES):
+            key = {'S': random_string()}
+            client.put_item(TableName=test_table_s.name,
+                Item={'p': key, 'a': {'N': input_num}})
+            got = client.get_item(TableName=test_table_s.name,
+                Key={'p': key},
+                ConsistentRead=True)
+            actual = got['Item']['a']['N']
+            if actual != expected:
+                failures.append(
+                    f'  {input_num!r}: expected {expected!r}, got {actual!r}')
+        assert not failures, \
+            'Number output normalization mismatches:\n' + '\n'.join(failures)
+
+# DynamoDB normalizes Number values inside Number Sets (NS), so different
+# string representations of the same number are treated as the same set
+# element.
+# Alternator stores NS elements as JSON strings and uses string
+# comparison (rjson::single_value_comp on kStringType), so "1" and "1.0"
+# are treated as different elements.
+# This single test checks ADD (union), DELETE (difference), and
+# ConditionExpression equality sequentially.
+# Reproduces SCYLLADB-1575.
+@pytest.mark.xfail(reason="SCYLLADB-1575")
+def test_number_set_normalization(test_table_s):
+    p = random_string()
+    with client_no_transform(test_table_s.meta.client) as client:
+        tn = test_table_s.name
+        key = {'S': p}
+
+        # --- ADD: adding a different representation of an existing element
+        # should not increase the set size.
+        client.put_item(TableName=tn,
+            Item={'p': key, 'ns': {'NS': ['1', '2', '3']}})
+        client.update_item(TableName=tn,
+            Key={'p': key},
+            UpdateExpression='ADD ns :v',
+            ExpressionAttributeValues={':v': {'NS': ['1.0', '2.00']}})
+        got = client.get_item(TableName=tn, Key={'p': key},
+            ConsistentRead=True)['Item']
+        ns = got['ns']['NS']
+        # DynamoDB: still 3 elements (1.0 == 1, 2.00 == 2).
+        # Alternator bug (SCYLLADB-1575): 5 elements ("1", "1.0", "2", "2.00", "3").
+        assert len(ns) == 3
+
+        # --- DELETE: removing by a different representation should work.
+        client.put_item(TableName=tn,
+            Item={'p': key, 'ns': {'NS': ['10.0', '20', '30']}})
+        client.update_item(TableName=tn,
+            Key={'p': key},
+            UpdateExpression='DELETE ns :v',
+            ExpressionAttributeValues={':v': {'NS': ['10', '2e1']}})
+        got = client.get_item(TableName=tn, Key={'p': key},
+            ConsistentRead=True)['Item']
+        ns = got['ns']['NS']
+        # DynamoDB: only "30" remains (10 == 10.0, 2e1 == 20).
+        # Alternator bug (SCYLLADB-1575): still all 3 ("10.0", "20", "30").
+        assert len(ns) == 1
+
+        # --- ConditionExpression EQ: sets with same values but different
+        # representations should be equal.
+        client.put_item(TableName=tn,
+            Item={'p': key, 'ns': {'NS': ['1', '2']}})
+        # Condition: ns = {1.0, 2.00}  — should pass (same numbers).
+        # Alternator bug (SCYLLADB-1575): fails because "1" != "1.0" in string comparison.
+        client.update_item(TableName=tn,
+            Key={'p': key},
+            UpdateExpression='SET #x = :x',
+            ConditionExpression='ns = :ns',
+            ExpressionAttributeNames={'#x': 'flag'},
+            ExpressionAttributeValues={
+                ':x': {'S': 'passed'},
+                ':ns': {'NS': ['1.0', '2.00']},
+            })
+        got = client.get_item(TableName=tn, Key={'p': key},
+            ConsistentRead=True)['Item']
+        assert got.get('flag', {}).get('S') == 'passed', \
+            'ConditionExpression: NS equality with different representations failed'
