@@ -309,7 +309,7 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_range_query) {
         }
 
         // Generate the sstable.
-        auto sst = make_sstable_containing(env.make_sstable(table.schema(), sstable_version_types::me), muts);
+        auto sst = make_sstable_containing(env.make_sstable(table.schema(), sstable_version_types::me), muts).get();
 
         // Use the index to find key positions.
         std::vector<uint64_t> partition_positions = get_partition_positions(sst, permit);
@@ -482,7 +482,7 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_singular_query) {
         }
 
         // Generate the sstable.
-        auto sst = make_sstable_containing(env.make_sstable(table.schema()), muts);
+        auto sst = make_sstable_containing(env.make_sstable(table.schema()), muts).get();
 
         // Use the index to find key positions.
         std::vector<uint64_t> partition_positions = get_partition_positions(sst, permit);

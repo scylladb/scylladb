@@ -67,7 +67,7 @@ make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factor
     auto key = tests::generate_partition_key(s);
     mutation m(s, key);
     m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
-    return make_sstable_containing(sst_factory, {m});
+    return make_sstable_containing(sst_factory, {m}).get();
 }
 
 /// Create a shared SSTable belonging to all shards for the following schema: "create table cf (p text PRIMARY KEY, c int)"

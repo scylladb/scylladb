@@ -155,7 +155,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_clone_preserves_staging_state) {
     auto schema = ss.schema();
 
     // Create an sstable in normal state.
-    auto sst = make_sstable_containing(env.make_sst_factory(schema), {ss.new_mutation("key1")});
+    auto sst = make_sstable_containing(env.make_sst_factory(schema), {ss.new_mutation("key1")}).get();
 
     // Move it to staging state.
     sst->change_state(sstable_state::staging).get();

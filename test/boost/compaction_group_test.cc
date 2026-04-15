@@ -48,7 +48,7 @@ static sstables::shared_sstable generate_sstable(schema_ptr s, std::function<sha
             muts.push_back(make_insert(k));
         }
     }
-    return make_sstable_containing(sst_gen, std::move(muts));
+    return make_sstable_containing(sst_gen, std::move(muts)).get();
 }
 
 static sstables::shared_sstable sstable_that_needs_split(schema_ptr s, std::function<shared_sstable()> sst_gen) {
