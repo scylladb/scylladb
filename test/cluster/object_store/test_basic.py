@@ -283,11 +283,10 @@ async def test_get_object_store_endpoints(manager: ManagerClient, config_with_fu
 
 @pytest.mark.asyncio
 async def test_create_keyspace_after_config_update(manager: ManagerClient, object_storage):
+    print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
     server = await manager.server_add()
     cql = manager.get_cql()
-
-    print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
-    endpoint = 'http://a:456'
+    endpoint = object_storage.address  
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
                                       'replication_factor': '1'})
     storage_opts = format_tuples(type=f'{object_storage.type}',
@@ -299,12 +298,51 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
                       f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
 
     print('Update config with a new endpoint and SIGHUP Scylla to reload configuration')
-    new_endpoint = MinioServer.create_conf(endpoint, 'region')
-    await manager.server_update_config(server.server_id, 'object_storage_endpoints', new_endpoint)
-    await wait_for_config(manager, server, 'object_storage_endpoints', {endpoint: '{ "type": "s3", "aws_region": "region", "iam_role_arn": "" }'})
+    objconf = object_storage.create_endpoint_conf()
+    await manager.server_update_config(server.server_id, 'object_storage_endpoints', objconf)
+    ep = objconf[0]
+    if ep['type'] == 's3':
+        expected_conf = f'{{ "type": "s3", "aws_region": "{ep["aws_region"]}", "iam_role_arn": "{ep["iam_role_arn"]}" }}'
+    else:
+        expected_conf = f'{{ "type": "gs", "credentials_file": "{ep["credentials_file"]}" }}'
+    await wait_for_config(manager, server, 'object_storage_endpoints', {ep['name']: expected_conf})
 
     print('Passing a known endpoint will make the CREATE KEYSPACE stmt to succeed')
     cql.execute((f'CREATE KEYSPACE random_ks WITH'
                     f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
     
+
+    print('Create a table, insert data and flush the keyspace to force object_storage_client creation')
+    cql.execute(f'CREATE TABLE random_ks.test (name text PRIMARY KEY, value int);')
+    await cql.run_async(f"INSERT INTO random_ks.test (name, value) VALUES ('test_key', 123);")
+    await manager.api.flush_keyspace(server.ip_addr, 'random_ks')
+    res = cql.execute(f"SELECT value FROM random_ks.test WHERE name = 'test_key';")
+    assert res.one().value == 123, f'Unexpected value after flush: {res.one().value}'
+
+    # Now that a live object_storage_client exists for this endpoint, push a
+    # config update that modifies the endpoint parameters.  This exercises the
+    # update_config_sync path on an already-instantiated client
+    print('Push a config update to reconfigure the live object_storage_client')
+    updated_objconf = object_storage.create_endpoint_conf()
+    updated_ep = updated_objconf[0]
+    if updated_ep['type'] == 's3':
+        updated_ep['aws_region'] = 'updated-region'
+        updated_expected_conf = f'{{ "type": "s3", "aws_region": "{updated_ep["aws_region"]}", "iam_role_arn": "{updated_ep["iam_role_arn"]}" }}'
+    else:
+        updated_ep['credentials_file'] = ''
+        updated_expected_conf = f'{{ "type": "gs", "credentials_file": "{updated_ep["credentials_file"]}" }}'
+        pytest.skip("https://scylladb.atlassian.net/browse/SCYLLADB-1559")
+
+    await manager.server_update_config(server.server_id, 'object_storage_endpoints', updated_objconf)
+    await wait_for_config(manager, server, 'object_storage_endpoints', {updated_ep['name']: updated_expected_conf})
+
+    print('Verify the reconfigured client still works: insert more data and flush')
+    await cql.run_async(f"INSERT INTO random_ks.test (name, value) VALUES ('after_reconfig', 456);")
+    await manager.api.flush_keyspace(server.ip_addr, 'random_ks')
+    res = cql.execute(f"SELECT value FROM random_ks.test WHERE name = 'after_reconfig';")
+    assert res.one().value == 456, f'Unexpected value after reconfiguration flush: {res.one().value}'
+
+    print('Verify all data is intact')
+    rows = {r.name: r.value for r in cql.execute(f'SELECT * FROM random_ks.test;')}
+    assert rows == {'test_key': 123, 'after_reconfig': 456}, f'Unexpected table content: {rows}'
 
