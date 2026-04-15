@@ -1584,12 +1584,12 @@ future<stop_iteration> view_update_builder::generate_updates() {
         if (_existing_fragment->is_range_tombstone_change()) {
             _existing_current_tombstone = _existing_fragment->as_range_tombstone_change().tombstone();
         } else if (_existing_fragment->is_clustering_row()) {
-            auto existing = clustering_row(*_schema, _existing_fragment->as_clustering_row());
+            auto existing = std::move(*_existing_fragment).as_clustering_row();
             existing.apply(std::max(_existing_partition_tombstone, _existing_current_tombstone));
             auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
             generate_update(std::move(update), { std::move(existing) });
         } else if (_existing_fragment->is_static_row()) {
-            auto existing = static_row(*_schema, _existing_fragment->as_static_row());
+            auto existing = std::move(*_existing_fragment).as_static_row();
             auto update = static_row();
             generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
         }
