@@ -41,6 +41,34 @@
 using namespace std::string_view_literals;
 using namespace std::chrono_literals;
 
+// Retry strategy for tests: same retryability logic as the default AWS
+// strategy but with a fixed 1ms delay between retries instead of
+// exponential backoff, to keep tests fast.
+class test_retry_strategy : public seastar::http::experimental::retry_strategy {
+    unsigned _max_retries;
+
+public:
+    test_retry_strategy(unsigned max_retries = 10) : _max_retries(max_retries) {}
+
+    future<bool> should_retry(std::exception_ptr error, unsigned attempted_retries) const override {
+        if (attempted_retries >= _max_retries) {
+            co_return false;
+        }
+        auto err = aws::aws_error::from_exception_ptr(error);
+        if (err.is_retryable() != utils::http::retryable::yes) {
+            co_return false;
+        }
+        if (attempted_retries > 0) {
+            co_await seastar::sleep(1ms);
+        }
+        co_return true;
+    }
+};
+
+static std::unique_ptr<seastar::http::experimental::retry_strategy> make_test_retry_strategy() {
+    return std::make_unique<test_retry_strategy>();
+}
+
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
 // permissive enough policy and then run the test with env set respectively
 // E.g. like this
@@ -59,7 +87,7 @@ static shared_ptr<s3::client> make_proxy_client() {
         .use_https = false,
         .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
     };
-    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy());
 }
 
 static shared_ptr<s3::client> make_minio_client() {
@@ -68,7 +96,7 @@ static shared_ptr<s3::client> make_minio_client() {
         .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
         .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
     };
-    return s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+    return s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy());
 }
 
 static future<uint32_t> create_file(const std::string& path, size_t file_size) {
