@@ -15,7 +15,7 @@ import pytest
 import urllib3
 from botocore.exceptions import ClientError, HTTPClientError
 
-from test.alternator.util import random_string, full_query, multiset, scylla_inject_error
+from test.alternator.util import random_string, full_query, multiset, scylla_inject_error, client_no_transform
 
 
 # Test ensuring that items inserted by a batched statement can be properly extracted
@@ -159,6 +159,64 @@ def test_batch_write_nonduplicate_multiple_tables(test_table_s, test_table_s_2):
     })
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hi'}
     assert test_table_s_2.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 'hello'}
+
+# DynamoDB normalizes Number values before comparing keys, so different
+# string representations of the same number (e.g., "1000" vs "1e3") are
+# treated as duplicates.
+def test_batch_write_duplicate_number_key(test_table_nn):
+    tn = test_table_nn.name
+    with client_no_transform(test_table_nn.meta.client) as client:
+        # Sanity: genuinely different keys are fine.
+        client.batch_write_item(RequestItems={tn: [
+            {'PutRequest': {'Item': {'p': {'N': '1'}, 'c': {'N': '1'}}}},
+            {'PutRequest': {'Item': {'p': {'N': '2'}, 'c': {'N': '2'}}}},
+        ]})
+
+        # Same hash key, range key differs only in representation.
+        with pytest.raises(ClientError, match='ValidationException.*[Dd]uplicate'):
+            client.batch_write_item(RequestItems={tn: [
+                {'PutRequest': {'Item': {'p': {'N': '1'}, 'c': {'N': '1000'}}}},
+                {'PutRequest': {'Item': {'p': {'N': '1'}, 'c': {'N': '1e3'}}}},
+            ]})
+
+        # Hash key differs only in representation, same range key.
+        with pytest.raises(ClientError, match='ValidationException.*[Dd]uplicate'):
+            client.batch_write_item(RequestItems={tn: [
+                {'PutRequest': {'Item': {'p': {'N': '1000'}, 'c': {'N': '1'}}}},
+                {'PutRequest': {'Item': {'p': {'N': '1e3'}, 'c': {'N': '1'}}}},
+            ]})
+
+        # Both keys differ in representation.
+        with pytest.raises(ClientError, match='ValidationException.*[Dd]uplicate'):
+            client.batch_write_item(RequestItems={tn: [
+                {'PutRequest': {'Item': {'p': {'N': '1000'}, 'c': {'N': '2000'}}}},
+                {'PutRequest': {'Item': {'p': {'N': '1e3'}, 'c': {'N': '2e3'}}}},
+            ]})
+
+# DynamoDB's BatchGetItem does not reject different string representations
+# of the same Number key as duplicates (unlike BatchWriteItem).
+# But it is an inconsistent behaviour and looks like a DynamoDB bug.
+def test_batch_get_item_duplicate_number_key(test_table_nn, dynamodb_bug):
+    tn = test_table_nn.name
+    with client_no_transform(test_table_nn.meta.client) as client:
+        # Identical keys are still rejected as duplicates.
+        with pytest.raises(ClientError, match='ValidationException.*[Dd]uplicate'):
+            client.batch_get_item(RequestItems={tn: {
+                'Keys': [
+                    {'p': {'N': '1000'}, 'c': {'N': '1'}},
+                    {'p': {'N': '1000'}, 'c': {'N': '1'}},
+                ]
+            }})
+
+        # Different representations of the same key: DynamoDB does NOT
+        # reject this as a duplicate, although it returns the item once.
+        with pytest.raises(ClientError, match='ValidationException.*[Dd]uplicate'):
+            client.batch_get_item(RequestItems={tn: {
+                'Keys': [
+                    {'p': {'N': '1000'}, 'c': {'N': '1'}},
+                    {'p': {'N': '1e3'}, 'c': {'N': '1'}},
+                ]
+            }})
 
 # Test that BatchWriteItem's PutRequest completely replaces an existing item.
 # It shouldn't merge it with a previously existing value. See also the same
