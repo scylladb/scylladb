@@ -1510,6 +1510,52 @@ def test_views_with_future_tombstones(cql, test_keyspace):
             assert [] == list(cql.execute(f'select * from {table}'))
             assert [] == list(cql.execute(f'select * from {mv}'))
 
+# Test that a partition tombstone arriving after a range tombstone doesn't
+# create a spurious view row for a base row that was never alive.
+# The bug was in view_update_builder::on_results() which failed to
+# track existing range tombstones when the update reader was exhausted,
+# causing the existing row to appear alive (ignoring that it was covered
+# by a range tombstone) and generating an incorrect view update with a
+# row marker that created a view row for a dead base row.
+# Reproduces SCYLLADB-1554
+def test_mv_partition_tombstone_does_not_resurrect_range_deleted_row(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            'p int, c int, v int, w int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'v, p, c',
+                'v is not null and p is not null and c is not null') as mv:
+            # First, write a range tombstone at ts=150. This will cover any
+            # future inserts with lower timestamps and we won't generate
+            # any view updates for them.
+            cql.execute(f"DELETE FROM {table} USING TIMESTAMP 150 "
+                        f"WHERE p = 1 AND c >= 1 AND c <= 3")
+
+            # Insert a row with v at ts=100 and w at ts=30. Both timestamps
+            # are below the range tombstone (150), so the row is dead in the
+            # base table. No view entry should be created.
+            cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (1, 2, 3) "
+                        f"USING TIMESTAMP 100")
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 30 SET w = 4 "
+                        f"WHERE p = 1 AND c = 2")
+            assert [] == list(cql.execute(f"SELECT * FROM {table}"))
+            assert [] == list(cql.execute(f"SELECT * FROM {mv}"))
+
+            # Partition delete at ts=50. This is weaker than the range
+            # tombstone and should be a complete no-op. The different
+            # timestamps of v (100) and w (30) relative to the partition
+            # tombstone (50) are critical: the partition tombstone kills w
+            # but not v, making cells differ between the update and existing
+            # in generate_updates(). This prevents can_skip_view_updates()
+            # from masking the bug.
+            #
+            # Without the fix, generate_updates() fails to apply the
+            # existing range tombstone to the existing row, making it appear
+            # alive. This causes update_entry() to write a row marker at
+            # ts=100 (based on the view key column v's timestamp) to the
+            # view, incorrectly creating a view row for a dead base row.
+            cql.execute(f"DELETE FROM {table} USING TIMESTAMP 50 WHERE p = 1")
+            assert [] == list(cql.execute(f"SELECT * FROM {table}"))
+            assert [] == list(cql.execute(f"SELECT * FROM {mv}"))
+
 # Test view representation in system.* tables
 def test_view_in_system_tables(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:

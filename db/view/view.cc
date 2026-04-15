@@ -1583,9 +1583,11 @@ future<stop_iteration> view_update_builder::on_results() {
 
     auto tombstone = std::max(_update_partition_tombstone, _update_current_tombstone);
     if (tombstone && _existing && !_existing->is_end_of_partition()) {
-        // We don't care if it's a range tombstone, as we're only looking for existing entries that get deleted
-        if (_existing->is_clustering_row()) {
+        if (_existing->is_range_tombstone_change()) {
+            _existing_current_tombstone = _existing->as_range_tombstone_change().tombstone();
+        } else if (_existing->is_clustering_row()) {
             auto existing = clustering_row(*_schema, _existing->as_clustering_row());
+            existing.apply(std::max(_existing_partition_tombstone, _existing_current_tombstone));
             auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
             generate_update(std::move(update), { std::move(existing) });
         } else if (_existing->is_static_row()) {
