@@ -149,38 +149,50 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
 
     tasks::tmlogger.info("tablet_virtual_task: wait until tablet operation is finished");
     co_await utils::get_local_injector().inject("tablet_virtual_task_wait", utils::wait_for_message(60s));
-    while (true) {
-        co_await _ss._topology_state_machine.event.wait([&] {
-            if (!_ss.get_token_metadata().tablets().has_tablet_map(table)) {
-                return true;
-            }
-            auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
-            if (is_resize_task(task_type)) {    // Resize task.
-                return tmap.resize_task_info().tablet_task_id.uuid() != id.uuid();
-            } else if (tablet_id_opt.has_value()) {    // Migration task.
-                return tmap.get_tablet_info(tablet_id_opt.value()).migration_task_info.tablet_task_id.uuid() != id.uuid();
-            } else {    // Repair task.
-                return true;
-            }
-        });
 
-        if (!is_repair_task(task_type)) {
-            break;
-        }
-
+    auto task_finished = [&] () -> future<bool> {
         auto tmptr = _ss.get_token_metadata_ptr();
-        if (!_ss.get_token_metadata().tablets().has_tablet_map(table)) {
-            break;
+        if (!tmptr->tablets().has_tablet_map(table)) {
+            co_return true;
         }
         auto& tmap = tmptr->tablets().get_tablet_map(table);
-        bool repair_still_running = false;
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            repair_still_running = repair_still_running || (info.repair_task_info.is_valid() && info.repair_task_info.tablet_task_id.uuid() == id.uuid());
-            return make_ready_future();
-        });
-        if (!repair_still_running) {
+        if (is_repair_task(task_type)) {
+            bool running = false;
+            co_await tmap.for_each_tablet([&] (locator::tablet_id, const locator::tablet_info& info) {
+                if (info.repair_task_info.is_valid() && info.repair_task_info.tablet_task_id.uuid() == id.uuid()) {
+                    running = true;
+                }
+                return make_ready_future();
+            });
+            co_return !running;
+        }
+        if (is_resize_task(task_type)) {
+            co_return tmap.resize_task_info().tablet_task_id.uuid() != id.uuid();
+        }
+        if (is_migration_task(task_type)) {
+            co_return tmap.get_tablet_info(tablet_id_opt.value()).migration_task_info.tablet_task_id.uuid() != id.uuid();
+        }
+        on_internal_error(tasks::tmlogger, fmt::format("tablet_virtual_task::wait: unhandled tablet task type {}", task_type));
+    };
+
+    // The repair check (task_finished) is async — for_each_tablet scans
+    // every tablet — so we cannot use condition_variable::wait(Pred) which
+    // requires a synchronous predicate.
+    //
+    // Register a waiter via event.wait() *before* running the async check
+    // to avoid missing a broadcast that fires while task_finished() yields.
+    // If the task is finished we discard the future (the stale waiter is
+    // cleaned up on the next broadcast or broken()). Otherwise we co_await
+    // the future, which is guaranteed to capture any broadcast that occurred
+    // during the check. event.broken() during shutdown propagates
+    // broken_condition_variable and unblocks the loop promptly.
+    while (true) {
+        auto f = _ss._topology_state_machine.event.wait();
+        if (co_await task_finished()) {
+            (void)f.handle_exception([] (auto&&) {});
             break;
         }
+        co_await std::move(f);
     }
 
     res->status.state = tasks::task_manager::task_state::done; // Failed repair task is retried.
