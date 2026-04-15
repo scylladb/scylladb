@@ -107,6 +107,10 @@ private:
         return bucket_key >= now;
     }
 
+    // Returns true if the SSTable's data spans more than one time window.
+    // Such SSTables arise e.g. after switching from ICS to TWCS without running a major compaction.
+    bool spans_multiple_windows(const sstables::sstable& sst) const;
+
     // Returns which compaction type should be performed on a given window bucket.
     bucket_compaction_mode
     compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
