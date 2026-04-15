@@ -329,16 +329,27 @@ async def get_coordinator_host_ids(manager: ManagerClient) -> list[str]:
 
 
 async def get_coordinator_host(manager: ManagerClient) -> ServerInfo:
-    """Get coordinator ServerInfo"""
+    """Get topology coordinator ServerInfo
 
-    coordinator_host_id = (await get_coordinator_host_ids(manager))[0]
-    host_ids = []
-    for s_info in await manager.running_servers():
-        with suppress(Exception):
-            host_ids.append(await manager.get_host_id(s_info.server_id))
-            if host_ids[-1] == coordinator_host_id:
-                return s_info
-    raise AssertionError(f"Node with host id {coordinator_host_id} was not found in cluster host ids {host_ids}")
+    Queries system.group0_history to find the current topology coordinator
+    host ID, then matches it against running servers.  The lookup is retried
+    for up to 60 seconds because we sometimes have to wait until a new topology
+    coordinator is started, for example if the function is called just after
+    stopping the previous topology coordinator (see SCYLLADB-1553).
+    """
+
+    async def _find_coordinator() -> ServerInfo | None:
+        coordinator_host_id = (await get_coordinator_host_ids(manager))[0]
+        host_ids = []
+        for s_info in await manager.running_servers():
+            with suppress(Exception):
+                host_ids.append(await manager.get_host_id(s_info.server_id))
+                if host_ids[-1] == coordinator_host_id:
+                    return s_info
+        logger.warning(f"Node with host id {coordinator_host_id} was not found in cluster host ids {host_ids}")
+        return None
+
+    return await wait_for(_find_coordinator, deadline=time.time() + 60)
 
 
 async def ensure_group0_leader_on(manager: ManagerClient, server: ServerInfo, timeout_seconds = 60):
