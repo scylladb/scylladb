@@ -569,7 +569,9 @@ async def new_test_keyspace(manager: ManagerClient, opts, host=None):
         logger.info(f"Error happened while using keyspace '{keyspace}', the keyspace is left in place for investigation")
         raise
     else:
-        await manager.get_cql().run_async("DROP KEYSPACE " + keyspace, host=host)
+        # Use DROP KEYSPACE IF EXISTS as a workaround for
+        # https://github.com/scylladb/python-driver/issues/317
+        await manager.get_cql().run_async("DROP KEYSPACE IF EXISTS " + keyspace, host=host)
 
 previously_used_table_names = []
 @asynccontextmanager
