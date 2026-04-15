@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/file.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -109,6 +110,7 @@ class client : public enable_shared_from_this<client> {
     timer<seastar::lowres_clock> _creds_update_timer;
     aws_credentials _credentials;
     aws::aws_credentials_provider_chain _creds_provider_chain;
+    seastar::gate _config_update_gate;
 
     struct io_stats {
         uint64_t ops = 0;
@@ -212,7 +214,7 @@ public:
                          upload_progress& up,
                          seastar::abort_source* = nullptr);
 
-    future<> update_config(std::string reg, std::string ira);
+    void update_config_sync(std::string reg, std::string ira);
 
     struct handle {
         std::string _host;

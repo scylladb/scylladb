@@ -129,7 +129,13 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
     }
 }
 
-future<> client::update_config(std::string region, std::string ira) {
+void client::update_config_sync(std::string region, std::string ira) {
+    if (_config_update_gate.is_closed()) {
+        s3l.info("config update gate is closed");
+        return;
+    }
+    auto holder = _config_update_gate.hold();
+
     endpoint_config new_cfg = {
         .port = _cfg->port,
         .use_https = _cfg->use_https,
@@ -137,10 +143,19 @@ future<> client::update_config(std::string region, std::string ira) {
         .role_arn = std::move(ira),
     };
     _cfg = make_lw_shared<endpoint_config>(std::move(new_cfg));
-    auto units = co_await get_units(_creds_sem, 1);
-    _creds_provider_chain.invalidate_credentials();
-    _credentials = {};
-    _creds_update_timer.rearm(lowres_clock::now());
+
+    (void)get_units(_creds_sem, 1).then_wrapped([this, h = std::move(holder)](future<semaphore_units<>> f) {
+        try {
+            s3l.info("Invalidating credentials");
+            
+            auto units = f.get();
+            _creds_provider_chain.invalidate_credentials();
+            _credentials = {};
+            _creds_update_timer.rearm(lowres_clock::now());
+        } catch (...) {
+            s3l.error("Failed to refresh credentials during config update: {}", std::current_exception());
+        }
+    });
 }
 
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf) {
@@ -1857,6 +1872,9 @@ file client::make_readable_file(sstring object_name, seastar::abort_source* as) 
 }
 
 future<> client::close() {
+    s3l.info("Closing S3 client...");
+
+    co_await _config_update_gate.close();
     {
         auto units = co_await get_units(_creds_sem, 1);
         _creds_invalidation_timer.cancel();
@@ -1865,6 +1883,8 @@ future<> client::close() {
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
         co_await it.second.http.close();
     });
+
+    s3l.info("Closed S3 client");
 }
 
 client::bucket_lister::bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, size_t objects_per_page, size_t entries_batch)
