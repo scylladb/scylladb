@@ -257,6 +257,10 @@ private:
     future<stop_iteration> read_next_update_fragment();
     future<stop_iteration> read_next_existing_fragment();
 
+    void consume_both_fragments();
+    void consume_update_fragment();
+    void consume_existing_fragment();
+
     future<stop_iteration> stop() const;
 };
 
