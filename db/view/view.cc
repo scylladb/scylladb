@@ -1596,9 +1596,10 @@ future<stop_iteration> view_update_builder::on_results() {
         return should_stop_updates() ? stop() : advance_existings();
     }
 
-    // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
     if (_update && !_update->is_end_of_partition()) {
-        if (_update->is_clustering_row()) {
+        if (_update->is_range_tombstone_change()) {
+            _update_current_tombstone = _update->as_range_tombstone_change().tombstone();
+        } else if (_update->is_clustering_row()) {
             _update->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
                 cr.apply(std::max(_update_partition_tombstone, _update_current_tombstone));
             });
