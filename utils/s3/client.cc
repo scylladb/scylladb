@@ -172,11 +172,21 @@ void client::update_connections_per_shard(unsigned connections_per_shard) {
     });
 }
 
+<<<<<<< HEAD
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf) {
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{});
 }
 
 shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, global_factory gf, unsigned connections_per_shard) {
+||||||| parent of 0a9528b837 (s3: add client::make overload with custom retry strategy)
+shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf) {
+=======
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, std::unique_ptr<http::experimental::retry_strategy> rs, global_factory gf) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{}, std::move(rs));
+}
+
+shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf) {
+>>>>>>> 0a9528b837 (s3: add client::make overload with custom retry strategy)
     auto url = utils::http::parse_simple_url(ep);
     endpoint_config cfg = {
         .port = url.port,

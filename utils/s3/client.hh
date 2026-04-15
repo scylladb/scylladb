@@ -183,9 +183,20 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
+<<<<<<< HEAD
     client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
+||||||| parent of 0a9528b837 (s3: add client::make overload with custom retry strategy)
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
+    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf = {});
+=======
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, std::unique_ptr<seastar::http::experimental::retry_strategy> rs, global_factory gf = {});
+    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf = {});
+>>>>>>> 0a9528b837 (s3: add client::make overload with custom retry strategy)
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);
