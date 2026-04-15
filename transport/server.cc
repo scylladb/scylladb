@@ -73,6 +73,7 @@
 #include "utils/result.hh"
 #include "utils/reusable_buffer.hh"
 #include "utils/histogram_metrics_helper.hh"
+#include "utils/error_injection.hh"
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -1844,6 +1845,8 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
             throw std::runtime_error(format("Unsupported opcode for processing: {}", static_cast<int>(op)));
         }
     } (opcode);
+
+    co_await utils::get_local_injector().inject("transport_cql_request_pause", utils::wait_for_message(60s));
 
     bool init_trace = (bool)!bounced; // If the request was bounced, we already started the trace in the handler
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,

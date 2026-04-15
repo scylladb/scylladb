@@ -532,3 +532,110 @@ async def test_anonymous_user(manager: ManagerClient) -> None:
             return
 
     assert False, f"None of clients use sl:default, rows={rows}"
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.xfail(reason="per-service-level cql_requests_serving metric not yet implemented")
+async def test_per_service_level_cql_requests_serving(manager: ManagerClient) -> None:
+    """Test that the per-service-level cql_requests_serving metric correctly
+    reflects the number of in-flight CQL requests for each service level.
+
+    Uses error injection to pause requests mid-flight, then verifies the gauge
+    shows exactly the right count per scheduling group. Sends two requests on
+    a custom service level and one on sl:default (the cassandra superuser) to
+    verify both per-SL counters independently.
+    """
+    cmdline = ['--logger-log-level', 'debug_error_injection=debug']
+    server = await manager.server_add(config=auth_config, cmdline=cmdline)
+    cql, _ = await manager.get_ready_cql([server])
+
+    # Create one new service level and one new user attached to it.
+    # The cassandra superuser already uses sl:default.
+    sl_a = unique_name()
+    await cql.run_async(f"CREATE SERVICE LEVEL {sl_a}")
+    await cql.run_async(f"CREATE ROLE user_a WITH PASSWORD = 'pass_a' AND LOGIN = true")
+    await cql.run_async(f"ATTACH SERVICE LEVEL {sl_a} TO user_a")
+
+    # Open dedicated driver sessions for user_a and the cassandra superuser.
+    # Disable schema and token metadata refresh on both to prevent background
+    # driver queries from interfering with the error injection and metrics.
+    cluster_a = manager.con_gen([server.ip_addr],
+        manager.port, manager.use_ssl, PlainTextAuthProvider(username='user_a', password='pass_a'))
+    cluster_a.schema_metadata_enabled = False
+    cluster_a.token_metadata_enabled = False
+    session_a = cluster_a.connect()
+
+    cluster_default = manager.con_gen([server.ip_addr],
+        manager.port, manager.use_ssl, PlainTextAuthProvider(username='cassandra', password='cassandra'))
+    cluster_default.schema_metadata_enabled = False
+    cluster_default.token_metadata_enabled = False
+    session_default = cluster_default.connect()
+
+    try:
+        # Enable error injection to pause CQL requests.
+        await manager.api.enable_injection(server.ip_addr, "transport_cql_request_pause", False)
+        log = await manager.server_open_log(server.server_id)
+
+        # Send two requests from user_a (sl:sl_a) and one from the cassandra
+        # superuser (sl:default). Each pauses at the injection point, keeping
+        # the cql_requests_serving gauge incremented.
+        mark = await log.mark()
+        task_a1 = asyncio.ensure_future(asyncio.to_thread(session_a.execute, "SELECT * FROM system.local"))
+        await log.wait_for("transport_cql_request_pause: waiting for message", from_mark=mark)
+
+        mark = await log.mark()
+        task_a2 = asyncio.ensure_future(asyncio.to_thread(session_a.execute, "SELECT * FROM system.local"))
+        await log.wait_for("transport_cql_request_pause: waiting for message", from_mark=mark)
+
+        mark = await log.mark()
+        task_default = asyncio.ensure_future(asyncio.to_thread(session_default.execute, "SELECT * FROM system.local"))
+        await log.wait_for("transport_cql_request_pause: waiting for message", from_mark=mark)
+
+        # All three requests are now paused. Verify the per-SL gauges.
+        # Use >= because a stray request from the manager's CQL session
+        # (whose metadata refresh we cannot disable) could also get paused,
+        # inflating the sl:default counter.
+        metrics = await manager.metrics.query(server.ip_addr)
+        serving_a = metrics.get("scylla_transport_cql_requests_serving",
+                                {'scheduling_group_name': f'sl:{sl_a}'})
+        serving_default = metrics.get("scylla_transport_cql_requests_serving",
+                                      {'scheduling_group_name': 'sl:default'})
+        assert serving_a >= 2, \
+            f"Expected at least 2 in-flight requests for sl:{sl_a}, got {serving_a}"
+        assert serving_default >= 1, \
+            f"Expected at least 1 in-flight request for sl:default, got {serving_default}"
+
+        # Release paused requests by sending messages. Each message_injection
+        # call sends one message per shard, waking one handler per shard.
+        # Send enough to cover our three requests plus any stray ones.
+        total_paused = serving_a + serving_default
+        for _ in range(total_paused):
+            await manager.api.message_injection(server.ip_addr, "transport_cql_request_pause")
+
+        # Wait for all requests to complete.
+        await task_a1
+        await task_a2
+        await task_default
+
+        # Disable injection before checking metrics to avoid pausing any
+        # stray requests that might arrive.
+        await manager.api.disable_injection(server.ip_addr, "transport_cql_request_pause")
+
+        # Verify gauges are back to zero. Use a retry loop because a stray
+        # request from the manager's CQL session may be briefly in-flight.
+        async def metrics_are_zero():
+            metrics = await manager.metrics.query(server.ip_addr)
+            serving_a = metrics.get("scylla_transport_cql_requests_serving",
+                                    {'scheduling_group_name': f'sl:{sl_a}'})
+            serving_default = metrics.get("scylla_transport_cql_requests_serving",
+                                          {'scheduling_group_name': 'sl:default'})
+            assert serving_a == 0, \
+                f"Expected 0 in-flight requests for sl:{sl_a} after release, got {serving_a}"
+            assert serving_default == 0, \
+                f"Expected 0 in-flight requests for sl:default after release, got {serving_default}"
+            return True
+        await wait_for(metrics_are_zero, deadline=time.time() + 60)
+    finally:
+        await manager.api.disable_injection(server.ip_addr, "transport_cql_request_pause")
+        safe_driver_shutdown(cluster_a)
+        safe_driver_shutdown(cluster_default)
