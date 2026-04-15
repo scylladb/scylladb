@@ -437,6 +437,36 @@ To migrate a keyspace from a numeric replication factor to a rack-list replicati
   ALTER KEYSPACE Excelsior
    WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2', 'RAC3'], 'dc2' : ['RAC4']} AND tablets = { 'enabled': true };
 
+.. _fix-rf-change-tablet-rebuilds:
+
+Fixing invalid replica state with RF change
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If a tablet rebuild fails during an RF change, the state of replicas will be invalid, even though the RF change is marked as successful. The missing replicas will be eventually added in the background. However, until then, the following RF changes will fail.
+
+To fix the state of replicas in the foreground, retry the previous ALTER KEYSPACE statement, i.e. update the replication factor to the same value it currently has.
+
+For example, if the following statement fails due to invalid replica state:
+
+.. code-block:: cql
+
+  ALTER KEYSPACE Excelsior WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 3, 'dc2' : 1} AND tablets = { 'enabled': true };
+
+Check the current replication factor with DESCRIBE KEYSPACE:
+
+.. code-block:: cql
+
+  DESCRIBE KEYSPACE Excelsior;
+  CREATE KEYSPACE Excelsior WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 3, 'dc2' : 2} AND tablets = { 'enabled': true };
+
+Ensure that reaching the valid replicas state is possible (e.g. there is enough non-excluded racks) and alter keyspace with the current replication factor:
+
+.. code-block:: cql
+
+  ALTER KEYSPACE Excelsior WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 3, 'dc2' : 2} AND tablets = { 'enabled': true };
+
+This should fix the state of replicas and allow future RF changes to succeed.
+
 .. _drop-keyspace-statement:
 
 DROP KEYSPACE
