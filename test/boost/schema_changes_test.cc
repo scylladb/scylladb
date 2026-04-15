@@ -45,7 +45,7 @@ future <> test_schema_changes_int(sstable_version_types sstable_vtype) {
         shared_sstable created_with_base_schema;
         shared_sstable created_with_changed_schema;
         if (it == cache.end()) {
-            created_with_base_schema = make_sstable_containing(env.make_sstable(base), base_mutations);
+            created_with_base_schema = make_sstable_containing(env.make_sstable(base), base_mutations).get();
             cache.emplace(base, created_with_base_schema);
         } else {
             created_with_base_schema = it->second;

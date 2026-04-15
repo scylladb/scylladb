@@ -771,11 +771,11 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
     };
 
     std::vector<sstables::shared_sstable> sstable_list = {
-            make_sstable_containing(sst_factory(0), std::move(sstable_level_0_0_mutations)),
-            make_sstable_containing(sst_factory(1), std::move(sstable_level_1_0_mutations)),
-            make_sstable_containing(sst_factory(1), std::move(sstable_level_1_1_mutations)),
-            make_sstable_containing(sst_factory(2), std::move(sstable_level_2_0_mutations)),
-            make_sstable_containing(sst_factory(2), std::move(sstable_level_2_1_mutations)),
+            make_sstable_containing(sst_factory(0), std::move(sstable_level_0_0_mutations)).get(),
+            make_sstable_containing(sst_factory(1), std::move(sstable_level_1_0_mutations)).get(),
+            make_sstable_containing(sst_factory(1), std::move(sstable_level_1_1_mutations)).get(),
+            make_sstable_containing(sst_factory(2), std::move(sstable_level_2_0_mutations)).get(),
+            make_sstable_containing(sst_factory(2), std::move(sstable_level_2_1_mutations)).get(),
     };
 
     auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::leveled, {});
@@ -1062,7 +1062,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                     combined[j++].apply(m);
                 }
             }
-            mutation_source ds = make_sstable_containing(env.make_sstable(s), muts)->as_mutation_source();
+            mutation_source ds = make_sstable_containing(env.make_sstable(s), muts).get()->as_mutation_source();
             reader_ranges.push_back(dht::partition_range::make({keys[0]}, {keys[0]}));
             readers.push_back(ds.make_mutation_reader(s,
                 permit,
@@ -1133,8 +1133,8 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
 
         std::vector<mutation_reader> readers;
 
-        mutation_source ds1 = make_sstable_containing(env.make_sstable(s), {m1})->as_mutation_source();
-        mutation_source ds2 = make_sstable_containing(env.make_sstable(s), {m2})->as_mutation_source();
+        mutation_source ds1 = make_sstable_containing(env.make_sstable(s), {m1}).get()->as_mutation_source();
+        mutation_source ds2 = make_sstable_containing(env.make_sstable(s), {m2}).get()->as_mutation_source();
 
         // upper bound ends before the row in m2, so that the raw is fetched after next fast forward.
         auto range = ss.make_ckey_range(0, 3);
@@ -2580,7 +2580,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
     auto make_populate = [] (bool single_fragment_buffer) {
         return [single_fragment_buffer] (schema_ptr s, const utils::chunked_vector<mutation>& mutations, gc_clock::time_point query_time) mutable {
-            auto mt = make_memtable(s, mutations);
+            auto mt = make_memtable(s, mutations).get();
             return mutation_source([=] (
                     schema_ptr s,
                     reader_permit permit,
@@ -2705,7 +2705,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_is_consistent_with_compaction) {
 
 SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
     auto make_populate = [] (schema_ptr s, const utils::chunked_vector<mutation>& mutations, gc_clock::time_point query_time) {
-        auto mt = make_memtable(s, mutations);
+        auto mt = make_memtable(s, mutations).get();
         return mutation_source([=] (
                 schema_ptr s,
                 reader_permit permit,
@@ -2782,7 +2782,7 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
     };
 
     auto make_populate = [] (schema_ptr s, const utils::chunked_vector<mutation>& mutations, gc_clock::time_point query_time) {
-        auto mt = make_memtable(s, mutations);
+        auto mt = make_memtable(s, mutations).get();
         return mutation_source([=] (
                 schema_ptr s,
                 reader_permit permit,
@@ -3947,7 +3947,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
         for (auto& mb: scenario.readers_data) {
             sstables::shared_sstable sst;
             if (mb.m) {
-                sst = make_sstable_containing(sst_factory, {*mb.m});
+                sst = make_sstable_containing(sst_factory, {*mb.m}).get();
                 sst_set.insert(sst);
             } else {
                 // We want to have an sstable that won't return any fragments when we query it
@@ -3956,7 +3956,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
                 auto pk = pkeys[1];
                 SCYLLA_ASSERT(!pk.equal(*g._s, g._pk));
 
-                sst = make_sstable_containing(sst_factory, {mutation(table_schema, pk)});
+                sst = make_sstable_containing(sst_factory, {mutation(table_schema, pk)}).get();
                 sst_set.insert(sst);
             }
 

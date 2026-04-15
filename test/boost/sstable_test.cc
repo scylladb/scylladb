@@ -431,7 +431,7 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
         auto schema = random_schema.schema();
 
         const auto muts = tests::generate_random_mutations(random_schema, 2).get();
-        auto sstp = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts);
+        auto sstp = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts).get();
 
         auto toc_path = fmt::to_string(sstp->toc_filename());
         auto dir_path = std::filesystem::path(toc_path).parent_path().string();
@@ -920,7 +920,7 @@ static future<> test_component_digest_persistence(component_type component, ssta
         auto schema = random_schema.schema();
 
         const auto muts = tests::generate_random_mutations(random_schema, 2).get();
-        auto sst_original = make_sstable_containing(env.make_sstable(schema, version), muts);
+        auto sst_original = make_sstable_containing(env.make_sstable(schema, version), muts).get();
 
         auto& components = sstables::test(sst_original).get_components();
         bool has_component = components.find(component) != components.end();
@@ -1046,7 +1046,7 @@ static future<> test_component_digest_validation(component_type component, sstab
         auto schema = random_schema.schema();
 
         const auto muts = tests::generate_random_mutations(random_schema, 2).get();
-        auto sst = make_sstable_containing(env.make_sstable(schema, version), muts);
+        auto sst = make_sstable_containing(env.make_sstable(schema, version), muts).get();
 
         auto digest = sst->get_component_digest(component);
         BOOST_REQUIRE(digest.has_value());

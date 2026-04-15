@@ -385,7 +385,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
         std::move(all_partitions.begin() + 1, all_partitions.end() - 1, std::back_inserter(partitions));
 
         cache_tracker tracker;
-        auto mt = make_memtable(s, partitions);
+        auto mt = make_memtable(s, partitions).get();
 
         auto make_cache = [&tracker, &mt](schema_ptr s, int& secondary_calls_count) -> lw_shared_ptr<row_cache> {
             auto secondary = mutation_source([&mt, &secondary_calls_count] (schema_ptr s, reader_permit permit, const dht::partition_range& range,
@@ -557,7 +557,7 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
 
         utils::chunked_vector<mutation> mutations = make_ring(s, 3);
 
-        auto mt = make_memtable(s, mutations);
+        auto mt = make_memtable(s, mutations).get();
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -603,7 +603,7 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         utils::chunked_vector<mutation> mutations = make_ring(s, 3);
-        auto mt = make_memtable(s, mutations);
+        auto mt = make_memtable(s, mutations).get();
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -639,7 +639,7 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         utils::chunked_vector<mutation> mutations = make_ring(s, 3);
-        auto mt = make_memtable(s, mutations);
+        auto mt = make_memtable(s, mutations).get();
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -694,7 +694,7 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
         cache_tracker tracker;
 
         run_mutation_source_tests([&tracker](schema_ptr s, const utils::chunked_vector<mutation>& mutations) -> mutation_source {
-            auto mt = make_memtable(s, mutations);
+            auto mt = make_memtable(s, mutations).get();
             auto cache = make_lw_shared<row_cache>(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
             return mutation_source([cache] (schema_ptr s,
                     reader_permit permit,
@@ -1275,7 +1275,7 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto ring = make_ring(s, 4);
-        auto mt = make_memtable(s, ring);
+        auto mt = make_memtable(s, ring).get();
 
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
@@ -1328,7 +1328,7 @@ SEASTAR_TEST_CASE(test_cache_invalidation_with_filter) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
         auto ring = make_ring(s, 5);
-        auto mt = make_memtable(s, ring);
+        auto mt = make_memtable(s, ring).get();
 
         cache_tracker tracker;
 
@@ -1469,13 +1469,13 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         cache_tracker tracker;
 
         auto ring = make_ring(s, 3);
-        auto mt1 = make_memtable(s, ring);
+        auto mt1 = make_memtable(s, ring).get();
         memtables.apply(*mt1);
 
         row_cache cache(s, cache_source, tracker);
 
         auto ring2 = updated_ring(ring);
-        auto mt2 = make_memtable(s, ring2);
+        auto mt2 = make_memtable(s, ring2).get();
 
         auto f = thr.block();
 
@@ -1602,13 +1602,13 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         cache_tracker tracker;
 
         auto ring = make_ring(s, 3);
-        auto mt1 = make_memtable(s, ring);
+        auto mt1 = make_memtable(s, ring).get();
         memtables.apply(*mt1);
 
         row_cache cache(s, std::move(cache_source), tracker);
 
         auto ring2 = updated_ring(ring);
-        auto mt2 = make_memtable(s, ring2);
+        auto mt2 = make_memtable(s, ring2).get();
 
         auto f = thr.block();
 
@@ -1768,7 +1768,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
                                  to_bytes("v"), data_value(i), api::new_timestamp());
         }
 
-        auto mt = make_memtable(s, {m});
+        auto mt = make_memtable(s, {m}).get();
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
@@ -2667,7 +2667,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
                     .produces_end_of_stream();
             });
 
-            auto mt = make_memtable(cache.schema(), muts2);
+            auto mt = make_memtable(cache.schema(), muts2).get();
 
             // Make snapshot on pkeys[2]
             auto pr = dht::partition_range::make_singular(pkeys[2]);
@@ -2675,7 +2675,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
             snap->set_max_buffer_size(1);
             snap->fill_buffer().get();
 
-            auto mt2 = make_memtable(cache.schema(), muts2);
+            auto mt2 = make_memtable(cache.schema(), muts2).get();
             cache.update(row_cache::external_updater([&] {
                 memory::scoped_critical_alloc_section dfg;
                 underlying.apply(std::move(mt2));

@@ -26,11 +26,10 @@ using namespace sstables;
 using namespace std::chrono_literals;
 
 using validate = bool_class<struct validate_tag>;
-// Must be called in a seastar thread.
-sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt);
-sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt);
-sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, utils::chunked_vector<mutation> muts, validate do_validate = validate::yes);
-sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate = validate::yes);
+future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt);
+future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt);
+future<sstables::shared_sstable> make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, utils::chunked_vector<mutation> muts, validate do_validate = validate::yes);
+future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate = validate::yes);
 
 namespace sstables {
 
@@ -270,5 +269,5 @@ inline shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::me
     return make_sstable_easy(env, std::move(mt), std::move(cfg), env.new_generation(), version, estimated_partitions, query_time);
 }
 
-lw_shared_ptr<replica::memtable> make_memtable(schema_ptr s, const utils::chunked_vector<mutation>& muts);
+future<lw_shared_ptr<replica::memtable>> make_memtable(schema_ptr s, const utils::chunked_vector<mutation>& muts);
 std::vector<replica::memtable*> active_memtables(replica::table& t);

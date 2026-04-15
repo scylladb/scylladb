@@ -3220,7 +3220,7 @@ static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema
 }
 
 static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt, sstable_version_types version) {
-    auto sst = make_sstable_containing(env.make_sstable(s, version), mt);
+    auto sst = make_sstable_containing(env.make_sstable(s, version), mt).get();
     BOOST_TEST_MESSAGE(format("write_sstable from memtable: {}", sst->get_filename()));
     return sst;
 }
@@ -3253,7 +3253,7 @@ constexpr std::array<sstable_version_types, 4> test_sstable_versions = {
 
 static void write_mut_and_compare_sstables_version(test_env& env, schema_ptr s, mutation& mut, const sstring& table_name,
         sstable_version_types version) {
-    lw_shared_ptr<replica::memtable> mt = make_memtable(s, {mut});
+    lw_shared_ptr<replica::memtable> mt = make_memtable(s, {mut}).get();
     write_and_compare_sstables(env, s, mt, table_name, version);
 }
 
@@ -3265,8 +3265,8 @@ static void write_mut_and_compare_sstables(test_env& env, schema_ptr s, mutation
 
 static void write_muts_and_compare_sstables_version(test_env& env, schema_ptr s, mutation& mut1, mutation& mut2, const sstring& table_name,
         sstable_version_types version) {
-    lw_shared_ptr<replica::memtable> mt1 = make_memtable(s, {mut1});
-    lw_shared_ptr<replica::memtable> mt2 = make_memtable(s, {mut2});
+    lw_shared_ptr<replica::memtable> mt1 = make_memtable(s, {mut1}).get();
+    lw_shared_ptr<replica::memtable> mt2 = make_memtable(s, {mut2}).get();
     write_and_compare_sstables(env, s, mt1, mt2, table_name, version);
 }
 
@@ -3326,7 +3326,7 @@ using validate_stats_metadata = bool_class<validate_stats_metadata_tag>;
 
 static void write_mut_and_validate_version(test_env& env, schema_ptr s, const sstring& table_name, mutation& mut,
         sstable_version_types version, validate_stats_metadata validate_flag) {
-    lw_shared_ptr<replica::memtable> mt = make_memtable(s, {mut});
+    lw_shared_ptr<replica::memtable> mt = make_memtable(s, {mut}).get();
     auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
     auto written_sst = validate_read(env, sst, {mut});
     if (validate_flag) {
@@ -3348,7 +3348,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
     // but cannot now because flat reader version transforms rearrange
     // range tombstones.  Revisit once the reader v2 migration is
     // complete and those version transforms are gone
-    auto sst = make_sstable_containing(env.make_sstable(s, version), {mut});
+    auto sst = make_sstable_containing(env.make_sstable(s, version), {mut}).get();
     auto written_sst = validate_read(env, sst, {mut});
     check_min_max_column_names(written_sst, std::move(min_components), std::move(max_components));
 }
@@ -3362,7 +3362,7 @@ static void write_mut_and_validate(test_env& env, schema_ptr s, const sstring& t
 
 static void write_mut_and_validate_version(test_env& env, schema_ptr s, const sstring& table_name, utils::chunked_vector<mutation> muts,
         sstable_version_types version, validate_stats_metadata validate_flag) {
-    lw_shared_ptr<replica::memtable> mt = make_memtable(s, muts);
+    lw_shared_ptr<replica::memtable> mt = make_memtable(s, muts).get();
     auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
     auto written_sst = validate_read(env, sst, muts);
     if (validate_flag) {
@@ -3701,7 +3701,7 @@ static future<> test_write_many_partitions(sstring table_name, tombstone partiti
 
     bool compressed = cp.get_algorithm() != compression_parameters::algorithm::none;
     for (auto version : test_sstable_versions) {
-        lw_shared_ptr<replica::memtable> mt = make_memtable(s, muts);
+        lw_shared_ptr<replica::memtable> mt = make_memtable(s, muts).get();
         auto sst = compressed ? write_sstables(env, s, mt, version) : write_and_compare_sstables(env, s, mt, table_name, version);
         std::ranges::sort(muts, mutation_decorated_key_less_comparator());
         validate_read(env, sst, muts);
@@ -5016,7 +5016,7 @@ SEASTAR_TEST_CASE(test_write_empty_static_row) {
     mut2.set_cell(ckey, "rc", data_value{3}, ts);
 
     for (auto version : test_sstable_versions) {
-        lw_shared_ptr<replica::memtable> mt = make_memtable(s, {mut1, mut2});
+        lw_shared_ptr<replica::memtable> mt = make_memtable(s, {mut1, mut2}).get();
         auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
         validate_read(env, sst, {mut2, mut1}); // Mutations are re-ordered according to decorated_key order
     }
@@ -5069,7 +5069,7 @@ SEASTAR_TEST_CASE(test_sstable_reader_on_unknown_column) {
         partition.set_cell(ckey, "val2", data_value{200 + i}, write_timestamp);
     };
   for (auto version : test_sstable_versions) {
-    auto mt = make_memtable(write_schema, {partition});
+    auto mt = make_memtable(write_schema, {partition}).get();
     for (auto index_block_size : {1, 128, 64*1024}) {
         auto _ = env.tempdir().make_sweeper();
         sstable_writer_config cfg = env.manager().configure_writer();
@@ -5190,7 +5190,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
     auto ck2 = s.make_ckey("cv2");
     s.add_row(partition, ck2, "foo bar");
   for (auto version : test_sstable_versions) {
-    auto mt = make_memtable(s.schema(), {partition});
+    auto mt = make_memtable(s.schema(), {partition}).get();
     test_sstable_write_large_row_f(s.schema(), semaphore.make_permit(), *mt, pk, {nullptr, &ck1, &ck2}, 21, version);
     test_sstable_write_large_row_f(s.schema(), semaphore.make_permit(), *mt, pk, {nullptr, &ck2}, 22, version);
   }
@@ -5271,7 +5271,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_cell) {
     auto ck2 = s.make_ckey("cv2");
     s.add_row(partition, ck2, "foo bar");
     for (auto version : test_sstable_versions) {
-        auto mt = make_memtable(s.schema(), {partition});
+        auto mt = make_memtable(s.schema(), {partition}).get();
         test_sstable_write_large_cell_f(s.schema(), semaphore.make_permit(), *mt, pk, {nullptr, &ck1, &ck2}, 13, version);
         test_sstable_write_large_cell_f(s.schema(), semaphore.make_permit(), *mt, pk, {nullptr, &ck2}, 14, version);
     }
@@ -5291,7 +5291,7 @@ static void test_sstable_log_too_many_rows_f(int rows, int range_tombstones, uin
     }
 
     schema_ptr sc = s.schema();
-    auto mt = make_memtable(sc, {p});
+    auto mt = make_memtable(sc, {p}).get();
 
     // rows_count_threshold = threshold; all other thresholds at MAX.
     large_data_test_handler handler(std::numeric_limits<uint64_t>::max(),
@@ -5457,7 +5457,7 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
     }
     s.add_row_with_collection(p, s.make_ckey("ck1"), kv_map);
     schema_ptr sc = s.schema();
-    auto mt = make_memtable(sc, {p});
+    auto mt = make_memtable(sc, {p}).get();
 
     BOOST_TEST_MESSAGE(format("elements={} threshold={} expected={}", elements, threshold, expected));
     // collection_elements_threshold = threshold; all other thresholds at MAX.
@@ -5530,7 +5530,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data_records_round_trip) {
             auto ck = ss.make_ckey("ck1");
             ss.add_row(m, ck, "a_value_that_is_larger_than_one_byte");
 
-            auto mt = make_memtable(s, {m});
+            auto mt = make_memtable(s, {m}).get();
             auto sst = env.make_sstable(s, version);
             sst->write_components(mt->make_mutation_reader(s, env.make_reader_permit()),
                 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
@@ -5646,7 +5646,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data_records_top_n_bounded) {
                 muts.push_back(std::move(m));
             }
 
-            auto mt = make_memtable(s, muts);
+            auto mt = make_memtable(s, muts).get();
             auto sst = env.make_sstable(s, version);
             sst->write_components(mt->make_mutation_reader(s, env.make_reader_permit()),
                 6, s, env.manager().configure_writer("test"), encoding_stats{}).get();
@@ -5699,7 +5699,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data_records_none_when_below_threshold) {
             mutation m(s, pk);
             ss.add_row(m, ss.make_ckey("ck1"), "small_value");
 
-            auto mt = make_memtable(s, {m});
+            auto mt = make_memtable(s, {m}).get();
             auto sst = env.make_sstable(s, version);
             sst->write_components(mt->make_mutation_reader(s, env.make_reader_permit()),
                 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();

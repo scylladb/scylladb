@@ -195,7 +195,7 @@ void compaction_manager_basic(test_env& env) {
         mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
 
-        auto sst = make_sstable_containing(sst_gen, {std::move(m)});
+        auto sst = make_sstable_containing(sst_gen, {std::move(m)}).get();
         column_family_test(cf).add_sstable(sst).get();
     }
 
@@ -403,7 +403,7 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes(min_sstable_size, 'a')));
 
-                sst = make_sstable_containing(sst, {std::move(m)});
+                sst = make_sstable_containing(sst, {std::move(m)}).get();
                 sstables.push_back(sst);
             }
         }
@@ -610,14 +610,14 @@ static void compact_corrupted_by_compression_mode(const std::string& tname,
         testlog.info("Compacting {}compressed SSTable with invalid checksums", compress ? "" : "un");
 
         const auto muts = tests::generate_random_mutations(random_schema, 2).get();
-        auto sst = make_sstable_containing(env.make_sstable(schema), muts);
+        auto sst = make_sstable_containing(env.make_sstable(schema), muts).get();
         corrupt_sstable(sst);
 
         test_failing_compact(schema, {sst}, error_msg, "failed checksum");
 
         testlog.info("Compacting {}compressed SSTable with invalid digest", compress ? "" : "un");
 
-        sst = make_sstable_containing(env.make_sstable(schema), muts);
+        sst = make_sstable_containing(env.make_sstable(schema), muts).get();
         {
             auto f = sstables::test(sst).open_file(component_type::Digest, {}, {}).get();
             auto stream = make_file_input_stream(f);
@@ -1430,8 +1430,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut3 = make_delete(alpha);
 
         std::vector<shared_sstable> sstables = {
-                make_sstable_containing(sst_gen, {mut1, mut2}),
-                make_sstable_containing(sst_gen, {mut3})
+                make_sstable_containing(sst_gen, {mut1, mut2}).get(),
+                make_sstable_containing(sst_gen, {mut3}).get()
         };
 
         forward_jump_clocks(std::chrono::seconds(ttl));
@@ -1449,8 +1449,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut2 = make_insert(alpha);
         auto mut3 = make_delete(alpha);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3}).get();
 
         forward_jump_clocks(std::chrono::seconds(ttl));
 
@@ -1468,8 +1468,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut3 = make_insert(beta);
         auto mut4 = make_insert(alpha);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
-        auto sst2 = make_sstable_containing(sst_gen, {mut4});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1, mut2, mut3}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut4}).get();
 
         forward_jump_clocks(std::chrono::seconds(ttl));
 
@@ -1487,8 +1487,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut3 = make_insert(beta);
         auto mut4 = make_insert(beta);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
-        auto sst2 = make_sstable_containing(sst_gen, {mut4});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1, mut2, mut3}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut4}).get();
 
         forward_jump_clocks(std::chrono::seconds(ttl));
 
@@ -1505,8 +1505,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut1 = make_insert(alpha);
         auto mut2 = make_expiring(alpha, ttl);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2}).get();
 
         forward_jump_clocks(std::chrono::seconds(ttl));
 
@@ -1521,8 +1521,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut1 = make_insert(alpha);
         auto mut2 = make_expiring(beta, ttl);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2}).get();
 
         forward_jump_clocks(std::chrono::seconds(ttl));
 
@@ -1534,8 +1534,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut2 = make_expiring(alpha, ttl);
         auto mut3 = make_insert(beta);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3}).get();
 
         forward_jump_clocks(std::chrono::seconds(ttl));
 
@@ -1569,7 +1569,7 @@ future<> tombstone_purge(test_env& env) {
         auto sst1 = make_sstable_containing(sst_gen,
                                             {make_insert(alpha),
                                              make_delete(alpha, deletion_time)},
-                                            validate::no);
+                                            validate::no).get();
         auto result = compact({sst1}, {sst1});
         BOOST_CHECK_EQUAL(1, sstables_stats::get_shard_stats().capped_tombstone_deletion_time);
     }
@@ -1579,8 +1579,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut2 = make_delete(alpha);
         auto mut3 = make_insert(beta);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3}).get();
 
         forward_jump_clocks(std::chrono::seconds(1));
 
@@ -1597,8 +1597,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut2 = make_delete(alpha);
         auto mut3 = make_insert(beta);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3}).get();
 
         forward_jump_clocks(std::chrono::seconds(1));
 
@@ -1613,8 +1613,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut1 = make_insert(alpha);
         auto mut2 = make_expiring(alpha, ttl);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2}).get();
 
         forward_jump_clocks(std::chrono::seconds(ttl));
 
@@ -1627,8 +1627,8 @@ future<> tombstone_purge(test_env& env) {
         auto mut1 = make_delete(alpha);
         auto mut2 = make_expiring(alpha, ttl);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2}).get();
 
         forward_jump_clocks(std::chrono::seconds(ttl));
 
@@ -1731,9 +1731,9 @@ future<> mv_tombstone_purge(test_env& env) {
         auto mut4 = make_delete_row(alpha, 2, gc_clock::now(), api::timestamp_type(2));
         auto mut5 = make_insert(alpha, 3, 1, api::timestamp_type(1), api::timestamp_type(3));
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
-        auto sst3 = make_sstable_containing(sst_gen, {mut4, mut5});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3}).get();
+        auto sst3 = make_sstable_containing(sst_gen, {mut4, mut5}).get();
 
         forward_jump_clocks(std::chrono::seconds(1));
 
@@ -1774,7 +1774,7 @@ future<> sstable_rewrite(test_env& env) {
     mutation mut(s, key_for_this_shard[0]);
     mut.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes("a")));
 
-    auto sstp = make_sstable_containing(sst_gen, {std::move(mut)});
+    auto sstp = make_sstable_containing(sst_gen, {std::move(mut)}).get();
     auto key = key_for_this_shard[0];
     std::vector<sstables::shared_sstable> new_tables;
     auto creator = [&] {
@@ -1844,7 +1844,7 @@ future<> sstable_max_local_deletion_time_2(test_env& env) {
             add_row(m, to_bytes("deletecolumn" + to_sstring(i)), 100);
         }
         add_row(m, to_bytes("todelete"), 1000);
-        auto sst1 = make_sstable_containing(sst_gen, mt);
+        auto sst1 = make_sstable_containing(sst_gen, mt).get();
         BOOST_REQUIRE(last_expiry == sst1->get_stats_metadata().max_local_deletion_time);
 
         mt = make_lw_shared<replica::memtable>(s);
@@ -1852,7 +1852,7 @@ future<> sstable_max_local_deletion_time_2(test_env& env) {
         tombstone tomb(api::new_timestamp(), now);
         m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
         mt->apply(std::move(m));
-        auto sst2 = make_sstable_containing(sst_gen, mt);
+        auto sst2 = make_sstable_containing(sst_gen, mt).get();
         BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
 
         auto creator = sst_gen;
@@ -1955,7 +1955,7 @@ void compaction_with_fully_expired_table_fn(test_env& env) {
     mutation m(s, key);
     tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(3600));
     m.partition().apply_delete(*s, c_key, tomb);
-    auto sst = make_sstable_containing(sst_gen, {std::move(m)});
+    auto sst = make_sstable_containing(sst_gen, {std::move(m)}).get();
 
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
@@ -2084,14 +2084,14 @@ void time_window_strategy_correctness_fn(test_env& env) {
     for (api::timestamp_type t = 0; t < 3; t++) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(t))});
         auto mut = make_insert(std::move(key), t);
-        sstables.push_back(make_sstable_containing(env.make_sstable(s), {std::move(mut)}));
+        sstables.push_back(make_sstable_containing(env.make_sstable(s), {std::move(mut)}).get());
     }
     // Decrement the timestamp to simulate a timestamp in the past hour
     for (api::timestamp_type t = 3; t < 5; t++) {
         // And add progressively more cells into each sstable
         auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(t))});
         auto mut = make_insert(std::move(key), t);
-        sstables.push_back(make_sstable_containing(env.make_sstable(s), {std::move(mut)}));
+        sstables.push_back(make_sstable_containing(env.make_sstable(s), {std::move(mut)}).get());
     }
 
     std::map<sstring, sstring> options;
@@ -2139,7 +2139,7 @@ void time_window_strategy_correctness_fn(test_env& env) {
         for (int i = 0 ; i < r ; i++) {
             mutations.push_back(make_insert(key, tstamp + r));
         }
-        sstables.push_back(make_sstable_containing(env.make_sstable(s), std::move(mutations)));
+        sstables.push_back(make_sstable_containing(env.make_sstable(s), std::move(mutations)).get());
     }
 
     // Reset the buckets, overfill it now
@@ -2198,7 +2198,7 @@ void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
     auto add_new_sstable_to_bucket = [&] (api::timestamp_type ts, api::timestamp_type window_ts) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(ts))});
         auto mut = make_insert(std::move(key), ts);
-        auto sst = make_sstable_containing(sst_gen, {std::move(mut)});
+        auto sst = make_sstable_containing(sst_gen, {std::move(mut)}).get();
         auto bound = compaction::time_window_compaction_strategy::get_window_lower_bound(window_size, window_ts);
         buckets[bound].push_back(std::move(sst));
     };
@@ -2303,7 +2303,7 @@ future<> min_max_clustering_key_2(test_env& env) {
             }
             mt->apply(std::move(m));
         }
-        auto sst = make_sstable_containing(sst_gen, mt);
+        auto sst = make_sstable_containing(sst_gen, mt).get();
         check_min_max_column_names(sst, {"0ck100"}, {"7ck149"});
 
         mt = make_lw_shared<replica::memtable>(s);
@@ -2314,7 +2314,7 @@ future<> min_max_clustering_key_2(test_env& env) {
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
         }
         mt->apply(std::move(m));
-        auto sst2 = make_sstable_containing(sst_gen, mt);
+        auto sst2 = make_sstable_containing(sst_gen, mt).get();
         check_min_max_column_names(sst2, {"9ck101"}, {"9ck298"});
 
         auto creator = sst_gen;
@@ -2416,7 +2416,7 @@ void sstable_expired_data_ratio(test_env& env) {
     for (auto i = 0; i < remaining; i++) {
         insert_key(to_bytes("key" + to_sstring(i)), 3600, expiration_time);
     }
-    auto sst = make_sstable_containing(sst_gen, mt);
+    auto sst = make_sstable_containing(sst_gen, mt).get();
     const auto& stats = sst->get_stats_metadata();
     BOOST_REQUIRE(stats.estimated_tombstone_drop_time.bin.size() == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
     auto uncompacted_size = sst->data_size();
@@ -2542,8 +2542,8 @@ void compaction_correctness_with_partitioned_sstable_set_fn(test_env& env) {
 
     {
         std::vector<shared_sstable> sstables = {
-                make_sstable_containing(sst_gen, {mut1, mut2}),
-                make_sstable_containing(sst_gen, {mut3, mut4})
+                make_sstable_containing(sst_gen, {mut1, mut2}).get(),
+                make_sstable_containing(sst_gen, {mut3, mut4}).get()
         };
 
         auto result = compact(std::move(sstables));
@@ -2568,9 +2568,9 @@ void compaction_correctness_with_partitioned_sstable_set_fn(test_env& env) {
         // [mut1, mut2]
         // (mut2, mut3]
         std::vector<shared_sstable> sstables = {
-                make_sstable_containing(sst_gen, {mut1, mut2}),
-                make_sstable_containing(sst_gen, {mut2, mut3}),
-                make_sstable_containing(sst_gen, {mut3, mut4})
+                make_sstable_containing(sst_gen, {mut1, mut2}).get(),
+                make_sstable_containing(sst_gen, {mut2, mut3}).get(),
+                make_sstable_containing(sst_gen, {mut3, mut4}).get()
         };
 
         auto result = compact(std::move(sstables));
@@ -2593,8 +2593,8 @@ void compaction_correctness_with_partitioned_sstable_set_fn(test_env& env) {
     {
         // with gap between tables
         std::vector<shared_sstable> sstables = {
-                make_sstable_containing(sst_gen, {mut1, mut2}),
-                make_sstable_containing(sst_gen, {mut4, mut4})
+                make_sstable_containing(sst_gen, {mut1, mut2}).get(),
+                make_sstable_containing(sst_gen, {mut4, mut4}).get()
         };
 
         auto result = compact(std::move(sstables));
@@ -2649,7 +2649,7 @@ void sstable_cleanup_correctness_fn(cql_test_env& cql_env, test_env& env) {
     for (auto i = 0U; i < total_partitions; i++) {
         mutations.push_back(make_insert(local_keys.at(i)));
     }
-    auto sst = make_sstable_containing(sst_gen, mutations);
+    auto sst = make_sstable_containing(sst_gen, mutations).get();
     auto run_identifier = sst->run_identifier();
 
     auto cf = env.make_table_for_tests(s);
@@ -3944,7 +3944,7 @@ void scrubbed_sstable_removal_fn(test_env& env) {
 
     auto mut1 = mutation(s, pk);
     mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-    auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+    auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
 
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
@@ -4002,7 +4002,7 @@ void compact_uncompressed_sstable_during_scrub_validate_fn(test_env& env) {
     for (int i = 0; i < 2; i++) {
         auto mut = mutation(s, tests::generate_partition_key(s));
         mut.partition().apply_insert(*s, tests::generate_clustering_key(s), timestamp++);
-        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut)});
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut)}).get();
         cf->add_sstable_and_update_cache(std::move(sst)).get();
     }
 
@@ -4158,7 +4158,7 @@ void sstable_run_based_compaction_fn(test_env& env) {
     // Generate 4 sstable runs composed of 4 fragments each after 4 compactions.
     // All fragments non-overlapping.
     for (auto i = 0U; i < keys.size(); i++) {
-        auto sst = make_sstable_containing(sst_gen, { make_insert(keys[i]) });
+        auto sst = make_sstable_containing(sst_gen, { make_insert(keys[i]) }).get();
         sst->set_sstable_level(1);
         BOOST_REQUIRE_EQUAL(sst->get_sstable_level(), 1);
         column_family_test(cf).add_sstable(sst).get();
@@ -4203,9 +4203,9 @@ void compaction_strategy_aware_major_compaction_fn(test_env& env) {
     };
 
     auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
-    auto sst = make_sstable_containing(env.make_sstable(s), {make_insert(alpha)});
+    auto sst = make_sstable_containing(env.make_sstable(s), {make_insert(alpha)}).get();
     sst->set_sstable_level(2);
-    auto sst2 = make_sstable_containing(env.make_sstable(s), {make_insert(alpha)});
+    auto sst2 = make_sstable_containing(env.make_sstable(s), {make_insert(alpha)}).get();
     sst2->set_sstable_level(3);
     auto candidates = std::vector<sstables::shared_sstable>({ sst, sst2 });
 
@@ -4265,8 +4265,8 @@ void backlog_tracker_correctness_after_changing_compaction_strategy_fn(test_env&
         auto mut3 = make_insert(keys[2]);
         auto mut4 = make_insert(keys[3]);
         std::vector<shared_sstable> ssts = {
-                make_sstable_containing(sst_gen, {mut1, mut2}),
-                make_sstable_containing(sst_gen, {mut3, mut4})
+                make_sstable_containing(sst_gen, {mut1, mut2}).get(),
+                make_sstable_containing(sst_gen, {mut3, mut4}).get()
         };
 
         for (auto& sst : ssts) {
@@ -4477,8 +4477,8 @@ void purged_tombstone_consumer_sstable_fn(test_env& env) {
         auto [mut3, mut3_tombstone] = make_delete(alpha);
 
         std::vector<shared_sstable> sstables = {
-            make_sstable_containing(env.make_sstable(s), {mut1, mut2}),
-            make_sstable_containing(env.make_sstable(s), {mut3})
+            make_sstable_containing(env.make_sstable(s), {mut1, mut2}).get(),
+            make_sstable_containing(env.make_sstable(s), {mut3}).get()
         };
 
         forward_jump_clocks(std::chrono::seconds(ttl));
@@ -4567,9 +4567,9 @@ void incremental_compaction_data_resurrection_fn(test_env& env) {
     auto mut4 = make_insert(zetta);
     auto mut1_deletion = make_delete(alpha);
 
-    auto non_expired_sst = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
-    auto non_expired_sst_2 = make_sstable_containing(sst_gen, {mut4});
-    auto expired_sst = make_sstable_containing(sst_gen, {mut1_deletion});
+    auto non_expired_sst = make_sstable_containing(sst_gen, {mut1, mut2, mut3}).get();
+    auto non_expired_sst_2 = make_sstable_containing(sst_gen, {mut4}).get();
+    auto expired_sst = make_sstable_containing(sst_gen, {mut1_deletion}).get();
 
     std::vector<shared_sstable> sstables = {
             non_expired_sst,
@@ -4697,12 +4697,12 @@ void twcs_major_compaction_fn(test_env& env) {
     cf->start();
     cf->set_compaction_strategy(compaction::compaction_strategy_type::time_window);
 
-    auto original_together = make_sstable_containing(sst_gen, {mut3, mut4});
+    auto original_together = make_sstable_containing(sst_gen, {mut3, mut4}).get();
 
     auto ret = compact_sstables(env, compaction::compaction_descriptor({original_together}), cf, sst_gen, replacer_fn_no_op()).get();
     BOOST_REQUIRE(ret.new_sstables.size() == 1);
 
-    auto original_apart = make_sstable_containing(sst_gen, {mut1, mut2});
+    auto original_apart = make_sstable_containing(sst_gen, {mut1, mut2}).get();
     ret = compact_sstables(env, compaction::compaction_descriptor({original_apart}), cf, sst_gen, replacer_fn_no_op()).get();
     BOOST_REQUIRE(ret.new_sstables.size() == 2);
 }
@@ -4749,7 +4749,7 @@ void autocompaction_control_fn(test_env& env) {
     const auto keys = tests::generate_partition_keys(1, s);
     for (auto i = 0; i < 2 * min_threshold; ++i) {
         auto mut = make_insert(keys[0]);
-        auto sst = make_sstable_containing(env.make_sstable(s), {mut});
+        auto sst = make_sstable_containing(env.make_sstable(s), {mut}).get();
         cf->add_sstable_and_update_cache(sst).wait();
     }
 
@@ -4840,8 +4840,8 @@ void test_bug_6472_fn(test_env& env) {
     // Reproduce issue 6472 by making an input set which causes both interposer and GC writer to be enabled
     //
     std::vector<shared_sstable> sstables_spanning_many_windows = {
-        make_sstable_containing(sst_gen, muts),
-        make_sstable_containing(sst_gen, muts),
+        make_sstable_containing(sst_gen, muts).get(),
+        make_sstable_containing(sst_gen, muts).get(),
     };
     sstables::run_id run_id = sstables::run_id::create_random_id();
     for (auto& sst : sstables_spanning_many_windows) {
@@ -4949,7 +4949,7 @@ void test_twcs_partition_estimate_fn(test_env& env) {
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
             m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_timestamp(sstable_idx, ck));
         }
-        return make_sstable_containing(sst_gen, {m});
+        return make_sstable_containing(sst_gen, {m}).get();
     };
 
     auto cf = env.make_table_for_tests(s);
@@ -5211,7 +5211,7 @@ void test_twcs_compaction_across_buckets_fn(test_env& env) {
     sstables_spanning_many_windows.reserve(windows + 1);
 
     for (unsigned w = 0; w < windows; w++) {
-        sstables_spanning_many_windows.push_back(make_sstable_containing(sst_gen, {make_row(std::chrono::hours((w + 1) * 2))}));
+        sstables_spanning_many_windows.push_back(make_sstable_containing(sst_gen, {make_row(std::chrono::hours((w + 1) * 2))}).get());
     }
     auto deletion_mut = [&] () {
         mutation m(s, pkey);
@@ -5219,7 +5219,7 @@ void test_twcs_compaction_across_buckets_fn(test_env& env) {
         m.partition().apply(tomb);
         return m;
     }();
-    sstables_spanning_many_windows.push_back(make_sstable_containing(sst_gen, {deletion_mut}));
+    sstables_spanning_many_windows.push_back(make_sstable_containing(sst_gen, {deletion_mut}).get());
 
     auto ret = compact_sstables(env, compaction::compaction_descriptor(std::move(sstables_spanning_many_windows)), cf, sst_gen, replacer_fn_no_op(), can_purge_tombstones::no).get();
 
@@ -5264,7 +5264,7 @@ void test_offstrategy_sstable_compaction_fn(test_env& env) {
         cf->start();
 
         for (auto i = 0; i < cf->schema()->max_compaction_threshold(); i++) {
-            auto sst = make_sstable_containing(sst_gen, {mut});
+            auto sst = make_sstable_containing(sst_gen, {mut}).get();
             cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
         }
         BOOST_REQUIRE(cf->perform_offstrategy_compaction(tasks::task_info{}).get());
@@ -5348,7 +5348,7 @@ void twcs_reshape_with_disjoint_set_fn(test_env& env) {
         std::vector<sstables::shared_sstable> sstables;
         sstables.reserve(disjoint_sstable_count);
         for (unsigned i = 0; i < disjoint_sstable_count; i++) {
-            auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(1))});
+            auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(1))}).get();
             sstables.push_back(std::move(sst));
         }
 
@@ -5361,7 +5361,7 @@ void twcs_reshape_with_disjoint_set_fn(test_env& env) {
         std::vector<sstables::shared_sstable> sstables;
         sstables.reserve(disjoint_sstable_count);
         for (unsigned i = 0; i < disjoint_sstable_count; i++) {
-            auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(i))});
+            auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(i))}).get();
             sstables.push_back(std::move(sst));
         }
 
@@ -5376,10 +5376,10 @@ void twcs_reshape_with_disjoint_set_fn(test_env& env) {
         std::vector<sstables::shared_sstable> sstables;
         sstables.reserve(disjoint_sstable_count);
         for (unsigned i = 0; i < disjoint_sstable_count; i++) {
-            auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(24*i))});
+            auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(24*i))}).get();
             sstables.push_back(std::move(sst));
             i++;
-            sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(24*i + 1))});
+            sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(24*i + 1))}).get();
             sstables.push_back(std::move(sst));
         }
 
@@ -5392,7 +5392,7 @@ void twcs_reshape_with_disjoint_set_fn(test_env& env) {
         std::vector<sstables::shared_sstable> sstables;
         sstables.reserve(disjoint_sstable_count);
         for (unsigned i = 0; i < disjoint_sstable_count; i++) {
-            auto sst = make_sstable_containing(sst_gen, {make_row(0, std::chrono::hours(1))});
+            auto sst = make_sstable_containing(sst_gen, {make_row(0, std::chrono::hours(1))}).get();
             sstables.push_back(std::move(sst));
         }
 
@@ -5422,10 +5422,10 @@ void twcs_reshape_with_disjoint_set_fn(test_env& env) {
             // intermix big and small files, to make sure STCS logic is really applied to favor similar-sized reshape jobs.
             //
             if (i % 2 == 0) {
-                sst = make_sstable_containing(sst_gen, mutations_for_small_files);
+                sst = make_sstable_containing(sst_gen, mutations_for_small_files).get();
                 generations_for_small_files.insert(sst->generation());
             } else {
-                sst = make_sstable_containing(sst_gen, mutations_for_big_files);
+                sst = make_sstable_containing(sst_gen, mutations_for_big_files).get();
             }
             sstables.push_back(std::move(sst));
         }
@@ -5455,7 +5455,7 @@ void twcs_reshape_with_disjoint_set_fn(test_env& env) {
             for (auto j = 0; j < 5; j++) {
                 muts.push_back(make_row(i, std::chrono::hours(j * 8)));
             }
-            auto sst = make_sstable_containing(sst_gen, std::move(muts));
+            auto sst = make_sstable_containing(sst_gen, std::move(muts)).get();
             sstables.push_back(std::move(sst));
         }
 
@@ -5536,7 +5536,7 @@ void stcs_reshape_overlapping_fn(test_env& env) {
         std::vector<sstables::shared_sstable> sstables;
         sstables.reserve(disjoint_sstable_count);
         for (unsigned i = 0; i < disjoint_sstable_count; i++) {
-            auto sst = make_sstable_containing(sst_gen, {make_row(i)});
+            auto sst = make_sstable_containing(sst_gen, {make_row(i)}).get();
             sstables.push_back(std::move(sst));
         }
 
@@ -5549,7 +5549,7 @@ void stcs_reshape_overlapping_fn(test_env& env) {
         std::vector<sstables::shared_sstable> sstables;
         sstables.reserve(disjoint_sstable_count);
         for (unsigned i = 0; i < disjoint_sstable_count; i++) {
-            auto sst = make_sstable_containing(sst_gen, {make_row(0)});
+            auto sst = make_sstable_containing(sst_gen, {make_row(0)}).get();
             sstables.push_back(std::move(sst));
         }
 
@@ -5587,8 +5587,8 @@ void test_twcs_single_key_reader_filtering_fn(test_env& env) {
         return m;
     };
 
-    auto sst1 = make_sstable_containing(sst_gen, {make_row(0, 0)});
-    auto sst2 = make_sstable_containing(sst_gen, {make_row(0, 1)});
+    auto sst1 = make_sstable_containing(sst_gen, {make_row(0, 0)}).get();
+    auto sst2 = make_sstable_containing(sst_gen, {make_row(0, 1)}).get();
     auto dkey = sst1->get_first_decorated_key();
 
     auto cf = env.make_table_for_tests(s);
@@ -5708,7 +5708,7 @@ void max_ongoing_compaction_fn(test_env& env) {
         auto s = schemas[idx];
         auto cf = tables[idx];
         auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
-        auto sst = make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts);
+        auto sst = make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts).get();
         column_family_test(cf).add_sstable(sst).get();
     };
 
@@ -5758,7 +5758,7 @@ void max_ongoing_compaction_fn(test_env& env) {
         auto cft = column_family_test(cf);
         for (size_t i = 0; i < num_sstables; i++) {
             auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
-            cft.add_sstable(make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts)).get();
+            cft.add_sstable(make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts).get()).get();
         }
     };
 
@@ -5947,8 +5947,8 @@ void twcs_single_key_reader_through_compound_set_fn(test_env& env) {
     auto sst_gen = env.make_sst_factory(s);
 
     // sstables with same key but belonging to different windows
-    auto sst1 = make_sstable_containing(sst_gen, {make_row(std::chrono::hours(1))});
-    auto sst2 = make_sstable_containing(sst_gen, {make_row(std::chrono::hours(5))});
+    auto sst1 = make_sstable_containing(sst_gen, {make_row(std::chrono::hours(1))}).get();
+    auto sst2 = make_sstable_containing(sst_gen, {make_row(std::chrono::hours(5))}).get();
     BOOST_REQUIRE(sst1->get_first_decorated_key().token() == sst2->get_last_decorated_key().token());
     auto dkey = sst1->get_first_decorated_key();
 
@@ -6064,7 +6064,7 @@ void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {
         m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), gc_clock::now().time_since_epoch().count());
         return m;
     }();
-    auto sst = make_sstable_containing(sst_gen, {std::move(row_mut)});
+    auto sst = make_sstable_containing(sst_gen, {std::move(row_mut)}).get();
     cf->add_sstable_and_update_cache(sst).get();
     assert_table_sstable_count(cf, 1);
 
@@ -6305,7 +6305,7 @@ void test_compaction_strategy_cleanup_method_fn(test_env& env) {
         candidates.reserve(all_files);
         for (size_t i = 0; i < all_files; i++) {
             auto current_step = duration_cast<microseconds>(step_base) * i;
-            auto sst = make_sstable_containing(sst_gen, {make_mutation(i, next_timestamp(current_step))});
+            auto sst = make_sstable_containing(sst_gen, {make_mutation(i, next_timestamp(current_step))}).get();
             sst->set_sstable_level(sstable_level);
             candidates.push_back(std::move(sst));
         }
@@ -6432,7 +6432,7 @@ void test_large_partition_splitting_on_compaction_fn(test_env& env) {
         mutations.push_back(make_open_ended_range_tombstone());
     }
 
-    auto sst = make_sstable_containing(sst_gen, std::move(mutations));
+    auto sst = make_sstable_containing(sst_gen, std::move(mutations)).get();
 
     auto desc = compaction::compaction_descriptor({ sst });
     // With max_sstable_bytes of 1, we'll perform the splitting of the partition as soon as possible.
@@ -6524,7 +6524,7 @@ void check_table_sstable_set_includes_maintenance_sstables_fn(test_env& env) {
 
     auto mut1 = mutation(s, pks[0]);
     mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-    auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+    auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
 
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
@@ -6596,11 +6596,11 @@ void test_print_shared_sstables_vector_fn(test_env& env) {
 
     auto mut0 = mutation(s, pks[0]);
     mut0.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-    ssts[0] = make_sstable_containing(sst_gen, {std::move(mut0)});
+    ssts[0] = make_sstable_containing(sst_gen, {std::move(mut0)}).get();
 
     auto mut1 = mutation(s, pks[1]);
     mut1.partition().apply_insert(*s, ss.make_ckey(1), ss.new_timestamp());
-    ssts[1] = make_sstable_containing(sst_gen, {std::move(mut1)});
+    ssts[1] = make_sstable_containing(sst_gen, {std::move(mut1)}).get();
 
     std::string msg = seastar::format("{}", ssts);
     for (const auto& sst : ssts) {
@@ -6680,8 +6680,8 @@ void tombstone_gc_disabled_fn(test_env& env) {
         auto mut2 = make_delete(alpha);
         auto mut3 = make_insert(beta);
 
-        auto sst1 = make_sstable_containing(sst_gen, {mut1});
-        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+        auto sst1 = make_sstable_containing(sst_gen, {mut1}).get();
+        auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3}).get();
 
         forward_jump_clocks(std::chrono::seconds(1));
 
@@ -6760,8 +6760,8 @@ void compaction_optimization_to_avoid_bloom_filter_checks_fn(test_env& env) {
         return m;
     };
 
-    auto uncompacting = make_sstable_containing(sst_gen, { make_insert(partition_key::from_exploded(*s, {to_bytes("pk1")}) )});
-    auto compacting = make_sstable_containing(sst_gen, { make_delete(partition_key::from_exploded(*s, {to_bytes("pk1")}) )});
+    auto uncompacting = make_sstable_containing(sst_gen, { make_insert(partition_key::from_exploded(*s, {to_bytes("pk1")}) )}).get();
+    auto compacting = make_sstable_containing(sst_gen, { make_delete(partition_key::from_exploded(*s, {to_bytes("pk1")}) )}).get();
 
     auto result = compact({uncompacting, compacting}, {compacting});
     BOOST_REQUIRE_EQUAL(1, result.new_sstables.size());
@@ -6834,7 +6834,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
             auto sst = make_sstable_containing(sst_gen, {
                 std::move(mut1),
                 std::move(mut2)
-            });
+            }).get();
             sstables::test(sst).set_run_identifier(run_identifier); // in order to produce multi-fragment run.
             sst->set_sstable_level(offstrategy ? 0 : 1);
 
@@ -6980,7 +6980,7 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
         auto sst = make_sstable_containing(sst_gen, {
             std::move(mut1),
             std::move(mut2)
-        });
+        }).get();
         // Force a new run_id to trigger offstrategy compaction
         sstables::test(sst).set_run_identifier(run_id::create_random_id());
         // Set level to 0 to trigger offstrategy compaction
@@ -7077,11 +7077,11 @@ future<> test_sstables_excluding_staging_correctness(test_env_config cfg) {
 
         auto sst_gen = env.make_sst_factory(s);
 
-        auto staging_sst = make_sstable_containing(sst_gen, {*sorted_muts.begin()});
+        auto staging_sst = make_sstable_containing(sst_gen, {*sorted_muts.begin()}).get();
         staging_sst->change_state(sstables::sstable_state::staging).get();
         BOOST_REQUIRE(staging_sst->requires_view_building());
 
-        auto regular_sst = make_sstable_containing(sst_gen, {*sorted_muts.rbegin()});
+        auto regular_sst = make_sstable_containing(sst_gen, {*sorted_muts.rbegin()}).get();
 
         t->add_sstable_and_update_cache(staging_sst).get();
         t->add_sstable_and_update_cache(regular_sst).get();
@@ -7150,7 +7150,7 @@ void produces_optimal_filter_by_estimating_correctly_partitions_per_sstable_fn(t
     for (auto i = 0; i < keys; i++) {
         muts.push_back(make_insert(partition_key::from_exploded(*s, {to_bytes(shared_key_prefix + to_sstring(i))})));
     }
-    auto sst = make_sstable_containing(sst_gen, std::move(muts));
+    auto sst = make_sstable_containing(sst_gen, std::move(muts)).get();
 
     testlog.info("index size: {}, data_size: {}", sst->index_size(), sst->ondisk_data_size());
 
@@ -7220,7 +7220,7 @@ void splitting_compaction_fn(test_env& env) {
     auto close_table = deferred_stop(t);
     t->start();
 
-    auto input = make_sstable_containing(sst_gen, std::move(muts));
+    auto input = make_sstable_containing(sst_gen, std::move(muts)).get();
 
     std::unordered_set<int64_t> groups;
     auto classify_fn = [&groups] (dht::token t) -> mutation_writer::token_group_id {
@@ -7354,7 +7354,7 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
 
     auto mut1 = mutation(s, pk);
     mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-    auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+    auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
 
     auto table = env.make_table_for_tests(s);
     auto close_table = deferred_stop(table);
@@ -7389,7 +7389,7 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
 
     auto mut1 = mutation(s, pk);
     mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-    auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+    auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)}).get();
 
     auto table = env.make_table_for_tests(s);
     auto close_table = deferred_stop(table);
@@ -7456,7 +7456,7 @@ void failure_when_adding_new_sstable_fn(test_env& env) {
 
     auto mut1 = mutation(s, pk);
     mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-    auto sst = make_sstable_containing(env.make_sstable(s), {mut1});
+    auto sst = make_sstable_containing(env.make_sstable(s), {mut1}).get();
 
     auto table = env.make_table_for_tests(s);
     auto close_table = deferred_stop(table);
@@ -7467,8 +7467,8 @@ void failure_when_adding_new_sstable_fn(test_env& env) {
     // Verify new sstable was unlinked on failure.
     BOOST_REQUIRE(!sst->get_storage().exists(*sst, sstables::component_type::Data).get());
 
-    auto sst2 = make_sstable_containing(env.make_sstable(s), {mut1});
-    auto sst3 = make_sstable_containing(env.make_sstable(s), {mut1});
+    auto sst2 = make_sstable_containing(env.make_sstable(s), {mut1}).get();
+    auto sst3 = make_sstable_containing(env.make_sstable(s), {mut1}).get();
     BOOST_REQUIRE_THROW(table->add_new_sstables_and_update_cache({sst2, sst3}, on_add).get(), std::runtime_error);
 
     // Verify both sstables are unlinked on failure.
@@ -7498,7 +7498,7 @@ static future<> test_perform_component_rewrite_single_sstable(compaction::compac
 
         auto mut1 = mutation(s, pk);
         mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-        auto original_sst = make_sstable_containing(env.make_sstable(s), {mut1});
+        auto original_sst = make_sstable_containing(env.make_sstable(s), {mut1}).get();
 
         BOOST_REQUIRE(original_sst->get_sstable_level() == 0);
 
@@ -7567,7 +7567,7 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
             auto pk = ss.make_pkey(i);
             auto mut = mutation(s, pk);
             mut.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-            auto sst = make_sstable_containing(env.make_sstable(s), {mut});
+            auto sst = make_sstable_containing(env.make_sstable(s), {mut}).get();
             all_sstables.push_back(sst);
         }
 
