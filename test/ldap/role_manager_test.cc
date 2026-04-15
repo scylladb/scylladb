@@ -277,6 +277,10 @@ const auto flaky_server_query_template = fmt::format(
         "ldap://localhost:{}/{}?cn?sub?(uniqueMember=uid={{USER}},ou=People,dc=example,dc=com)",
         std::stoi(ldap_port) + 2, base_dn);
 
+const auto member_uid_query_template = fmt::format(
+        "ldap://localhost:{}/dc=example,dc=com?cn?sub?(memberUid={{USER}})",
+        ldap_port);
+
 auto make_ldap_manager(cql_test_env& env, sstring query_template = default_query_template) {
     auto stop_role_manager = [] (auth::ldap_role_manager* m) {
         m->stop().get();
@@ -339,6 +343,148 @@ SEASTAR_TEST_CASE(ldap_wrong_role) {
     });
 }
 
+SEASTAR_TEST_CASE(ldap_filter_injection_with_wildcard_user) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, member_uid_query_template);
+        m->start().get();
+        do_with_mc(env, [&] (::service::group0_batch& b) {
+            m->create("*", auth::role_config{.is_superuser = false, .can_login = true}, b).get();
+            m->create("role1", auth::role_config{}, b).get();
+            m->create("role2", auth::role_config{.is_superuser = true, .can_login = false}, b).get();
+        });
+
+        // SCYLLADB-1309: Escaping keeps '*' literal, so it should not match any LDAP memberUid entries besides the local role itself.
+        const role_set expected{"*"};
+        BOOST_REQUIRE_EQUAL(expected, m->query_granted("*", auth::recursive_role_query::no).get());
+    });
+}
+
+SEASTAR_TEST_CASE(ldap_filter_injection_with_parenthesis_payload) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, member_uid_query_template);
+        m->start().get();
+
+        // SCYLLADB-1309: With escaping, the payload becomes (memberUid=\29\28uid=\2a) - a valid filter
+        // that matches no real entry.  The user gets only its own role.
+        const sstring payload = ")(uid=*";
+        do_with_mc(env, [&] (::service::group0_batch& b) {
+            m->create(payload, auth::role_config{.is_superuser = false, .can_login = true}, b).get();
+            m->create("role1", auth::role_config{}, b).get();
+            m->create("role2", auth::role_config{.is_superuser = true, .can_login = false}, b).get();
+        });
+
+        const role_set expected{payload};
+        BOOST_REQUIRE_EQUAL(expected, m->query_granted(payload, auth::recursive_role_query::no).get());
+    });
+}
+
+SEASTAR_TEST_CASE(ldap_filter_injection_with_percent_encoded_wildcard) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, member_uid_query_template);
+        m->start().get();
+
+        // SCYLLADB-1309: Without URL percent-encoding of '%', ldap_url_parse would
+        // percent-decode "%2a" -> '*', turning it into a wildcard that
+        // matches every entry.  The fix percent-encodes '%' -> "%25",
+        // so ldap_url_parse decodes "%252a" -> "%2a" (literal string).
+        const sstring payload = "%2a";
+        do_with_mc(env, [&] (::service::group0_batch& b) {
+            m->create(payload, auth::role_config{.is_superuser = false, .can_login = true}, b).get();
+            m->create("role1", auth::role_config{}, b).get();
+            m->create("role2", auth::role_config{.is_superuser = true, .can_login = false}, b).get();
+        });
+
+        const role_set expected{payload};
+        BOOST_REQUIRE_EQUAL(expected, m->query_granted(payload, auth::recursive_role_query::no).get());
+    });
+}
+
+SEASTAR_TEST_CASE(ldap_filter_injection_with_question_mark_user) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, member_uid_query_template);
+        m->start().get();
+
+        // SCYLLADB-1309: '?' is the LDAP URL component separator.  Without URL
+        // percent-encoding, it would break ldap_url_parse's splitting,
+        // truncating the filter and potentially pushing the remainder
+        // into the extensions component.  The fix encodes '?' -> "%3F".
+        const sstring payload = "foo?bar";
+        do_with_mc(env, [&] (::service::group0_batch& b) {
+            m->create(payload, auth::role_config{.is_superuser = false, .can_login = true}, b).get();
+            m->create("role1", auth::role_config{}, b).get();
+            m->create("role2", auth::role_config{.is_superuser = true, .can_login = false}, b).get();
+        });
+
+        const role_set expected{payload};
+        BOOST_REQUIRE_EQUAL(expected, m->query_granted(payload, auth::recursive_role_query::no).get());
+    });
+}
+
+SEASTAR_TEST_CASE(ldap_filter_injection_with_hash_fragment_user) {
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, member_uid_query_template);
+        m->start().get();
+
+        // SCYLLADB-1309: '#' introduces a URI fragment.  Without URL
+        // percent-encoding, ldap_url_parse would treat everything after '#' as
+        // a fragment and silently truncate the filter.  The fix encodes
+        // '#' -> "%23".
+        const sstring payload = "foo#bar";
+        do_with_mc(env, [&] (::service::group0_batch& b) {
+            m->create(payload, auth::role_config{.is_superuser = false, .can_login = true}, b).get();
+            m->create("role1", auth::role_config{}, b).get();
+            m->create("role2", auth::role_config{.is_superuser = true, .can_login = false}, b).get();
+        });
+
+        const role_set expected{payload};
+        BOOST_REQUIRE_EQUAL(expected, m->query_granted(payload, auth::recursive_role_query::no).get());
+    });
+}
+
+using exception_predicate::message_contains;
+
+SEASTAR_TEST_CASE(ldap_rejects_user_outside_filter_component) {
+    // SCYLLADB-1309: {USER} placed outside the filter component (in the base DN here) is a
+    // misconfiguration.  The substitution produces a working LDAP search rooted
+    // at the user-controlled DN, but RFC 4515 filter escaping is the wrong
+    // defense for DN values (which need RFC 4514 escaping for ',', '=', '+',
+    // etc.).  DN metacharacters in the username could restructure the base DN
+    // and redirect the search.  start() now rejects this configuration.
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, "ldap://localhost:5000/ou={USER},dc=example,dc=com?cn?sub?(objectClass=*)");
+        BOOST_REQUIRE_EXCEPTION(m->start().get(), auth::ldap_role_manager::url_error,
+                                message_contains("outside the filter component"));
+    });
+}
+
+SEASTAR_TEST_CASE(ldap_rejects_user_in_host_component) {
+    // SCYLLADB-1309: {USER} in the host lets an attacker redirect the query to an arbitrary server.
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, "ldap://{USER}/dc=example,dc=com?cn?sub?(uid={USER})");
+        BOOST_REQUIRE_EXCEPTION(m->start().get(), auth::ldap_role_manager::url_error,
+                                message_contains("outside the filter component"));
+    });
+}
+
+SEASTAR_TEST_CASE(ldap_rejects_user_in_attributes_component) {
+    // SCYLLADB-1309: {USER} in the attributes component would let an attacker control which
+    // attributes are returned, potentially leaking sensitive data from LDAP entries.
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, "ldap://localhost:5000/dc=example,dc=com?{USER}?sub?(uid=foo)");
+        BOOST_REQUIRE_EXCEPTION(m->start().get(), auth::ldap_role_manager::url_error,
+                                message_contains("outside the filter component"));
+    });
+}
+
+SEASTAR_TEST_CASE(ldap_rejects_user_in_extensions_component) {
+    // SCYLLADB-1309: {USER} in the extensions component could inject critical LDAP extensions.
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        auto m = make_ldap_manager(env, "ldap://localhost:5000/dc=example,dc=com?cn?sub?(uid=foo)?!{USER}=bar");
+        BOOST_REQUIRE_EXCEPTION(m->start().get(), auth::ldap_role_manager::url_error,
+                                message_contains("outside the filter component"));
+    });
+}
+
 SEASTAR_TEST_CASE(ldap_reconnect) {
     return do_with_cql_env_thread([](cql_test_env& env) {
         auto m = make_ldap_manager(env, flaky_server_query_template);
@@ -354,8 +500,6 @@ SEASTAR_TEST_CASE(ldap_reconnect) {
         when_all(queries.begin(), queries.end()).get();
     });
 }
-
-using exception_predicate::message_contains;
 
 SEASTAR_TEST_CASE(ldap_wrong_url) {
     return do_with_cql_env_thread([](cql_test_env& env) {
