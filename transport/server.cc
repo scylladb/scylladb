@@ -1687,7 +1687,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
 
     std::vector<cql3::statements::batch_statement::single_statement> modifications;
     std::vector<cql3::raw_value_view_vector_with_unset> values;
-    std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> pending_authorization_entries;
+    std::unordered_map<cql3::prepared_cache_key_type, cql3::statements::prepared_statement::checked_weak_ptr> pending_authorization_entries;
 
     modifications.reserve(n.assume_value());
     values.reserve(n.assume_value());

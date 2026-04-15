@@ -22,13 +22,14 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/dialect.hh"
+#include "cql3/query_options.hh"
+#include "cql3/stats.hh"
 #include "exceptions/exceptions.hh"
 #include "service/migration_listener.hh"
 #include "mutation/timestamp.hh"
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
-#include "vector_search/vector_store_client.hh"
 #include "utils/assert.hh"
 #include "utils/observable.hh"
 #include "utils/rolling_max_tracker.hh"
@@ -41,6 +42,9 @@
 
 
 namespace lang { class manager; }
+namespace vector_search {
+class vector_store_client;
+}
 namespace service {
 class migration_manager;
 class query_state;
@@ -57,6 +61,9 @@ struct query;
 }
 
 namespace cql3 {
+
+class prepared_statements_cache;
+class authorized_prepared_statements_cache;
 
 namespace statements {
 class batch_statement;
@@ -184,7 +191,7 @@ public:
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries, dialect d);
 
     query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc,
-            memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm);
+            memory_config mcfg, cql_config& cql_cfg, const utils::loading_cache_config& auth_prep_cache_cfg, lang::manager& langm);
 
     ~query_processor();
 
@@ -474,7 +481,7 @@ public:
             ::shared_ptr<statements::batch_statement> stmt,
             service::query_state& query_state,
             query_options& options,
-            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
+            std::unordered_map<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr> pending_authorization_entries) {
         return execute_batch_without_checking_exception_message(
                 std::move(stmt),
                 query_state,
@@ -490,7 +497,7 @@ public:
             ::shared_ptr<statements::batch_statement>,
             service::query_state& query_state,
             query_options& options,
-            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
+            std::unordered_map<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr> pending_authorization_entries);
 
     future<service::broadcast_tables::query_result>
     execute_broadcast_table_query(const service::broadcast_tables::query&);

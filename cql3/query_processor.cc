@@ -17,6 +17,9 @@
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/try_future.hh>
 
+#include "cql3/prepared_statements_cache.hh"
+#include "cql3/authorized_prepared_statements_cache.hh"
+#include "transport/messages/result_message.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/mapreduce_service.hh"
@@ -77,7 +80,7 @@ static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
 }
 
-query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm)
+query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc, query_processor::memory_config mcfg, cql_config& cql_cfg, const utils::loading_cache_config& auth_prep_cache_cfg, lang::manager& langm)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
@@ -86,7 +89,7 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _mcfg(mcfg)
         , _cql_config(cql_cfg)
         , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
-        , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
+        , _authorized_prepared_cache(auth_prep_cache_cfg, authorized_prepared_statements_cache_log)
         , _auth_prepared_cache_cfg_cb([this] (uint32_t) { (void) _authorized_prepared_cache_config_action.trigger_later(); })
         , _authorized_prepared_cache_config_action([this] { update_authorized_prepared_cache_config(); return make_ready_future<>(); })
         , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
@@ -1074,7 +1077,7 @@ query_processor::execute_batch_without_checking_exception_message(
         ::shared_ptr<statements::batch_statement> batch,
         service::query_state& query_state,
         query_options& options,
-        std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
+        std::unordered_map<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr> pending_authorization_entries) {
     auto access_future = co_await coroutine::as_future(batch->check_access(*this, query_state.get_client_state()));
     bool failed = access_future.failed();
     co_await audit::inspect(batch, query_state, options, failed);

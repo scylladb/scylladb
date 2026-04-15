@@ -9,7 +9,6 @@
 #pragma once
 
 #include "cql3/cql_statement.hh"
-#include "cql3/query_processor.hh"
 #include "raw/parsed_statement.hh"
 #include "service/qos/qos_common.hh"
 #include "service/query_state.hh"

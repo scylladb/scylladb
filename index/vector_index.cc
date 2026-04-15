@@ -21,6 +21,7 @@
 #include "utils/UUID_gen.hh"
 #include "types/types.hh"
 #include "utils/managed_string.hh"
+#include "utils/rjson.hh"
 #include <ranges>
 #include <seastar/core/sstring.hh>
 #include <boost/algorithm/string.hpp>

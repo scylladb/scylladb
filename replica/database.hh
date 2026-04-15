@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "locator/abstract_replication_strategy.hh"
 #include "index/secondary_index_manager.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -111,6 +110,10 @@ class raft_group_registry;
 
 namespace gms {
 class feature_service;
+}
+
+namespace locator {
+class abstract_replication_strategy;
 }
 
 namespace alternator {

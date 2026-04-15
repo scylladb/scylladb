@@ -361,7 +361,7 @@ utils::config_file::configs utils::config_file::unset_values() const {
 
 future<> utils::config_file::read_from_file(file f, error_handler h) {
     return f.size().then([this, f, h](size_t s) {
-        return do_with(make_file_input_stream(f), [this, s, h](input_stream<char>& in) {
+        return do_with(make_file_input_stream(f), [this, s, h](seastar::input_stream<char>& in) {
             return in.read_exactly(s).then([this, h](temporary_buffer<char> buf) {
                read_from_yaml(sstring(buf.begin(), buf.end()), h);
                 if (!_initialization_completed) {

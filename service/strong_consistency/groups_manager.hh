@@ -11,7 +11,10 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
-#include "cql3/query_processor.hh"
+
+namespace cql3 {
+class query_processor;
+}
 
 namespace db {
 class system_keyspace;
