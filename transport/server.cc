@@ -279,6 +279,12 @@ void cql_sg_stats::register_metrics()
                              {{"scheduling_group_name", cur_sg_name}}).set_skip_when_empty()
     );
 
+    transport_metrics.emplace_back(
+            sm::make_gauge("cql_requests_serving", [this] { return _requests_serving; },
+                             sm::description("Holds the number of requests that are being processed right now."),
+                             {{"scheduling_group_name", cur_sg_name}})
+    );
+
     new_metrics.add_group("transport", std::move(transport_metrics));
     _metrics = std::exchange(new_metrics, {});
 }
@@ -1003,6 +1009,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             tracing::stop_foreground(trace_state);
         });
         --_server._stats.requests_serving;
+        --_server.get_cql_sg_stats()._requests_serving;
 
         return seastar::futurize_invoke([&] () {
             if (f.failed()) {
@@ -1238,6 +1245,7 @@ future<> cql_server::connection::process_request() {
 
             ++_server._stats.requests_served;
             ++_server._stats.requests_serving;
+            ++_server.get_cql_sg_stats()._requests_serving;
 
             _pending_requests_gate.enter();
             auto leave = defer([this] {

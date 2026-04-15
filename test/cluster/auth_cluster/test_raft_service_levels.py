@@ -535,7 +535,6 @@ async def test_anonymous_user(manager: ManagerClient) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.xfail(reason="per-service-level cql_requests_serving metric not yet implemented")
 async def test_per_service_level_cql_requests_serving(manager: ManagerClient) -> None:
     """Test that the per-service-level cql_requests_serving metric correctly
     reflects the number of in-flight CQL requests for each service level.

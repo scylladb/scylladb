@@ -148,6 +148,11 @@ struct cql_sg_stats {
     // Track total memory consumed by responses waiting to be sent.
     // Incremented when a response is queued, decremented when the write completes.
     int64_t _pending_response_memory = 0;
+
+    // Track the number of CQL requests currently being processed in this
+    // scheduling group. Incremented when a request starts processing,
+    // decremented when request processing completes.
+    int32_t _requests_serving = 0;
 private:
     bool _use_metrics = false;
     seastar::metrics::metric_groups _metrics;
