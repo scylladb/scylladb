@@ -44,6 +44,8 @@ The following metrics are new in ScyllaDB |NEW_VERSION| compared to |PRECEDING_V
      - Number of failed tablet auto repair attempts.
    * - scylla_tablet_ops_succeeded
      - Number of successful tablet auto repair attempts.
+   * - scylla_transport_cql_requests_serving
+     - Holds the number of CQL requests that are being processed right now, per service level (scheduling group).
    
 Renamed Metrics in |NEW_VERSION|
 --------------------------------------
