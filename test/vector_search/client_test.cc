@@ -215,32 +215,42 @@ SEASTAR_TEST_CASE(is_down_when_connection_times_out) {
     co_await client.close();
 }
 
-SEASTAR_TEST_CASE(unreachable_node_detection_window_cannot_be_smaller_than_5s) {
-    abort_source_timeout as;
-    auto unreachable = co_await make_unreachable_socket();
-    client client{client_test_logger, client::endpoint_type{unreachable.host, unreachable.port, seastar::net::inet_address(unreachable.host)},
-            utils::updateable_value<uint32_t>{1000}, shared_ptr<seastar::tls::certificate_credentials>{}};
-
-
-    auto start = std::chrono::steady_clock::now();
-    auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
-    auto duration = std::chrono::steady_clock::now() - start;
-
-    BOOST_CHECK(duration >= 5s);
-
-    co_await unreachable.close();
-    co_await client.close();
-}
-
 BOOST_AUTO_TEST_CASE(test_get_keepalive_parameters) {
 
-    auto params1 = get_keepalive_parameters(10s);
-    BOOST_CHECK_EQUAL(params1.idle.count(), 4);
-    BOOST_CHECK_EQUAL(params1.interval.count(), 2);
-    BOOST_CHECK_EQUAL(params1.count, 3);
+    auto params_10s = get_keepalive_parameters(10s);
+    BOOST_CHECK_EQUAL(params_10s.idle.count(), 4);
+    BOOST_CHECK_EQUAL(params_10s.interval.count(), 2);
+    BOOST_CHECK_EQUAL(params_10s.count, 3);
 
-    auto params2 = get_keepalive_parameters(5s);
-    BOOST_CHECK_EQUAL(params2.idle.count(), 2);
-    BOOST_CHECK_EQUAL(params2.interval.count(), 1);
-    BOOST_CHECK_EQUAL(params2.count, 3);
+    auto params_5s = get_keepalive_parameters(5s);
+    BOOST_CHECK_EQUAL(params_5s.idle.count(), 2);
+    BOOST_CHECK_EQUAL(params_5s.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_5s.count, 3);
+
+    auto params_3s = get_keepalive_parameters(3s);
+    BOOST_CHECK_EQUAL(params_3s.idle.count(), 1);
+    BOOST_CHECK_EQUAL(params_3s.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_3s.count, 2);
+
+    auto params_2s = get_keepalive_parameters(2s);
+    BOOST_CHECK_EQUAL(params_2s.idle.count(), 1);
+    BOOST_CHECK_EQUAL(params_2s.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_2s.count, 1);
+
+    auto params_1s = get_keepalive_parameters(1s);
+    BOOST_CHECK_EQUAL(params_1s.idle.count(), 0);
+    BOOST_CHECK_EQUAL(params_1s.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_1s.count, 1);
+
+    // For timeout < 1s the function should return minimal valid parameters.
+    auto params_500ms = get_keepalive_parameters(std::chrono::milliseconds(500));
+    BOOST_CHECK_GE(params_500ms.idle.count(), 0);
+    BOOST_CHECK_GE(params_500ms.interval.count(), 1);
+    BOOST_CHECK_GE(static_cast<int>(params_500ms.count), 1);
+
+    // For timeout < 1s the function should return minimal valid parameters.
+    auto params_0ms = get_keepalive_parameters(std::chrono::milliseconds(0));
+    BOOST_CHECK_GE(params_0ms.idle.count(), 0);
+    BOOST_CHECK_GE(params_0ms.interval.count(), 1);
+    BOOST_CHECK_GE(static_cast<int>(params_0ms.count), 1);
 }

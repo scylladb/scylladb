@@ -78,7 +78,7 @@ public:
     }
 
     future<connected_socket> make([[maybe_unused]] abort_source* as) override {
-        auto t = timeout();
+        auto t = std::chrono::milliseconds(_unreachable_node_detection_time_in_ms.get());
         auto socket = co_await connect(t, as);
         socket.set_nodelay(true);
         socket.set_keepalive_parameters(get_keepalive_parameters(t));
@@ -107,15 +107,6 @@ private:
             co_await coroutine::return_exception_ptr(std::move(err));
         }
         co_return co_await std::move(f);
-    }
-
-    std::chrono::milliseconds timeout() const {
-        constexpr std::chrono::milliseconds MIN_TIMEOUT = 5s;
-        auto timeout_ms = std::chrono::milliseconds(_unreachable_node_detection_time_in_ms.get());
-        if (timeout_ms < MIN_TIMEOUT) {
-            timeout_ms = MIN_TIMEOUT;
-        }
-        return timeout_ms;
     }
 
     utils::updateable_value<uint32_t> _unreachable_node_detection_time_in_ms;
