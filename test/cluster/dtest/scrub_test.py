@@ -234,7 +234,8 @@ class TestScrubIndexes(TestHelper):
                 "tablets_initial_scale_factor": 1,
             }
         )
-        cluster.populate(1).start(jvm_args=["--smp", "1"])
+        jvm_args = ["--smp", "1"]
+        cluster.populate(1).start(jvm_args=jvm_args)
         node1 = cluster.nodelist()[0]
 
         session = self.patient_cql_connection(node1)
@@ -261,7 +262,7 @@ class TestScrubIndexes(TestHelper):
 
         # Restart and check data again
         cluster.stop()
-        cluster.start()
+        cluster.start(jvm_args=jvm_args)
 
         session = self.patient_cql_connection(node1)
         session.execute("USE %s" % (KEYSPACE))
