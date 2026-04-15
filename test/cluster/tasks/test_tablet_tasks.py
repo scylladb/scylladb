@@ -623,3 +623,72 @@ async def test_tablet_task_sees_latest_state(manager: ManagerClient):
         await manager.api.abort_task(servers[0].ip_addr, tablet_task_id)
 
     await asyncio.gather(repair_task(), del_repair_task())
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_tablet_repair_wait_task_shutdown(manager: ManagerClient):
+    """Reproducer for SCYLLADB-1532.
+
+    tablet_virtual_task::wait() for repair tasks used a condition variable
+    predicate that always returned true, so event.wait(pred) never actually
+    suspended. The while(true) loop busy-spun and event.broken() had no
+    effect because no real waiter was registered on the CV. During
+    shutdown, the HTTP server's task gate stayed open, blocking
+    http_server::stop() until systemd killed the process with SIGABRT.
+
+    We reproduce the hang deterministically:
+      1. Pause the repair inside repair_tablet_repair_task_impl_run so it
+         never completes on its own.
+      2. Launch a wait_for_task HTTP call which enters
+         tablet_virtual_task::wait() and parks in the CV loop.
+      3. Ask the server to stop gracefully, WITHOUT releasing the repair
+         pause.
+
+    Before the fix the busy-spin in wait() blocks http_server::stop();
+    graceful shutdown never finishes and the test times out. After the
+    fix, event.broken() -- fired via the storage_service abort_source
+    subscription -- wakes the real waiter parked on
+    _topology_state_machine.event, wait() returns, the HTTP task gate
+    closes, and the module's abort_source aborts the paused
+    wait_for_message so the repair task exits cleanly.
+    """
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    stop_repair_injection = "repair_tablet_repair_task_impl_run"
+
+    servers, _, _, ks, _ = await create_table_insert_data_for_repair(manager)
+    assert module_name in await tm.list_modules(servers[0].ip_addr)
+
+    # Hold repair so the task stays in 'running' state throughout the test.
+    # The injection's wait_for_message is wired to the repair module's
+    # abort_source, so shutdown will release it with an abort exception
+    # rather than tripping the internal-error timeout path.
+    await inject_error_on(manager, stop_repair_injection, servers)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", await_completion=False)
+
+    repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, "user_repair", keyspace=ks)
+    task = repair_tasks[0]
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    # Start wait_for_task which enters tablet_virtual_task::wait().
+    # Because repair is paused for the entire test, task_finished() can
+    # never return true, so the only way out of wait() is via
+    # event.broken() during shutdown -- which must surface as an
+    # exception on the client side (connection closed / server error).
+    # A normal return would indicate a regression (e.g. a stale "done"
+    # status leaking out during shutdown), so we assert one was raised.
+    wait_task = asyncio.create_task(tm.wait_for_task(servers[0].ip_addr, task.task_id))
+
+    # Make sure wait() has entered its loop before we initiate shutdown.
+    await log.wait_for("tablet_virtual_task: wait until tablet operation is finished", from_mark=mark)
+
+    # Stop the server gracefully with the repair still paused. With the
+    # fix this completes promptly. Without the fix the busy-spin loop
+    # holds the HTTP task gate open and graceful shutdown times out.
+    await manager.server_stop_gracefully(servers[0].server_id, timeout=30)
+
+    with pytest.raises(Exception):
+        await wait_task
