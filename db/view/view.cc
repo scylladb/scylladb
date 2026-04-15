@@ -1349,29 +1349,29 @@ future<> view_update_builder::close() noexcept {
     return when_all_succeed(_update_reader.close(), _existing_reader->close()).discard_result();
 }
 
-future<stop_iteration> view_update_builder::read_both_next_fragments() {
+future<stop_iteration> view_update_builder::read_both_next_fragments(stop_iteration si) {
     auto existings_f = _existing_reader ? (*_existing_reader)() : make_ready_future<mutation_fragment_v2_opt>();
-    return when_all(_update_reader(), std::move(existings_f)).then([this] (auto&& fragments) mutable {
+    return when_all(_update_reader(), std::move(existings_f)).then([this, si] (auto&& fragments) mutable {
         _update_fragment = std::move(std::get<0>(fragments).get());
         _existing_fragment = std::move(std::get<1>(fragments).get());
-        return stop_iteration::no;
+        return si;
     });
 }
 
-future<stop_iteration> view_update_builder::read_next_update_fragment() {
-    return _update_reader().then([this] (auto&& update) mutable {
+future<stop_iteration> view_update_builder::read_next_update_fragment(stop_iteration si) {
+    return _update_reader().then([this, si] (auto&& update) mutable {
         _update_fragment = std::move(update);
-        return stop_iteration::no;
+        return si;
     });
 }
 
-future<stop_iteration> view_update_builder::read_next_existing_fragment() {
+future<stop_iteration> view_update_builder::read_next_existing_fragment(stop_iteration si) {
     if (!_existing_reader) {
-        return make_ready_future<stop_iteration>(stop_iteration::no);
+        return make_ready_future<stop_iteration>(si);
     }
-    return (*_existing_reader)().then([this] (auto&& existing) mutable {
+    return (*_existing_reader)().then([this, si] (auto&& existing) mutable {
         _existing_fragment = std::move(existing);
-        return stop_iteration::no;
+        return si;
     });
 }
 
@@ -1455,13 +1455,13 @@ void view_update_builder::consume_existing_fragment() {
     }
 }
 
-future<stop_iteration> view_update_builder::stop() const {
-    return make_ready_future<stop_iteration>(stop_iteration::yes);
+future<> view_update_builder::initialize() {
+    return read_both_next_fragments().discard_result();
 }
 
 future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_update_builder::build_some() {
-    (void)co_await read_both_next_fragments();
-    if (!_update_fragment && !_existing_fragment) {
+    if (((!_update_fragment || _update_fragment->is_end_of_partition()) && (!_existing_fragment || _existing_fragment->is_end_of_partition()))
+        || _skip_row_updates) {
         // Tell the caller there is no more data to build.
         co_return std::nullopt;
     }
@@ -1581,31 +1581,31 @@ future<stop_iteration> view_update_builder::generate_updates() {
         auto cmp = position_in_partition::tri_compare(*_schema)(_update_fragment->position(), _existing_fragment->position());
         if (cmp < 0) {
             consume_update_fragment();
-            return should_stop_updates() ? stop() : read_next_update_fragment();
+            return read_next_update_fragment(should_stop_updates() ? stop_iteration::yes : stop_iteration::no);
         }
         if (cmp > 0) {
             consume_existing_fragment();
-            return should_stop_updates() ? stop () : read_next_existing_fragment();
+            return read_next_existing_fragment(should_stop_updates() ? stop_iteration::yes : stop_iteration::no);
         }
         // We're updating a row that had pre-existing data
         consume_both_fragments();
-        return should_stop_updates() ? stop() : read_both_next_fragments();
+        return read_both_next_fragments(should_stop_updates() ? stop_iteration::yes : stop_iteration::no);
     }
 
     if (_existing_fragment && !_existing_fragment->is_end_of_partition()) {
         consume_existing_fragment();
-        return should_stop_updates() ? stop() : read_next_existing_fragment();
+        return read_next_existing_fragment(should_stop_updates() ? stop_iteration::yes : stop_iteration::no);
     }
 
     if (_update_fragment && !_update_fragment->is_end_of_partition()) {
         consume_update_fragment();
-        return should_stop_updates() ? stop() : read_next_update_fragment();
+        return read_next_update_fragment(should_stop_updates() ? stop_iteration::yes : stop_iteration::no);
     }
 
-    return stop();
+    return make_ready_future<stop_iteration>(stop_iteration::yes);
 }
 
-view_update_builder make_view_update_builder(
+future<view_update_builder> make_view_update_builder(
         data_dictionary::database db,
         const replica::table& base_table,
         const schema_ptr& base,
@@ -1616,7 +1616,9 @@ view_update_builder make_view_update_builder(
     auto vs = views_to_update | std::views::transform([&] (view_ptr v) {
         return view_updates(std::move(v), base);
     }) | std::ranges::to<std::vector<view_updates>>();
-    return view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
+    auto builder = view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
+    co_await builder.initialize();
+    co_return builder;
 }
 
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_dictionary::database db,

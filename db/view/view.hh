@@ -244,6 +244,7 @@ public:
     // std::optional, which is disengaged when the iteration is done.
     future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> build_some();
 
+    future<> initialize();
     future<> close() noexcept;
 
 private:
@@ -253,19 +254,17 @@ private:
     // generate updates from the read fragments and read new fragments for the next iteration
     future<stop_iteration> generate_updates();
 
-    future<stop_iteration> read_both_next_fragments();
-    future<stop_iteration> read_next_update_fragment();
-    future<stop_iteration> read_next_existing_fragment();
+    future<stop_iteration> read_both_next_fragments(stop_iteration si = stop_iteration::no);
+    future<stop_iteration> read_next_update_fragment(stop_iteration si = stop_iteration::no);
+    future<stop_iteration> read_next_existing_fragment(stop_iteration si = stop_iteration::no);
 
     void consume_both_fragments();
     void consume_update_fragment();
     void consume_existing_fragment();
-
-    future<stop_iteration> stop() const;
 };
 
 // The readers provided for the view_update_builder should span the same single partition.
-view_update_builder make_view_update_builder(
+future<view_update_builder> make_view_update_builder(
         data_dictionary::database db,
         const replica::table& base_table,
         const schema_ptr& base_schema,

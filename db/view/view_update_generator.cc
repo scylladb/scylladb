@@ -384,7 +384,7 @@ future<> view_update_generator::populate_views(const replica::table& table,
         mutation_reader&& reader,
         gc_clock::time_point now) {
     auto schema = reader.schema();
-    view_update_builder builder = make_view_update_builder(
+    view_update_builder builder = co_await make_view_update_builder(
             get_db().as_data_dictionary(),
             table,
             schema,
@@ -460,7 +460,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
         db::timeout_clock::time_point timeout) {
     auto base_token = m.token();
     auto m_schema = m.schema();
-    view_update_builder builder = make_view_update_builder(
+    view_update_builder builder = co_await make_view_update_builder(
             get_db().as_data_dictionary(),
             table,
             base,
