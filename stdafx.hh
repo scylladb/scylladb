@@ -254,7 +254,6 @@
 #include <seastar/coroutine/generator.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include <seastar/http/api_docs.hh>
 #include <seastar/http/client.hh>
 #include <seastar/http/common.hh>
 #include <seastar/http/connection_factory.hh>

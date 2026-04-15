@@ -8,6 +8,7 @@
 
 #include <fmt/format.h>
 #include <exception>
+#include "utils/exceptions.hh"
 #include <initializer_list>
 #include <memory>
 #include <regex>
