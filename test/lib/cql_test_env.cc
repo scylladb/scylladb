@@ -19,6 +19,7 @@
 #include "cdc/generation_service.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
+#include "transport/messages/result_message.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"

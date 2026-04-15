@@ -14,6 +14,7 @@
 #include "auth/service.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_processor.hh"
+#include "unimplemented.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "transport/event.hh"

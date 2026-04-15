@@ -16,6 +16,7 @@
 #include "service/paxos/paxos_state.hh"
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
+#include "transport/messages/result_message.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"

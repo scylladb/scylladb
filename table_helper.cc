@@ -13,6 +13,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "table_helper.hh"
 #include "cql3/query_processor.hh"
+#include "transport/messages/result_message.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "replica/database.hh"

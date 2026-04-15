@@ -16,6 +16,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
+#include "transport/messages/result_message.hh"
 #include "service/storage_proxy.hh"
 #include "tracing/trace_state.hh"
 #include "utils/unique_view.hh"

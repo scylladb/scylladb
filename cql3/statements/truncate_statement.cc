@@ -15,6 +15,7 @@
 #include "cql3/cql_statement.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
+#include "unimplemented.hh"
 #include "service/storage_proxy.hh"
 #include <optional>
 #include "validation.hh"
