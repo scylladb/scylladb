@@ -11,6 +11,8 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/net/api.hh>
+#include <algorithm>
+#include <chrono>
 #include <vector>
 
 namespace vector_search {
@@ -30,26 +32,32 @@ inline seastar::sstring response_content_to_sstring(const std::vector<seastar::t
 }
 
 inline seastar::net::tcp_keepalive_params get_keepalive_parameters(std::chrono::milliseconds timeout) {
-    constexpr unsigned retry_count = 3;
+    constexpr unsigned min_count = 1;
+    constexpr unsigned max_count = 3;
     constexpr auto min_interval = std::chrono::seconds(1);
 
-    // Divide total time by (count + 2) to balance Probing vs. Idle (~60/40)
-    auto target_duration = std::chrono::duration_cast<std::chrono::seconds>(timeout);
-    auto interval = target_duration / (retry_count + 2);
+    auto timeout_s = std::chrono::duration_cast<std::chrono::seconds>(timeout);
 
-    // Ensure minimum 1s interval
-    if (interval < min_interval) {
-        interval = min_interval;
+    if (timeout_s < min_interval) {
+        return seastar::net::tcp_keepalive_params{
+                .idle = std::chrono::seconds(0),
+                .interval = min_interval,
+                .count = min_count,
+        };
     }
 
-    auto idle = target_duration - (interval * retry_count);
+    auto count = std::max(min_count, std::min(max_count, static_cast<unsigned>(timeout_s / min_interval) - 1));
+    auto interval = std::max(min_interval, timeout_s / (count + 1));
+    auto idle = timeout_s - (interval * count);
+    if (idle < std::chrono::seconds(0)) {
+        idle = std::chrono::seconds(0);
+    }
 
     return seastar::net::tcp_keepalive_params{
             .idle = idle,
             .interval = interval,
-            .count = retry_count,
+            .count = count,
     };
 }
-
 
 } // namespace vector_search
