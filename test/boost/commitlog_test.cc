@@ -1891,6 +1891,7 @@ static future<> do_test_oversized_entry(size_t max_size_mb) {
     commitlog::replay_state state;
     for (auto& f : replay_set) {
         try {
+            bool first = true;
             co_await commitlog::read_log_file(state, f, cfg.fname_prefix, [&](commitlog::buffer_and_replay_position buf_rp) -> future<> {
                 auto&& buf = buf_rp.buffer;
                 auto&& rp = buf_rp.position;
@@ -1902,6 +1903,16 @@ static future<> do_test_oversized_entry(size_t max_size_mb) {
                 auto m2 = rp2mut.at(rp).unfreeze(gen.schema());
 
                 BOOST_CHECK_EQUAL(m1, m2);
+                // Schema mappings must be written at least once per segment
+                // (in the first entry when the schema is new). Additional
+                // entries may also carry the mapping because
+                // forget_schema_versions() is called on each chunk flush,
+                // so the invariant is: first entry must have it, others may.
+                bool has_mapping = cer.get_column_mapping().has_value();
+                if (first) {
+                    BOOST_CHECK(has_mapping);
+                    first = false;
+                }
                 ++n;
                 co_return;
             });
