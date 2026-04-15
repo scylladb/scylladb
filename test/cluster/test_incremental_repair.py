@@ -44,10 +44,10 @@ def get_sstables(workdir, ks, table):
     sstables = glob.glob(base_pattern)
     return sstables
 
-async def get_sst_status(run, log):
-    sst_add = await log.grep(rf'.*Added sst.*for incremental repair')
-    sst_skip = await log.grep(rf'.*Skipped adding sst.*for incremental repair')
-    sst_mark = await log.grep(rf'.*Marking.*for incremental repair')
+async def get_sst_status(run, log, from_mark=None):
+    sst_add = await log.grep(rf'.*Added sst.*for incremental repair', from_mark=from_mark)
+    sst_skip = await log.grep(rf'.*Skipped adding sst.*for incremental repair', from_mark=from_mark)
+    sst_mark = await log.grep(rf'.*Marking.*for incremental repair', from_mark=from_mark)
     logging.info(f'{run=}: {sst_add=} {sst_skip=} {sst_mark=}');
     logging.info(f'{run=}: {len(sst_add)=} {len(sst_skip)=} {len(sst_mark)=}');
     return sst_add, sst_skip, sst_mark
@@ -331,10 +331,11 @@ async def do_tablet_incremental_repair_and_ops(manager: ManagerClient, ops: str)
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await preapre_cluster_for_incremental_repair(manager, nr_keys)
     token = -1
 
+    marks = [await log.mark() for log in logs]
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
     # 1 add 0 skip 1 mark
-    for log in logs:
-        sst_add, sst_skip, sst_mark = await get_sst_status("First", log)
+    for log, mark in zip(logs, marks):
+        sst_add, sst_skip, sst_mark = await get_sst_status("First", log, from_mark=mark)
         assert len(sst_add) == 1
         assert len(sst_skip) == 0
         assert len(sst_mark) == 1
@@ -357,13 +358,14 @@ async def do_tablet_incremental_repair_and_ops(manager: ManagerClient, ops: str)
         else:
             assert False # Wrong ops
 
+    marks = [await log.mark() for log in logs]
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
 
     # 1 add 1 skip 1 mark
-    for log in logs:
-        sst_add, sst_skip, sst_mark = await get_sst_status("Second", log)
-        assert len(sst_add) == 2
-        assert len(sst_mark) == 2
+    for log, mark in zip(logs, marks):
+        sst_add, sst_skip, sst_mark = await get_sst_status("Second", log, from_mark=mark)
+        assert len(sst_add) == 1
+        assert len(sst_mark) == 1
         assert len(sst_skip) == 1
 
 @pytest.mark.asyncio
