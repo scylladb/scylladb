@@ -2457,6 +2457,9 @@ def write_build_file(f,
             command = reloc/build_deb.sh --reloc-pkg $in --builddir $out
         rule unified
             command = unified/build_unified.sh --build-dir $builddir/$mode --unified-pkg $out
+        rule collect_pkgs
+            command = rm -rf $out && mkdir -p $out && cp $pkgs $out/
+            description = COLLECT $out
         rule rust_header
             command = cxxbridge --include rust/cxx.h --header $in > $out
             description = RUST_HEADER $out
@@ -2942,6 +2945,8 @@ def write_build_file(f,
         build dist-tar: phony dist-unified-tar dist-server-tar dist-python3-tar dist-cqlsh-tar
 
         build dist: phony dist-unified dist-server dist-python3 dist-cqlsh
+
+        build collect-dist: phony {' '.join([f'collect-dist-{mode}' for mode in default_modes])}
         '''))
 
     f.write(textwrap.dedent(f'''\
@@ -2949,7 +2954,28 @@ def write_build_file(f,
         rule dist-check
           command = ./tools/testing/dist-check/dist-check.sh --mode $mode
         '''))
+    deb_arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch]
+    deb_ver = f'{scylla_version}-{scylla_release}-1'
+    rpm_ver = f'{scylla_version}-{scylla_release}'
     for mode in build_modes:
+        server_rpms_dir = f'$builddir/dist/{mode}/redhat/RPMS/{arch}'
+        server_rpms = [f'{server_rpms_dir}/{scylla_product}{suffix}-{rpm_ver}.{arch}.rpm'
+                       for suffix in ['', '-server', '-server-debuginfo', '-conf', '-kernel-conf', '-node-exporter']]
+        cqlsh_rpms = [f'tools/cqlsh/build/redhat/RPMS/{arch}/{scylla_product}-cqlsh-{rpm_ver}.{arch}.rpm']
+        python3_rpms = [f'tools/python3/build/redhat/RPMS/{arch}/{scylla_product}-python3-{rpm_ver}.{arch}.rpm']
+        all_rpms = server_rpms + cqlsh_rpms + python3_rpms
+
+        server_deb_dir = f'$builddir/dist/{mode}/debian'
+        server_debs = [f'{server_deb_dir}/{scylla_product}{suffix}_{deb_ver}_{deb_arch}.deb'
+                       for suffix in ['', '-server', '-server-dbg', '-conf', '-kernel-conf', '-node-exporter']]
+        server_debs += [f'{server_deb_dir}/scylla-enterprise{suffix}_{deb_ver}_all.deb'
+                        for suffix in ['', '-server', '-conf', '-kernel-conf', '-node-exporter']]
+        cqlsh_debs = [f'tools/cqlsh/build/debian/{scylla_product}-cqlsh_{deb_ver}_{deb_arch}.deb',
+                      f'tools/cqlsh/build/debian/scylla-enterprise-cqlsh_{deb_ver}_all.deb']
+        python3_debs = [f'tools/python3/build/debian/{scylla_product}-python3_{deb_ver}_{deb_arch}.deb',
+                        f'tools/python3/build/debian/scylla-enterprise-python3_{deb_ver}_all.deb']
+        all_debs = server_debs + cqlsh_debs + python3_debs
+
         f.write(textwrap.dedent(f'''\
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz: copy tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz: copy tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
@@ -2957,6 +2983,11 @@ def write_build_file(f,
         build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-package.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
 
+        build $builddir/{mode}/dist/rpm: collect_pkgs | {' '.join(all_rpms)} $builddir/dist/{mode}/redhat dist-cqlsh-rpm dist-python3-rpm
+          pkgs = {' '.join(all_rpms)}
+        build $builddir/{mode}/dist/deb: collect_pkgs | {' '.join(all_debs)} $builddir/dist/{mode}/debian dist-cqlsh-deb dist-python3-deb
+          pkgs = {' '.join(all_debs)}
+        build collect-dist-{mode}: phony $builddir/{mode}/dist/rpm $builddir/{mode}/dist/deb
         build {mode}-dist: phony dist-server-{mode} dist-server-debuginfo-{mode} dist-python3-{mode} dist-unified-{mode} dist-cqlsh-{mode}
         build dist-{mode}: phony {mode}-dist
         build dist-check-{mode}: dist-check
