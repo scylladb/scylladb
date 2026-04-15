@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <cctype>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
@@ -1461,7 +1462,208 @@ private:
     }
 };
 
-}
+// --- system.wordle ---
+//
+// Play Wordle via CQL:
+//   INSERT INTO system.wordle (game_id, guess) VALUES (42, 'crane');
+//   SELECT * FROM system.wordle WHERE game_id = 42;
+//
+// game_id is the index into the built-in word list.  Each shard tracks its
+// own games in thread-local storage, so games are naturally isolated per
+// connection (connections are pinned to a shard) and there is no locking.
+
+static constexpr std::array<std::string_view, 180> wordle_words = {{
+    // ScyllaDB / distributed-systems vocabulary – every DBA knows these
+    "SHARD", "QUERY", "TABLE", "INDEX", "BLOOM", "CACHE", "BYTES", "NODES",
+    "TOKEN", "MUTEX", "PAXOS", "READS", "WRITE", "BATCH", "STORE", "TUPLE",
+    "RANGE", "PEERS", "RETRY", "CORES", "BURST", "FLUSH", "MERGE", "CHUNK",
+    "PROBE", "ELECT", "VOTER", "ROUTE", "REDIS", "KAFKA",
+    // More DB internals, because we clearly don't get out enough
+    "ROWID", "FENCE", "LEASE", "EPOCH", "DELTA", "LEVEL", "SPLIT", "MINOR",
+    "MAJOR", "SIEVE", "EVICT", "STALL", "YIELD", "DECAY", "HINTS", "CODEC",
+    "INBOX", "QUEUE", "ACTOR", "FIBER", "ASYNC", "AWAIT", "CHAOS", "CLOUD",
+    "STACK", "HEAPS", "ALLOC", "DEREF", "THROW", "CATCH",
+    // April Fools special – words that belong in a database commit message
+    "APRIL", "PRANK", "JOKES", "TRICK", "FUNNY", "LAUGH", "SILLY", "FOLLY",
+    "FLAKY", "BUGGY", "CRASH", "ABORT", "PANIC", "OOPSY", "OINKS", "SQUIB",
+    // Classic five-letter words
+    "CRANE", "SLATE", "AUDIO", "RAISE", "AROSE", "STARE", "SNARE", "SHARE",
+    "SCORE", "TRACE", "GRACE", "BRACE", "PLACE", "PLANE", "PLANT", "GRANT",
+    "BRAND", "BLAND", "BLEND", "SPEND", "TREND", "BREAD", "BREAK", "DREAM",
+    "CREAM", "STEAM", "STERN", "STONE", "STOVE", "ABOVE", "SHOVE", "GROVE",
+    "PROVE", "DROVE", "GLOVE", "STOKE", "SMOKE", "SPOKE", "SPORE", "SLOPE",
+    "ALONE", "PHONE", "PRONE", "DRONE", "ARISE", "CLAIM", "FLAME", "FRAME",
+    "SHAME", "SHALE", "WHALE", "QUILL", "SCALE", "SPARE", "FLARE", "GLARE",
+    "STALE", "GROAN", "BROWN", "CROWN", "DROWN", "FROWN", "GROWL", "CRAWL",
+    "TRAIL", "SNAIL", "BRAIN", "DRAIN", "GRAIN", "TRAIN", "BRINE", "SPINE",
+    "SWINE", "SHINE", "GRIPE", "SMILE", "GUILE", "EXILE", "GRUEL", "SWILL",
+    "BLAZE", "CRAZE", "GLAZE", "GRAZE", "PHASE", "CHASE", "ERASE", "BRAVE",
+    "CRAVE", "GRAVE", "KNAVE", "SHAVE", "STAVE", "WAIVE", "BIRCH", "PERCH",
+    "TORCH", "MARCH", "NOTCH", "BOTCH", "BENCH", "WINCH", "CINCH", "FINCH",
+}};
+
+struct wordle_game_state {
+    // Pairs of (normalised guess, result string like "GYYXX")
+    std::vector<std::pair<sstring, sstring>> attempts;
+    bool won = false;
+};
+
+class wordle_table : public memtable_filling_virtual_table {
+    static constexpr int _max_attempts = 6;
+
+    static thread_local std::unordered_map<int32_t, wordle_game_state> _games;
+
+    // Standard Wordle colouring: G = green, Y = yellow, X = grey.
+    static sstring compute_result(std::string_view target, std::string_view guess) {
+        std::string result(5, 'X');
+        std::array<int, 26> remaining = {};
+
+        // First pass: mark greens and count unmatched target letters.
+        for (int i = 0; i < 5; ++i) {
+            if (guess[i] == target[i]) {
+                result[i] = 'G';
+            } else {
+                remaining[target[i] - 'A']++;
+            }
+        }
+
+        // Second pass: mark yellows.
+        for (int i = 0; i < 5; ++i) {
+            if (result[i] != 'G' && remaining[guess[i] - 'A'] > 0) {
+                result[i] = 'Y';
+                remaining[guess[i] - 'A']--;
+            }
+        }
+
+        return result;
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "wordle");
+        return schema_builder(system_keyspace::NAME, "wordle", std::make_optional(id))
+            .with_column("game_id", int32_type, column_kind::partition_key)
+            .with_column("guess",   utf8_type,  column_kind::clustering_key)
+            .with_column("attempt", int32_type)
+            .with_column("result",  utf8_type)
+            .with_column("message", utf8_type)
+            .set_comment("Play Wordle via CQL. "
+                         "INSERT INTO system.wordle (game_id, guess) VALUES (<word_index>, '<five_letter_word>'); "
+                         "SELECT * FROM system.wordle WHERE game_id = <word_index>;")
+            .with_hash_version()
+            .build();
+    }
+
+public:
+    wordle_table() : memtable_filling_virtual_table(build_schema()) {
+        // _shard_aware = true: we only emit rows whose partition token is owned
+        // by this shard, matching where apply() stored them.
+        _shard_aware = true;
+    }
+
+    future<> execute(std::function<void(mutation)> mutation_sink) override {
+        static const std::array<std::string_view, 6> cheers = {{
+            "Genius!", "Magnificent!", "Impressive!", "Splendid!", "Great!", "Phew!"
+        }};
+
+        for (const auto& [game_id, game] : _games) {
+            auto dk = dht::decorate_key(*_s, partition_key::from_single_value(*_s,
+                data_value(game_id).serialize_nonnull()));
+            if (!this_shard_owns(dk)) {
+                continue;
+            }
+
+            if (game.attempts.empty()) {
+                continue;
+            }
+
+            mutation m(_s, dk);
+            const auto& target = wordle_words[game_id % wordle_words.size()];
+            const int total = static_cast<int>(game.attempts.size());
+
+            for (int i = 0; i < total; ++i) {
+                const auto& [guess, result] = game.attempts[i];
+                auto ck = clustering_key::from_single_value(*_s, data_value(guess).serialize_nonnull());
+                auto& cr = m.partition().clustered_row(*_s, ck).cells();
+                set_cell(cr, "attempt", int32_t(i + 1));
+                set_cell(cr, "result",  result);
+
+                // Attach a human-readable message on the very last attempt.
+                if (i == total - 1) {
+                    if (game.won) {
+                        set_cell(cr, "message", sstring(format("{} The word was {}. You got it in {} attempt{}!",
+                            cheers[i], target, i + 1, i == 0 ? "" : "s")));
+                    } else if (total >= _max_attempts) {
+                        set_cell(cr, "message", sstring(format(
+                            "Game over! The word was {}. Better luck next time. Try game_id {}.",
+                            target, game_id + 1)));
+                    }
+                }
+            }
+
+            mutation_sink(std::move(m));
+        }
+        return make_ready_future<>();
+    }
+
+    future<> apply(const frozen_mutation& fm) override {
+        const mutation m = fm.unfreeze(_s);
+
+        // Extract game_id from the partition key.
+        const int32_t game_id = value_cast<int32_t>(
+            int32_type->deserialize(m.key().get_component(*_s, 0)));
+
+        // Extract the guess from the clustering key.
+        sstring guess;
+        for (const auto& cr : m.partition().clustered_rows()) {
+            guess = value_cast<sstring>(utf8_type->deserialize(cr.key().get_component(*_s, 0)));
+            break;
+        }
+
+        if (guess.empty()) {
+            return make_exception_future<>(virtual_table_update_exception(
+                "guess is required. "
+                "Usage: INSERT INTO system.wordle (game_id, guess) VALUES (<word_index>, '<five_letter_word>')"));
+        }
+
+        boost::to_upper(guess);
+
+        if (guess.size() != 5) {
+            return make_exception_future<>(virtual_table_update_exception(
+                "guess must be exactly 5 letters"));
+        }
+        for (unsigned char c : guess) {
+            if (!std::isalpha(c)) {
+                return make_exception_future<>(virtual_table_update_exception(
+                    "guess must contain only letters"));
+            }
+        }
+
+        auto& game = _games[game_id];
+
+        if (game.won) {
+            return make_exception_future<>(virtual_table_update_exception(
+                "You already won this game! Try a different game_id."));
+        }
+        if (static_cast<int>(game.attempts.size()) >= _max_attempts) {
+            return make_exception_future<>(virtual_table_update_exception(format(
+                "Game over! No more attempts. The word was {}. Try game_id {}.",
+                wordle_words[game_id % wordle_words.size()], game_id + 1)));
+        }
+
+        const sstring target(wordle_words[game_id % wordle_words.size()]);
+        const sstring result = compute_result(target, guess);
+        const bool won = (result == "GGGGG");
+
+        game.attempts.emplace_back(guess, std::move(result));
+        game.won = won;
+
+        return make_ready_future<>();
+    }
+};
+
+thread_local std::unordered_map<int32_t, wordle_game_state> wordle_table::_games;
+
+} // anonymous namespace
 
 future<> initialize_virtual_tables(
         sharded<replica::database>& dist_db, sharded<service::storage_service>& dist_ss,
@@ -1500,6 +1702,7 @@ future<> initialize_virtual_tables(
     co_await add_table(std::make_unique<tablet_sizes>(tablet_allocator, dist_db, dist_raft_gr, ms));
     co_await add_table(std::make_unique<cdc_timestamps_table>(db, ss));
     co_await add_table(std::make_unique<cdc_streams_table>(db, ss));
+    co_await add_table(std::make_unique<wordle_table>());
 
     db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks.local())));
     db.find_column_family(system_keyspace::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
