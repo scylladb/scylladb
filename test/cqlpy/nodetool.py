@@ -101,6 +101,10 @@ def flush_all(cql):
     else:
         run_nodetool(cql, "flush")
 
+# Note that this function will, by default (flush_memtables=True), perform
+# both a flush (of all tables) and compaction (of just the specified table).
+# This is *not* the normal behavior of Cassandra's "nodetool compact" -
+# so on Cassandra we need to call two separate nodetool commands.
 def compact(cql, table, flush_memtables=True):
     ks, cf = table.split('.')
     if has_rest_api(cql):
@@ -109,9 +113,10 @@ def compact(cql, table, flush_memtables=True):
             params["flush_memtables"] = "false"
         requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params)
     else:
-        args = [] if not flush_memtables else ["--flush-memtables", "false"]
-        args.extend([ks, cf])
-        run_nodetool(cql, "compact", *args)
+        if flush_memtables:
+            # note that we flush all memtables, not just the specified table
+            run_nodetool(cql, "flush")
+        run_nodetool(cql, "compact", ks, cf)
 
 def compact_keyspace(cql, ks, flush_memtables=True):
     if has_rest_api(cql):
@@ -120,9 +125,10 @@ def compact_keyspace(cql, ks, flush_memtables=True):
             params = {"flush_memtables": "false"}
         requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params)
     else:
-        args = [] if not flush_memtables else ["--flush-memtables", "false"]
-        args.extend([ks])
-        run_nodetool(cql, "compact", *args)
+        if flush_memtables:
+            # note that we flush all memtables, not just the specified keyspace
+            run_nodetool(cql, "flush")
+        run_nodetool(cql, "compact", ks)
 
 def take_snapshot(cql, table, tag, skip_flush = None, ttl = None):
     ks, cf = table.split('.')

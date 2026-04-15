@@ -192,3 +192,21 @@ def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace_
             nodetool.compact(cql, table)
             tasks, stats = get_compaction_stats(cql, table)
             assert tasks == 0, f"Found {tasks} pending compaction tasks unexpectedly: stats={stats}"
+
+# A simple test to exercise nodetool.compact() and nodetool.compact_keyspace()
+# for both Scylla and Cassandra. It is less of a test for Scylla, more of a
+# test for these utility functions which have different code paths for Scylla
+# and Cassandra. We just check the operation doesn't fail - not what it does.
+# Unlike Cassandra's nodetool, our nodetool.compact() utility function can
+# flush memtables before compacting (and does this by default), so we want
+# to check this option enabled and disabled.
+def test_nodetool_py_compact(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        for i in range(2):
+            cql.execute(f"INSERT INTO {table} (p, v) VALUES ({i}, {i})")
+            nodetool.flush(cql, table)
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (3, 3)")
+        nodetool.compact(cql, table, flush_memtables=False)
+        nodetool.compact(cql, table, flush_memtables=True)
+        nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=False)
+        nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=True)
