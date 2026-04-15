@@ -1497,6 +1497,42 @@ def test_views_with_future_tombstones(cql, test_keyspace):
             assert [] == list(cql.execute(f'select * from {table}'))
             assert [] == list(cql.execute(f'select * from {mv}'))
 
+# Test that a range delete in the same batch as an insert correctly covers
+# rows within the deleted range in the materialized view and that it doesn't
+# cover rows outside the deleted range. The view update builder must track
+# range tombstone changes from the update stream so that all range tombstones
+# are applied to the clustering rows that they cover.
+# Without this, an inserted row within the range incorrectly survives in the
+# view or is incorrectly deleted.
+# Reproduces SCYLLADB-1555.
+def test_mv_range_delete_and_insert_in_same_batch(cql, test_keyspace):
+    # Case 1: Insert within the range-deleted interval. The range tombstone
+    # should shadow the insert, leaving both base and view empty.
+    with new_test_table(cql, test_keyspace,
+            'p int, c int, v int, w int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'v, p, c',
+                'v is not null and p is not null and c is not null') as mv:
+            cql.execute(f"BEGIN BATCH "
+                        f"DELETE FROM {table} WHERE p = 1 AND c >= 1 AND c <= 3; "
+                        f"INSERT INTO {table} (p, c, v) VALUES (1, 3, 3); "
+                        f"APPLY BATCH")
+            assert [] == list(cql.execute(f"SELECT * FROM {table}"))
+            assert [] == list(cql.execute(f"SELECT * FROM {mv}"))
+    # Case 2: A pre-existing row within the range, and an insert outside it.
+    # The range delete should remove the existing row, but the new row at c=4
+    # falls outside the range and should survive in both base and view.
+    with new_test_table(cql, test_keyspace,
+            'p int, c int, v int, w int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'v, p, c',
+                'v is not null and p is not null and c is not null') as mv:
+            cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (1, 2, 1)")
+            cql.execute(f"BEGIN BATCH "
+                        f"DELETE FROM {table} WHERE p = 1 AND c >= 1 AND c <= 3; "
+                        f"INSERT INTO {table} (p, c, v) VALUES (1, 4, 3); "
+                        f"APPLY BATCH")
+            assert [] != list(cql.execute(f"SELECT * FROM {table}"))
+            assert [] != list(cql.execute(f"SELECT * FROM {mv}"))
+
 # Test view representation in system.* tables
 def test_view_in_system_tables(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:
