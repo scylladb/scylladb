@@ -2675,9 +2675,9 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
             snap->set_max_buffer_size(1);
             snap->fill_buffer().get();
 
+            auto mt2 = make_memtable(cache.schema(), muts2);
             cache.update(row_cache::external_updater([&] {
                 memory::scoped_critical_alloc_section dfg;
-                auto mt2 = make_memtable(cache.schema(), muts2);
                 underlying.apply(std::move(mt2));
             }), *mt).get();
 
