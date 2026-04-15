@@ -1563,13 +1563,11 @@ future<stop_iteration> view_update_builder::generate_updates() {
             _update_current_tombstone = std::move(*_update_fragment).as_range_tombstone_change().tombstone();
         } else if (_update_fragment->is_clustering_row()) {
             SCYLLA_ASSERT(_existing_fragment->is_clustering_row());
-            _update_fragment->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
-                cr.apply(std::max(_update_partition_tombstone, _update_current_tombstone));
-            });
-            _existing_fragment->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
-                cr.apply(std::max(_existing_partition_tombstone, _existing_current_tombstone));
-            });
-            generate_update(std::move(*_update_fragment).as_clustering_row(), { std::move(*_existing_fragment).as_clustering_row() });
+            auto update = std::move(*_update_fragment).as_clustering_row();
+            update.apply(std::max(_update_partition_tombstone, _update_current_tombstone));
+            auto existing = std::move(*_existing_fragment).as_clustering_row();
+            existing.apply(std::max(_existing_partition_tombstone, _existing_current_tombstone));
+            generate_update(std::move(update), { std::move(existing) });
         } else if (_update_fragment->is_static_row()) {
             if (!_existing_fragment->is_static_row()) {
                 on_internal_error(vlogger, format("Static row update mutation part {} shouldn't compare equal with an existing, non-static row mutation part {}",
@@ -1602,14 +1600,13 @@ future<stop_iteration> view_update_builder::generate_updates() {
         if (_update_fragment->is_range_tombstone_change()) {
             _update_current_tombstone = _update_fragment->as_range_tombstone_change().tombstone();
         } else if (_update_fragment->is_clustering_row()) {
-            _update_fragment->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
-                cr.apply(std::max(_update_partition_tombstone, _update_current_tombstone));
-            });
+            auto update = std::move(*_update_fragment).as_clustering_row();
+            update.apply(std::max(_update_partition_tombstone, _update_current_tombstone));
             auto existing_tombstone = std::max(_existing_partition_tombstone, _existing_current_tombstone);
             auto existing = existing_tombstone
-                          ? std::optional<clustering_row>(std::in_place, _update_fragment->as_clustering_row().key(), row_tombstone(std::move(existing_tombstone)), row_marker(), ::row())
+                          ? std::optional<clustering_row>(std::in_place, update.key(), row_tombstone(std::move(existing_tombstone)), row_marker(), ::row())
                           : std::nullopt;
-            generate_update(std::move(*_update_fragment).as_clustering_row(), std::move(existing));
+            generate_update(std::move(update), std::move(existing));
         } else if (_update_fragment->is_static_row()) {
             auto existing_tombstone = _existing_partition_tombstone;
             auto existing = existing_tombstone
