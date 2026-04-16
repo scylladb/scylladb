@@ -757,6 +757,13 @@ void object_storage_base::open(sstable& sst) {
 }
 
 future<file> object_storage_base::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
+    // Object-storage SSTables never have a TemporaryTOC object — the
+    // sealed/unsealed distinction is tracked via the SSTable registry
+    // (creating vs sealed), not via a separate TOC file.  Transparently
+    // redirect TemporaryTOC requests to the regular TOC.
+    if (type == component_type::TemporaryTOC) {
+        type = component_type::TOC;
+    }
     return maybe_wrap_file(sst, type, flags, make_readable_file(make_object_name(sst, type)));
 }
 
