@@ -97,14 +97,20 @@ namespace alternator {
 // NOTE: we're holding inside a name of cdc log table, not a user table
 class stream_arn {
     std::string _arn;
-    std::string_view _table_name;
-    std::string_view _keyspace_name;
+    size_t _table_name_offset, _table_name_size;
+    size_t _keyspace_name_offset, _keyspace_name_size;
+
+    void _initialize_offsets() {
+        auto parts = parse_arn(_arn, "StreamArn", "stream", "/stream/");
+        _table_name_offset = parts.table_name.data() - _arn.data();
+        _table_name_size = parts.table_name.size();
+        _keyspace_name_offset = parts.keyspace_name.data() - _arn.data();
+        _keyspace_name_size = parts.keyspace_name.size();
+    }
 public:
     // ARN to get table name from
     stream_arn(std::string arn) : _arn(std::move(arn)) {
-        auto parts = parse_arn(_arn, "StreamArn", "stream", "/stream/");
-        _table_name = parts.table_name;
-        _keyspace_name = parts.keyspace_name;
+        _initialize_offsets();
     }
     // NOTE: it must be a schema of a CDC log table, not a base table, because that's what we are encoding in ARN and returning to users.
     // we need base schema for creation time
@@ -114,16 +120,13 @@ public:
 
         // KCL checks for arn / aws / dynamodb and account-id being a number
         _arn = fmt::format("arn:aws:dynamodb:us-east-1:000000000000:table/{}@{}/stream/{:%FT%T}", s->ks_name(), s->cf_name(), now);
-        auto table_index = std::string_view{"arn:aws:dynamodb:us-east-1:000000000000:table/"}.size();
-        auto x1 = _arn.find("@", table_index);
-        auto x2 = _arn.find("/", x1);
-        _table_name = std::string_view{ _arn }.substr(x1 + 1, x2 - (x1 + 1));
-        _keyspace_name = std::string_view{ _arn }.substr(table_index, x1 - table_index);
+
+        _initialize_offsets();
     }
 
     std::string_view unparsed() const { return _arn; }
-    std::string_view table_name() const { return _table_name; }
-    std::string_view keyspace_name() const { return _keyspace_name; }
+    std::string_view table_name() const { return std::string_view{ _arn }.substr(_table_name_offset, _table_name_size); }
+    std::string_view keyspace_name() const { return std::string_view{ _arn }.substr(_keyspace_name_offset, _keyspace_name_size); }
     friend std::ostream& operator<<(std::ostream& os, const stream_arn& arn) {
         os << arn._arn;
         return os;
