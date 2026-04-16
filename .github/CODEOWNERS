@@ -32,8 +32,8 @@ counters* @nuivall
 tests/counter_test* @nuivall
 
 # DOCS
-docs/* @annastuchlik @tzach
-docs/alternator @annastuchlik @tzach @nyh
+/docs/ @annastuchlik @tzach
+/docs/alternator/ @annastuchlik @tzach @nyh
 
 # GOSSIP
 gms/* @tgrabiec @asias @kbr-scylla
