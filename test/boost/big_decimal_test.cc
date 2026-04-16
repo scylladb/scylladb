@@ -10,6 +10,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "utils/big_decimal.hh"
+#include "types/types.hh"
 #include "marshal_exception.hh"
 
 namespace {
@@ -116,6 +117,133 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_construct_from_string) {
     BOOST_REQUIRE_THROW(big_decimal("1E2147483649"), marshal_exception);
     // 1.2E-2147483647 : scale(2147483648) > int32::max()
     BOOST_REQUIRE_THROW(big_decimal("1.2E-2147483647"), marshal_exception);
+}
+
+// Test to_string_canonical() against the Java BigDecimal.toString() specification.
+// See: https://docs.oracle.com/javase/8/docs/api/java/math/BigDecimal.html#toString--
+// Plain form is used iff scale >= 0 AND adjusted_exp >= -6
+// (where adjusted_exp = num_digits - 1 - scale).
+// Negative scales always produce exponential form.
+BOOST_AUTO_TEST_CASE(test_big_decimal_to_string_canonical) {
+    // Zero with various scales
+    BOOST_REQUIRE_EQUAL(big_decimal("0").to_string_canonical(), "0");
+    BOOST_REQUIRE_EQUAL(big_decimal("0.0").to_string_canonical(), "0.0");
+    BOOST_REQUIRE_EQUAL(big_decimal("0.00").to_string_canonical(), "0.00");
+    BOOST_REQUIRE_EQUAL(big_decimal("0E-7").to_string_canonical(), "0E-7");
+    BOOST_REQUIRE_EQUAL(big_decimal("0E+7").to_string_canonical(), "0E+7");
+
+    // Plain form - integer (scale == 0)
+    BOOST_REQUIRE_EQUAL(big_decimal("123").to_string_canonical(), "123");
+    BOOST_REQUIRE_EQUAL(big_decimal("1").to_string_canonical(), "1");
+
+    // Plain form - fractional, dot inside digit string
+    BOOST_REQUIRE_EQUAL(big_decimal("1.23").to_string_canonical(), "1.23");   // scale=2, adj_exp=0
+    BOOST_REQUIRE_EQUAL(big_decimal("12.3").to_string_canonical(), "12.3");   // scale=1, adj_exp=1
+
+    // Plain form - fractional, leading zeros after "0."
+    // scale=6, num_digits=3, adj_exp = 2-6 = -4  (>= -6 -> plain)
+    BOOST_REQUIRE_EQUAL(big_decimal("0.000123").to_string_canonical(), "0.000123");
+    // scale=7, num_digits=3, adj_exp = 2-7 = -5  (>= -6 -> plain)
+    BOOST_REQUIRE_EQUAL(big_decimal("0.0000123").to_string_canonical(), "0.0000123");
+    // scale=8, num_digits=3, adj_exp = 2-8 = -6  (== -6 -> still plain)
+    BOOST_REQUIRE_EQUAL(big_decimal("0.00000123").to_string_canonical(), "0.00000123");
+
+    // Exponential form - scale > 0 but adjusted_exp < -6
+    // scale=9, num_digits=3, adj_exp = 2-9 = -7  (< -6 -> exp form)
+    BOOST_REQUIRE_EQUAL(big_decimal("1.23E-7").to_string_canonical(), "1.23E-7");
+
+    // Exponential form - negative scale (always exp form regardless of magnitude)
+    // big_decimal("1.23E+3") -> unscaled=123, scale=-1
+    BOOST_REQUIRE_EQUAL(big_decimal("1.23E+3").to_string_canonical(), "1.23E+3");
+    // big_decimal("1E+1") -> unscaled=1, scale=-1
+    BOOST_REQUIRE_EQUAL(big_decimal("1E+1").to_string_canonical(), "1E+1");
+
+    // Negative numbers
+    BOOST_REQUIRE_EQUAL(big_decimal("-45.6").to_string_canonical(), "-45.6");
+    BOOST_REQUIRE_EQUAL(big_decimal("-1.23E+3").to_string_canonical(), "-1.23E+3");
+    BOOST_REQUIRE_EQUAL(big_decimal("-1.23E-7").to_string_canonical(), "-1.23E-7");
+
+    // DoS / OOM guard: extreme scales must not allocate unbounded memory.
+    // to_string() would previously expand trailing zeros in a loop;
+    // to_string_canonical() uses exponential notation instead.
+    BOOST_REQUIRE_EQUAL(big_decimal("1E+1000000000").to_string_canonical(), "1E+1000000000"); // scale = -1e9
+    BOOST_REQUIRE_EQUAL(big_decimal("1E-999999999").to_string_canonical(), "1E-999999999");  // scale = +1e9 (close to int32 max)
+
+    // Round-trip: parse -> to_string_canonical -> re-parse -> value equality
+    auto check_roundtrip = [](const char* s) {
+        big_decimal orig(s);
+        auto str = orig.to_string_canonical();
+        big_decimal reparsed(str);
+        BOOST_REQUIRE((orig <=> reparsed) == std::strong_ordering::equal);
+    };
+    check_roundtrip("0");
+    check_roundtrip("0.0");
+    check_roundtrip("0.00");
+    check_roundtrip("0E-7");
+    check_roundtrip("0E+7");
+    check_roundtrip("1");
+    check_roundtrip("123");
+    check_roundtrip("1.23");
+    check_roundtrip("0.000123");
+    check_roundtrip("0.00000123");
+    check_roundtrip("1.23E-7");
+    check_roundtrip("1.23E+3");
+    check_roundtrip("-45.6");
+    check_roundtrip("1E+1000000000");
+}
+
+// Verify the hash/equality contract for decimal_type: numerically equal
+// big_decimal values with different (unscaled, scale) representations must
+// produce the same hash via decimal_type->hash(). This is required because
+// decimal_type comparison (used by clustering_key::equality) is value-based
+// - it deserializes and uses big_decimal::operator<=> - so hash() must
+// agree: equal values must hash equally.
+BOOST_AUTO_TEST_CASE(test_big_decimal_hash_contract) {
+    auto check = [](const char* desc, const big_decimal& a, const big_decimal& b) {
+        BOOST_TEST_CONTEXT(desc) {
+            // Precondition: a and b are numerically equal.
+            BOOST_REQUIRE((a <=> b) == std::strong_ordering::equal);
+            // Serialize both to bytes.
+            auto bytes_a = decimal_type->decompose(a);
+            auto bytes_b = decimal_type->decompose(b);
+            // The byte representations must differ (otherwise the test is trivial).
+            BOOST_REQUIRE_NE(bytes_a, bytes_b);
+            // Hash contract: equal values must produce equal hashes.
+            auto hash_a = decimal_type->hash(bytes_view(bytes_a));
+            auto hash_b = decimal_type->hash(bytes_view(bytes_b));
+            BOOST_REQUIRE_EQUAL(hash_a, hash_b);
+        }
+    };
+
+    // (1230, scale=0) vs (123, scale=-1): both equal 1230
+    check("1230 vs 1.23E+3",
+        big_decimal(0, 1230),
+        big_decimal(-1, 123));
+
+    // (70, scale=1) vs (7, scale=0): both equal 7
+    check("7.0 vs 7",
+        big_decimal(1, 70),
+        big_decimal(0, 7));
+
+    // (100, scale=2) vs (1, scale=0): both equal 1
+    check("1.00 vs 1",
+        big_decimal(2, 100),
+        big_decimal(0, 1));
+
+    // Negative values: (-500, scale=2) vs (-5, scale=0): both equal -5
+    check("-5.00 vs -5",
+        big_decimal(2, -500),
+        big_decimal(0, -5));
+
+    // Zero with different scales: (0, scale=5) vs (0, scale=0)
+    check("0E-5 vs 0",
+        big_decimal(5, 0),
+        big_decimal(0, 0));
+
+    // Negative scale: (-2, 12300) vs (0, 1230000): both equal 1230000
+    check("1.23E+6 vs 1230000",
+        big_decimal(-2, 12300),
+        big_decimal(0, 1230000));
 }
 
 BOOST_AUTO_TEST_CASE(test_big_decimal_div) {
