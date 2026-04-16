@@ -15,6 +15,7 @@
 #include <seastar/core/shared_future.hh>
 #include "absl-flat_hash_map.hh"
 #include "gms/endpoint_state.hh"
+#include "gms/gossiper.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
 #include "service/client_routes.hh"

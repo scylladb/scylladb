@@ -20,6 +20,7 @@
 #include "cdc/metadata.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
+#include "query/query-result-set.hh"
 #include "db/virtual_table.hh"
 #include "partition_slice_builder.hh"
 #include "db/virtual_tables.hh"

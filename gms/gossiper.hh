@@ -34,6 +34,7 @@
 #include "locator/token_metadata.hh"
 #include "locator/types.hh"
 #include "gms/gossip_address_map.hh"
+#include "gms/loaded_endpoint_state.hh"
 
 namespace gms {
 
@@ -69,11 +70,6 @@ struct gossip_config {
     utils::updateable_value<uint32_t> failure_detector_timeout_ms;
     utils::updateable_value<int32_t> force_gossip_generation;
     utils::updateable_value<utils::UUID> recovery_leader;
-};
-
-struct loaded_endpoint_state {
-    gms::inet_address endpoint;
-    std::optional<locator::endpoint_dc_rack> opt_dc_rack;
 };
 
 /**

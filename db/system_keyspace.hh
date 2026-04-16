@@ -15,10 +15,11 @@
 #include <utility>
 #include <vector>
 #include "db/view/view_build_status.hh"
-#include "gms/gossiper.hh"
+#include "gms/inet_address.hh"
+#include "gms/generation-number.hh"
+#include "gms/loaded_endpoint_state.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
-#include "query/query-result-set.hh"
 #include "db_clock.hh"
 #include "mutation_query.hh"
 #include "system_keyspace_view_types.hh"
@@ -35,6 +36,10 @@
 namespace netw {
     class shared_dict;
 };
+
+namespace query {
+    class result_set;
+}
 
 namespace sstables {
     struct entry_descriptor;

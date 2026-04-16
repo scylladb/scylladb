@@ -9,6 +9,7 @@
 #include "tools/load_system_tablets.hh"
 
 #include <seastar/core/thread.hh>
+#include "query/query-result-set.hh"
 #include <seastar/util/closeable.hh>
 
 #include "locator/abstract_replication_strategy.hh"
