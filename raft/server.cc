@@ -1138,6 +1138,11 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         }
     }
 
+    // Note: during shutdown, _state_machine->abort() may already be initiated
+    // (but not yet awaited) by the time io_fiber processes this batch.
+    // This is safe because drop_snapshot() is synchronous (returns void) and
+    // current implementations are trivial no-ops. If a future implementation
+    // becomes non-trivial, it must tolerate being called after abort().
     for (const auto& snp_id: batch.snps_to_drop) {
         _state_machine->drop_snapshot(snp_id);
     }
@@ -1413,7 +1418,16 @@ future<> server_impl::applier_fiber() {
                     snp.idx = _applied_idx;
                     snp.config = _fsm->log_last_conf_for(_applied_idx);
                     logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
-                    snp.id = co_await _state_machine->take_snapshot();
+                    try {
+                        snp.id = co_await _state_machine->take_snapshot();
+                    } catch (abort_requested_exception& e) {
+                        logger.info("[{}] applier fiber: stopped because "
+                                "state machine was aborted during take_snapshot: {}", _id, e);
+                        throw stop_apply_fiber{};
+                    } catch (...) {
+                        std::throw_with_nested(raft::state_machine_error{});
+                    }
+                    logger.trace("[{}] applier fiber: took snapshot term={}, idx={}, id={}", _id, snp.term, snp.idx, snp.id);
                     // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
                     // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
                     // a later snapshot from the queue.
@@ -1430,7 +1444,16 @@ future<> server_impl::applier_fiber() {
                 SCYLLA_ASSERT(snp.idx >= _applied_idx);
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);
-                co_await _state_machine->load_snapshot(snp.id);
+                try {
+                    co_await _state_machine->load_snapshot(snp.id);
+                } catch (abort_requested_exception& e) {
+                    logger.info("[{}] apply_fiber: stopped because state "
+                            "machine was aborted during load_snapshot: {}", _id, e);
+                    throw stop_apply_fiber{};
+                } catch (...) {
+                    std::throw_with_nested(raft::state_machine_error{});
+                }
+                logger.trace("[{}] apply_fiber applied snapshot {}", _id, snp.id);
                 drop_waiters(snp.idx);
                 _applied_idx = snp.idx;
                 _applied_index_changed.broadcast();
@@ -1452,7 +1475,17 @@ future<> server_impl::applier_fiber() {
                 snp.idx = _applied_idx;
                 snp.config = _fsm->log_last_conf_for(_applied_idx);
                 logger.trace("[{}] taking snapshot at term={}, idx={} due to request", _id, snp.term, snp.idx);
-                snp.id = co_await _state_machine->take_snapshot();
+                try {
+                    snp.id = co_await _state_machine->take_snapshot();
+                } catch (abort_requested_exception& e) {
+                    logger.info("[{}] applier fiber: stopped because state "
+                            "machine was aborted during take_snapshot: {}", _id, e);
+                    throw stop_apply_fiber{};
+                } catch (...) {
+                    std::throw_with_nested(raft::state_machine_error{});
+                }
+                logger.trace("[{}] applier fiber: took snapshot term={}, idx={}, id={}", _id, snp.term, snp.idx, snp.id);
+
                 if (!_fsm->apply_snapshot(snp, 0, 0, true)) {
                     logger.trace("[{}] while taking snapshot term={} idx={} id={} due to request,"
                            " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
@@ -1621,16 +1654,18 @@ future<> server_impl::abort(sstring reason) {
     _events.broken();
     _snapshot_desc_idx_changed.broken();
 
-    // IO and applier fibers may update waiters and start new snapshot
-    // transfers, so abort them first
+    // Stop the applier queue and initiate state machine abort so that
+    // any in-progress apply/snapshot operation is unblocked soon.
+    // Then wait for IO and applier fibers to finish before tearing down
+    // waiters and snapshot transfers they may still update.
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
+    auto abort_sm = _state_machine->abort();
     co_await seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status)).discard_result();
 
     // Start RPC abort before aborting snapshot applications or destroying entry waiters.
     // After calling `_rpc->abort()` no new snapshot applications should be started or new waiters created
     // (see `rpc::abort()` comment and `_aborted` flag).
     auto abort_rpc = _rpc->abort();
-    auto abort_sm = _state_machine->abort();
     auto abort_persistence = _persistence->abort();
 
     // Abort snapshot applications before waiting for `abort_rpc`,
