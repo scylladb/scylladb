@@ -1320,7 +1320,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , vector_store_secondary_uri(this, "vector_store_secondary_uri", liveness::LiveUpdate, value_status::Used, "",
         "A comma-separated list of secondary vector store node URIs. These nodes are used as a fallback when all primary nodes are unavailable, and are typically located in a different availability zone for high availability.")
     , vector_store_unreachable_node_detection_time_in_ms(this, "vector_store_unreachable_node_detection_time_in_ms", liveness::LiveUpdate, value_status::Used, 3000,
-        "Time in milliseconds for detecting an unreachable vector store node. This value is applied to the TCP connect timeout, keepalive parameters, and TCP_USER_TIMEOUT. "
+        "Time in milliseconds for detecting an unreachable vector store node. This value is applied to the TCP connect timeout, keepalive parameters, TCP_USER_TIMEOUT, "
+        "and the deadline of the health-check request used to detect that an unreachable node became available again. "
         "When any of these mechanisms detects that a node is unreachable within this window, the client fails over to the next available vector store node.")
     , vector_store_encryption_options(this, "vector_store_encryption_options", value_status::Used, {},
         "Options for encrypted connections to the vector store. These options are used for HTTPS URIs in `vector_store_primary_uri` and `vector_store_secondary_uri`. The available options are:\n"
