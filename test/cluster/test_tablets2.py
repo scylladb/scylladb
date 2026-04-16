@@ -1598,6 +1598,65 @@ async def test_drop_table_and_truncate_after_migration(manager: ManagerClient, o
     logger.info(f"Running {operation} {ks}.test")
     await cql.run_async(f"{operation} {ks}.test")
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming_mode", ["sstables_during_snapshot", "sstables_after_snapshot"])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_table_during_streaming(manager: ManagerClient, streaming_mode: str):
+    cmdline = ['--logger-log-level', 'stream_blob=debug']
+    cfg = {}
+
+    servers = await manager.servers_add(2, cmdline=cmdline, config=cfg)
+
+    await manager.disable_tablet_balancing()
+
+    cql = manager.get_cql()
+    inj = 'take_storage_snapshot' if streaming_mode == "sstables_during_snapshot" else 'wait_before_tablet_stream_files_after_snapshot'
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c text)")
+
+        for k in range(128):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, '{k}')")
+
+        tablet_token = 0
+        src_host_id = await manager.get_host_id(servers[0].server_id)
+        dst_host_id = await manager.get_host_id(servers[1].server_id)
+        replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
+        if replica[0] != src_host_id:
+            src_host_id, dst_host_id = dst_host_id, src_host_id
+            servers = [servers[1], servers[0]]
+
+        src_server = servers[0]
+        await manager.api.keyspace_flush(src_server.ip_addr, ks, "test")
+
+        src_log = await manager.server_open_log(src_server.server_id)
+        src_mark = await src_log.mark()
+
+        await manager.api.enable_injection(src_server.ip_addr, inj, one_shot=True)
+
+        logger.info("Starting tablet migration with sender paused at %s", inj)
+        migration_task = asyncio.create_task(
+            manager.api.move_tablet(servers[0].ip_addr, ks, "test", src_host_id, replica[1], dst_host_id, 0, tablet_token)
+        )
+
+        await src_log.wait_for(f'{inj}: waiting for message', from_mark=src_mark)
+
+        logger.info("Dropping table while sender-side tablet stream is paused after snapshot")
+        drop_task = cql.run_async(f"DROP TABLE {ks}.test")
+
+        await src_log.wait_for(f"Dropping {ks}.test", from_mark=src_mark)
+        await asyncio.sleep(1)
+
+        await manager.api.message_injection(src_server.ip_addr, inj)
+
+        await drop_task
+
+        try:
+            await migration_task
+        except HTTPError as e:
+            logger.info("Tablet migration failed after drop as expected: %s", e.message)
+
 @pytest.mark.asyncio
 @pytest.mark.nightly
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
