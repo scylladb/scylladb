@@ -772,7 +772,7 @@ def testToJsonFct(cql, test_keyspace):
             # Scylla may print floating-point numbers with different choice
             # of capitalization, exponent, etc, so we use EquivalentJson.
             # Note that some representations may be equivalent, but
-            # objectively bad - see issue #80002.
+            # objectively bad - see issue #8002.
             assert_rows(execute(cql, table, "SELECT k, toJson(decimalval) FROM %s WHERE k = ?", 0), [0, EquivalentJson("-1.23E-12")])
 
             # ================ double ================
