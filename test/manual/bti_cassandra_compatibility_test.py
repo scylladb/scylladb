@@ -620,7 +620,7 @@ if __name__ == "__main__":
     parser.add_argument("--partition-count", type=int, help="Max number of partitions")
     parser.add_argument("--row-count", type=int, help="Max number of rows per partition")
     parser.add_argument("--build-mode", type=str, default="release", help="Scylla build mode")
-    parser.add_argument("--tmpdir", type=str, help="Temporary directory")
+    parser.add_argument("--workdir", "--tmpdir", type=str, dest="workdir", help="Temporary directory")
     args = parser.parse_args()
 
     # logging.getLogger().setLevel(logging.NOTSET)
@@ -633,7 +633,7 @@ if __name__ == "__main__":
     module_logger.info(f"Arguments: {args}")
 
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
-    with tempfile.TemporaryDirectory(delete=False, dir=args.tmpdir) as workdir:
+    with tempfile.TemporaryDirectory(delete=False, dir=args.workdir) as workdir:
         LOGDIR.set(f"{workdir}/logs")
         os.makedirs(LOGDIR.get(), exist_ok=True)
         GLOBAL_LOGFILE.set(f"{workdir}/global.log")

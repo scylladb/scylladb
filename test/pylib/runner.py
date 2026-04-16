@@ -68,7 +68,8 @@ _pytest_config: pytest.Config | None = None
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
                      help="Run only tests for given build mode(s)")
-    parser.addoption('--tmpdir', action='store', default=str(TOP_SRC_DIR / 'testlog'),
+    parser.addoption('--workdir', '--tmpdir', action='store', default=str(TOP_SRC_DIR / 'testlog'),
+                     dest='workdir',
                      help='Path to temporary test data and log files.  The data is further segregated per build mode.')
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
     parser.addoption('--byte-limit', action="store", default=randint(0, 2000), type=int,
@@ -93,7 +94,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Save test log output on success and skip cleanup before the run.")
     parser.addoption('--coverage', action='store_true', default=False,
                      help="When running code instrumented with coverage support"
-                          "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
+                          "Will route the profiles to `workdir`/mode/coverage/`suite` and post process them in order to generate "
                           "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
                           "The lcov files can eventually be used for generating coverage reports")
     parser.addoption("--coverage-mode", action='append', type=str, dest="coverage_modes",
@@ -210,10 +211,10 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # Run stuff just once for the main pytest process (not in xdist workers).
     # Only prepare the environment if it hasn't been prepared by test.py
     if not is_xdist_worker and TESTPY_PREPARED_ENVIRONMENT not in os.environ:
-        temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
+        temp_dir = pathlib.Path(session.config.getoption("--workdir")).absolute()
 
         prepare_environment(
-            tempdir_base=temp_dir,
+            workdir=temp_dir,
             modes=get_modes_to_run(session.config),
             gather_metrics=session.config.getoption("--gather-metrics"),
             save_log_on_success=session.config.getoption("--save-log-on-success"),
@@ -280,6 +281,14 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # Check if test.py has already prepared the environment, so it should clean up
 
     if is_xdist_worker or TESTPY_PREPARED_ENVIRONMENT in os.environ:
+        # In xdist workers (or when test.py prepared the env), drain cluster
+        # pools so that idle clusters are destroyed and their directories
+        # cleaned up. Without this, the last cluster per suite per worker
+        # would leak its directory until the process exits.
+        if session.testsfailed == 0 and not session.config.getoption("--save-log-on-success"):
+            for suite in TestSuite.suites.values():
+                if hasattr(suite, 'clusters'):
+                    asyncio.run(suite.clusters.close())
         return
     # we only clean up when running with pure pytest
     if getattr(TestSuite, "artifacts", None) is not None:
@@ -297,7 +306,7 @@ def pytest_configure(config: pytest.Config) -> None:
     _pytest_config = config
 
     if _pytest_config.getoption("--test-py-init"):
-        pytest_log_dir = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_LOG_FOLDER
+        pytest_log_dir = pathlib.Path(_pytest_config.getoption("--workdir")).absolute() / PYTEST_LOG_FOLDER
         worker_id = os.environ.get("PYTEST_XDIST_WORKER")
         # If this is an xdist worker, set up logging to a separate file for this worker. Otherwise, set up logging for the main process.
         if worker_id is not None:
@@ -383,7 +392,7 @@ def pytest_runtest_makereport(item, call):
     if _pytest_config.getoption("--test-py-init"):
         rep = outcome.get_result()
         # we only look at actual failing test calls, not setup/teardown
-        pytest_tests_logs = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_TESTS_LOGS_FOLDER
+        pytest_tests_logs = pathlib.Path(_pytest_config.getoption("--workdir")).absolute() / PYTEST_TESTS_LOGS_FOLDER
         if rep.failed or (_pytest_config.getoption("--save-log-on-success") and rep.when == "teardown"):
             mode = "a" if os.path.exists(pytest_tests_logs) else "w"
             with open(pytest_tests_logs/ f"{item._nodeid.replace("::", "-").replace("/", "-")}-{rep.when}-{HOST_ID}.log",mode) as f:

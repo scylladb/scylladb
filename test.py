@@ -218,7 +218,8 @@ def parse_cmd_line() -> argparse.Namespace:
         action="store",
         help=name_help,
     )
-    parser.add_argument("--tmpdir", action="store", default=str(TOP_SRC_DIR / "testlog"),
+    parser.add_argument("--workdir", "--tmpdir", action="store", default=str(TOP_SRC_DIR / "testlog"),
+                        dest="workdir",
                         help="Path to temporary test data and log files.  The data is further segregated per build mode.")
     parser.add_argument("--gather-metrics", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-failures", type=int, default=0,
@@ -252,7 +253,7 @@ def parse_cmd_line() -> argparse.Namespace:
                         " acceptable format). Consider using --jobs too")
     parser.add_argument('--log-level', action="store",
                         help="Log level for Python logging module. The log "
-                        "is in {tmpdir}/test.py.log. Default: INFO",
+                        "is in {workdir}/test.py.log. Default: INFO",
                         default="INFO",
                         choices=["CRITICAL", "ERROR", "WARNING", "INFO",
                                  "DEBUG"],
@@ -273,7 +274,7 @@ def parse_cmd_line() -> argparse.Namespace:
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
     parser.add_argument('--coverage', action = 'store_true', default = False,
                         help="When running code instrumented with coverage support"
-                             "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
+                             "Will route the profiles to `workdir`/mode/coverage/`suite` and post process them in order to generate "
                              "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
                              "The lcov files can eventually be used for generating coverage reports")
     parser.add_argument("--coverage-mode",action = 'append', type = str, dest = "coverage_modes",
@@ -349,7 +350,7 @@ def parse_cmd_line() -> argparse.Namespace:
             raise RuntimeError(f"The following modes weren't built or ran (using the '--mode' option): {missing_coverage_modes}")
         args.coverage = True
 
-    args.tmpdir = os.path.abspath(args.tmpdir)
+    args.workdir = os.path.abspath(args.workdir)
 
     return args
 
@@ -367,7 +368,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     # So HOST_ID needed to not overwrite results from different hosts during Jenkins will copy to one directory.
 
     failed_tests = []
-    temp_dir = pathlib.Path(options.tmpdir).absolute()
+    temp_dir = pathlib.Path(options.workdir).absolute()
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
     files_to_run = []
@@ -396,7 +397,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             "-rf",
             '--test-py-init',
             f'-n{options.jobs}',
-            f'--tmpdir={temp_dir}',
+            f'--workdir={temp_dir}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
             f'--dist=worksteal',
@@ -559,10 +560,10 @@ def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: arg
                             f"'boost/memtable_test'"))
 
 
-def open_log(tmpdir: str, log_file_name: str, log_level: str) -> None:
-    pathlib.Path(tmpdir).mkdir(parents=True, exist_ok=True)
+def open_log(workdir: str, log_file_name: str, log_level: str) -> None:
+    pathlib.Path(workdir).mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
-        filename=os.path.join(tmpdir, log_file_name),
+        filename=os.path.join(workdir, log_file_name),
         filemode="w",
         level=log_level,
         format="%(asctime)s.%(msecs)03d %(levelname)s> %(message)s",
@@ -582,10 +583,10 @@ async def main() -> int:
         run_pytest(options)
         return 0
 
-    open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
+    open_log(options.workdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
     init_testsuite_globals()
     await prepare_environment(
-        tempdir_base=pathlib.Path(options.tmpdir),
+        workdir=pathlib.Path(options.workdir),
         modes=options.modes,
         gather_metrics=options.gather_metrics,
         save_log_on_success=options.save_log_on_success,
@@ -600,7 +601,7 @@ async def main() -> int:
 
     signaled = asyncio.Event()
     stop_event = asyncio.Event()
-    resource_watcher = run_resource_watcher(options.gather_metrics, signaled, stop_event, options.tmpdir)
+    resource_watcher = run_resource_watcher(options.gather_metrics, signaled, stop_event, options.workdir)
 
     setup_signal_handlers(asyncio.get_running_loop(), signaled)
 
@@ -660,7 +661,7 @@ async def process_coverage(options):
     ran_suites = list({test.suite for test in TestSuite.all_tests() if test.suite.need_coverage()})
 
     def suite_coverage_path(suite) -> pathlib.Path:
-        return pathlib.Path(suite.options.tmpdir) / suite.mode / 'coverage' / suite.name
+        return pathlib.Path(suite.options.workdir) / suite.mode / 'coverage' / suite.name
 
     def pathsize(path : pathlib.Path):
         if path.is_file():
@@ -835,7 +836,7 @@ async def process_coverage(options):
     modes_trace_files  = {}
     for mode, suite_traces in suits_trace_files.items():
 
-        target_trace_file = pathlib.Path(options.tmpdir) / mode / "coverage" / f"{mode}_coverage.info"
+        target_trace_file = pathlib.Path(options.workdir) / mode / "coverage" / f"{mode}_coverage.info"
         start_time = time.time()
         logger.info(f"Consolidating trace files for mode {mode}.")
         await coverage_utils.lcov_combine_traces(lcovs = suite_traces.values(),
@@ -856,7 +857,7 @@ async def process_coverage(options):
     #5. create one consolidated file with all trace information
     logger.info(f"Consolidating all trace files for this run.")
     start_time = time.time()
-    target_trace_file = pathlib.Path(options.tmpdir) / "test_coverage.info"
+    target_trace_file = pathlib.Path(options.workdir) / "test_coverage.info"
     await coverage_utils.lcov_combine_traces(lcovs = modes_trace_files.values(),
                                              output_lcov = target_trace_file,
                                              clear_on_success = False,
@@ -870,13 +871,13 @@ async def process_coverage(options):
     logger.info(f"Done consolidating all trace files for this run - time: {humanfriendly.format_timespan(time.time() - start_time)}.")
 
     logger.info(f"Creating textual report.")
-    proc = await asyncio.create_subprocess_shell(f"lcov --summary --rc lcov_branch_coverage=1 {options.tmpdir}/test_coverage.info 2>/dev/null > {options.tmpdir}/test_coverage_report.txt")
+    proc = await asyncio.create_subprocess_shell(f"lcov --summary --rc lcov_branch_coverage=1 {options.workdir}/test_coverage.info 2>/dev/null > {options.workdir}/test_coverage_report.txt")
     await proc.wait()
-    with open(pathlib.Path(options.tmpdir) /"test_coverage_report.txt") as f:
+    with open(pathlib.Path(options.workdir) /"test_coverage_report.txt") as f:
         summary = f.readlines()
-    proc = await asyncio.create_subprocess_shell(f"lcov --list --rc lcov_branch_coverage=1 {options.tmpdir}/test_coverage.info  2>/dev/null >> {options.tmpdir}/test_coverage_report.txt")
+    proc = await asyncio.create_subprocess_shell(f"lcov --list --rc lcov_branch_coverage=1 {options.workdir}/test_coverage.info  2>/dev/null >> {options.workdir}/test_coverage_report.txt")
     await proc.wait()
-    logger.info(f"Done creating textual report. ({options.tmpdir}/test_coverage_report.txt)")
+    logger.info(f"Done creating textual report. ({options.workdir}/test_coverage_report.txt)")
     total_processing_time = time.time() - total_processing_time
     ROOT_NODE.data.time = total_processing_time
 

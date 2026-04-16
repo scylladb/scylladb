@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import collections
 import logging
 import os
@@ -70,6 +71,11 @@ class PythonTestSuite(TestSuite):
             if cluster.api is not None:
                 cluster.api.close()
                 cluster.api = None
+            # Eagerly delete server directories and log files unless a test
+            # failed on this cluster (preserve for debugging) or the user
+            # requested to save logs on success (--save-log-on-success).
+            if not cluster.preserve_for_debugging and not options.save_log_on_success:
+                await asyncio.gather(*(srv.uninstall() for srv in cluster.stopped.values()))
             await cluster.release_ips()
 
         self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
@@ -119,8 +125,12 @@ class PythonTestSuite(TestSuite):
             # Suite artifacts are removed when
             # the entire suite ends successfully.
             self.artifacts.add_suite_artifact(self, stop)
+            # Cluster directories are eagerly cleaned up in recycle_cluster()
+            # when the cluster is no longer needed, unless a test failed
+            # (preserve_for_debugging). The suite artifact for uninstall
+            # is still registered as a fallback for clusters that are still
+            # in the pool when the suite ends (i.e. the clean, reusable ones).
             if not self.options.save_log_on_success:
-                # If a test fails, we might want to keep the data dirs.
                 async def uninstall() -> None:
                     await cluster.uninstall()
 
@@ -189,7 +199,7 @@ class PythonTest(Test):
             "-rs",
             "--run_id={}".format(self.id),
             "--mode={}".format(self.mode),
-            "--tmpdir={}".format(options.tmpdir),
+            "--workdir={}".format(options.workdir),
         ]
         if options.gather_metrics:
             self.args.append("--gather-metrics")

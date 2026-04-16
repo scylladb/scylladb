@@ -1110,6 +1110,8 @@ class ScyllaCluster:
         self.is_running: bool = False
         # cluster was modified in a way it should not be used in subsequent tests
         self.is_dirty: bool = False
+        # a test failed on this cluster; preserve directories for debugging
+        self.preserve_for_debugging: bool = False
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
         self.api = ScyllaRESTAPIClient()
@@ -1373,6 +1375,7 @@ class ScyllaCluster:
         if self.start_exception:
             # Mark as dirty so further test cases don't try to reuse this cluster.
             self.is_dirty = True
+            self.preserve_for_debugging = True
             raise Exception(f'Exception when starting cluster {self}:\n{self.start_exception}')
 
         for server in self.running.values():
@@ -1386,6 +1389,7 @@ class ScyllaCluster:
         if not success:
             self.logger.debug(f"Test failed using cluster {self.name}, marking the cluster as dirty")
             self.is_dirty = True
+            self.preserve_for_debugging = True
         if self.is_dirty:
             self.logger.info(f"The cluster {self.name} is dirty, not checking"
                              f" keyspace count post-condition")
