@@ -366,12 +366,18 @@ enum class tablet_transition_stage {
     write_both_read_new,
     use_new,
     cleanup,
+    sc_rollback,
     cleanup_target,
     revert_migration,
     end_migration,
     repair,
     end_repair,
     restore,
+
+    start_migration = allow_write_both_read_old,
+    sc_add_nonvoter = write_both_read_old,
+    sc_become_voter = write_both_read_new,
+    sc_snapshot_transfer = streaming,
 };
 
 enum class tablet_transition_kind {
