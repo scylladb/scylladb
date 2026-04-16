@@ -44,6 +44,7 @@ static future<std::optional<google_credentials>> credentials(const std::string& 
 }
 
 static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const tmpdir& tmp) {
+<<<<<<< HEAD
     std::vector<std::string> params({
         "", "-filesystem-root", (tmp.path() / "objects").string()
     });
@@ -55,6 +56,31 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
         exec = tp::find_file_in_path("docker");
         if (exec.empty()) {
             exec = tp::find_file_in_path("podman");
+||||||| parent of 999e108139 (Merge 'test: lib: fix broken retry in start_docker_service' from Dario Mirovic)
+    return tp::start_docker_service("local-kms"
+        , "docker.io/fsouza/fake-gcs-server:1.52.3"
+        , {}
+        , [](std::string_view line) {
+            if (line.find("server started at") != std::string::npos) {
+                return tp::service_parse_state::success;
+            }
+            if (line.find("address already in use") != std::string::npos) {
+                return tp::service_parse_state::failed;
+            }
+            return tp::service_parse_state::cont;
+=======
+    return tp::start_docker_service("fake-gcs-server"
+        , "docker.io/fsouza/fake-gcs-server:1.52.3"
+        , {}
+        , [](std::string_view line) {
+            if (line.find("server started at") != std::string::npos) {
+                return tp::service_parse_state::success;
+            }
+            if (line.find("address already in use") != std::string::npos) {
+                return tp::service_parse_state::failed;
+            }
+            return tp::service_parse_state::cont;
+>>>>>>> 999e108139 (Merge 'test: lib: fix broken retry in start_docker_service' from Dario Mirovic)
         }
         if (exec.empty()) {
             throw std::runtime_error("Could not find fake-gcs-server, docker or podman.");
@@ -352,7 +378,7 @@ seastar::future<> local_gcs_wrapper::setup() {
     if (!f) {
         _local = std::make_unique<gcs_fixture>();
         co_await _local->setup();
-        f = gcs_fixture::active();;
+        f = gcs_fixture::active();
     }
 
     endpoint = f->endpoint();

@@ -19,7 +19,7 @@
     Simple Google object storage endpoint provider. Uses either real or local, fake, endpoint.
 
     Note: the below text blobs are service account credentials, including private keys. 
-    _Never_ give any real priviledges to these accounts, as we are obviously exposing them here.
+    _Never_ give any real privileges to these accounts, as we are obviously exposing them here.
 
     User1 is assumed to have permissions to read/write the bucket
     User2 is assumed to only have permissions to read the bucket, but permission to 

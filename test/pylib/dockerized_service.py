@@ -38,6 +38,150 @@ class DockerizedServer:
                                                 for path in ["podman", "docker"]] 
                                                 if exe is not None)).resolve()
 
+<<<<<<< HEAD
+||||||| parent of 999e108139 (Merge 'test: lib: fix broken retry in start_docker_service' from Dario Mirovic)
+        docker_args = self.docker_args(self.host, self.service_port)
+        image_args = self.image_args(self.host, self.service_port)
+
+        args = [exe, "run", "--name", name, "--rm" ]
+        if self.service_port is None:
+            args = args + ["-P"]
+        else:
+            args = args + ["-p", str(self.service_port)]
+
+        args = args + docker_args + [self.image] + image_args
+
+        # This seems weird, using the blocking IO subprocess.
+        # However, we want to use a pipe reader so we can push the 
+        # output into the test log (because we are bad at propagating
+        # log files etc from CI)
+        # But the pipe reader needs to read until EOF, otherwise the
+        # docker process will eventually hang. So we can't await a 
+        # coroutine.
+        # We _can_, sort of, use pool.create_task(...) to send a coro
+        # to the background, and use a signal for waiting, like here,
+        # thus ensuring the coro runs forever, sort of... However, 
+        # this currently breaks, probably due to some part of the 
+        # machinery/tests that don't async fully, causing us to not
+        # process the log, and thus hand/fail, bla bla.
+        # The solution is to make the process synced, and use a 
+        # background thread (execution pool) for the processing.
+        # This way we know the pipe reader will not suddenly get
+        # blocked at inconvinient times.
+        proc = subprocess.Popen(args, stderr=subprocess.PIPE)
+        loop = asyncio.get_running_loop()
+        ready_fut = loop.create_future()
+
+        def process_io(): 
+            f = ready_fut
+            try:
+                while True:
+                    data = proc.stderr.readline()
+                    if not data:
+                        if f:
+                            loop.call_soon_threadsafe(f.set_exception, RuntimeError("Log EOF"))
+                        logger.debug("EOF received")
+                        break
+                    line = data.decode()
+                    self.logfile.write(data)
+                    logger.debug(line)
+                    if f and self.is_success_line(line, self.service_port):
+                        logger.info('Got start message: %s', line)
+                        loop.call_soon_threadsafe(f.set_result, True)
+                        f = None
+                    if f and self.is_failure_line(line, self.service_port):
+                        logger.info('Got fail message: %s', line)
+                        loop.call_soon_threadsafe(f.set_result, False)
+                        f = None
+            except Exception as e:
+                logger.error("Exception in log processing: %s", e)
+                if f:
+                    loop.call_soon_threadsafe(f.set_exception, e)
+
+        self.echo_thread = loop.run_in_executor(None, process_io)
+        ok = await ready_fut
+        if not ok:
+            self.logfile.close()
+            proc.kill()
+            proc.wait()
+            raise RuntimeError("Could not parse expected launch message from container")
+
+        check_proc = await asyncio.create_subprocess_exec(exe
+                                                          , *["container", "port", name]
+                                                          , stdout=asyncio.subprocess.PIPE
+        )
+=======
+        docker_args = self.docker_args(self.host, self.service_port)
+        image_args = self.image_args(self.host, self.service_port)
+
+        args = [exe, "run", "--name", name, "--rm" ]
+        if self.service_port is None:
+            args = args + ["-P"]
+        else:
+            args = args + ["-p", str(self.service_port)]
+
+        args = args + docker_args + [self.image] + image_args
+
+        # This seems weird, using the blocking IO subprocess.
+        # However, we want to use a pipe reader so we can push the 
+        # output into the test log (because we are bad at propagating
+        # log files etc from CI)
+        # But the pipe reader needs to read until EOF, otherwise the
+        # docker process will eventually hang. So we can't await a 
+        # coroutine.
+        # We _can_, sort of, use pool.create_task(...) to send a coro
+        # to the background, and use a signal for waiting, like here,
+        # thus ensuring the coro runs forever, sort of... However, 
+        # this currently breaks, probably due to some part of the 
+        # machinery/tests that don't async fully, causing us to not
+        # process the log, and thus hang/fail, bla bla.
+        # The solution is to make the process synced, and use a 
+        # background thread (execution pool) for the processing.
+        # This way we know the pipe reader will not suddenly get
+        # blocked at inconvenient times.
+        proc = subprocess.Popen(args, stderr=subprocess.PIPE)
+        loop = asyncio.get_running_loop()
+        ready_fut = loop.create_future()
+
+        def process_io(): 
+            f = ready_fut
+            try:
+                while True:
+                    data = proc.stderr.readline()
+                    if not data:
+                        if f:
+                            loop.call_soon_threadsafe(f.set_exception, RuntimeError("Log EOF"))
+                        logger.debug("EOF received")
+                        break
+                    line = data.decode()
+                    self.logfile.write(data)
+                    logger.debug(line)
+                    if f and self.is_success_line(line, self.service_port):
+                        logger.info('Got start message: %s', line)
+                        loop.call_soon_threadsafe(f.set_result, True)
+                        f = None
+                    if f and self.is_failure_line(line, self.service_port):
+                        logger.info('Got fail message: %s', line)
+                        loop.call_soon_threadsafe(f.set_result, False)
+                        f = None
+            except Exception as e:
+                logger.error("Exception in log processing: %s", e)
+                if f:
+                    loop.call_soon_threadsafe(f.set_exception, e)
+
+        self.echo_thread = loop.run_in_executor(None, process_io)
+        ok = await ready_fut
+        if not ok:
+            self.logfile.close()
+            proc.kill()
+            proc.wait()
+            raise RuntimeError("Could not parse expected launch message from container")
+
+        check_proc = await asyncio.create_subprocess_exec(exe
+                                                          , *["container", "port", name]
+                                                          , stdout=asyncio.subprocess.PIPE
+        )
+>>>>>>> 999e108139 (Merge 'test: lib: fix broken retry in start_docker_service' from Dario Mirovic)
         while True:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.bind((self.host, 0))

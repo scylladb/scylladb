@@ -20,7 +20,7 @@ namespace tests::proc {
     using namespace seastar;
 
     std::filesystem::path find_file_in_path(std::string_view name, 
-        const std::vector<std::filesystem::path>& path_preprend = {},
+        const std::vector<std::filesystem::path>& path_prepend = {},
         const std::vector<std::filesystem::path>& path_append = {}
     );
 
