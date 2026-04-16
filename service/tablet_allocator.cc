@@ -1031,6 +1031,8 @@ private:
                 return false;
             case tablet_transition_stage::cleanup:
                 return false;
+            case tablet_transition_stage::sc_rollback:
+                return false;
             case tablet_transition_stage::cleanup_target:
                 return false;
             case tablet_transition_stage::revert_migration:
