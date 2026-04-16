@@ -146,6 +146,25 @@ AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
    - When set, these values are used by the S3 client to sign requests.
    - If not set, requests are sent unsigned, which may not be accepted by all servers.
 
+.. _admin-oci-object-storage:
+
+Using Oracle OCI Object Storage
+=================================
+
+Oracle Cloud Infrastructure (OCI) Object Storage is compatible with the Amazon
+S3 API, so it works with ScyllaDB without additional configuration.
+
+To use OCI Object Storage, follow the same configuration as for AWS S3, and
+specify your OCI S3-compatible endpoint.
+
+Example:
+
+.. code:: yaml
+
+   object_storage_endpoints:
+     - name: https://idedxcgnkfkt.compat.objectstorage.us-ashburn-1.oci.customer-oci.com:443
+       aws_region: us-ashburn-1
+
 .. _admin-compression:
 
 Compression
