@@ -181,7 +181,14 @@ seastar::future<client::response> client::request_impl(seastar::httpd::operation
 }
 
 seastar::future<bool> client::check_status() {
-    auto f = co_await coroutine::as_future(request_impl(httpd::operation_type::GET, "/api/v1/status", std::nullopt, http::reply::status_type::ok, _as));
+    auto timeout = std::chrono::milliseconds(_unreachable_node_detection_time_in_ms.get());
+    abort_on_expiry timeout_as(seastar::lowres_clock::now() + timeout);
+    utils::composite_abort_source composite_as;
+    composite_as.add(timeout_as.abort_source());
+    composite_as.add(_as);
+
+    auto f = co_await coroutine::as_future(
+            request_impl(httpd::operation_type::GET, "/api/v1/status", std::nullopt, http::reply::status_type::ok, composite_as.abort_source()));
     if (f.failed()) {
         f.ignore_ready_future();
         co_return false;
