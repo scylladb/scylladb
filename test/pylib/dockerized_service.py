@@ -6,12 +6,11 @@
 
 import logging
 import shutil
-import itertools
 import asyncio
 import pathlib
 import re
-import os
 import subprocess
+import uuid
 from typing import Callable
 
 logger = logging.getLogger("DockerizedServer")
@@ -19,8 +18,6 @@ logger = logging.getLogger("DockerizedServer")
 class DockerizedServer:
     """class for running an external dockerized service image, typically mock server"""
     # pylint: disable=too-many-instance-attributes
-
-    newid = itertools.count(start=1).__next__   # Sequential unique id
 
     def __init__(self, image, tmpdir, logfilenamebase, 
                  success_string : Callable[[str, int], bool] | str,
@@ -48,7 +45,7 @@ class DockerizedServer:
         exe = pathlib.Path(next(exe for exe in [shutil.which(path) 
                                                 for path in ["podman", "docker"]] 
                                                 if exe is not None)).resolve()
-        sid = f"{os.getpid()}-{DockerizedServer.newid()}"
+        sid = str(uuid.uuid4())
         name = f'{self.logfilenamebase}-{sid}'
         logfilename = (pathlib.Path(self.tmpdir) / name).with_suffix(".log")
         self.logfile = logfilename.open("wb")
