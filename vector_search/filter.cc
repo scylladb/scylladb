@@ -12,6 +12,7 @@
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/expr/evaluate.hh"
 #include "types/json_utils.hh"
+#include "utils/big_decimal.hh"
 
 namespace vector_search {
 
@@ -59,7 +60,22 @@ rjson::value value_to_json(const data_type& type, const cql3::raw_value& val) {
     if (val.is_null()) {
         return rjson::null_value();
     }
-    auto json_str = to_json_string(*type, to_bytes(val.view()));
+    auto base_type = type->is_reversed() ? type->underlying_type() : type;
+    // For decimal and varint types, rjson::parse() on the JSON string would
+    // parse through a double, losing precision for large values. Instead,
+    // produce the numeric string directly and wrap it with rjson::from_string()
+    // which preserves the exact digits.
+    // TODO: once to_json_string() uses a lossless representation for these
+    // types (SCYLLADB-1574), revert its common use.
+    if (base_type == decimal_type) {
+        auto bd = value_cast<big_decimal>(base_type->deserialize(to_bytes(val.view())));
+        return rjson::from_string(bd.to_string_canonical());
+    }
+    if (base_type == varint_type) {
+        auto json_str = to_json_string(*base_type, to_bytes(val.view()));
+        return rjson::from_string(json_str);
+    }
+    auto json_str = to_json_string(*base_type, to_bytes(val.view()));
     return rjson::parse(json_str);
 }
 
