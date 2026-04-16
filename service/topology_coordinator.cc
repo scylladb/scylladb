@@ -1984,11 +1984,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     fmt::format("tablet draining failed: {}, moving {} to {}, due to {}", gid, replica, trinfo.pending_replica, reason));
             };
 
+            const bool is_strong_consistency = tmap.has_raft_info();
+
+            auto streaming_stage = locator::tablet_transition_stage::streaming;
+            auto cleanup_target_stage = locator::tablet_transition_stage::cleanup_target;
+            if (is_strong_consistency) {
+                streaming_stage = locator::tablet_transition_stage::sc_snapshot_transfer;
+                cleanup_target_stage = locator::tablet_transition_stage::sc_cleanup_target;
+            }
+
             switch (trinfo.stage) {
-                case locator::tablet_transition_stage::allow_write_both_read_old:
+                case locator::tablet_transition_stage::allow_write_both_read_old: /* start_migration */
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
-                            transition_to(locator::tablet_transition_stage::cleanup_target);
+                            transition_to(cleanup_target_stage);
                             break;
                         }
                     }
@@ -2006,29 +2015,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             .build());
                     }
                     break;
-                case locator::tablet_transition_stage::write_both_read_old:
+                case locator::tablet_transition_stage::write_both_read_old: /* sc_add_nonvoter */
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
-                            transition_to(locator::tablet_transition_stage::cleanup_target);
+                            transition_to(cleanup_target_stage);
                             break;
                         }
                     }
-                    if (trinfo.transition == locator::tablet_transition_kind::rebuild_v2) {
+                    if (trinfo.transition == locator::tablet_transition_kind::rebuild_v2 && !is_strong_consistency) {
                         transition_to_with_barrier(locator::tablet_transition_stage::rebuild_repair);
                     } else {
-                        transition_to_with_barrier(locator::tablet_transition_stage::streaming);
+                        transition_to_with_barrier(streaming_stage);
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:
-                    transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                    transition_to_with_barrier(cleanup_target_stage);
                     break;
                 case locator::tablet_transition_stage::rebuild_repair: {
                     if (action_failed(tablet_state.rebuild_repair)) {
                         bool fail = utils::get_local_injector().enter("rebuild_repair_stage_fail");
                         if (fail || check_excluded_replicas()) {
-                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, cleanup_target_stage);
                             updates.emplace_back(get_mutation_builder()
-                                    .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                    .set_stage(last_token, cleanup_target_stage)
                                     .del_session(last_token)
                                     .build());
                             break;
@@ -2057,9 +2066,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             });
                         });
                     })) {
-                        rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::streaming);
+                        rtlogger.debug("Will set tablet {} stage to {}", gid, streaming_stage);
                         updates.emplace_back(get_mutation_builder()
-                            .set_stage(last_token, locator::tablet_transition_stage::streaming)
+                            .set_stage(last_token, streaming_stage)
                             .build());
                     }
                 }
@@ -2103,9 +2112,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
 
                         if (rollback) {
-                            rtlogger.debug("Will set tablet {} stage to {}: {}", gid, locator::tablet_transition_stage::cleanup_target, *rollback);
+                            rtlogger.debug("Will set tablet {} stage to {}: {}", gid, cleanup_target_stage, *rollback);
                             updates.emplace_back(get_mutation_builder()
-                                .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                .set_stage(last_token, cleanup_target_stage)
                                 .del_session(last_token)
                                 .build());
                             break;
@@ -2138,7 +2147,40 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                 }
                     break;
-                case locator::tablet_transition_stage::write_both_read_new: {
+                case locator::tablet_transition_stage::sc_snapshot_transfer:
+                    if (action_failed(tablet_state.barriers[trinfo.stage]) || utils::get_local_injector().enter("sc_snapshot_transfer_fail")) {
+                        std::optional<sstring> rollback;
+
+                        if (utils::get_local_injector().enter("sc_snapshot_transfer_move_to_cleanup")) {
+                            rollback = "error injection";
+                        }
+
+                        bool critical_disk_utilization = false;
+                        if (auto stats = _tablet_allocator.get_load_stats()) {
+                            const auto& util = stats->critical_disk_utilization;
+                            auto it = util.find(trinfo.pending_replica->host);
+                            critical_disk_utilization = (it != util.end() && it->second);
+                            if (critical_disk_utilization) {
+                                rollback = fmt::format("critical disk utilization on {}", trinfo.pending_replica->host);
+                            }
+                        }
+
+                        if (!rollback) {
+                            rollback = check_excluded_replicas();
+                        }
+
+                        if (rollback) {
+                            rtlogger.debug("Will set tablet {} stage to {}: {}", gid, cleanup_target_stage, *rollback);
+                            updates.emplace_back(get_mutation_builder()
+                                .set_stage(last_token, cleanup_target_stage)
+                                .del_session(last_token)
+                                .build());
+                            break;
+                        }
+                    }
+                    transition_to_with_barrier(locator::tablet_transition_stage::sc_become_voter);
+                    break;
+                case locator::tablet_transition_stage::write_both_read_new: /* sc_become_voter */ {
                     utils::get_local_injector().inject("crash-in-tablet-write-both-read-new", [] {
                         rtlogger.info("crash-in-tablet-write-both-read-new hit, killing the node");
                         _exit(1);
@@ -2168,7 +2210,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             if (_feature_service.tablets_intermediate_fallback_cleanup) {
                                 transition_to(locator::tablet_transition_stage::write_both_read_old_fallback_cleanup);
                             } else {
-                                transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
+                                transition_to_with_barrier(cleanup_target_stage);
                             }
                             break;
                         }
@@ -2205,6 +2247,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
                 }
+                    break;
+                case locator::tablet_transition_stage::sc_cleanup_target:
+                    transition_to_with_barrier(locator::tablet_transition_stage::cleanup_target);
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
                     if (do_barrier()) {

@@ -72,6 +72,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::both;
         case tablet_transition_stage::streaming:
             return write_replica_set_selector::both;
+        case tablet_transition_stage::sc_snapshot_transfer:
+            return write_replica_set_selector::both;
         case tablet_transition_stage::rebuild_repair:
             return write_replica_set_selector::both;
         case tablet_transition_stage::repair:
@@ -84,6 +86,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::next;
         case tablet_transition_stage::cleanup:
             return write_replica_set_selector::next;
+        case tablet_transition_stage::sc_cleanup_target:
+            return write_replica_set_selector::previous;
         case tablet_transition_stage::cleanup_target:
             return write_replica_set_selector::previous;
         case tablet_transition_stage::revert_migration:
@@ -107,6 +111,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
             return read_replica_set_selector::previous;
         case tablet_transition_stage::streaming:
             return read_replica_set_selector::previous;
+        case tablet_transition_stage::sc_snapshot_transfer:
+            return read_replica_set_selector::previous;
         case tablet_transition_stage::rebuild_repair:
             return read_replica_set_selector::previous;
         case tablet_transition_stage::repair:
@@ -119,6 +125,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
             return read_replica_set_selector::next;
         case tablet_transition_stage::cleanup:
             return read_replica_set_selector::next;
+        case tablet_transition_stage::sc_cleanup_target:
+            return read_replica_set_selector::previous;
         case tablet_transition_stage::cleanup_target:
             return read_replica_set_selector::previous;
         case tablet_transition_stage::revert_migration:
@@ -888,11 +896,13 @@ static const std::unordered_map<tablet_transition_stage, sstring> tablet_transit
     {tablet_transition_stage::write_both_read_old_fallback_cleanup, "write_both_read_old_fallback_cleanup"},
     {tablet_transition_stage::write_both_read_new, "write_both_read_new"},
     {tablet_transition_stage::streaming, "streaming"},
+    {tablet_transition_stage::sc_snapshot_transfer, "sc_snapshot_transfer"},
     {tablet_transition_stage::rebuild_repair, "rebuild_repair"},
     {tablet_transition_stage::repair, "repair"},
     {tablet_transition_stage::end_repair, "end_repair"},
     {tablet_transition_stage::use_new, "use_new"},
     {tablet_transition_stage::cleanup, "cleanup"},
+    {tablet_transition_stage::sc_cleanup_target, "sc_cleanup_target"},
     {tablet_transition_stage::cleanup_target, "cleanup_target"},
     {tablet_transition_stage::revert_migration, "revert_migration"},
     {tablet_transition_stage::end_migration, "end_migration"},
