@@ -43,6 +43,14 @@ public:
 
     sstring to_string() const;
 
+    // Exact string representation following the Java BigDecimal.toString() spec
+    // (JDK 8+). Unlike to_string(), this is bijective: each (unscaled, scale)
+    // pair maps to a unique string. Uses exponential notation when the exponent
+    // is large or the scale is negative. This could replace to_string(), but
+    // doing so has wider consequences (e.g. hash/equality contract for
+    // decimal_type) described in SCYLLADB-1574.
+    sstring to_string_canonical() const;
+
     std::strong_ordering operator<=>(const big_decimal& other) const;
 
     big_decimal& operator+=(const big_decimal& other);
