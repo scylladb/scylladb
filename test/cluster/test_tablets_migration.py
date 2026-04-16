@@ -118,7 +118,7 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage):
+async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage, build_mode):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
         pytest.skip('Failing destination during cleanup is pointless')
     if fail_stage == 'cleanup_target' and fail_replica == 'source':
@@ -249,7 +249,8 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                 await manager.remove_node(servers[via].server_id, servers[self.fail_idx].server_id)
                 logger.info(f"Done with {self.replica} {host_ids[self.fail_idx]}")
 
-        finish_writes = await start_writes(cql, ks, "test")
+        writes_concurrency = 1 if build_mode == 'debug' else 3
+        finish_writes = await start_writes(cql, ks, "test", concurrency=writes_concurrency)
 
         failer = node_failer(fail_stage, fail_replica, ks)
         await failer.setup()
