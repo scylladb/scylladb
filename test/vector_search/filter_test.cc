@@ -13,6 +13,8 @@
 #include "cql3/util.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
+#include "types/types.hh"
+#include "utils/big_decimal.hh"
 #include "utils/rjson.hh"
 #include "vector_search/filter.hh"
 
@@ -443,6 +445,74 @@ SEASTAR_TEST_CASE(to_json_nonprimary_key_bind_marker) {
         auto json = rjson::print(filter.to_json(options));
 
         auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":1},{"type":"==","lhs":"r","rhs":99}],"allow_filtering":true})json";
+        BOOST_CHECK_EQUAL(json, expected);
+    });
+}
+
+// Decimal and varint filter values must be serialized as JSON strings, not
+// bare JSON numbers - to avoid precision loss.
+SEASTAR_TEST_CASE(to_json_decimal) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table ks.t(pk decimal, ck int, v vector<float, 3>, primary key(pk, ck))");
+
+        // Basic literal value.
+        auto restr = make_restrictions("pk=1.23", e);
+        auto json = get_restrictions_json(restr, false);
+        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":"1.23"}],"allow_filtering":false})json";
+        BOOST_CHECK_EQUAL(json, expected);
+
+        // Value exceeding double precision (more than 15-16 significant digits).
+        restr = make_restrictions("pk=98765432109876543210.12345", e);
+        json = get_restrictions_json(restr, false);
+        expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":"98765432109876543210.12345"}],"allow_filtering":false})json";
+        BOOST_CHECK_EQUAL(json, expected);
+
+        // Same value via bind marker.
+        restr = make_restrictions("pk=?", e);
+        auto filter = vector_search::prepare_filter(restr, false);
+        std::vector<raw_value> bind_values = {
+            raw_value::make_value(decimal_type->decompose(big_decimal("98765432109876543210.12345")))};
+        auto options = make_query_options(std::move(bind_values));
+        json = rjson::print(filter.to_json(options));
+        BOOST_CHECK_EQUAL(json, expected);
+
+        // Integer decimal exceeding uint64_max (18446744073709551615).
+        restr = make_restrictions("pk=98765432109876543210", e);
+        json = get_restrictions_json(restr, false);
+        expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":"98765432109876543210"}],"allow_filtering":false})json";
+        BOOST_CHECK_EQUAL(json, expected);
+
+        // Exact representation: "1.230" (scale=3, unscaled=1230) must stay
+        // "1.230", not be normalized to "1.23". These are different partition
+        // keys because the wire format differs.
+        restr = make_restrictions("pk=?", e);
+        auto filter2 = vector_search::prepare_filter(restr, false);
+        std::vector<raw_value> bind_values2 = {
+            raw_value::make_value(decimal_type->decompose(big_decimal("1.230")))};
+        auto options2 = make_query_options(std::move(bind_values2));
+        json = rjson::print(filter2.to_json(options2));
+        expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":"1.230"}],"allow_filtering":false})json";
+        BOOST_CHECK_EQUAL(json, expected);
+    });
+}
+
+SEASTAR_TEST_CASE(to_json_varint) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table ks.t(pk varint, ck int, v vector<float, 3>, primary key(pk, ck))");
+
+        // Value exceeding uint64_max (18446744073709551615).
+        auto restr = make_restrictions("pk=98765432109876543210", e);
+        auto json = get_restrictions_json(restr, false);
+        auto expected = R"json({"restrictions":[{"type":"==","lhs":"pk","rhs":"98765432109876543210"}],"allow_filtering":false})json";
+        BOOST_CHECK_EQUAL(json, expected);
+
+        // Same value via bind marker.
+        restr = make_restrictions("pk=?", e);
+        auto filter = vector_search::prepare_filter(restr, false);
+        std::vector<raw_value> bind_values = {
+            raw_value::make_value(varint_type->decompose(utils::multiprecision_int("98765432109876543210")))};
+        auto options = make_query_options(std::move(bind_values));
+        json = rjson::print(filter.to_json(options));
         BOOST_CHECK_EQUAL(json, expected);
     });
 }

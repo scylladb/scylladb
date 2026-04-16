@@ -140,6 +140,60 @@ sstring big_decimal::to_string() const
     return str;
 }
 
+// Java BigDecimal.toString() spec (JDK 8+):
+// See: https://docs.oracle.com/javase/8/docs/api/java/math/BigDecimal.html#toString--
+//   adjusted_exp = -scale + (precision - 1)
+//   if scale >= 0 AND adjusted_exp >= -6: plain decimal (no exponent)
+//   otherwise: exponential notation with 'E' suffix
+//
+// This guarantees a bijective mapping from (unscaled, scale) to string.
+// Using int64_t for adjusted_exp to avoid overflow when scale is extreme.
+//
+// This could replace to_string(), but doing so has wider consequences
+// (e.g. hash/equality contract for decimal_type) described in SCYLLADB-1574.
+sstring big_decimal::to_string_canonical() const
+{
+    boost::multiprecision::cpp_int num = boost::multiprecision::abs(_unscaled_value);
+    auto digits = !_unscaled_value ? std::string("0") : num.str(); // decimal digits, no sign
+    int64_t precision = static_cast<int64_t>(digits.size());
+    int64_t adjusted_exp = -static_cast<int64_t>(_scale) + (precision - 1);
+
+    std::string result;
+    if (_unscaled_value < 0) {
+        result += '-';
+    }
+
+    if (_scale >= 0 && adjusted_exp >= -6) {
+        // Plain decimal form (no exponent).
+        int64_t int_digits = precision - static_cast<int64_t>(_scale);
+        if (int_digits > 0) {
+            result.append(digits.data(), int_digits);
+            if (_scale > 0) {
+                result += '.';
+                result.append(digits.data() + int_digits, _scale);
+            }
+        } else {
+            result += "0.";
+            result.append(-int_digits, '0');
+            result.append(digits);
+        }
+    } else {
+        // Exponential notation.
+        result += digits[0];
+        if (precision > 1) {
+            result += '.';
+            result.append(digits.data() + 1, precision - 1);
+        }
+        result += 'E';
+        if (adjusted_exp >= 0) {
+            result += '+';
+        }
+        result += std::to_string(adjusted_exp);
+    }
+
+    return sstring(result);
+}
+
 std::strong_ordering big_decimal::tri_cmp_slow(const big_decimal& other) const
 {
     auto max_scale = std::max(_scale, other._scale);
