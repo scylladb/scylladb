@@ -13,7 +13,7 @@
 #include "db/system_keyspace.hh"
 #include "locator/tablets.hh"
 #include "mutation/canonical_mutation.hh"
-#include "raft/raft.hh"
+#include "raft/raft_fwd.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"

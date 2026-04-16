@@ -15,7 +15,7 @@
 #include <seastar/core/shared_future.hh>
 #include "absl-flat_hash_map.hh"
 #include "gms/endpoint_state.hh"
-#include "gms/gossiper.hh"
+#include "gms/gossip_address_map.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
 #include "service/client_routes.hh"
@@ -41,11 +41,9 @@
 #include <seastar/core/shared_ptr.hh>
 #include "cdc/generation_id.hh"
 #include "db/system_keyspace.hh"
-#include "raft/raft.hh"
+#include "raft/raft_fwd.hh"
 #include "node_ops/id.hh"
-#include "raft/server.hh"
 #include "db/view/view_building_state.hh"
-#include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "mutation/timestamp.hh"
 #include "utils/UUID.hh"
@@ -115,6 +113,10 @@ class tablet_mutation_builder;
 }
 
 namespace auth { class cache; }
+
+namespace service {
+class tablet_allocator;
+}
 
 namespace utils {
 class disk_space_monitor;

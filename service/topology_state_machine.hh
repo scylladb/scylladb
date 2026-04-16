@@ -17,7 +17,7 @@
 #include <seastar/core/sstring.hh>
 #include "cdc/generation_id.hh"
 #include "dht/token.hh"
-#include "raft/raft.hh"
+#include "raft/raft_fwd.hh"
 #include "utils/UUID.hh"
 #include "service/session.hh"
 #include "mutation/canonical_mutation.hh"

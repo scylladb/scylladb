@@ -13,6 +13,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/when_all.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include "gms/gossiper.hh"
 #include <seastar/util/defer.hh>
 
 

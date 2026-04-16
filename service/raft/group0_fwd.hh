@@ -9,7 +9,7 @@
 #pragma once
 
 #include <iosfwd>
-#include "raft/raft.hh"
+#include "raft/raft_fwd.hh"
 #include "gms/inet_address.hh"
 
 namespace service {

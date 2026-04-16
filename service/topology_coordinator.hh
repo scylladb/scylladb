@@ -17,7 +17,7 @@
 #include <seastar/core/metrics.hh>
 
 #include "utils/log.hh"
-#include "raft/raft.hh"
+#include "raft/raft_fwd.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_state_machine.hh"
 #include "db/view/view_building_state.hh"

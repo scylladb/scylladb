@@ -29,6 +29,7 @@
 
 #include "db/config.hh"
 #include "db/view/base_info.hh"
+#include "gms/gossiper.hh"
 #include "query/query-result-set.hh"
 #include "db/view/view_build_status.hh"
 #include "db/view/view_consumer.hh"

@@ -21,10 +21,9 @@
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
 #include "utils/UUID.hh"
-#include "raft/raft.hh"
+#include "raft/raft_fwd.hh"
 
 #include <ranges>
-#include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
