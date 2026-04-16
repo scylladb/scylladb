@@ -38,7 +38,8 @@ audit_cf_storage_helper::audit_cf_storage_helper(cql3::query_processor& qp, serv
                        "source inet, "
                        "username text, "
                        "error boolean, "
-                       "PRIMARY KEY ((date, node), event_time))",
+                       "PRIMARY KEY ((date, node), event_time))"
+                       " WITH caching = {{'keys': 'NONE', 'rows_per_partition': 'NONE', 'enabled': 'false'}}",
                        KEYSPACE_NAME, TABLE_NAME),
              fmt::format("INSERT INTO {}.{} ("
                        "date,"
