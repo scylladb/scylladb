@@ -125,6 +125,7 @@ namespace {
                 system_keyspace::VIEW_BUILDING_TASKS,
                 system_keyspace::CLIENT_ROUTES,
                 system_keyspace::REPAIR_TASKS,
+                system_keyspace::SSTABLES_REGISTRY,
             };
             if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
                 builder.set_is_group0_table();
@@ -3404,30 +3405,53 @@ system_keyspace::read_cdc_generation_opt(utils::UUID id) {
     co_return cdc::topology_description{std::move(entries)};
 }
 
-future<> system_keyspace::sstables_registry_create_entry(table_id owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {
+future<> system_keyspace::sstables_registry_create_entry(table_id owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc, service::group0_batch& mc) {
     static const auto req = format("INSERT INTO system.{} (owner, generation, status, state, version, format) VALUES (?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
     slogger.trace("Inserting {}.{} into {}", owner, desc.generation, SSTABLES_REGISTRY);
-    co_await execute_cql(req, owner.id, desc.generation, status, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
+    if (mc.has_guard()) {
+        auto muts = co_await _qp.get_mutations_internal(req, internal_system_query_state(), mc.write_timestamp(),
+                {data_value(owner.id), data_value(desc.generation), data_value(status), data_value(sstables::state_to_dir(state)), data_value(fmt::to_string(desc.version)), data_value(fmt::to_string(desc.format))});
+        mc.add_mutations(std::move(muts), fmt::format("sstables_registry create_entry {}.{}", owner, desc.generation));
+    } else {
+        co_await execute_cql(req, owner.id, desc.generation, status, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
+    }
 }
 
-future<> system_keyspace::sstables_registry_update_entry_status(table_id owner, sstables::generation_type gen, sstring status) {
+future<> system_keyspace::sstables_registry_update_entry_status(table_id owner, sstables::generation_type gen, sstring status, service::group0_batch& mc) {
     static const auto req = format("UPDATE system.{} SET status = ? WHERE owner = ? AND generation = ?", SSTABLES_REGISTRY);
     slogger.trace("Updating {}.{} -> status={} in {}", owner, gen, status, SSTABLES_REGISTRY);
-    co_await execute_cql(req, status, owner.id, gen).discard_result();
+    if (mc.has_guard()) {
+        auto muts = co_await _qp.get_mutations_internal(req, internal_system_query_state(), mc.write_timestamp(),
+                {data_value(status), data_value(owner.id), data_value(gen)});
+        mc.add_mutations(std::move(muts), fmt::format("sstables_registry update_entry_status {}.{}", owner, gen));
+    } else {
+        co_await execute_cql(req, status, owner.id, gen).discard_result();
+    }
 }
 
-future<> system_keyspace::sstables_registry_update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state) {
+future<> system_keyspace::sstables_registry_update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state, service::group0_batch& mc) {
     static const auto req = format("UPDATE system.{} SET state = ? WHERE owner = ? AND generation = ?", SSTABLES_REGISTRY);
     auto new_state = sstables::state_to_dir(state);
     slogger.trace("Updating {}.{} -> state={} in {}", owner, gen, new_state, SSTABLES_REGISTRY);
-    co_await execute_cql(req, new_state, owner.id, gen).discard_result();
+    if (mc.has_guard()) {
+        auto muts = co_await _qp.get_mutations_internal(req, internal_system_query_state(), mc.write_timestamp(),
+                {data_value(new_state), data_value(owner.id), data_value(gen)});
+        mc.add_mutations(std::move(muts), fmt::format("sstables_registry update_entry_state {}.{}", owner, gen));
+    } else {
+        co_await execute_cql(req, new_state, owner.id, gen).discard_result();
+    }
 }
 
-future<> system_keyspace::sstables_registry_delete_entry(table_id owner, sstables::generation_type gen) {
+future<> system_keyspace::sstables_registry_delete_entry(table_id owner, sstables::generation_type gen, service::group0_batch& mc) {
     static const auto req = format("DELETE FROM system.{} WHERE owner = ? AND generation = ?", SSTABLES_REGISTRY);
     slogger.trace("Removing {}.{} from {}", owner, gen, SSTABLES_REGISTRY);
-    co_await execute_cql(req, owner.id, gen).discard_result();
-
+    if (mc.has_guard()) {
+        auto muts = co_await _qp.get_mutations_internal(req, internal_system_query_state(), mc.write_timestamp(),
+                {data_value(owner.id), data_value(gen)});
+        mc.add_mutations(std::move(muts), fmt::format("sstables_registry delete_entry {}.{}", owner, gen));
+    } else {
+        co_await execute_cql(req, owner.id, gen).discard_result();
+    }
 }
 
 future<> system_keyspace::sstables_registry_list(table_id owner, sstable_registry_entry_consumer consumer) {
@@ -3444,6 +3468,15 @@ future<> system_keyspace::sstables_registry_list(table_id owner, sstable_registr
         co_await consumer(std::move(status), std::move(state), std::move(desc));
         co_return stop_iteration::no;
     });
+}
+
+mutation system_keyspace::make_drop_sstables_registry_mutation(table_id id, api::timestamp_type ts) {
+    auto s = db::system_keyspace::sstables_registry();
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(id.uuid()).serialize_nonnull()
+    ));
+    m.partition().apply(tombstone(ts, gc_clock::now()));
+    return m;
 }
 
 future<service::topology_request_state> system_keyspace::get_topology_request_state(utils::UUID id, bool require_entry) {

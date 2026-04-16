@@ -1760,6 +1760,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // The client has to be created before `stop_raft` since during
             // destruction it has to exist until raft_gr.stop() completes.
             service::raft_group0_client group0_client{raft_gr.local(), gossiper.local(), sys_ks.local(), token_metadata.local(), maintenance_mode_enabled{cfg->maintenance_mode()}};
+            db.invoke_on_all([&group0_client, &db, &stop_signal](replica::database& local_db) {
+                local_db.get_user_sstables_manager().plug_group0_client(group0_client, db, stop_signal.as_sharded_abort_source());
+            }).get();
+            auto unplug_group0_client = defer_verbose_shutdown("sstables_manager group0_client", [&db] {
+                db.invoke_on_all([](replica::database& local_db) {
+                    local_db.get_user_sstables_manager().unplug_group0_client();
+                }).get();
+            });
 
             service::raft_group0 group0_service{
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
@@ -1798,6 +1806,37 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             };
             auto the_sstable_dict_deleter = sstable_dict_deleter(mm_notifier.local(), feature_service.local());
+
+            class sstables_registry_dropper : public service::migration_listener::empty_listener {
+                service::migration_notifier& _mn;
+                replica::database& _db;
+            public:
+                sstables_registry_dropper(service::migration_notifier& mn, replica::database& db) : _mn(mn), _db(db) {
+                    _mn.register_listener(this);
+                }
+                ~sstables_registry_dropper() {
+                    _mn.unregister_listener(this).get();
+                }
+                void on_before_drop_column_family(const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+                    if (!_db.find_keyspace(s.ks_name()).metadata()->get_storage_options().is_object_storage_type()) {
+                        return;
+                    }
+                    if (utils::get_local_injector().enter("skip_sstables_registry_drop_tombstone")) {
+                        return;
+                    }
+                    muts.emplace_back(db::system_keyspace::make_drop_sstables_registry_mutation(s.id(), ts));
+                }
+                void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+                    auto& ks = _db.find_keyspace(keyspace_name);
+                    if (!ks.metadata()->get_storage_options().is_object_storage_type()) {
+                        return;
+                    }
+                    for (auto&& [name, s] : ks.metadata()->cf_meta_data()) {
+                        muts.emplace_back(db::system_keyspace::make_drop_sstables_registry_mutation(s->id(), ts));
+                    }
+                }
+            };
+            auto the_sstables_registry_dropper = sstables_registry_dropper(mm_notifier.local(), db.local());
 
             checkpoint(stop_signal, "starting migration manager");
             debug::the_migration_manager = &mm;

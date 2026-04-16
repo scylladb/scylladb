@@ -17,6 +17,9 @@ from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace
 from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.rest_client import read_barrier
+from time import time
 
 logger = logging.getLogger(__name__)
 
@@ -316,3 +319,244 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     cql.execute((f'CREATE KEYSPACE random_ks WITH'
                     f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
 
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_table_object_storage_no_deadlock(manager: ManagerClient, object_storage):
+    """
+    Verify DROP TABLE on an object-storage-backed keyspace does not deadlock
+    and that the on_before_drop_column_family listener atomically removes
+    sstables registry entries via a partition tombstone in the group0 command.
+
+    Without the listener, wipe() during schema merge would either deadlock
+    (trying to acquire the group0 operation mutex already held by the DROP
+    TABLE caller) or, with the in_group0_drop_schema_trx safety flag, silently
+    skip per-SSTable registry cleanup — leaking registry entries.
+
+    Part 1 enables an error injection that skips the tombstone, proving
+    that registry entries leak when the listener is bypassed.
+
+    Part 2 runs without the injection, proving that the listener correctly
+    cleans up registry entries and that DROP TABLE completes without deadlock.
+
+    Reproduces SCYLLADB-1004.
+    """
+    cfg = {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+        'experimental_features': ['keyspace-storage-options'],
+    }
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        # injection skips the tombstone — registry entries leak
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int)")
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        tid = await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't1'")
+        table_id = tid[0].id
+
+        # Verify registry entries exist before DROP
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Expected registry entries before DROP TABLE"
+
+        await manager.api.enable_injection(
+            server.ip_addr, "skip_sstables_registry_drop_tombstone", one_shot=False)
+
+        await asyncio.wait_for(
+            cql.run_async(f"DROP TABLE {ks}.t1"),
+            timeout=10)
+
+        # Without the tombstone, registry entries should still exist (leaked)
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Registry entries should leak when tombstone is skipped"
+
+        await manager.api.disable_injection(
+            server.ip_addr, "skip_sstables_registry_drop_tombstone")
+
+        # no injection — tombstone cleans up registry entries
+        await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, v int)")
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.t2 (pk, v) VALUES ({i}, {i})")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        tid = await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't2'")
+        table_id = tid[0].id
+
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Expected registry entries before DROP TABLE"
+
+        await asyncio.wait_for(
+            cql.run_async(f"DROP TABLE {ks}.t2"),
+            timeout=10)
+
+        # With the tombstone, registry entries should be cleaned up
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) == 0, f"Registry entries should be cleaned up after DROP TABLE, found {len(rows)}"
+
+
+@pytest.mark.asyncio
+async def test_drop_keyspace_object_storage_cleans_registry(manager: ManagerClient, object_storage):
+    """
+    Verify DROP KEYSPACE on an object-storage-backed keyspace cleans up
+    sstables registry entries for ALL tables in the keyspace.
+
+    The on_before_drop_keyspace listener iterates all tables in the
+    keyspace and adds partition tombstones for each table's registry
+    entries into the group0 command.  This test creates two tables,
+    verifies their registry entries exist, drops the keyspace, and
+    confirms that registry entries for both tables are gone.
+
+    Uses asyncio.wait_for with a timeout to detect a potential deadlock.
+    """
+    cfg = {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+        'experimental_features': ['keyspace-storage-options'],
+    }
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    ks = unique_name()
+    ks_opts = keyspace_options(object_storage)
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks} {ks_opts}")
+
+    await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int)")
+    await cql.run_async(f"CREATE TABLE {ks}.t2 (pk int PRIMARY KEY, v int)")
+
+    for i in range(10):
+        await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+        await cql.run_async(f"INSERT INTO {ks}.t2 (pk, v) VALUES ({i}, {i})")
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+
+    tid1 = await cql.run_async(
+        f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't1'")
+    table_id1 = tid1[0].id
+    tid2 = await cql.run_async(
+        f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't2'")
+    table_id2 = tid2[0].id
+
+    rows1 = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id1])
+    assert len(rows1) > 0, "Expected registry entries for t1 before DROP KEYSPACE"
+    rows2 = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id2])
+    assert len(rows2) > 0, "Expected registry entries for t2 before DROP KEYSPACE"
+
+    await asyncio.wait_for(
+        cql.run_async(f"DROP KEYSPACE {ks}"),
+        timeout=10)
+
+    # After DROP KEYSPACE, registry entries for both tables should be gone
+    rows1 = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id1])
+    assert len(rows1) == 0, f"Registry entries for t1 should be cleaned up after DROP KEYSPACE, found {len(rows1)}"
+    rows2 = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id2])
+    assert len(rows2) == 0, f"Registry entries for t2 should be cleaned up after DROP KEYSPACE, found {len(rows2)}"
+  
+@pytest.mark.asyncio
+async def test_truncate_object_storage_cleans_registry(manager: ManagerClient, object_storage):
+    """
+    Verify TRUNCATE on an object-storage-backed table cleans up sstables
+    registry entries while keeping the table itself intact.
+    """
+    cfg = {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+        'experimental_features': ['keyspace-storage-options'],
+    }
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int)")
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        tid = await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't1'")
+        table_id = tid[0].id
+
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Expected registry entries before TRUNCATE"
+
+        await cql.run_async(f"TRUNCATE {ks}.t1")
+
+        # After truncate, registry entries should be cleaned up
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) == 0, f"Registry entries should be cleaned up after TRUNCATE, found {len(rows)}"
+
+        # Table should still exist but be empty
+        res = await cql.run_async(f"SELECT * FROM {ks}.t1")
+        assert len(res) == 0, f"Table should be empty after TRUNCATE, found {len(res)} rows"
+
+        # Verify the table is still functional: insert new data, flush, check new registry entries
+        for i in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        rows = await cql.run_async("SELECT * FROM system.sstables WHERE owner = %s", parameters=[table_id])
+        assert len(rows) > 0, "Expected new registry entries after inserting into truncated table"
+
+        res = await cql.run_async(f"SELECT * FROM {ks}.t1")
+        assert len(res) == 5, f"Expected 5 rows after re-inserting into truncated table, found {len(res)}"
+
+
+@pytest.mark.asyncio
+async def test_sstables_registry_replicated_across_nodes(manager: ManagerClient, object_storage):
+    """
+    Verify that sstables registry entries written through group0 Raft
+    replication are visible on ALL nodes in the cluster, not just the
+    node that performed the flush.
+
+    Starts a 2-node cluster with RF=1 object-storage-backed keyspace,
+    inserts data, flushes on both nodes (only the replica owner will
+    actually create SSTables), then verifies that both nodes see the
+    same set of registry entries in system.sstables.
+
+    This proves that system.sstables is replicated via Raft group0
+    rather than being local-only.
+
+    Related to SCYLLADB-1004.
+    """
+    cfg = {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+        'experimental_features': ['keyspace-storage-options'],
+    }
+    servers = await manager.servers_add(2, config=cfg)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
+
+    ks = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE {ks} {keyspace_options(object_storage, rf=1)}")
+    await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int)")
+    for i in range(10):
+        await cql.run_async(f"INSERT INTO {ks}.t1 (pk, v) VALUES ({i}, {i})")
+
+    # Flush on both nodes — only the RF=1 replica owner creates SSTables,
+    # but flushing both ensures we don't need to figure out which node owns data.
+    for srv in servers:
+        await manager.api.flush_keyspace(srv.ip_addr, ks)
+
+    tid = await cql.run_async(
+        f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't1'")
+    table_id = tid[0].id
+
+    # Ensure Raft log is fully applied on both nodes before querying
+    for srv in servers:
+        await read_barrier(manager.api, srv.ip_addr)
+
+    rows_node0 = await cql.run_async(
+        "SELECT generation FROM system.sstables WHERE owner = %s",
+        parameters=[table_id], host=hosts[0])
+    rows_node1 = await cql.run_async(
+        "SELECT generation FROM system.sstables WHERE owner = %s",
+        parameters=[table_id], host=hosts[1])
+
+    gens_node0 = sorted(str(r.generation) for r in rows_node0)
+    gens_node1 = sorted(str(r.generation) for r in rows_node1)
+
+    assert len(gens_node0) > 0 or len(gens_node1) > 0, \
+        "Expected at least one node to have registry entries after flush"
+    assert gens_node0 == gens_node1, \
+        f"Registry entries differ between nodes: node0={gens_node0}, node1={gens_node1}"

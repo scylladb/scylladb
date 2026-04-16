@@ -28,6 +28,7 @@
 #include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
 #include "sstables/generation_type.hh"
+#include "service/raft/raft_group0_client.hh"
 
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
@@ -314,11 +315,11 @@ class mock_sstables_registry : public sstables::sstables_registry {
     };
     std::map<std::pair<table_id, generation_type>, entry> _entries;
 public:
-    virtual future<> create_entry(table_id owner, sstring status, sstable_state state, sstables::entry_descriptor desc) override {
+    virtual future<> create_entry(table_id owner, sstring status, sstable_state state, sstables::entry_descriptor desc, service::group0_batch&) override {
         _entries.emplace(std::make_pair(owner, desc.generation), entry { status, state, desc });
         co_return;
     };
-    virtual future<> update_entry_status(table_id owner, sstables::generation_type gen, sstring status) override {
+    virtual future<> update_entry_status(table_id owner, sstables::generation_type gen, sstring status, service::group0_batch&) override {
         auto it = _entries.find(std::make_pair(owner, gen));
         if (it != _entries.end()) {
             it->second.status = status;
@@ -327,7 +328,7 @@ public:
         }
         co_return;
     }
-    virtual future<> update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state) override {
+    virtual future<> update_entry_state(table_id owner, sstables::generation_type gen, sstables::sstable_state state, service::group0_batch&) override {
         auto it = _entries.find(std::make_pair(owner, gen));
         if (it != _entries.end()) {
             it->second.state = state;
@@ -336,7 +337,7 @@ public:
         }
         co_return;
     }
-    virtual future<> delete_entry(table_id owner, sstables::generation_type gen) override {
+    virtual future<> delete_entry(table_id owner, sstables::generation_type gen, service::group0_batch&) override {
         auto it = _entries.find(std::make_pair(owner, gen));
         if (it != _entries.end()) {
             _entries.erase(it);
