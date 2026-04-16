@@ -1388,6 +1388,7 @@ future<> server_impl::applier_fiber() {
                         logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _id, e);
                         throw stop_apply_fiber{};
                     } catch (...) {
+                        logger.debug("[{}] applier fiber failed to apply commands: {}", _id, std::current_exception());
                         std::throw_with_nested(raft::state_machine_error{});
                     }
                     _stats.applied_entries += size;
@@ -1425,6 +1426,7 @@ future<> server_impl::applier_fiber() {
                                 "state machine was aborted during take_snapshot: {}", _id, e);
                         throw stop_apply_fiber{};
                     } catch (...) {
+                        logger.debug("[{}] applier fiber failed to take snapshot term={}, idx={}: {}", _id, snp.term, snp.idx, std::current_exception());
                         std::throw_with_nested(raft::state_machine_error{});
                     }
                     logger.trace("[{}] applier fiber: took snapshot term={}, idx={}, id={}", _id, snp.term, snp.idx, snp.id);
@@ -1451,6 +1453,7 @@ future<> server_impl::applier_fiber() {
                             "machine was aborted during load_snapshot: {}", _id, e);
                     throw stop_apply_fiber{};
                 } catch (...) {
+                    logger.debug("[{}] applier fiber failed to load snapshot {}: {}", _id, snp.id, std::current_exception());
                     std::throw_with_nested(raft::state_machine_error{});
                 }
                 logger.trace("[{}] apply_fiber applied snapshot {}", _id, snp.id);
@@ -1482,6 +1485,7 @@ future<> server_impl::applier_fiber() {
                             "machine was aborted during take_snapshot: {}", _id, e);
                     throw stop_apply_fiber{};
                 } catch (...) {
+                    logger.debug("[{}] applier fiber failed to take snapshot at term={}, idx={}: {}", _id, snp.term, snp.idx, std::current_exception());
                     std::throw_with_nested(raft::state_machine_error{});
                 }
                 logger.trace("[{}] applier fiber: took snapshot term={}, idx={}, id={}", _id, snp.term, snp.idx, snp.id);
