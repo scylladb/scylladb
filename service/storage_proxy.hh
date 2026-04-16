@@ -38,7 +38,6 @@
 #include "replica/exceptions.hh"
 #include "locator/host_id.hh"
 #include "dht/token_range_endpoints.hh"
-#include "service/storage_service.hh"
 #include "service/cas_shard.hh"
 #include "service/storage_proxy_fwd.hh"
 
