@@ -2177,13 +2177,17 @@ SEASTAR_TEST_CASE(test_commitlog_buffer_size_counter) {
 SEASTAR_TEST_CASE(test_commitlog_handle_replayed_segments) {
     commitlog::config cfg;
 
-    constexpr uint64_t max_size_mb = 8 * 1024;
+    // Keep max_size_mb small: the test creates (4 + max_size_mb/seg_size) files
+    // of seg_size each per iteration. With a large value (e.g. 8*1024) this
+    // results in hundreds of 32 MB fallocate calls per iteration which can
+    // easily exceed the CI timeout of 15 minutes (SCYLLADB-1496).
+    constexpr uint64_t max_size_mb = 128;
 
     cfg.commitlog_total_space_in_mb = max_size_mb * smp::count;
     cfg.allow_going_over_size_limit = false;
     cfg.commitlog_sync_period_in_ms = 1;
 
-    for (size_t k = 0; k < 100; ++k) {
+    for (size_t k = 0; k < 10; ++k) {
         tmpdir tmp;
         cfg.commit_log_location = tmp.path().string();
 
