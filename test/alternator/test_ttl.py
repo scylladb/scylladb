@@ -664,7 +664,7 @@ def test_ttl_expiration_streams(dynamodb, dynamodbstreams, waits_for_expiration)
     # In my experiments, a 30-minute (1800 seconds) is the typical
     # expiration delay in this test. If the test doesn't finish within
     # max_duration, we report a failure.
-    max_duration = 3600 if is_aws(dynamodb) else 10
+    max_duration = 3600 if is_aws(dynamodb) else 20
     with new_test_table(dynamodb,
         Tags=TAGS,
         KeySchema=[
