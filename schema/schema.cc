@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <seastar/core/on_internal_error.hh>
@@ -131,12 +131,12 @@ bool operator==(const column_mapping_entry& lhs, const column_mapping_entry& rhs
 }
 
 bool operator==(const column_mapping& lhs, const column_mapping& rhs) {
-    const auto& lhs_columns = lhs.columns(), rhs_columns = rhs.columns();
+    const auto& lhs_columns = lhs.columns(), &rhs_columns = rhs.columns();
     if (lhs_columns.size() != rhs_columns.size()) {
         return false;
     }
     for (size_t i = 0, end = lhs_columns.size(); i < end; ++i) {
-        const column_mapping_entry& lhs_entry = lhs_columns[i], rhs_entry = rhs_columns[i];
+        const column_mapping_entry& lhs_entry = lhs_columns[i], &rhs_entry = rhs_columns[i];
         if (lhs_entry != rhs_entry) {
             return false;
         }
@@ -731,7 +731,20 @@ bool index_metadata::operator==(const index_metadata& other) const {
 }
 
 bool index_metadata::equals_noname(const index_metadata& other) const {
-    return _kind == other._kind && _options == other._options;
+    if (_kind != other._kind || _options.size() != other._options.size()) {
+        return false;
+    }
+    for (const auto& [key, value] : _options) {
+        // The index_version is unique for each index creation
+        if (key == "index_version") {
+            continue;
+        }
+        auto it = other._options.find(key);
+        if (it == other._options.end() || it->second != value) {
+            return false;
+        }
+    }
+    return true;
 }
 
 const table_id& index_metadata::id() const {
@@ -1186,10 +1199,18 @@ cql3::description schema::describe(const schema_describe_helper& helper, cql3::d
         }
     });
 
+    // For indexes, cf_name() returns the backing materialized view's
+    // table name (e.g. "myindex_index"), not the logical index name
+    // (e.g. "myindex"). Derive the correct name so all callers get
+    // the user-facing index name.
+    sstring name = helper.type == schema_describe_helper::type::index
+            ? secondary_index::index_name_from_table_name(cf_name())
+            : cf_name();
+
     return cql3::description {
         .keyspace = ks_name(),
         .type = std::move(type),
-        .name = cf_name(),
+        .name = std::move(name),
         .create_statement = desc_opt == cql3::describe_option::NO_STMTS
                 ? std::nullopt
                 : std::make_optional(get_create_statement(helper, desc_opt == cql3::describe_option::STMTS_AND_INTERNALS))

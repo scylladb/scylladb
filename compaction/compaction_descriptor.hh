@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -87,6 +87,8 @@ public:
         drop_unfixable_sstables drop_unfixable = drop_unfixable_sstables::no;
     };
     struct reshard {
+        // If set, resharding compaction will apply the owned_ranges to segregate sstables in vnode boundaries.
+        bool vnodes_resharding = false;
     };
     struct reshape {
     };
@@ -115,8 +117,8 @@ public:
         return compaction_type_options(reshape{});
     }
 
-    static compaction_type_options make_reshard() {
-        return compaction_type_options(reshard{});
+    static compaction_type_options make_reshard(bool vnodes_resharding = false) {
+        return compaction_type_options(reshard{.vnodes_resharding = vnodes_resharding});
     }
 
     static compaction_type_options make_regular() {

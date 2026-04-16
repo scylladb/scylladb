@@ -5,9 +5,10 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
+#include <boost/algorithm/string.hpp>
 #include <seastar/core/coroutine.hh>
 #include "create_index_statement.hh"
 #include "db/config.hh"
@@ -35,8 +36,10 @@
 #include "db/schema_tables.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/concrete_types.hh"
+#include "types/vector.hh"
 #include "db/tags/extension.hh"
 #include "tombstone_gc_extension.hh"
+#include "index/secondary_index.hh"
 
 #include <stdexcept>
 
@@ -114,6 +117,58 @@ static data_type type_for_computed_column(cql3::statements::index_target::target
         case index_target::target_type::collection_values:  return collection_values_type(collection_type);
         default: throw std::logic_error("reached regular values or full when only collection index target types were expected");
     }
+}
+
+// Cassandra SAI compatibility: detect the StorageAttachedIndex class name
+// used by Cassandra to create vector and metadata indexes.
+static bool is_sai_class_name(const sstring& class_name) {
+    return class_name == "org.apache.cassandra.index.sai.StorageAttachedIndex"
+        || boost::iequals(class_name, "storageattachedindex")
+        || boost::iequals(class_name, "sai");
+}
+
+// Returns true if the custom class name refers to a vector-capable index
+// (either ScyllaDB's native vector_index or Cassandra's SAI).
+static bool is_vector_capable_class(const sstring& class_name) {
+    return class_name == "vector_index" || is_sai_class_name(class_name);
+}
+
+// When the custom class is SAI, verify that at least one target is a
+// vector column and rewrite the class to ScyllaDB's native "vector_index".
+// Non-vector single-column targets and multi-column (local-index partition
+// key) targets are skipped — they are treated as filtering columns by
+// vector_index::check_target().
+static void maybe_rewrite_sai_to_vector_index(
+        const schema& schema,
+        const std::vector<::shared_ptr<index_target>>& targets,
+        index_specific_prop_defs& props) {
+    if (!props.custom_class || !is_sai_class_name(*props.custom_class)) {
+        return;
+    }
+    for (const auto& target : targets) {
+        auto* ident = std::get_if<::shared_ptr<column_identifier>>(&target->value);
+        if (!ident) {
+            // Multi-column target (local-index partition key) — skip.
+            continue;
+        }
+        auto cd = schema.get_column_definition((*ident)->name());
+        if (!cd) {
+            // Nonexistent column — skip; vector_index::validate() will catch it.
+            continue;
+        }
+        if (dynamic_cast<const vector_type_impl*>(cd->type.get())) {
+            props.custom_class = "vector_index";
+            return;
+        }
+    }
+    throw exceptions::invalid_request_exception(
+        "StorageAttachedIndex (SAI) is only supported on vector columns; "
+        "use a secondary index for non-vector columns");
+}
+
+static bool is_vector_index(const index_options_map& options) {
+    auto class_it = options.find(db::index::secondary_index::custom_class_option_name);
+    return class_it != options.end() && is_vector_capable_class(class_it->second);
 }
 
 view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im,
@@ -265,8 +320,8 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
 
     _idx_properties->validate();
 
-    // FIXME: This is ugly and can be improved.
-    const bool is_vector_index = _idx_properties->custom_class && *_idx_properties->custom_class == "vector_index";
+
+    const bool is_vector_index = _idx_properties->custom_class && is_vector_capable_class(*_idx_properties->custom_class);
     const bool uses_view_properties = _view_properties.properties()->count() > 0
             || _view_properties.use_compact_storage()
             || _view_properties.defined_ordering().size() > 0;
@@ -351,6 +406,8 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
     for (auto& raw_target : _raw_targets) {
         targets.emplace_back(raw_target->prepare(*schema));
     }
+
+    maybe_rewrite_sai_to_vector_index(*schema, targets, *_idx_properties);
 
     if (_idx_properties && _idx_properties->custom_class) {
         auto custom_index_factory = secondary_index::secondary_index_manager::get_custom_class_factory(*_idx_properties->custom_class);
@@ -618,21 +675,27 @@ create_index_statement::build_index_schema(data_dictionary::database db, locator
     }
     auto index = make_index_metadata(targets, accepted_name, kind, index_options);
     auto existing_index = schema->find_index_noname(index);
-    if (existing_index) {
+    bool is_vector = _idx_properties->custom_class && _idx_properties->custom_class == "vector_index";
+    // For vector indexes:
+    // - unnamed ones are blocked by the duplicate check on the same column;
+    // - named ones are only checked for name uniqueness — allowing multiple named indexes on the same column.
+    // For all other indexes:
+    // - always block duplicates on the same column.
+    //
+    // Name uniqueness without IF NOT EXISTS is enforced before.
+    // The name check here handles IF NOT EXISTS when the index with same name
+    // exists in the same keyspace (on the same or different table) - needed because
+    // vector indexes have no backing view table, so the `has_schema()` check
+    // below cannot catch this case (issue #26672).
+    bool duplicate = (is_vector && !_index_name.empty())
+        ? db.existing_index_names(keyspace()).contains(_index_name)
+        : existing_index.has_value();
+    if (duplicate) {
         if (_if_not_exists) {
             return std::make_pair(std::nullopt, std::move(warnings));
         } else {
             throw exceptions::invalid_request_exception(
                     format("Index {} is a duplicate of existing index {}", index.name(), existing_index.value().name()));
-        }
-    }
-    bool existing_vector_index = _idx_properties->custom_class && _idx_properties->custom_class == "vector_index" && secondary_index::vector_index::has_vector_index_on_column(*schema, targets[0]->column_name());
-    bool custom_index_with_same_name = _idx_properties->custom_class && db.existing_index_names(keyspace()).contains(_index_name);
-    if (existing_vector_index || custom_index_with_same_name) {
-        if (_if_not_exists) {
-            return std::make_pair(std::nullopt, std::move(warnings));
-        } else {
-            throw exceptions::invalid_request_exception("There exists a duplicate custom index");
         }
     }
     auto index_table_name = secondary_index::index_table_name(accepted_name);
@@ -697,7 +760,9 @@ index_metadata create_index_statement::make_index_metadata(const std::vector<::s
                                                            const index_options_map& options)
 {
     index_options_map new_options = options;
-    auto target_option = secondary_index::target_parser::serialize_targets(targets);
+    auto target_option = is_vector_index(options)
+        ? secondary_index::vector_index::serialize_targets(targets)
+        : secondary_index::target_parser::serialize_targets(targets);
     new_options.emplace(index_target::target_option_name, target_option);
 
     const auto& first_target = targets.front()->value;

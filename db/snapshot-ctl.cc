@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  *
  * Copyright (C) 2020-present ScyllaDB
  */
@@ -18,8 +18,11 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db/snapshot-ctl.hh"
 #include "db/snapshot/backup_task.hh"
+#include "db/schema_tables.hh"
+#include "index/secondary_index_manager.hh"
 #include "replica/database.hh"
 #include "replica/global_table_ptr.hh"
+#include "replica/schema_describe_helper.hh"
 #include "sstables/sstables_manager.hh"
 #include "service/storage_proxy.hh"
 
@@ -154,14 +157,56 @@ future<> snapshot_ctl::do_take_cluster_column_family_snapshot(std::vector<sstrin
     );
 }
 
+sstring snapshot_ctl::resolve_table_name(const sstring& ks_name, const sstring& name) const {
+    try {
+        _db.local().find_uuid(ks_name, name);
+        return name;
+    } catch (const data_dictionary::no_such_column_family&) {
+        // The name may be a logical index name (e.g. "myindex").
+        // Only indexes with a backing view have a separate backing table
+        // that can be snapshotted. Custom indexes such as vector indexes
+        // do not, so keep rejecting them here rather than mapping them to
+        // a synthetic name.
+        auto schema = _db.local().find_indexed_table(ks_name, name);
+        if (schema) {
+            const auto& im = schema->all_indices().at(name);
+            if (db::schema_tables::view_should_exist(im)) {
+                return secondary_index::index_table_name(name);
+            }
+        }
+        throw;
+    }
+}
+
 future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts) {
+    for (auto& t : tables) {
+        t = resolve_table_name(ks_name, t);
+    }
     co_await check_snapshot_not_exist(ks_name, tag, tables);
     co_await replica::database::snapshot_tables_on_all_shards(_db, ks_name, std::move(tables), std::move(tag), opts);
 }
 
 future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
-    return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] {
-        return _db.local().clear_snapshot(tag, keyspace_names, cf_name);
+    co_return co_await run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] (this auto) -> future<> {
+        // clear_snapshot enumerates keyspace_names and uses cf_name as a
+        // filter in each. When cf_name needs resolution (e.g. logical index
+        // name -> backing table name), the result may differ per keyspace,
+        // so resolve and clear individually.
+        if (!cf_name.empty() && !keyspace_names.empty()) {
+            std::vector<std::pair<sstring, sstring>> resolved_targets;
+            resolved_targets.reserve(keyspace_names.size());
+
+            // Resolve every keyspace first so a later failure doesn't delete
+            // snapshots that were already matched in earlier keyspaces.
+            for (const auto& ks_name : keyspace_names) {
+                resolved_targets.emplace_back(ks_name, resolve_table_name(ks_name, cf_name));
+            }
+            for (auto& [ks_name, resolved_cf_name] : resolved_targets) {
+                co_await _db.local().clear_snapshot(tag, {ks_name}, std::move(resolved_cf_name));
+            }
+            co_return;
+        }
+        co_await _db.local().clear_snapshot(std::move(tag), std::move(keyspace_names), cf_name);
     });
 }
 
@@ -170,7 +215,26 @@ snapshot_ctl::get_snapshot_details() {
     using snapshot_map = std::unordered_map<sstring, db_snapshot_details>;
 
     co_return co_await run_snapshot_list_operation(coroutine::lambda([this] () -> future<snapshot_map> {
-        return _db.local().get_snapshot_details();
+        auto details = co_await _db.local().get_snapshot_details();
+
+        for (auto& [snapshot_name, snapshot_details] : details) {
+            for (auto& table : snapshot_details) {
+                auto schema = _db.local().as_data_dictionary().try_find_table(
+                        table.ks, table.cf);
+                if (!schema || !schema->schema()->is_view()) {
+                    continue;
+                }
+
+                auto helper = replica::make_schema_describe_helper(
+                        schema->schema(), _db.local().as_data_dictionary());
+                if (helper.type == schema_describe_helper::type::index) {
+                    table.cf = secondary_index::index_name_from_table_name(
+                            table.cf);
+                }
+            }
+        }
+
+        co_return details;
     }));
 }
 

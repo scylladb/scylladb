@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <algorithm>
@@ -99,7 +99,7 @@ public:
 
                 set_cell(cr, "up", gossiper.is_alive(hostid));
                 if (gossiper.is_shutdown(endpoint)) {
-                    set_cell(cr, "status", gossiper.get_gossip_status(endpoint));
+                    set_cell(cr, "status", "shutdown");
                 } else {
                     set_cell(cr, "status", boost::to_upper_copy<std::string>(fmt::format("{}", ss.get_node_state(hostid))));
                 }
@@ -224,12 +224,12 @@ public:
             }
 
             if (_db.find_keyspace(e.name).get_replication_strategy().uses_tablets()) {
-                co_await _db.get_tables_metadata().for_each_table_gently([&, this] (table_id, lw_shared_ptr<replica::table> table) -> future<> {
+                co_await _db.get_tables_metadata().for_each_table_gently([&, this] (table_id tid, lw_shared_ptr<replica::table> table) -> future<> {
                     if (table->schema()->ks_name() != e.name) {
                         co_return;
                     }
                     const auto& table_name = table->schema()->cf_name();
-                    utils::chunked_vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring_for_table(e.name, table_name);
+                    utils::chunked_vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring_for_table(tid);
                     co_await emit_ring(result, e.key, table_name, std::move(ranges));
                 });
             } else {

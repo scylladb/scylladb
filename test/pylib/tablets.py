@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2024-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from collections import defaultdict
 
@@ -113,4 +113,4 @@ async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_
     table_id = await get_base_table(manager, table_id)
     rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
                                        f"table_id = {table_id}", host=host)
-    return rows[0].tablet_count
+    return rows[0].tablet_count if len(rows) > 0 else 0

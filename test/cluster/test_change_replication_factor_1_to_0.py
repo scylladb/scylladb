@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2024-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 import logging
 import pytest
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
     "use_tablets",
     [
         pytest.param(False, id="vnodes"),
-        pytest.param(True, id="tablets", marks=[pytest.mark.skip(reason="issue #20282"), pytest.mark.nightly]),
+        pytest.param(True, id="tablets", marks=[pytest.mark.skip_bug(reason="issue #20282"), pytest.mark.nightly]),
     ],
 )
 @pytest.mark.asyncio

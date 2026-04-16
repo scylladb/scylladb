@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -261,7 +261,7 @@ public:
     data_value(bool_class<Tag>);
 
     data_value& operator=(const data_value&);
-    data_value& operator=(data_value&&);
+    data_value& operator=(data_value&&) noexcept;
     const data_type& type() const {
         return _type;
     }

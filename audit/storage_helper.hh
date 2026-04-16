@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #pragma once
 
@@ -22,7 +22,7 @@ public:
     virtual future<> write(const audit_info* audit_info,
                            socket_address node_ip,
                            socket_address client_ip,
-                           db::consistency_level cl,
+                           std::optional<db::consistency_level> cl,
                            const sstring& username,
                            bool error) = 0;
     virtual future<> write_login(const sstring& username,

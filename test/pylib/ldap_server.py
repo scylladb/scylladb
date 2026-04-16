@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from __future__ import annotations
 
@@ -60,17 +60,24 @@ userid: jdoe
 userPassword: pa55w0rd
 """, """dn: cn=role1,dc=example,dc=com
 objectClass: groupOfUniqueNames
+objectClass: extensibleObject
 cn: role1
 uniqueMember: uid=jsmith,ou=People,dc=example,dc=com
 uniqueMember: uid=cassandra,ou=People,dc=example,dc=com
+memberUid: jsmith
+memberUid: cassandra
 """, """dn: cn=role2,dc=example,dc=com
 objectClass: groupOfUniqueNames
+objectClass: extensibleObject
 cn: role2
 uniqueMember: uid=cassandra,ou=People,dc=example,dc=com
+memberUid: cassandra
 """, """dn: cn=role3,dc=example,dc=com
 objectClass: groupOfUniqueNames
+objectClass: extensibleObject
 cn: role3
 uniqueMember: uid=jdoe,ou=People,dc=example,dc=com
+memberUid: jdoe
 """, ]
 
 

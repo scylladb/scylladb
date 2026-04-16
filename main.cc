@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <algorithm>
@@ -344,6 +344,43 @@ public:
         _stopping = true;
         _cond.broadcast();
         _done.get();
+    }
+};
+
+template <typename SchedGroupOrSuper>
+requires std::is_same_v<SchedGroupOrSuper, seastar::scheduling_group> || std::is_same_v<SchedGroupOrSuper, seastar::scheduling_supergroup>
+class io_throughput_updater {
+    std::string_view _name;
+    SchedGroupOrSuper _sg;
+    utils::config_file::named_value<uint32_t>& _value;
+    serialized_action _updater = serialized_action([this] { return update(_value()); });
+    utils::observer<uint32_t> _observer;
+
+    future<> update(uint32_t value) {
+        uint64_t bps = ((uint64_t)(value != 0 ? value : std::numeric_limits<uint32_t>::max())) << 20;
+        return _sg.update_io_bandwidth(bps).then_wrapped([this, value] (auto f) {
+            if (f.failed()) {
+                diaglog.warn("Couldn't update {} bandwidth: {}", _name, f.get_exception());
+            } else if (value != 0) {
+                diaglog.info("Set {} bandwidth to {}MB/s", _name, value);
+            } else {
+                diaglog.info("Set unlimited {} bandwidth", _name);
+            }
+        });
+    }
+
+public:
+    io_throughput_updater(std::string_view name, SchedGroupOrSuper ssg, utils::config_file::named_value<uint32_t>& v)
+            : _name(name)
+            , _sg(ssg)
+            , _value(v)
+            , _observer(_value.observe(_updater.make_observer()))
+    {
+        (void)_updater.trigger_later();
+    }
+
+    ~io_throughput_updater() {
+        _updater.join().get();
     }
 };
 
@@ -903,8 +940,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             schema::set_default_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
 
             auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", "bgre", 50).get();
-            auto maintenance_scheduling_group = create_scheduling_group("streaming", "strm", 200).get();
-            debug::streaming_scheduling_group = maintenance_scheduling_group;
+
+            // Maintenance supergroup -- the collection of background low-prio activites
+            auto maintenance_supergroup = create_scheduling_supergroup(200).get();
+            auto bandwidth_updater = io_throughput_updater("maintenance supergroup", maintenance_supergroup,
+                    cfg->maintenance_io_throughput_mb_per_sec.is_set() ? cfg->maintenance_io_throughput_mb_per_sec : cfg->stream_io_throughput_mb_per_sec);
+            auto maintenance_scheduling_group = create_scheduling_group("maintenance", "mant", 200, maintenance_supergroup).get();
 
             smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
                 logalloc::tracker::config st_cfg;
@@ -1142,8 +1183,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Note: changed from using a move here, because we want the config object intact.
             replica::database_config dbcfg;
             dbcfg.compaction_scheduling_group = create_scheduling_group("compaction", "comp", 1000).get();
+            dbcfg.maintenance_compaction_scheduling_group = create_scheduling_group("maintenance_compaction", "manc", 200, maintenance_supergroup).get();
             dbcfg.memory_compaction_scheduling_group = create_scheduling_group("mem_compaction", "mcmp", 1000).get();
-            dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
+            dbcfg.streaming_scheduling_group = create_scheduling_group("streaming", "strm", 200, maintenance_supergroup).get();
+            debug::streaming_scheduling_group = dbcfg.streaming_scheduling_group;
+            dbcfg.maintenance_scheduling_group = maintenance_scheduling_group;
             dbcfg.statement_scheduling_group = create_scheduling_group("statement", "stmt", 1000, user_ssg).get();
             dbcfg.memtable_scheduling_group = create_scheduling_group("memtable", "mt", 1000).get();
             dbcfg.memtable_to_cache_scheduling_group = create_scheduling_group("memtable_to_cache", "mt2c", 200).get();
@@ -1151,6 +1195,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             debug::gossip_scheduling_group = dbcfg.gossip_scheduling_group;
             dbcfg.commitlog_scheduling_group = create_scheduling_group("commitlog", "clog", 1000).get();
             dbcfg.schema_commitlog_scheduling_group = create_scheduling_group("schema_commitlog", "sclg", 1000).get();
+            dbcfg.backup_scheduling_group = create_scheduling_group("backup", "bckp", 200, maintenance_supergroup).get(),
             dbcfg.available_memory = memory::stats().total_memory();
 
             // Make sure to initialize the scheduling group keys at a point where we are sure
@@ -1202,7 +1247,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto get_cm_cfg = sharded_parameter([&] {
                 return compaction::compaction_manager::config {
                     .compaction_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
-                    .maintenance_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
+                    .maintenance_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.maintenance_compaction_scheduling_group},
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .max_shares = cfg->compaction_max_shares,
@@ -1215,6 +1260,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                cm.stop().get();
             });
             cm.invoke_on_all(&compaction::compaction_manager::start, std::ref(*cfg), only_on_shard0(&*disk_space_monitor_shard0)).get();
+
+            auto compaction_throughput_update = io_throughput_updater("compaction", dbcfg.compaction_scheduling_group, cfg->compaction_throughput_mb_per_sec);
 
             checkpoint(stop_signal, "starting storage manager");
             sstables::storage_manager::config stm_cfg;
@@ -1306,7 +1353,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "starting storage proxy");
             service::storage_proxy::config spcfg {
                 .hints_directory_initializer = hints_dir_initializer,
-                .hints_sched_group = maintenance_scheduling_group,
+                .hints_sched_group = dbcfg.streaming_scheduling_group,
             };
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
             spcfg.available_memory = memory::stats().total_memory();
@@ -1379,7 +1426,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             stop_signal.check();
             ctx.http_server.server().invoke_on_all([] (auto& server) { server.set_content_streaming(true); }).get();
-            with_scheduling_group(maintenance_scheduling_group, [&] {
+            with_scheduling_group(dbcfg.streaming_scheduling_group, [&] {
                 return ctx.http_server.listen(socket_address{api_addr, cfg->api_port()});
             }).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_addr, cfg->api_port());
@@ -1485,6 +1532,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     throw std::runtime_error(
                         "Cannot start - cluster is not yet upgraded to use service levels v2 and this version does not support legacy service levels. "
                         "If you are trying to upgrade the node then first upgrade the cluster to use service levels v2.");
+                }
+                if (sys_ks.local().get_view_builder_version().get() != db::system_keyspace::view_builder_version_t::v2) {
+                    throw std::runtime_error(
+                        "Cannot start - view builder has not been migrated to v2 and this version does not support legacy view builder. "
+                        "If you are trying to upgrade the node then first upgrade the cluster to use view builder v2.");
                 }
             }
 
@@ -1715,7 +1767,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg {
-                .background_sg = maintenance_scheduling_group,
+                .background_sg = dbcfg.maintenance_scheduling_group,
             };
             sharded<service::tablet_allocator> tablet_allocator;
             tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
@@ -1794,7 +1846,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting the view builder");
-            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
+            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
             auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
                 view_builder.stop().get();
             });
@@ -1807,7 +1859,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
-            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            auto repair_config = sharded_parameter([&] {
+                return repair_service::config{
+                    .enable_small_table_optimization_for_rbno = cfg->enable_small_table_optimization_for_rbno,
+                    .repair_hints_batchlog_flush_cache_time_in_ms = cfg->repair_hints_batchlog_flush_cache_time_in_ms,
+                    .repair_partition_count_estimation_ratio = cfg->repair_partition_count_estimation_ratio,
+                    .critical_disk_utilization_level = cfg->critical_disk_utilization_level,
+                    .repair_multishard_reader_buffer_hint_size = cfg->repair_multishard_reader_buffer_hint_size,
+                    .repair_multishard_reader_enable_read_ahead = cfg->repair_multishard_reader_enable_read_ahead,
+                };
+            });
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(mm), max_memory_repair, std::move(repair_config)).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
@@ -1821,7 +1883,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             debug::the_stream_manager = &stream_manager;
             checkpoint(stop_signal, "starting streaming service");
-            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), dbcfg.streaming_scheduling_group).get();
             auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
                 // FIXME -- keep the instances alive, just call .stop on them
                 stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
@@ -1836,6 +1898,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {
                 api::unset_server_stream_manager(ctx).get();
             });
+
+            auto stream_throughput_update = io_throughput_updater("streaming", dbcfg.streaming_scheduling_group, cfg->stream_io_throughput_mb_per_sec);
 
             checkpoint(stop_signal, "starting auth cache");
             auth_cache.start(std::ref(qp), std::ref(stop_signal.as_sharded_abort_source())).get();
@@ -2117,12 +2181,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting REST API");
             db::snapshot_ctl::config snap_cfg = {
-                .backup_sched_group = dbcfg.streaming_scheduling_group,
+                .backup_sched_group = dbcfg.backup_scheduling_group,
             };
             snapshot_ctl.start(std::ref(db), std::ref(proxy), std::ref(task_manager), std::ref(sstm), snap_cfg).get();
             auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
                 snapshot_ctl.stop().get();
             });
+            auto backup_throughput_update = io_throughput_updater("backup", dbcfg.backup_scheduling_group, cfg->backup_io_throughput_mb_per_sec);
 
             api::set_server_snapshot(ctx, snapshot_ctl).get();
             auto stop_api_snapshots = defer_verbose_shutdown("snapshots API", [&ctx] {
@@ -2178,7 +2243,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting sstables loader");
-            sst_loader.start(std::ref(db), std::ref(ss), std::ref(messaging), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(sstm), maintenance_scheduling_group).get();
+            sst_loader.start(std::ref(db), std::ref(ss), std::ref(messaging), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(sstm), dbcfg.streaming_scheduling_group).get();
             auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
                 sst_loader.stop().get();
             });
@@ -2244,7 +2309,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_storage_service(ctx).get();
             });
 
-            with_scheduling_group(maintenance_scheduling_group, [&] {
+            with_scheduling_group(dbcfg.streaming_scheduling_group, [&] {
                 return messaging.invoke_on_all([&] (auto& ms) {
                         return ms.start_listen(token_metadata.local(), [&gossiper] (gms::inet_address ip)  {
                             // #27429. When running with broadcast_address != rpc_address, topology gets
@@ -2271,7 +2336,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Allow abort during join_cluster since bootstrap or replace
             // can take a long time.
             stop_signal.ready(true);
-            with_scheduling_group(maintenance_scheduling_group, [&] {
+            with_scheduling_group(dbcfg.streaming_scheduling_group, [&] {
                 return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);
             }).get();
             stop_signal.ready(false);
@@ -2488,14 +2553,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (cfg->view_building()) {
                 checkpoint(stop_signal, "Launching generate_mv_updates for non system tables");
-                with_scheduling_group(maintenance_scheduling_group, [] {
+                with_scheduling_group(dbcfg.streaming_scheduling_group, [] {
                     return view_update_generator.invoke_on_all(&db::view::view_update_generator::start);
                 }).get();
             }
 
             if (cfg->view_building()) {
                 checkpoint(stop_signal, "starting view builders");
-                with_scheduling_group(maintenance_scheduling_group, [&mm] {
+                with_scheduling_group(dbcfg.streaming_scheduling_group, [&mm] {
                     return view_builder.invoke_on_all(&db::view::view_builder::start, std::ref(mm), utils::cross_shard_barrier());
                 }).get();
             }
@@ -2504,7 +2569,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting view building worker's background fibers");
-            with_scheduling_group(maintenance_scheduling_group, [&] {
+            with_scheduling_group(dbcfg.streaming_scheduling_group, [&] {
                 return view_building_worker.local().init();
             }).get();
             auto drain_view_buiding_worker = defer_verbose_shutdown("draining view building worker", [&] {
@@ -2528,7 +2593,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             stop_expiration_service = defer_verbose_shutdown("expiration service", [&es] {
                 es.stop().get();
             });
-            with_scheduling_group(maintenance_scheduling_group, [&es] {
+            with_scheduling_group(dbcfg.streaming_scheduling_group, [&es] {
                 return es.invoke_on_all(&alternator::expiration_service::start);
             }).get();
 

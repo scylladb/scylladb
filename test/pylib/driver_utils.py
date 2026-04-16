@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2026-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
 """Utilities for working with the scylla-driver (cassandra-driver)."""

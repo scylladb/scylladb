@@ -3,14 +3,16 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 
 #include <fmt/format.h>
+#include <functional>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/file.hh>
+#include "dht/token.hh"
 #include "sstables/generation_type.hh"
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
@@ -41,8 +43,8 @@ public:
         auto gtable = co_await replica::get_table_on_all_shards(db, ks_name, cf_name);
         co_await replica::distributed_loader::lock_table(gtable, dir);
     }
-    static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr = nullptr) {
-        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator), std::move(owned_ranges_ptr));
+    static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr = nullptr, bool vnodes_resharding = false) {
+        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator), std::move(owned_ranges_ptr), vnodes_resharding);
     }
 };
 
@@ -73,13 +75,13 @@ make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factor
 /// Arguments passed to the function are passed to table::make_sstable
 template <typename... Args>
 sstables::shared_sstable
-make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state, sstables::generation_type generation) {
+make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, unsigned num_shards = smp::count) {
     // Unlike the previous helper, we'll assume we're in a thread here. It's less flexible
     // but the users are usually in a thread, and rewrite_toc_without_component requires
     // a thread. We could fix that, but deferring that for now.
     auto s = table.schema();
     auto mt = make_lw_shared<replica::memtable>(s);
-    for (shard_id shard = 0; shard < smp::count; ++shard) {
+    for (shard_id shard = 0; shard < num_shards; ++shard) {
         auto key = tests::generate_partition_key(s, shard);
         mutation m(s, key);
         m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
@@ -327,6 +329,26 @@ future<> verify_that_all_sstables_are_local(sharded<sstable_directory>& sstdir, 
             co_return ret;
         }, 0, std::plus<unsigned>());
         THREADSAFE_BOOST_REQUIRE_EQUAL(count, expected_sstables);
+}
+
+future<> verify_that_all_sstables_are_contained_in_ranges(sharded<sstable_directory>& sstdir, compaction::owned_ranges_ptr owned_ranges) {
+        auto all_ok = co_await sstdir.map_reduce0([owned_ranges] (sstable_directory& d) -> future<bool> {
+            bool ret = true;
+            co_await d.do_for_each_sstable([&ret, &owned_ranges] (sstables::shared_sstable sst) {
+                dht::token_range sst_range(sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
+                bool found = false;
+                for (const auto& r : *owned_ranges) {
+                    if (r.contains(sst_range, dht::token_comparator{})) {
+                        found = true;
+                        break;
+                    }
+                }
+                ret &= found;
+                return make_ready_future<>();
+            });
+            co_return ret;
+        }, true, std::logical_and<>{});
+        THREADSAFE_BOOST_REQUIRE(all_ok);
 }
 
 // Test that all SSTables are seen as unshared, if the generation numbers match what their
@@ -860,6 +882,53 @@ SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
             BOOST_REQUIRE_EQUAL(expected, collected);
         });
       }
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_directory_test_reshard_vnodes) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& cf = db.find_column_family("ks", "cf");
+            return cf.disable_auto_compaction();
+        }).get();
+
+        unsigned num_sstables = 10 * smp::count;
+
+        sharded<sstables::sstable_generation_generator> sharded_gen;
+        sharded_gen.start().get();
+        auto stop_generator = deferred_stop(sharded_gen);
+
+        for (unsigned nr = 0; nr < num_sstables; ++nr) {
+            auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
+                return gen();
+            }).get();
+            make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation, smp::count);
+        }
+
+        with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::upload, [&] (sharded<sstables::sstable_directory>& sstdir) {
+            distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
+
+            sharded<sstables::sstable_generation_generator> sharded_gen;
+            sharded_gen.start().get();
+            auto stop_generator = deferred_stop(sharded_gen);
+
+            auto make_sstable = [&e, &sharded_gen] (shard_id shard) {
+                auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
+                    return gen();
+                }).get();
+                auto& cf = e.local_db().find_column_family("ks", "cf");
+                return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
+            };
+
+            const auto& erm = e.local_db().find_keyspace("ks").get_static_effective_replication_map();
+            auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(e.local_db().get_keyspace_local_ranges(erm).get());
+            bool vnodes_resharding = true;
+            distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable), owned_ranges_ptr, vnodes_resharding).get();
+            verify_that_all_sstables_are_contained_in_ranges(sstdir, owned_ranges_ptr).get();
+        });
     });
 }
 

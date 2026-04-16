@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "db/view/view_building_worker.hh"
@@ -130,6 +130,86 @@ lw_shared_ptr<tablet_stream_status> get_tablet_stream(file_stream_id ops_id) {
     return status;
 }
 
+using foreign_segment_sink = foreign_ptr<std::unique_ptr<replica::logstor::segment_stream_sink>>;
+using foreign_os = foreign_ptr<std::unique_ptr<output_stream<char>>>;
+
+struct foreign_data_sink : public data_sink_impl {
+    sharded<replica::database>& db;
+    shard_id target_shard;
+    foreign_os out;
+
+    foreign_data_sink(sharded<replica::database>& db, shard_id target_shard, foreign_os out)
+        : db(db), target_shard(target_shard), out(std::move(out)) {}
+
+    future<> put(std::span<temporary_buffer<char>> data) override {
+        // Copy buffers since they'll be moved to another shard
+        // TODO write directly from this shard to the file of the target shard?
+        std::vector<temporary_buffer<char>> bufs;
+        bufs.reserve(data.size());
+        for (auto& buf : data) {
+            if (!buf.empty()) {
+                temporary_buffer<char> copy(buf.size());
+                std::copy_n(buf.get(), buf.size(), copy.get_write());
+                bufs.push_back(std::move(copy));
+            }
+        }
+
+        co_await db.invoke_on(target_shard, [this, bufs = std::move(bufs)] (replica::database& db) -> future<> {
+            for (auto& buf : bufs) {
+                co_await out->write(buf.get(), buf.size());
+            }
+        });
+    }
+
+    future<> close() override {
+        co_await db.invoke_on(target_shard, [this] (replica::database&) -> future<> {
+            return out->close();
+        });
+    }
+};
+
+class logstor_sink {
+    sharded<replica::database>& _db;
+    table_id _tid;
+    shard_id _target_shard;
+    foreign_segment_sink _segment_sink;
+
+public:
+    logstor_sink(sharded<replica::database>& db, table_id tid, shard_id target_shard, foreign_segment_sink target_sink)
+        : _db(db), _tid(tid), _target_shard(target_shard), _segment_sink(std::move(target_sink)) {}
+
+    future<output_stream<char>> output(const file_open_options&, const file_output_stream_options&) {
+        auto foreign_out = co_await _db.invoke_on(_target_shard, [this] (replica::database& db) -> future<foreign_os> {
+            auto out = co_await _segment_sink->output();
+            co_return make_foreign(std::make_unique<output_stream<char>>(std::move(out)));
+        });
+        auto ds = std::make_unique<foreign_data_sink>(_db, _target_shard, std::move(foreign_out));
+        auto out = output_stream<char>(data_sink(std::move(ds)), file_stream_buffer_size);
+        co_return std::move(out);
+    }
+
+    future<> close() {
+        return _db.invoke_on(_target_shard, [this] (replica::database& db) -> future<> {
+            return _segment_sink->close();
+        });
+    }
+
+    future<> abort() {
+        return _db.invoke_on(_target_shard, [this] (replica::database& db) -> future<> {
+            return _segment_sink->abort();
+        });
+    }
+};
+
+future<logstor_sink> make_logstor_sink(sharded<replica::database>& db, table_id tid, shard_id target_shard) {
+    auto sink = co_await db.invoke_on(target_shard, [tid] (replica::database& db) -> future<foreign_segment_sink> {
+        auto& table = db.find_column_family(tid);
+        auto segment_sink = co_await table.create_logstor_segment_sink(db);
+        co_return make_foreign(std::move(segment_sink));
+    });
+    co_return logstor_sink(db, tid, target_shard, std::move(sink));
+}
+
 static void may_inject_error(const streaming::stream_blob_meta& meta, bool may_inject, const sstring& error) {
     if (may_inject) {
         if (rand() % 500 == 0) {
@@ -172,7 +252,8 @@ future<> stream_blob_handler(replica::database& db,
 
         // Reject any file_ops that is not support by this node
         if (meta.fops != streaming::file_ops::stream_sstables &&
-            meta.fops != streaming::file_ops::load_sstables) {
+            meta.fops != streaming::file_ops::load_sstables &&
+            meta.fops != streaming::file_ops::stream_logstor_segments) {
             auto msg = format("fstream[{}] Unsupported file_ops={} peer={} file={}",
                     meta.ops_id, int(meta.fops), from, meta.filename);
             blogger.warn("{}", msg);
@@ -352,29 +433,52 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
         stream_options.write_behind = file_stream_write_behind;
 
         auto& table = db.find_column_family(meta.table);
-        auto& sstm = table.get_sstables_manager();
-        // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
-        // left sealed on the table directory.
-        sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables,
-                                                .leave_unsealed = true };
-        auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, cfg);
-        auto out = co_await sstable_sink->output(foptions, stream_options);
-        co_return output_result{
-            [sstable_sink = std::move(sstable_sink), &meta, &db, &vbw](store_result res) -> future<> {
-                if (res != store_result::ok) {
-                    co_await sstable_sink->abort();
-                    co_return;
-                }
-                auto sst = co_await sstable_sink->close();
-                if (sst) {
-                    blogger.debug("stream_sstables[{}] Loading sstable {} on shard {}", meta.ops_id, sst->toc_filename(), meta.dst_shard_id);
-                    auto desc = sst->get_descriptor(sstables::component_type::TOC);
-                    sst = {};
-                    co_await load_sstable_for_tablet(meta.ops_id, db, vbw, meta.table, sstable_state(meta), std::move(desc), meta.dst_shard_id);
-                }
-            },
-            std::move(out)
-        };
+        if (meta.fops == file_ops::stream_sstables || meta.fops == file_ops::load_sstables) {
+            auto& sstm = table.get_sstables_manager();
+            // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
+            // left sealed on the table directory.
+            sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables,
+                                                    .leave_unsealed = true };
+            auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, cfg);
+            auto out = co_await sstable_sink->output(foptions, stream_options);
+            co_return output_result{
+                [sstable_sink = std::move(sstable_sink), &meta, &db, &vbw](store_result res) -> future<> {
+                    if (res != store_result::ok) {
+                        co_await sstable_sink->abort();
+                        co_return;
+                    }
+                    auto sst = co_await sstable_sink->close();
+                    if (sst) {
+                        blogger.debug("stream_sstables[{}] Loading sstable {} on shard {}", meta.ops_id, sst->toc_filename(), meta.dst_shard_id);
+                        auto desc = sst->get_descriptor(sstables::component_type::TOC);
+                        sst = {};
+                        co_await load_sstable_for_tablet(meta.ops_id, db, vbw, meta.table, sstable_state(meta), std::move(desc), meta.dst_shard_id);
+                    }
+                },
+                std::move(out)
+            };
+        } else if (meta.fops == file_ops::stream_logstor_segments) {
+            blogger.debug("stream_logstor_segments[{}] Creating logstor segment stream sink on shard {}", meta.ops_id, meta.dst_shard_id);
+            auto& sharded_db = db.container();
+            auto target_shard = meta.dst_shard_id;
+            auto table_id = meta.table;
+
+            auto sink = co_await make_logstor_sink(sharded_db, table_id, target_shard);
+            auto out = co_await sink.output(foptions, stream_options);
+
+            co_return output_result{
+                [sink = std::move(sink)](store_result res) mutable -> future<> {
+                    if (res != store_result::ok) {
+                        co_await sink.abort();
+                        co_return;
+                    }
+                    co_await sink.close();
+                },
+                std::move(out)
+            };
+        } else {
+            throw std::runtime_error(format("Unexpected file_ops={} in stream_blob_handler", int(meta.fops)));
+        }
     });
 }
 
@@ -638,68 +742,86 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
 future<stream_files_response> tablet_stream_files_handler(replica::database& db, netw::messaging_service& ms, streaming::stream_files_request req) {
     stream_files_response resp;
     auto& table = db.find_column_family(req.table);
-    auto sstables = co_await table.take_storage_snapshot(req.range);
-    co_await utils::get_local_injector().inject("order_sstables_for_streaming", [&sstables] (auto& handler) -> future<> {
-        if (sstables.size() == 3) {
-            // make sure the sstables are ordered so that the sstable containing shadowed data is streamed last
-            const std::string_view shadowed_file = handler.template get<std::string_view>("shadowed_file").value();
-            for (int index: {0, 1}) {
-                if (sstables[index].sst->component_basename(component_type::Data) == shadowed_file) {
-                    std::swap(sstables[index], sstables[2]);
-                }
-            }
-        }
-        return make_ready_future<>();
-    });
     auto files = std::list<stream_blob_info>();
-
-    auto& sst_gen = table.get_sstable_generation_generator();
     auto reader = co_await db.obtain_reader_permit(table, "tablet_file_streaming", db::no_timeout, {});
 
-    for (auto& sst_snapshot : sstables) {
-        auto& sst = sst_snapshot.sst;
-        // stable state (across files) is a must for load to work on destination
-        auto sst_state = sst->state();
-
-        auto sources = co_await create_stream_sources(sst_snapshot, reader);
-        auto newgen = fmt::to_string(sst_gen());
-
-        for (auto&& s : sources) {
-            auto oldname = s->component_basename();
-            auto newname = get_sstable_name_with_generation(req.ops_id, oldname, newgen);
-
-            blogger.debug("fstream[{}] Get name oldname={}, newname={}", req.ops_id, oldname, newname);
-
+    if (table.uses_logstor()) {
+        auto segments = co_await table.take_logstor_snapshot(req.range);
+        for (auto& seg : segments) {
             auto& info = files.emplace_back();
-            info.fops = file_ops::stream_sstables;
-            info.sstable_state = sst_state;
-            info.filename = std::move(newname);
-            info.source = [s = std::move(s)](const file_input_stream_options& options) {
-                return s->input(options);
+            info.filename = format("logstor_segment_{}", seg.segment_id); // used only for logging
+            info.fops = file_ops::stream_logstor_segments;
+            info.source = [seg = std::move(seg)](const file_input_stream_options& options) {
+                return seg.source(options);
             };
         }
-        // ensure we mark the end of each component sequence.
-        if (!files.empty()) {
-            files.back().fops = file_ops::load_sstables;
+        blogger.debug("stream_logstor_segments[{}] Started sending segment_nr={} range={}",
+                req.ops_id, segments.size(), req.range);
+    } else {
+        auto sstables = co_await table.take_storage_snapshot(req.range);
+        co_await utils::get_local_injector().inject("order_sstables_for_streaming", [&sstables] (auto& handler) -> future<> {
+            if (sstables.size() == 3) {
+                // make sure the sstables are ordered so that the sstable containing shadowed data is streamed last
+                const std::string_view shadowed_file = handler.template get<std::string_view>("shadowed_file").value();
+                for (int index: {0, 1}) {
+                    if (sstables[index].sst->component_basename(component_type::Data) == shadowed_file) {
+                        std::swap(sstables[index], sstables[2]);
+                    }
+                }
+            }
+            return make_ready_future<>();
+        });
+
+        auto& sst_gen = table.get_sstable_generation_generator();
+
+        for (auto& sst_snapshot : sstables) {
+            auto& sst = sst_snapshot.sst;
+            // stable state (across files) is a must for load to work on destination
+            auto sst_state = sst->state();
+
+            auto sources = co_await create_stream_sources(sst_snapshot, reader);
+            auto newgen = fmt::to_string(sst_gen());
+
+            for (auto&& s : sources) {
+                auto oldname = s->component_basename();
+                auto newname = get_sstable_name_with_generation(req.ops_id, oldname, newgen);
+
+                blogger.debug("fstream[{}] Get name oldname={}, newname={}", req.ops_id, oldname, newname);
+
+                auto& info = files.emplace_back();
+                info.fops = file_ops::stream_sstables;
+                info.sstable_state = sst_state;
+                info.filename = std::move(newname);
+                info.source = [s = std::move(s)](const file_input_stream_options& options) {
+                    return s->input(options);
+                };
+            }
+            // ensure we mark the end of each component sequence.
+            if (!files.empty()) {
+                files.back().fops = file_ops::load_sstables;
+            }
         }
+        auto sstable_nr = sstables.size();
+        // Release reference to sstables to be streamed here. Since one sstable is streamed at a time,
+        // a sstable - that has been compacted - can have its space released from disk right after
+        // that sstable's content has been fully streamed.
+        sstables.clear();
+
+        blogger.debug("stream_sstables[{}] Started sending sstable_nr={} files_nr={} files={} range={}",
+                req.ops_id, sstable_nr, files.size(), files, req.range);
     }
     if (files.empty()) {
         co_return resp;
     }
-    auto sstable_nr = sstables.size();
-    // Release reference to sstables to be streamed here. Since one sstable is streamed at a time,
-    // a sstable - that has been compacted - can have its space released from disk right after
-    // that sstable's content has been fully streamed.
-    sstables.clear();
-    blogger.debug("stream_sstables[{}] Started sending sstable_nr={} files_nr={} files={} range={}",
-            req.ops_id, sstable_nr, files.size(), files, req.range);
+    co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::seconds(60)));
     auto ops_start_time = std::chrono::steady_clock::now();
     auto files_nr = files.size();
     size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), req.targets, req.table, req.ops_id, req.topo_guard);
     resp.stream_bytes = stream_bytes;
     auto duration = std::chrono::steady_clock::now() - ops_start_time;
-    blogger.info("stream_sstables[{}] Finished sending sstable_nr={} files_nr={} range={} stream_bytes={} stream_time={} stream_bw={}",
-            req.ops_id, sstable_nr, files_nr, req.range, stream_bytes, duration, get_bw(stream_bytes, ops_start_time));
+    blogger.info("stream_{}[{}] Finished sending files_nr={} range={} stream_bytes={} stream_time={} stream_bw={}",
+            table.uses_logstor() ? "logstor_segments" : "sstables",
+            req.ops_id, files_nr, req.range, stream_bytes, duration, get_bw(stream_bytes, ops_start_time));
     co_return resp;
 }
 

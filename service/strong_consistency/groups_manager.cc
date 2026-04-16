@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "groups_manager.hh"
@@ -16,6 +16,8 @@
 #include "service/storage_proxy.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+
+#include <seastar/core/abort_source.hh>
 
 namespace service::strong_consistency {
 
@@ -68,10 +70,20 @@ raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder h
 {
 }
 
-auto raft_server::begin_mutate() -> begin_mutate_result {
+// conditional_variable::wait doesn't have an overload taking an abort_source.
+// This is a temporary workaround until we extend the interface.
+// See: scylladb/seastar#3292.
+static future<> wait_with_abort_source(condition_variable& cv, abort_source& as) {
+    as.check();
+    const auto _ = as.subscribe([&cv] noexcept { cv.broadcast(); });
+    co_await cv.wait();
+    as.check();
+}
+
+auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
     const auto leader = _state.server->current_leader();
     if (!leader) {
-        return need_wait_for_leader{_state.server->wait_for_leader(nullptr)};
+        return need_wait_for_leader{_state.server->wait_for_leader(&as)};
     }
     if (leader != _state.server->id()) {
         return raft::not_a_leader{leader};
@@ -86,7 +98,7 @@ auto raft_server::begin_mutate() -> begin_mutate_result {
         // after every state change wake-up. This ensures we will not deadlock,
         // even if the raft server state changes again (e.g., we lose leadership)
         // before the updater gets a chance to run.
-        return need_wait_for_leader{_state.leader_info_cond.wait()};
+        return need_wait_for_leader{wait_with_abort_source(_state.leader_info_cond, as)};
     }
     const auto new_ts = std::max(api::new_timestamp(), _state.leader_info->last_timestamp + 1);
     _state.leader_info->last_timestamp = new_ts;
@@ -137,6 +149,12 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 
     auto& persistence_ref = *storage;
     auto config = raft::server::configuration {
+        // Snapshotting is not implemented yet for strong consistency,
+        // so effectively disable periodic snapshotting.
+        // TODO: Revert after snapshots are implemented
+        .snapshot_threshold = std::numeric_limits<size_t>::max(),
+        .snapshot_threshold_log_size = 10 * 1024 * 1024, // 10MB
+        .max_log_size = 20 * 1024 * 1024, // 20MB
         .enable_forwarding = false,
         .on_background_error = [tablet, group_id](std::exception_ptr e) {
             on_internal_error(logger, 
@@ -163,11 +181,17 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     if (state.gate->is_closed()) {
         return;
     }
-    logger.info("schedule_raft_group_deletion(): group id {}", id);
+    logger.info("schedule_raft_group_deletion(): group id {}: scheduling", id);
     state.server_control_op = futurize_invoke([this, &state, id, g = state.gate](this auto) -> future<> {
         co_await state.server_control_op.get_future();
+        logger.debug("schedule_raft_group_deletion(): group id {}: starting", id);
+
         co_await g->close();
+        logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
+
         co_await _raft_gr.abort_server(id);
+        logger.debug("schedule_raft_group_deletion(): group id {}: server aborted", id);
+
         co_await std::move(state.leader_info_updater);
 
         _raft_gr.destroy_server(id);
@@ -222,7 +246,15 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
                 logger.debug("leader_info_updater({}-{}): current term {}, running read_barrier()",
                     tablet, gid,
                     current_term);
+                // We intentionally pass nullptr here. If the tablet is leaving this node,
+                // the Raft server will be aborted and the loop will break.
+                // The same will happen when the node is shutting down.
+                // There's no reason to abort this operation in any other case.
                 co_await state.server->read_barrier(nullptr);
+
+                co_await utils::get_local_injector().inject("sc_leader_info_updater_wait_before_setting_leader_info",
+                    utils::wait_for_message(5min));
+
                 state.leader_info = leader_info {
                     .term = current_term,
                     .last_timestamp = schema->table().get_max_timestamp_for_tablet(tablet.tablet)
@@ -239,6 +271,10 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
             }
             state.leader_info_cond.broadcast();
 
+            // We intentionally pass nullptr here. If the tablet is leaving this node,
+            // the Raft server will be aborted and the loop will break.
+            // The same will happen when the node is shutting down.
+            // There's no reason to abort this operation in any other case.
             co_await state.server->wait_for_state_change(nullptr);
         }
     } catch (const raft::request_aborted&) {
@@ -253,6 +289,9 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
         // thrown from find_schema() and schema->table() when the table is dropped
         logger.debug("leader_info_updater({}-{}): got replica::no_such_column_family {}",
             tablet, gid, std::current_exception());
+    } catch (...) {
+        on_internal_error(logger, ::format("leader_info_updater({}-{}): unexpected exception: {}",
+            tablet, gid, std::current_exception()));
     }
 }
 
@@ -293,7 +332,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     schedule_raft_groups_deletion(false);
 }
 
-future<raft_server> groups_manager::acquire_server(raft::group_id group_id) {
+future<raft_server> groups_manager::acquire_server(raft::group_id group_id, abort_source& as) {
     if (!_features.strongly_consistent_tables) {
         on_internal_error(logger, "strongly consistent tables are not enabled on this shard");
     }
@@ -303,7 +342,7 @@ future<raft_server> groups_manager::acquire_server(raft::group_id group_id) {
         on_internal_error(logger, format("raft group {} not found", group_id));
     }
     auto& state = it->second;
-    return state.server_control_op.get_future().then([&state, h = state.gate->hold()] mutable {
+    return state.server_control_op.get_future(as).then([&state, h = state.gate->hold()] mutable {
         return raft_server(state, std::move(h));
     });
 }

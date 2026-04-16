@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Modifications: Copyright 2021-present ScyllaDB
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
 from cassandra.query import UNSET_VALUE

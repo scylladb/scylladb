@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -17,6 +17,7 @@
 #include <seastar/core/when_all.hh>
 #include "replica/global_table_ptr.hh"
 #include "replica/logstor/compaction.hh"
+#include "replica/logstor/types.hh"
 #include "types/user.hh"
 #include "utils/assert.hh"
 #include "utils/hash.hh"
@@ -470,6 +471,7 @@ public:
         seastar::scheduling_group memtable_to_cache_scheduling_group;
         seastar::scheduling_group memory_compaction_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
+        seastar::scheduling_group maintenance_scheduling_group;
         bool enable_metrics_reporting = false;
         bool enable_node_aggregated_table_metrics = true;
         size_t view_update_memory_semaphore_limit;
@@ -616,7 +618,7 @@ public:
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
 
-    bool add_logstor_segment(logstor::segment_descriptor&, dht::token first_token, dht::token last_token);
+    bool add_logstor_segment(logstor::log_segment_id, logstor::segment_descriptor&, dht::token first_token, dht::token last_token);
 
     logstor::separator_buffer& get_logstor_separator_buffer(dht::token token, size_t write_size);
 
@@ -700,6 +702,10 @@ public:
     future<> maybe_split_compaction_group_of(locator::tablet_id);
 
     dht::token_range get_token_range_after_split(const dht::token&) const noexcept;
+
+    // Returns a counter_id for use in local counter updates.
+    counter_id get_counter_id(const mutation&) const;
+
 private:
     // If SSTable doesn't need split, the same input SSTable is returned as output.
     // If SSTable needs split, then output SSTables are returned and the input SSTable is deleted.
@@ -724,6 +730,9 @@ private:
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
     compaction_group* get_compaction_group(size_t id) const;
+public:
+    compaction_group* get_any_compaction_group() const;
+private:
     // NOTE: all readers must only operate on storage groups, which can provide all data belonging to
     // a given tablet replica. Interfaces below should only be used in the context of writes, for
     // example, to append data to memtable. Iterating on compaction groups is susceptible to races
@@ -734,6 +743,8 @@ private:
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const;
     // Select a compaction group from a given sstable based on its token range.
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const;
+    // Select a compaction group from a given logstor segment based on its token range.
+    compaction_group& compaction_group_for_logstor_segment(logstor::log_segment_id, dht::token first_token, dht::token last_token) const;
     // Safely iterate through compaction groups, while performing async operations on them.
     future<> parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action);
     void for_each_compaction_group(std::function<void(compaction_group&)> action);
@@ -881,14 +892,6 @@ public:
         auto& full_slice = schema->full_slice();
         return make_mutation_reader(std::move(schema), std::move(permit), range, full_slice);
     }
-
-    mutation_reader make_logstor_mutation_reader(schema_ptr s,
-            reader_permit permit,
-            const dht::partition_range& pr,
-            const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state,
-            streamed_mutation::forwarding fwd,
-            mutation_reader::forwarding fwd_mr) const;
 
     // The streaming mutation reader differs from the regular mutation reader in that:
     //  - Reflects all writes accepted by replica prior to creation of the
@@ -1402,6 +1405,9 @@ public:
     // Takes snapshot of current sstable set all compaction groups.
     future<utils::chunked_vector<sstables::shared_sstable>> take_sstable_set_snapshot();
 
+    future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot(dht::token_range tr);
+    future<std::unique_ptr<logstor::segment_stream_sink>> create_logstor_segment_sink(replica::database&);
+
     // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
     // If leave_unsealead is set, all the destination sstables will be left unsealed.
@@ -1456,6 +1462,7 @@ public:
         seastar::scheduling_group memtable_to_cache_scheduling_group;
         seastar::scheduling_group memory_compaction_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
+        seastar::scheduling_group maintenance_scheduling_group;
         bool enable_metrics_reporting = false;
         size_t view_update_memory_semaphore_limit;
     };
@@ -1532,12 +1539,15 @@ struct database_config {
     seastar::scheduling_group memtable_scheduling_group;
     seastar::scheduling_group memtable_to_cache_scheduling_group; // FIXME: merge with memtable_scheduling_group
     seastar::scheduling_group compaction_scheduling_group;
+    seastar::scheduling_group maintenance_compaction_scheduling_group;
     seastar::scheduling_group memory_compaction_scheduling_group;
     seastar::scheduling_group statement_scheduling_group;
     seastar::scheduling_group streaming_scheduling_group;
+    seastar::scheduling_group maintenance_scheduling_group;
     seastar::scheduling_group gossip_scheduling_group;
     seastar::scheduling_group commitlog_scheduling_group;
     seastar::scheduling_group schema_commitlog_scheduling_group;
+    seastar::scheduling_group backup_scheduling_group;
     size_t available_memory;
 };
 
@@ -1822,7 +1832,7 @@ public:
 
     // Load the schema definitions kept in schema tables from disk and initialize in-memory schema data structures
     // (keyspace/table definitions, column mappings etc.)
-    future<> parse_system_tables(sharded<service::storage_proxy>&, sharded<db::system_keyspace>&);
+    future<> parse_system_tables(sharded<service::storage_proxy>&, sharded<db::system_keyspace>&, std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
             compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&,
@@ -1880,9 +1890,9 @@ public:
     void init_schema_commitlog();
 
     using is_new_cf = bool_class<struct is_new_cf_tag>;
-    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr);
+    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr, std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
     future<> make_column_family_directory(schema_ptr schema);
-    future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new);
+    future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new, std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
 
 
     /* throws no_such_column_family if missing */

@@ -3,9 +3,10 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "state_machine.hh"
@@ -33,6 +34,8 @@ class state_machine : public raft_state_machine {
     replica::database& _db;
     service::migration_manager& _mm;
     db::system_keyspace& _sys_ks;
+
+    abort_source _as;
 
 public:
     state_machine(locator::global_tablet_id tablet,
@@ -70,6 +73,28 @@ public:
             // (see `schema_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
             // In this case, we should just ignore mutations without throwing an error.
             logger.log(log_level::warn, rate_limit, "apply(): table {} was already dropped, ignoring mutations", _tablet.table);
+        } catch (const abort_requested_exception& ex) {
+            // The exception can be thrown by get_schema_and_upgrade_mutations.
+            // It means that the Raft group is being removed.
+            //
+            // Technically, throwing an exception from a state machine
+            // may result in killing the corresponding Raft instance:
+            // cf. the description of raft::state_machine:
+            //
+            //  "Any of the functions may return an error, but it will kill the
+            //   raft instance that uses it. Depending on what state the failure
+            //   leaves the state is the raft instance will either have to be recreated
+            //   with the same state machine and rejoined the cluster with the same server_id
+            //   or it new raft instance will have to be created with empty state machine and
+            //   it will have to rejoin to the cluster with different server_id through
+            //   configuration change."
+            //
+            // Fortunately, in strong consistency, we use the default Raft server
+            // implementation, which handles abort_requested_exception thrown by
+            // raft::state_machine::apply -- it will simply end the applier fiber.
+            logger.debug("apply(): execution for tablet {}, group_id={} aborted due to: {}",
+                _tablet, _group_id, ex);
+            throw;
         }
          catch (...) {
             throw std::runtime_error(::format(
@@ -79,11 +104,16 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
-        throw std::runtime_error("take_snapshot() not implemented");
+        // Until snapshot transfer is fully implemented, return a fake ID
+        // and don't actually do anything. As long as we don't do snapshot
+        // transfers (attempting to do that throws an exception), we should
+        // be safe.
+        return make_ready_future<raft::snapshot_id>(raft::snapshot_id(utils::make_random_uuid()));
     }
 
     void drop_snapshot(raft::snapshot_id id) override {
-        throw std::runtime_error("drop_snapshot() not implemented");
+        // Taking a snapshot is a no-op, so dropping a snapshot is also a no-op.
+        (void) id;
     }
 
     future<> load_snapshot(raft::snapshot_id id) override {
@@ -91,6 +121,8 @@ public:
     }
 
     future<> abort() override {
+        logger.debug("abort(): Aborting state machine for group {}", _group_id);
+        _as.request_abort();
         return make_ready_future<>();
     }
 
@@ -109,6 +141,10 @@ private:
         bool barrier_executed = false;
 
         auto get_schema = [&] (table_schema_version schema_version) -> future<std::pair<schema_ptr, column_mappings_cache::value_ptr>> {
+            if (utils::get_local_injector().enter("sc_state_machine_return_empty_schema")) {
+                co_return std::pair{nullptr, nullptr};
+            }
+
             auto schema = local_schema_registry().get_or_null(schema_version);
             if (schema) {
                 co_return std::pair{std::move(schema), nullptr};
@@ -147,8 +183,7 @@ private:
                 if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
                     utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
                 }
-                // TODO: pass valid abort source
-                co_await _mm.get_group0_barrier().trigger();
+                co_await _mm.get_group0_barrier().trigger(false, &_as);
                 barrier_executed = true;
                 schema_cm = co_await get_schema(schema_version);
             }

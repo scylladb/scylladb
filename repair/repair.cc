@@ -3,10 +3,9 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-#include "db/config.hh"
 #include "repair.hh"
 #include "gms/gossip_address_map.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -137,9 +136,8 @@ std::string_view format_as(row_level_diff_detect_algorithm algo) {
     return "unknown";
 }
 
-bool should_enable_small_table_optimization_for_rbno(const replica::database& db, sstring keyspace, streaming::stream_reason reason) {
+bool should_enable_small_table_optimization_for_rbno(bool enable_small_table_optimization_for_rbno, sstring keyspace, streaming::stream_reason reason) {
     bool small_table_optimization = false;
-    auto enable_small_table_optimization_for_rbno = db.get_config().enable_small_table_optimization_for_rbno();
     if (enable_small_table_optimization_for_rbno) {
         static const std::unordered_set<sstring> small_table_optimization_enabled_ks = {
             "system_distributed",
@@ -1507,7 +1505,7 @@ future<> repair::data_sync_repair_task_impl::run() {
     auto id = get_repair_uniq_id();
 
     size_t ranges_reduced_factor = 1;
-    bool small_table_optimization = should_enable_small_table_optimization_for_rbno(db, keyspace, _reason);
+    bool small_table_optimization = should_enable_small_table_optimization_for_rbno(rs.get_config().enable_small_table_optimization_for_rbno(), keyspace, _reason);
     if (small_table_optimization) {
         auto range = dht::token_range(dht::token_range::bound(dht::minimum_token(), false), dht::token_range::bound(dht::maximum_token(), false));
         ranges_reduced_factor = _ranges.size();
@@ -1601,7 +1599,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 continue;
             }
             auto nr_tables = get_nr_tables(db, keyspace_name);
-            bool small_table_optimization = should_enable_small_table_optimization_for_rbno(db, keyspace_name, reason);
+            bool small_table_optimization = should_enable_small_table_optimization_for_rbno(_config.enable_small_table_optimization_for_rbno(), keyspace_name, reason);
             if (small_table_optimization) {
                 nr_ranges_total += 1 * nr_tables;
                 continue;
@@ -1621,7 +1619,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 rlogger.info("bootstrap_with_repair: keyspace={} does not exist any more, ignoring it", keyspace_name);
                 continue;
             }
-            bool small_table_optimization = should_enable_small_table_optimization_for_rbno(db, keyspace_name, reason);
+            bool small_table_optimization = should_enable_small_table_optimization_for_rbno(_config.enable_small_table_optimization_for_rbno(), keyspace_name, reason);
             dht::token_range_vector desired_ranges;
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;

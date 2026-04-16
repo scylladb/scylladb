@@ -1423,7 +1423,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_azure_provider_with_no_host, local_azure_kms_wrap
         co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
         , std::invalid_argument
         , [](const std::invalid_argument& e) {
-            return sstring(e.what()).find("No such host") != sstring::npos;
+            return sstring(e.what()).find("is not defined in scylla.yaml") != sstring::npos;
         }
     );
 }

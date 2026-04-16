@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -225,6 +225,14 @@ public:
 
     void set_digest(std::optional<uint32_t> digest) {
         _sst->_components->digest = digest;
+    }
+
+    storage& get_storage() {
+        return *_sst->_storage;
+    }
+
+    future<file> open_file(component_type type, open_flags flags, file_open_options opts) {
+        return _sst->open_file(type, flags, opts);
     }
 };
 

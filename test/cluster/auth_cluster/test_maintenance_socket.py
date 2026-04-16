@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2023-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
 from cassandra.auth import PlainTextAuthProvider
@@ -10,6 +10,7 @@ from cassandra import Unauthorized, InvalidRequest
 from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy
 from test.cluster.conftest import cluster_con
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
 
@@ -29,7 +30,7 @@ def cql_clusters() -> Generator[CqlClusters, None, None]:
     clusters: CqlClusters = []
     yield clusters
     for c in reversed(clusters):
-        c.shutdown()
+        safe_driver_shutdown(c)
 
 
 async def get_ready_maintenance_session(socket_path: str, timeout: int = 60):

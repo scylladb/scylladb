@@ -71,4 +71,5 @@ async def test_group0_apply_while_node_is_being_shutdown(manager: ManagerClient)
         pass  # ingore errors, since we don't care
 
     errors = await log.grep_for_errors()
+    errors = await manager.filter_errors(errors)
     assert errors == []

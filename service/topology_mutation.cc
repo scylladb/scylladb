@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "utils/assert.hh"
@@ -121,6 +121,11 @@ Builder& topology_mutation_builder_base<Builder>::set(const char* cell, const ui
 
 template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::set(const char* cell, cleanup_status value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, intended_storage_mode value) {
     return apply_atomic(cell, sstring{::format("{}", value)});
 }
 
@@ -377,6 +382,12 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     apply_atomic("new_keyspace_rf_change_data",
                  make_map_value(schema().get_column_definition("new_keyspace_rf_change_data")->type,
                                 map_type_impl::native_type(rf_per_dc.begin(), rf_per_dc.end())));
+    return *this;
+}
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_finalize_migration_data(
+        const sstring& ks_name) {
+    apply_atomic("finalize_migration_ks_name", ks_name);
     return *this;
 }
 

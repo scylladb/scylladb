@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import pytest
 from test.cluster.dtest.dtest_config import DTestConfig
 from test.cluster.dtest.dtest_setup import DTestSetup
 from test.cluster.dtest.dtest_setup_overrides import DTestSetupOverrides
+from test.pylib.driver_utils import safe_driver_shutdown
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -97,7 +98,7 @@ def fixture_dtest_setup(request: FixtureRequest,
     dtest_setup.jvm_args = []
 
     for con in dtest_setup.connections:
-        con.cluster.shutdown()
+        safe_driver_shutdown(con.cluster)
     dtest_setup.connections = []
 
     try:

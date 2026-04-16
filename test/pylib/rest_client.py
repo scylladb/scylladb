@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2022-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 """Asynchronous helper for Scylla REST API operations.
 """
@@ -323,6 +323,26 @@ class ScyllaRESTAPIClient:
 
     async def disable_tablet_balancing(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "false"})
+
+    async def create_vnode_tablet_migration(self, node_ip: str, ks: str) -> None:
+        """Start vnodes-to-tablets migration for all tables in a keyspace"""
+        await self.client.post(f"/storage_service/vnode_tablet_migrations/keyspaces/{ks}", host=node_ip)
+
+    async def upgrade_node_to_tablets(self, node_ip: str) -> None:
+        """Set the node's intended storage mode to tablets"""
+        await self.client.put_json(f"/storage_service/vnode_tablet_migrations/node/storage_mode?intended_mode=tablets", host=node_ip)
+
+    async def downgrade_node_to_vnodes(self, node_ip: str) -> None:
+        """Set the node's intended storage mode to vnodes"""
+        await self.client.put_json(f"/storage_service/vnode_tablet_migrations/node/storage_mode?intended_mode=vnodes", host=node_ip)
+
+    async def get_vnode_tablet_migration_status(self, node_ip: str, ks: str) -> dict:
+        """Get vnodes-to-tablets migration status for a keyspace"""
+        return await self.client.get_json(f"/storage_service/vnode_tablet_migrations/keyspaces/{ks}", host=node_ip)
+
+    async def finalize_vnode_tablet_migration(self, node_ip: str, ks: str) -> None:
+        """Finalize vnodes-to-tablets migration for all tables in a keyspace"""
+        await self.client.post(f"/storage_service/vnode_tablet_migrations/keyspaces/{ks}/finalization", host=node_ip)
 
     async def keyspace_upgrade_sstables(self, node_ip: str, ks: str) -> None:
         await self.client.get(f"/storage_service/keyspace_upgrade_sstables/{ks}", host=node_ip)

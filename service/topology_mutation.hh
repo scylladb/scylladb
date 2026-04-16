@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -51,6 +51,7 @@ protected:
     Builder& set(const char* cell, const raft::server_id& value);
     Builder& set(const char* cell, const uint32_t& value);
     Builder& set(const char* cell, cleanup_status value);
+    Builder& set(const char* cell, intended_storage_mode value);
     Builder& set(const char* cell, const utils::UUID& value);
     Builder& set(const char* cell, bool value);
     Builder& set(const char* cell, const char* value);
@@ -159,6 +160,7 @@ public:
     topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
     topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);
     topology_request_tracking_mutation_builder& set_snapshot_tables_data(const std::unordered_set<table_id>&, const sstring& tag, bool);
+    topology_request_tracking_mutation_builder& set_finalize_migration_data(const sstring& ks_name);
 
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

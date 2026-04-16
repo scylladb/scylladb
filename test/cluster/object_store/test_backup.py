@@ -101,10 +101,10 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
         print(f'Check {f} is in backup')
         assert f'{prefix}/{f}' in objects
 
-    # Check that task runs in the streaming sched group
+    # Check that task runs in the backup sched group
     log = await manager.server_open_log(server.server_id)
     res = await log.grep(r'INFO.*\[shard [0-9]:([a-z]+)\] .* Backup sstables from .* to')
-    assert len(res) == 1 and res[0][1].group(1) == 'strm'
+    assert len(res) == 1 and res[0][1].group(1) == 'bckp'
 
 
 @pytest.mark.asyncio
@@ -494,31 +494,6 @@ async def create_cluster(topology, manager, logger, object_storage=None):
 
     return servers,host_ids
 
-async def create_dataset(manager, ks, cf, topology, logger, num_keys=256, min_tablet_count=None, schema=None, consistency_level=ConsistencyLevel.ALL):
-    cql = manager.get_cql()
-    logger.info(f'Create keyspace, {topology=}')
-    keys = range(num_keys)
-    replication_opts = {'class': 'NetworkTopologyStrategy'}
-    replication_opts['replication_factor'] = f'{topology.rf}'
-    replication_opts = format_tuples(replication_opts)
-
-    print(replication_opts)
-
-    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-
-    if schema is None:
-        if min_tablet_count is not None:
-            logger.info(f'Creating schema with min_tablet_count={min_tablet_count}')
-        schema = create_schema(ks, cf, min_tablet_count)
-    cql.execute(schema)
-
-    stmt = cql.prepare(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES (?, ?)")
-    if consistency_level is not None:
-        stmt.consistency_level = consistency_level
-    await asyncio.gather(*(cql.run_async(stmt, (str(k), k)) for k in keys))
-
-    return schema, keys, replication_opts
-
 async def do_restore_server(manager, logger, ks, cf, s, toc_names, scope, primary_replica_only, prefix, object_storage):
     logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
     tid = await manager.api.restore(s.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, prefix, toc_names, scope, primary_replica_only=primary_replica_only)
@@ -902,32 +877,35 @@ async def test_restore_primary_replica(manager: ManagerClient, object_storage, d
             scope = "all"
         expected_replicas = 1
 
-    ks = 'ks'
     cf = 'cf'
+    keys = range(256)
+    replication_str = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
 
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
 
-    schema, keys, replication_opts = await create_dataset(manager, ks, cf, topology, logger)
+    async with new_test_keyspace(manager, replication_str) as ks:
+        cql.execute(create_schema(ks, cf))
+        stmt = cql.prepare(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES (?, ?)")
+        stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(stmt, (str(k), k)) for k in keys))
 
-    # validate replicas assertions hold on fresh dataset
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
+        # validate replicas assertions hold on fresh dataset
+        await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
 
-    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
-    prefix = f'{cf}/{snap_name}'
+        snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+        prefix = f'{cf}/{snap_name}'
 
-    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
+        await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
 
-    logger.info(f'Re-initialize keyspace')
-    cql.execute(f'DROP KEYSPACE {ks}')
-    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-    cql.execute(schema)
+    async with new_test_keyspace(manager, replication_str) as ks:
+        cql.execute(create_schema(ks, cf))
 
-    await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
+        await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
-    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=expected_replicas)
+        await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas=expected_replicas)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(servers):

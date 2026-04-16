@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -136,6 +136,9 @@ public:
         // Calling fill_buffer() will not add any new fragments
         // unless the reader is fast-forwarded to a new range.
         bool _end_of_stream = false;
+
+        // Set by fill buffer for segregating output by partition range.
+        std::optional<dht::partition_range> _next_range;
 
         schema_ptr _schema;
         reader_permit _permit;

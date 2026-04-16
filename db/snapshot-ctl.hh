@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  *
  * Copyright (C) 2020-present ScyllaDB
  */
@@ -132,6 +132,12 @@ private:
     sstables::storage_manager& _storage_manager;
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
+
+    // Resolve a user-provided table name that may be a logical index name
+    // (e.g. "myindex") to its backing column family name (e.g.
+    // "myindex_index"). Returns the name unchanged if it already
+    // matches a column family.
+    sstring resolve_table_name(const sstring& ks_name, const sstring& name) const;
 
     future<> run_snapshot_modify_operation(noncopyable_function<future<>()> &&);
 

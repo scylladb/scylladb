@@ -16,6 +16,7 @@ def new_test_snapshot(rest_api, keyspaces=[], tables=[], tag=""):
     if not tag:
         tag = f"test_snapshot_{int(time.time() * 1000)}"
     params = { "tag": tag }
+    delete_params = []
     if type(keyspaces) is str:
         params["kn"] = keyspaces
     else:
@@ -23,15 +24,22 @@ def new_test_snapshot(rest_api, keyspaces=[], tables=[], tag=""):
     if tables:
         if type(tables) is str:
             params["cf"] = tables
+            delete_params.append(dict(params))
         else:
             params["cf"] = ",".join(tables)
+            # DELETE /storage_service/snapshots accepts a single table name.
+            # When the snapshot spans multiple tables, clean it up per table.
+            delete_params.extend([{**params, "cf": table} for table in tables])
+    else:
+        delete_params.append(dict(params))
     resp = rest_api.send("POST", "storage_service/snapshots", params)
     resp.raise_for_status()
     try:
         yield tag
     finally:
-        resp = rest_api.send("DELETE", "storage_service/snapshots", params)
-        resp.raise_for_status()
+        for delete_param in delete_params:
+            resp = rest_api.send("DELETE", "storage_service/snapshots", delete_param)
+            resp.raise_for_status()
 
 # Tries to inject an error via Scylla REST API. It only works in specific
 # build modes (dev, debug, sanitize), so this function will trigger a test

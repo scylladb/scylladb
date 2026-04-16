@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -18,7 +18,6 @@
 #include "schema/schema_fwd.hh"
 #include "service/state_id.hh"
 #include "version.hh"
-#include "cdc/generation_id.hh"
 #include <set>
 #include <unordered_set>
 
@@ -45,11 +44,7 @@ public:
 
     // values for ApplicationState.STATUS
     static constexpr std::string_view STATUS_UNKNOWN{"UNKNOWN"};
-    static constexpr std::string_view STATUS_BOOTSTRAPPING{"BOOT"};
     static constexpr std::string_view STATUS_NORMAL{"NORMAL"};
-    static constexpr std::string_view STATUS_LEFT{"LEFT"};
-
-    static constexpr std::string_view REMOVED_TOKEN{"removed"};
 
     static constexpr std::string_view SHUTDOWN{"shutdown"};
 
@@ -80,26 +75,18 @@ public:
         : _version(-1) {
     }
 
-    static sstring version_string(const std::initializer_list<sstring>& args) {
-        return fmt::to_string(fmt::join(args, versioned_value::DELIMITER));
-    }
-
-    static sstring make_full_token_string(const std::unordered_set<dht::token>& tokens);
-    static sstring make_token_string(const std::unordered_set<dht::token>& tokens);
-    static sstring make_cdc_generation_id_string(std::optional<cdc::generation_id>);
-
-    // Reverse of `make_full_token_string`.
-    static std::unordered_set<dht::token> tokens_from_string(const sstring&);
-
     static versioned_value clone_with_higher_version(const versioned_value& value) noexcept {
         return versioned_value(value.value());
     }
 
-    static versioned_value bootstrapping(const std::unordered_set<dht::token>& tokens) {
-        return versioned_value(version_string({sstring(versioned_value::STATUS_BOOTSTRAPPING),
-                                               make_token_string(tokens)}));
+private:
+    static sstring version_string(const std::initializer_list<sstring>& args) {
+        return fmt::to_string(fmt::join(args, versioned_value::DELIMITER));
     }
 
+    static sstring make_token_string(const std::unordered_set<dht::token>& tokens);
+
+public:
     static versioned_value normal(const std::unordered_set<dht::token>& tokens) {
         return versioned_value(version_string({sstring(versioned_value::STATUS_NORMAL),
                                                make_token_string(tokens)}));
@@ -113,22 +100,8 @@ public:
         return versioned_value(new_version.to_sstring());
     }
 
-    static versioned_value left(const std::unordered_set<dht::token>& tokens, int64_t expire_time) {
-        return versioned_value(version_string({sstring(versioned_value::STATUS_LEFT),
-                                               make_token_string(tokens),
-                                               std::to_string(expire_time)}));
-    }
-
     static versioned_value host_id(const locator::host_id& host_id) {
         return versioned_value(host_id.to_sstring());
-    }
-
-    static versioned_value tokens(const std::unordered_set<dht::token>& tokens) {
-        return versioned_value(make_full_token_string(tokens));
-    }
-
-    static versioned_value removed_nonlocal(const locator::host_id& host_id, int64_t expire_time) {
-        return versioned_value(sstring(REMOVED_TOKEN) + sstring(DELIMITER) + host_id.to_sstring() + sstring(DELIMITER) + to_sstring(expire_time));
     }
 
     static versioned_value shutdown(bool value) {
@@ -167,10 +140,6 @@ public:
 
     static versioned_value internal_ip(const sstring &private_ip) {
         return versioned_value(private_ip);
-    }
-
-    static versioned_value severity(double value) {
-        return versioned_value(to_sstring(value));
     }
 
     static versioned_value supported_features(const std::set<std::string_view>& features) {

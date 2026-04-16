@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #pragma once
 
@@ -37,7 +37,7 @@ class audit_cf_storage_helper : public storage_helper {
     static cql3::query_options make_data(const audit_info* audit_info,
                                          socket_address node_ip,
                                          socket_address client_ip,
-                                         db::consistency_level cl,
+                                         std::optional<db::consistency_level> cl,
                                          const sstring& username,
                                          bool error);
     static cql3::query_options make_login_data(socket_address node_ip,
@@ -55,7 +55,7 @@ public:
     virtual future<> write(const audit_info* audit_info,
                            socket_address node_ip,
                            socket_address client_ip,
-                           db::consistency_level cl,
+                           std::optional<db::consistency_level> cl,
                            const sstring& username,
                            bool error) override;
     virtual future<> write_login(const sstring& username,

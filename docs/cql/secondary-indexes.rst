@@ -151,6 +151,11 @@ columns are treated as filtering columns. The local vector index requires that t
 of the base table is also the partition key of the index and the vector column is the first one
 from the following columns.
 
+ScyllaDB allows creating multiple **named** vector indexes on the same vector column.
+This can be used to create a replacement index before dropping an older one.
+Unnamed duplicate vector index definitions are still rejected, and index names
+must remain unique within a keyspace.
+
 Example of a simple index:
 
 .. code-block:: cql
@@ -261,7 +266,50 @@ The following options are supported for vector indexes. All of them are optional
 |                              | * ``true``: Enable rescoring.                                                                            |               |
 |                              | * ``false``: Disable rescoring.                                                                          |               |
 +------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
+| ``source_model``             | The name of the embedding model that produced the vectors (e.g., ``"ada002"``). Cassandra client         | *(none)*      |
+|                              | libraries such as CassIO send this option to tag the index with the model. Cassandra SAI rejects it as   |               |
+|                              | an unrecognized property; ScyllaDB accepts and preserves it in ``DESCRIBE`` output for compatibility     |               |
+|                              | with those libraries, but does not act on it.                                                            |               |
++------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
 
+
+.. _cassandra-sai-compatibility:
+
+Cassandra SAI Compatibility for Vector Search
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ScyllaDB accepts the Cassandra ``StorageAttachedIndex`` (SAI) class name in ``CREATE CUSTOM INDEX``
+statements **for vector columns**. Cassandra libraries such as
+`CassIO <https://cassio.org/>`_ and `LangChain <https://www.langchain.com/>`_ use SAI to create
+vector indexes; ScyllaDB recognizes these statements for compatibility.
+
+When ScyllaDB encounters an SAI class name on a **vector column**, the index is automatically
+created as a native ``vector_index``. The following class names are recognized:
+
+* ``org.apache.cassandra.index.sai.StorageAttachedIndex`` (exact case required)
+* ``StorageAttachedIndex`` (case-insensitive)
+* ``SAI`` (case-insensitive)
+
+Example::
+
+   -- Cassandra SAI statement accepted by ScyllaDB:
+   CREATE CUSTOM INDEX ON my_table (embedding)
+   USING 'org.apache.cassandra.index.sai.StorageAttachedIndex'
+   WITH OPTIONS = {'similarity_function': 'COSINE'};
+
+   -- Equivalent to:
+   CREATE CUSTOM INDEX ON my_table (embedding)
+   USING 'vector_index'
+   WITH OPTIONS = {'similarity_function': 'COSINE'};
+
+The ``similarity_function`` option is supported by both Cassandra SAI and ScyllaDB.
+
+.. note::
+
+   SAI class names are only supported on **vector columns**. Using an SAI class name on a
+   non-vector column (e.g., ``text`` or ``int``) will result in an error. General SAI
+   indexing of non-vector columns is not supported by ScyllaDB; use a
+   :doc:`secondary index </cql/secondary-indexes>` instead.
 
 .. _drop-index-statement:
 

@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include "schema_applier.hh"
@@ -335,7 +335,7 @@ static std::vector<bytes> get_primary_key(const std::vector<column_definition>& 
 
 // Build a map from primary keys to rows.
 static std::map<std::vector<bytes>, const query::result_set_row*> build_row_map(const query::result_set& result) {
-    const std::vector<query::result_set_row>& rows = result.rows();
+    const auto& rows = result.rows();
     auto primary_key = get_primary_key_definition(result.schema());
     std::map<std::vector<bytes>, const query::result_set_row*> ret;
     for (const auto& row: rows) {

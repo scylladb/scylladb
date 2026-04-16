@@ -1,6 +1,6 @@
 # Copyright 2024-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # Tests for how CQL's Role-Based Access Control (RBAC) commands - CREATE ROLE,
 # GRANT, REVOKE, etc., can be used on Alternator for authentication and for

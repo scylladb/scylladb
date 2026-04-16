@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -168,96 +168,40 @@ public:
         config_source _source = config_source::None;
         value_status _value_status;
         struct the_value_type final : any_value {
-            the_value_type(T value) : value(std::move(value)) {}
+            the_value_type(T value);
             utils::updateable_value_source<T> value;
-            virtual std::unique_ptr<any_value> clone() const override {
-                return std::make_unique<the_value_type>(value());
-            }
-            virtual void update_from(const any_value* source) override {
-                auto typed_source = static_cast<const the_value_type*>(source);
-                value.set(typed_source->value());
-            }
+            std::unique_ptr<any_value> clone() const override;
+            void update_from(const any_value* source) override;
         };
         liveness _liveness;
         std::vector<T> _allowed_values;
     protected:
-        updateable_value_source<T>& the_value() {
-            any_value* av = _cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
-            return static_cast<the_value_type*>(av)->value;
-        }
-        const updateable_value_source<T>& the_value() const {
-            return const_cast<named_value*>(this)->the_value();
-        }
-        virtual const void* current_value() const override {
-            return &the_value().get();
-        }
+        updateable_value_source<T>& the_value();
+        const updateable_value_source<T>& the_value() const;
+        const void* current_value() const override;
     public:
         typedef T type;
         typedef named_value<T> MyType;
 
         named_value(config_file* file, std::string_view name, std::string_view alias, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
-                std::initializer_list<T> allowed_values = {})
-            : config_src(file, name, alias, &config_type_for<T>(), desc)
-            , _value_status(vs)
-            , _liveness(liveness_)
-            , _allowed_values(std::move(allowed_values)) {
-            file->add(*this, std::make_unique<the_value_type>(std::move(t)));
-        }
+                std::initializer_list<T> allowed_values = {});
         named_value(config_file* file, std::string_view name, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
-                std::initializer_list<T> allowed_values = {})
-            : named_value(file, name, {}, liveness_, vs, t, desc, std::move(allowed_values)) {
-        }
+                std::initializer_list<T> allowed_values = {});
         named_value(config_file* file, std::string_view name, std::string_view alias, value_status vs, const T& t = T(), std::string_view desc = {},
-                std::initializer_list<T> allowed_values = {})
-                : named_value(file, name, alias, liveness::MustRestart, vs, t, desc, allowed_values) {
-        }
+                std::initializer_list<T> allowed_values = {});
         named_value(config_file* file, std::string_view name, value_status vs, const T& t = T(), std::string_view desc = {},
-                std::initializer_list<T> allowed_values = {})
-                : named_value(file, name, {}, liveness::MustRestart, vs, t, desc, allowed_values) {
-        }
-        value_status status() const noexcept override {
-            return _value_status;
-        }
-        config_source source() const noexcept override {
-            return _source;
-        }
-        bool is_set() const {
-            return _source > config_source::None;
-        }
-        MyType & operator()(const T& t, config_source src = config_source::Internal) {
-            if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
-                throw std::invalid_argument(fmt::format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
-            }
-            the_value().set(t);
-            if (src > config_source::None) {
-                _source = src;
-            }
-            return *this;
-        }
-        MyType & operator()(T&& t, config_source src = config_source::Internal) {
-            if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
-                throw std::invalid_argument(fmt::format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
-            }
-            the_value().set(std::move(t));
-            if (src > config_source::None) {
-                _source = src;
-            }
-            return *this;
-        }
-        void set(T&& t, config_source src = config_source::None) {
-            operator()(std::move(t), src);
-        }
-        const T& operator()() const {
-            return the_value().get();
-        }
+                std::initializer_list<T> allowed_values = {});
+        value_status status() const noexcept override;
+        config_source source() const noexcept override;
+        bool is_set() const;
+        MyType & operator()(const T& t, config_source src = config_source::Internal);
+        MyType & operator()(T&& t, config_source src = config_source::Internal);
+        void set(T&& t, config_source src = config_source::None);
+        const T& operator()() const;
 
-        operator updateable_value<T>() const & {
-            return updateable_value<T>(the_value());
-        }
+        operator updateable_value<T>() const &;
 
-        observer<T> observe(std::function<void (const T&)> callback) const {
-            return the_value().observe(std::move(callback));
-        }
+        observer<T> observe(std::function<void (const T&)> callback) const;
 
         void add_command_line_option(bpo::options_description_easy_init&) override;
         void set_value(const YAML::Node&, config_source) override;
@@ -335,6 +279,25 @@ const config_file::named_value<T>& operator||(const config_file::named_value<T>&
 }
 
 extern template struct config_file::named_value<seastar::log_level>;
+
+// Explicit instantiation declarations for the most common named_value<T>
+// specializations. The definitions are in db/config.cc (which is the only
+// TU that includes config_file_impl.hh and therefore has the full template
+// bodies). This avoids re-compiling the heavy boost::program_options /
+// boost::lexical_cast / yaml-cpp machinery in every TU that includes
+// config.hh.
+extern template struct config_file::named_value<bool>;
+extern template struct config_file::named_value<uint16_t>;
+extern template struct config_file::named_value<uint32_t>;
+extern template struct config_file::named_value<uint64_t>;
+extern template struct config_file::named_value<int32_t>;
+extern template struct config_file::named_value<int64_t>;
+extern template struct config_file::named_value<float>;
+extern template struct config_file::named_value<double>;
+extern template struct config_file::named_value<sstring>;
+extern template struct config_file::named_value<std::string>;
+extern template struct config_file::named_value<config_file::string_map>;
+extern template struct config_file::named_value<config_file::string_list>;
 
 }
 

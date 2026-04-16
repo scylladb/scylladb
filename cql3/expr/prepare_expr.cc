@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "expression.hh"
@@ -1259,6 +1259,40 @@ prepare_column_mutation_attribute(
                     receiver->type->name(), receiver->name->text()));
     }
     auto column = prepare_expression(cma.column, db, keyspace, schema_opt, nullptr);
+    // Helper for the subscript and field-selection cases below: validates that
+    // inner_expr is a column, not a primary key column, that its type satisfies
+    // type_allowed, and that the cluster feature flag is on.
+    auto validate_and_return =
+            [&](const expression& inner_expr, std::string_view context,
+                auto type_allowed, std::string_view type_allowed_str) -> std::optional<expression> {
+        auto inner_cval = expr::as_if<column_value>(&inner_expr);
+        if (!inner_cval) {
+            throw exceptions::invalid_request_exception(fmt::format("{} on a {} expects a column, got {}", cma.kind, context, inner_expr));
+        }
+        if (inner_cval->col->is_primary_key()) {
+            throw exceptions::invalid_request_exception(fmt::format("{} is not legal on primary key component {}", cma.kind, inner_cval->col->name_as_text()));
+        }
+        if (!type_allowed(inner_cval->col->type)) {
+            throw exceptions::invalid_request_exception(fmt::format("{} on a {} is only valid for {}", cma.kind, context, type_allowed_str));
+        }
+        if (!db.features().writetime_ttl_individual_element) {
+            throw exceptions::invalid_request_exception(fmt::format(
+                "{} on a {} is not supported until all nodes in the cluster are upgraded", cma.kind, context));
+        }
+        return column_mutation_attribute{.kind = cma.kind, .column = std::move(column)};
+    };
+    // Handle WRITETIME(m[key]) / TTL(m[key]) - a subscript into a non-frozen map or set column
+    if (auto sub = expr::as_if<subscript>(&column)) {
+        return validate_and_return(sub->val, "subscript",
+            [](const data_type& t) { return (t->is_map() || t->is_set()) && t->is_multi_cell(); },
+            "non-frozen map or set columns");
+    }
+    // Handle WRITETIME(x.field) / TTL(x.field) - a field selection into a non-frozen UDT column
+    if (auto fs = expr::as_if<field_selection>(&column)) {
+        return validate_and_return(fs->structure, "field selection",
+            [](const data_type& t) { return t->is_user_type() && t->is_multi_cell(); },
+            "non-frozen UDT columns");
+    }
     auto cval = expr::as_if<column_value>(&column);
     if (!cval) {
         throw exceptions::invalid_request_exception(fmt::format("{} expects a column, but {} is a general expression", cma.kind, column));
@@ -1653,6 +1687,12 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
             } else {
                 return list_value_spec_of(*sub_col.col->column_specification);
             }
+        },
+        [&](const field_selection& fs) -> lw_shared_ptr<column_specification> {
+            return make_lw_shared<column_specification>(
+                schema.ks_name(), schema.cf_name(),
+                ::make_shared<column_identifier>(fs.field->text(), true),
+                fs.type);
         },
         [&](const tuple_constructor& tup) -> lw_shared_ptr<column_specification> {
             std::ostringstream tuple_name;

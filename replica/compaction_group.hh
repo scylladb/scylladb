@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <seastar/core/condition-variable.hh>
@@ -18,6 +18,7 @@
 #include "compaction/compaction_manager.hh"
 #include "locator/tablets.hh"
 #include "replica/logstor/compaction.hh"
+#include "replica/logstor/segment_manager.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
 #include <absl/container/flat_hash_map.h>
@@ -96,6 +97,8 @@ class compaction_group {
     bool _tombstone_gc_enabled = true;
     std::optional<compaction::compaction_backlog_tracker> _backlog_tracker;
     repair_classifier_func _repair_sstable_classifier;
+
+    counter_id _counter_id;
 
     lw_shared_ptr<logstor::segment_set> _logstor_segments;
     std::optional<logstor::separator_buffer> _logstor_separator;
@@ -191,6 +194,14 @@ public:
 
     future<> update_repaired_at_for_merge();
 
+    void set_counter_id(counter_id cid) noexcept {
+        _counter_id = cid;
+    }
+
+    counter_id get_counter_id() const noexcept {
+        return _counter_id;
+    }
+
     void set_compaction_strategy_state(compaction::compaction_strategy_state compaction_strategy_state) noexcept;
 
     lw_shared_ptr<memtable_list>& memtables() noexcept;
@@ -218,6 +229,9 @@ public:
 
     // Merges all sstables from another group into this one.
     future<> merge_sstables_from(compaction_group& group);
+
+    // Merges all logstor segments from another group into this one.
+    future<> merge_logstor_segments_from(compaction_group& group);
 
     const lw_shared_ptr<sstables::sstable_set>& main_sstables() const noexcept;
     sstables::sstable_set make_main_sstable_set() const;
@@ -306,6 +320,8 @@ public:
         return *_logstor_segments;
     }
 
+    future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot();
+
     friend class storage_group;
 };
 
@@ -389,8 +405,11 @@ public:
     // Make an sstable set spanning all sstables in the storage_group
     lw_shared_ptr<const sstables::sstable_set> make_sstable_set() const;
 
+    future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot() const;
+
     // Flush all memtables.
     future<> flush() noexcept;
+    future<> flush_separator() noexcept;
     bool can_flush() const;
     bool needs_flush() const;
     api::timestamp_type min_memtable_timestamp() const;
@@ -484,8 +503,8 @@ public:
     virtual compaction_group& compaction_group_for_token(dht::token token) const = 0;
     virtual compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const = 0;
     virtual compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const = 0;
+    virtual compaction_group& compaction_group_for_logstor_segment(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) const = 0;
 
-    virtual size_t log2_storage_groups() const = 0;
     virtual storage_group& storage_group_for_token(dht::token) const = 0;
     virtual utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const = 0;
 

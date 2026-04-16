@@ -46,7 +46,9 @@ private:
         const dht::sharder& remote_sharder,
         unsigned remote_shard,
         gc_clock::time_point compaction_time,
-        incremental_repair_meta inc);
+        incremental_repair_meta inc,
+        uint64_t multishard_reader_buffer_hint_size,
+        bool multishard_reader_enable_read_ahead);
 
 public:
     repair_reader(
@@ -60,7 +62,9 @@ public:
         uint64_t seed,
         read_strategy strategy,
         gc_clock::time_point compaction_time,
-        incremental_repair_meta inc);
+        incremental_repair_meta inc,
+        uint64_t multishard_reader_buffer_hint_size,
+        bool multishard_reader_enable_read_ahead);
 
     future<mutation_fragment_opt>
     read_mutation_fragment();

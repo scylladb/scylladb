@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -427,6 +427,7 @@ public:
         std::optional<sstring> snapshot_tag;
         std::optional<db_clock::time_point> snapshot_expiry;
         bool snapshot_skip_flush;
+        std::optional<sstring> finalize_migration_ks_name;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
 

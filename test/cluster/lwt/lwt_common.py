@@ -1,5 +1,5 @@
 # Copyright (C) 2024-present ScyllaDB
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 """
 Common functionality for LWT (Lightweight Transaction)
 This module provides shared components for testing LWT behavior during various tablet operations

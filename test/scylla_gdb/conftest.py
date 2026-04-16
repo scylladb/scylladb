@@ -1,6 +1,6 @@
 # Copyright 2022-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 """Conftest for Scylla GDB tests"""
 
 import os

@@ -1,6 +1,6 @@
 # Copyright 2021-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # Tests for CORS (Cross-origin resource sharing) protocol support.
 # If the request has the "Origin" header specifying where the script which

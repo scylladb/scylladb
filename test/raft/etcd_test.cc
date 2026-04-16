@@ -17,7 +17,7 @@
  * under the License.
  */
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 // Port of etcd Raft implementation unit tests

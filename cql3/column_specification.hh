@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -41,5 +41,7 @@ public:
 
     static bool all_in_same_table(const std::vector<lw_shared_ptr<column_specification>>& names);
 };
+
+lw_shared_ptr<column_specification> make_column_spec(std::string_view ks_name, std::string_view cf_name, sstring name, data_type type);
 
 }

@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "api/api-doc/error_injection.json.hh"
@@ -23,7 +23,7 @@ void set_error_injection(http_context& ctx, routes& r) {
 
     hf::enable_injection.set(r, [](std::unique_ptr<request> req) -> future<json::json_return_type> {
         sstring injection = req->get_path_param("injection");
-        bool one_shot = req->get_query_param("one_shot") == "True";
+        bool one_shot = strcasecmp(req->get_query_param("one_shot").c_str(), "true") == 0;
         auto params = co_await util::read_entire_stream_contiguous(*req->content_stream);
 
         const size_t max_params_size = 1024 * 1024;

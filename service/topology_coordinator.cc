@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <algorithm>
@@ -325,7 +325,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
             // We did not find a request that has enough live node to proceed
             // Cancel all requests to let admin know that no operation can succeed
-            rtlogger.warn("topology coordinator: cancel request queue because no request can proceed. Dead nodes: {}", dead_nodes);
+            rtlogger.info("topology coordinator: no request can proceed. Dead nodes: {}", dead_nodes);
             return cancel_requests{std::move(guard), std::move(dead_nodes)};
         }
 
@@ -1070,6 +1070,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
                                 co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
                                     auto last_token = new_tablet_map.get_last_token(tablet_id);
+                                    auto old_tablet_info = old_tablets.get_tablet_info(last_token);
+                                    auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
+                                    auto new_replicas = locator::substract_sets(tablet_info.replicas, old_tablet_info.replicas);
+                                    if (abandoning_replicas.size() + new_replicas.size() > 1) {
+                                        throw std::runtime_error(fmt::format("Invalid state of a tablet {} of a table {}.{}. Expected replication factor: {}, but the tablet has replicas only on {}. "
+                                            "Try again later or use the \"Fixing invalid replica state with RF change\" procedure to fix the problem.", tablet_id, ks_name, table_or_mv->cf_name(),
+                                            ks.get_replication_strategy().get_replication_factor(*tmptr), old_tablet_info.replicas));
+                                    }
+
                                     updates.emplace_back(co_await make_canonical_mutation_gently(
                                             replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
                                                     .set_new_replicas(last_token, tablet_info.replicas)
@@ -1079,8 +1088,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                     ));
 
                                     // Calculate abandoning replica and abort view building tasks on them
-                                    auto old_tablet_info = old_tablets.get_tablet_info(last_token);
-                                    auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
                                     if (!abandoning_replicas.empty()) {
                                         if (abandoning_replicas.size() != 1) {
                                             on_internal_error(rtlogger, fmt::format("Keyspace RF abandons {} replicas for table {} and tablet id {}", abandoning_replicas.size(), table_or_mv->id(), tablet_id));
@@ -1167,6 +1174,164 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                    .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
                    .set_session(session_id(req_id));
             co_await update_topology_state(std::move(guard), {builder.build()}, "SNAPSHOT TABLES requested");
+        }
+        break;
+        case global_topology_request::finalize_migration: {
+            rtlogger.info("finalize_migration requested");
+
+            auto ks_name = *req_entry.finalize_migration_ks_name;
+            utils::chunked_vector<canonical_mutation> updates;
+            sstring error;
+
+            if (_db.has_keyspace(ks_name)) {
+                try {
+                    auto& ks = _db.find_keyspace(ks_name);
+                    if (ks.uses_tablets()) {
+                        throw std::runtime_error(fmt::format("Keyspace '{}' already uses tablets", ks_name));
+                    }
+
+                    auto tmptr = get_token_metadata_ptr();
+                    const auto& tablet_metadata = tmptr->tablets();
+                    auto tables = ks.metadata()->tables();
+
+                    // Verify all tables have tablet maps.
+                    for (const auto& schema : tables) {
+                        if (!tablet_metadata.has_tablet_map(schema->id())) {
+                            throw std::runtime_error(fmt::format(
+                                "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
+                        }
+                    }
+
+                    // Find the migration direction (tablets or rollback to vnodes).
+                    // Nodes that haven't set their intended mode are treated as vnodes (the default).
+                    std::optional<intended_storage_mode> global_intended_mode;
+                    for (const auto& [server_id, replica_state] : _topo_sm._topology.normal_nodes) {
+                        auto replica_intended_mode = replica_state.storage_mode ? *replica_state.storage_mode : intended_storage_mode::vnodes;
+                        if (!global_intended_mode) {
+                            global_intended_mode = replica_intended_mode;
+                        } else if (replica_intended_mode != *global_intended_mode) {
+                            throw std::runtime_error(fmt::format(
+                                "Cannot finalize migration for keyspace '{}': node {} has intended storage mode '{}', expected '{}'",
+                                ks_name, server_id, replica_intended_mode, *global_intended_mode));
+                        }
+                    }
+                    if (!global_intended_mode) {
+                        on_internal_error(rtlogger, fmt::format(
+                            "finalize_migration: no normal nodes found while finalizing migration for keyspace '{}'", ks_name));
+                    }
+                    bool rollback = *global_intended_mode == intended_storage_mode::vnodes;
+
+                    rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
+                        ks_name, rollback ? "rollback to vnodes" : "forward to tablets");
+
+                    co_await _tablet_load_stats_refresh.trigger();
+
+                    // Verify that the actual storage mode matches the intended mode for all normal nodes.
+                    // A node that has migrated a table's storage to tablets will report it in its load_stats.
+                    for (const auto& [node_id, _] : _topo_sm._topology.normal_nodes) {
+                        auto host_id = to_host_id(node_id);
+                        auto it = _load_stats_per_node.find(host_id);
+                        if (!rollback) { // forward path (vnodes to tablets)
+                            if (it == _load_stats_per_node.end()) {
+                                throw std::runtime_error(fmt::format(
+                                    "No load stats available for node {}", host_id));
+                            }
+                            const auto& node_stats = it->second;
+                            for (const auto& schema : tables) {
+                                if (!node_stats.tables.contains(schema->id())) {
+                                    throw std::runtime_error(fmt::format(
+                                        "Node {} has not yet migrated table {}.{} to tablets",
+                                        host_id, ks_name, schema->cf_name()));
+                                }
+                            }
+                        } else { // rollback path (tablets to vnodes)
+                            if (it != _load_stats_per_node.end()) {
+                                const auto& node_stats = it->second;
+                                for (const auto& schema : tables) {
+                                    if (node_stats.tables.contains(schema->id())) {
+                                        throw std::runtime_error(fmt::format(
+                                            "Node {} still reports table {}.{} as tablet-based, rollback not complete",
+                                            host_id, ks_name, schema->cf_name()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (!rollback) {
+                        // All nodes have been migrated. ALTER the keyspace to use tablets.
+                        auto old_md = ks.metadata();
+                        auto new_md = data_dictionary::keyspace_metadata::new_keyspace(
+                            old_md->name(),
+                            old_md->strategy_name(),
+                            old_md->strategy_options(),
+                            std::optional<unsigned>(0), // initial_tablets=0 means auto
+                            old_md->consistency_option(),
+                            old_md->durable_writes(),
+                            old_md->get_storage_options());
+                        auto schema_muts = prepare_keyspace_update_announcement(_db, new_md, guard.write_timestamp());
+                        for (auto& m : schema_muts) {
+                            updates.emplace_back(m);
+                        }
+                    } else {
+                        // Rollback: delete tablet maps for all tables in the keyspace.
+                        for (const auto& schema : tables) {
+                            updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    error = e.what();
+                    rtlogger.error("Couldn't process global_topology_request::finalize_migration for keyspace '{}': {}",
+                                   ks_name, std::current_exception());
+                    updates.clear();
+                }
+            } else {
+                error = fmt::format("Keyspace '{}' does not exist", ks_name);
+            }
+
+            topology_mutation_builder tbuilder(guard.write_timestamp());
+            tbuilder.del_global_topology_request()
+                    .del_global_topology_request_id()
+                    .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
+
+            if (error.empty()) {
+                // Only clear intended_storage_mode if no other keyspace is still under migration.
+                auto tmptr = get_token_metadata_ptr();
+                const auto& tmd = tmptr->tablets();
+                bool has_other_migrating_ks = false;
+                for (const auto& other_ks_name : _db.get_non_system_keyspaces()) {
+                    if (other_ks_name == ks_name) {
+                        continue;
+                    }
+                    auto& other_ks = _db.find_keyspace(other_ks_name);
+                    if (other_ks.uses_tablets()) {
+                        continue;
+                    }
+                    bool other_ks_has_tablet_map = std::ranges::any_of(other_ks.metadata()->tables(), [&](const auto& s) {
+                        return tmd.has_tablet_map(s->id());
+                    });
+                    if (other_ks_has_tablet_map) {
+                        has_other_migrating_ks = true;
+                        break;
+                    }
+                }
+                if (!has_other_migrating_ks) {
+                    for (const auto& [node_id, _] : _topo_sm._topology.normal_nodes) {
+                        tbuilder.with_node(node_id).del("intended_storage_mode");
+                    }
+                }
+            }
+
+            updates.push_back(canonical_mutation(
+                    topology_request_tracking_mutation_builder(req_id)
+                         .done(error)
+                         .build()));
+            updates.push_back(canonical_mutation(tbuilder.build()));
+
+            sstring reason = fmt::format("finalize vnode-to-tablet migration for keyspace '{}'", ks_name);
+            mixed_change change{std::move(updates)};
+            group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard, reason);
+            co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         }
         break;
         }
@@ -2497,6 +2662,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (_topo_sm._topology.requests.empty()) {
             co_return;
         }
+        rtlogger.warn("topology coordintator: cancel all requests because non can proceed");
         for (auto& [id, req] : _topo_sm._topology.requests) {
             auto done_msg = fmt::format("Canceled. Dead nodes: {}", dead_nodes);
             _topo_sm.generate_cancel_request_update(muts, _feature_service, guard, id, done_msg);
@@ -2583,7 +2749,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
 
             // If there is no other work, evaluate load and start tablet migration if there is imbalance.
-            if (co_await maybe_start_tablet_migration(std::move(guard))) {
+            if (auto guard_opt = co_await maybe_start_tablet_migration(std::move(guard)); !guard_opt) {
+                co_return true;
+            } else {
+                guard = std::move(*guard_opt);
+            }
+
+            if (co_await maybe_retry_failed_rf_change_tablet_rebuilds(std::move(guard))) {
                 co_return true;
             }
             co_return false;
@@ -3790,11 +3962,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // Returns the guard if no work done. Otherwise, performs a table migration and consumes the guard.
     future<std::optional<group0_guard>> maybe_migrate_system_tables(group0_guard guard);
 
-    // Returns true if the state machine was transitioned into tablet migration path.
-    future<bool> maybe_start_tablet_migration(group0_guard);
+    // Returns the guard if no work done. Otherwise, transitions the state machine into tablet migration path.
+    future<std::optional<group0_guard>> maybe_start_tablet_migration(group0_guard);
 
-    // Returns true if the state machine was transitioned into tablet resize finalization path.
-    future<bool> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
+    // Returns the guard if no work done. Otherwise, transitions the state machine into tablet resize finalization path.
+    future<std::optional<group0_guard>> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
+
+    // Returns true if the state machine was transitioned into tablet migration path.
+    future<bool> maybe_retry_failed_rf_change_tablet_rebuilds(group0_guard guard);
 
     future<> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
@@ -3864,32 +4039,6 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
     // it's in `topology_coordinator::enable_features` ,so  topology_coordinator will re-run its loop
     // and `maybe_migrate_system_tables` will be called.
 
-    // Check if we can upgrade the view_build_status table to v2, being managed by group0.
-    // First we upgrade to an intermediate version v1_5 where we write to both tables, then
-    // we upgrade to v2.
-    const auto view_builder_version = co_await _sys_ks.get_view_builder_version();
-    if (view_builder_version == db::system_keyspace::view_builder_version_t::v1 && _feature_service.view_build_status_on_group0) {
-        rtlogger.info("Migrating view_builder to v1_5");
-        auto tmptr = get_token_metadata_ptr();
-        co_await db::view::view_builder::migrate_to_v1_5(tmptr, _sys_ks, _sys_ks.query_processor(), _group0.client(), _as, std::move(guard));
-        co_return std::nullopt;
-    }
-
-    if (view_builder_version == db::system_keyspace::view_builder_version_t::v1_5) {
-        if (!get_dead_nodes().empty()) {
-            rtlogger.debug("Not all nodes are alive. Skipping system table migration until there are any dead nodes.");
-            co_return std::move(guard);
-        }
-
-        rtlogger.info("Migrating view_builder to v2");
-        // do a barrier to ensure all nodes applied the migration to v1_5 before we continue to v2
-        guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier, {_raft.id()});
-
-        auto tmptr = get_token_metadata_ptr();
-        co_await db::view::view_builder::migrate_to_v2(tmptr, _sys_ks, _sys_ks.query_processor(), _group0.client(), _as, std::move(guard));
-        co_return std::nullopt;
-    }
-
     if (_feature_service.driver_service_level) {
         const auto sl_driver_created = co_await _sys_ks.get_service_level_driver_created();
         if (!sl_driver_created.value_or(false)) {
@@ -3900,14 +4049,14 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
     co_return std::move(guard);
 }
 
-future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
+future<std::optional<group0_guard>> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
     rtlogger.debug("Evaluating tablet balance");
 
     auto tm = get_token_metadata_ptr();
     auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
     if (plan.empty()) {
         rtlogger.debug("Tablet load balancer did not make any plan");
-        co_return false;
+        co_return std::move(guard);
     }
 
     utils::chunked_vector<canonical_mutation> updates;
@@ -3927,15 +4076,15 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
             .build());
 
     co_await update_topology_state(std::move(guard), std::move(updates), "Starting tablet migration");
-    co_return true;
+    co_return std::nullopt;
 }
 
-future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0_guard guard, const table_resize_plan& plan) {
+future<std::optional<group0_guard>> topology_coordinator::maybe_start_tablet_resize_finalization(group0_guard guard, const table_resize_plan& plan) {
     if (plan.finalize_resize.empty()) {
-        co_return false;
+        co_return std::move(guard);
     }
     if (utils::get_local_injector().enter("tablet_split_finalization_postpone")) {
-        co_return false;
+        co_return std::move(guard);
     }
 
     auto resize_finalization_transition_state = [this] {
@@ -3951,6 +4100,73 @@ future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0
             .build());
 
     co_await update_topology_state(std::move(guard), std::move(updates), "Started tablet resize finalization");
+    co_return std::nullopt;
+}
+
+future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(group0_guard guard) {
+    rtlogger.debug("Retrying failed rebuilds");
+
+    if (utils::get_local_injector().enter("maybe_retry_failed_rf_change_tablet_rebuilds_skip")) {
+        rtlogger.debug("Skipping retrying failed rebuilds due to error injection");
+        co_return false;
+    }
+
+    auto tmptr = get_token_metadata_ptr();
+    utils::chunked_vector<canonical_mutation> updates;
+    for (auto& ks_name : _db.get_tablets_keyspaces()) {
+        auto& ks = _db.find_keyspace(ks_name);
+        auto& strategy = ks.get_replication_strategy();
+        auto tables_with_mvs = ks.metadata()->tables();
+        auto views = ks.metadata()->views();
+        tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
+        for (const auto& table_or_mv : tables_with_mvs) {
+            if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
+                continue;
+            }
+
+            auto& tablet_map = tmptr->tablets().get_tablet_map(table_or_mv->id());
+            auto new_tablet_map = co_await strategy.maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await tablet_map.clone_gently());
+
+            replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
+            co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
+                auto& replicas = tablet_map.get_tablet_info(tablet_id).replicas;
+                auto it = std::find_if(tablet_info.replicas.begin(), tablet_info.replicas.end(), [&](const auto& replica) {
+                    return std::find(replicas.begin(), replicas.end(), replica) == replicas.end();
+                });
+                if (it == tablet_info.replicas.end()) {
+                    co_return;
+                }
+                auto new_replicas = replicas;
+                new_replicas.push_back(*it);
+                auto last_token = new_tablet_map.get_last_token(tablet_id);
+                updates.emplace_back(co_await make_canonical_mutation_gently(
+                        replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
+                                .set_new_replicas(last_token, new_replicas)
+                                .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                                .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
+                                .build()
+                ));
+            });
+        }
+
+        if (!updates.empty()) {
+            break;
+        }
+    }
+
+    if (updates.empty()) {
+        rtlogger.debug("No failed RF change rebuilds to retry");
+        co_return false;
+    }
+
+    updates.emplace_back(
+        topology_mutation_builder(guard.write_timestamp())
+            .set_transition_state(topology::transition_state::tablet_migration)
+            .set_version(_topo_sm._topology.version + 1)
+            .build());
+
+    sstring reason = "Retry failed tablet rebuilds";
+    co_await update_topology_state(std::move(guard), std::move(updates), reason);
     co_return true;
 }
 

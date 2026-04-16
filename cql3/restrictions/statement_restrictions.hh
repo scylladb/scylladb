@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -199,6 +199,10 @@ public:
 
     const expr::expression& get_clustering_columns_restrictions() const {
         return _clustering_columns_restrictions;
+    }
+
+    const expr::expression& get_nonprimary_key_restrictions() const {
+        return _nonprimary_key_restrictions;
     }
 
     // Get a set of columns restricted by the IS NOT NULL restriction.

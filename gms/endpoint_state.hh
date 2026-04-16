@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -41,7 +41,7 @@ public:
                _ip == other._ip;
     }
 
-    endpoint_state(inet_address ip) noexcept
+    explicit endpoint_state(inet_address ip) noexcept
         : _heart_beat_state()
         , _update_timestamp(clk::now())
         , _ip(ip)

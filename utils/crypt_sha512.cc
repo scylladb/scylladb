@@ -2,7 +2,7 @@
  * This file originates from musl libc (git.musl-libc.org).
  * Modifications have been made and are licensed under the following terms:
  * Copyright (C) 2025-present ScyllaDB
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  *
  * public domain sha512 crypt implementation
  *

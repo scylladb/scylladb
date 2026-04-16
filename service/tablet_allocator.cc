@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "cql3/statements/ks_prop_defs.hh"
@@ -20,6 +20,7 @@
 #include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/div_ceil.hh"
 #include "db/config.hh"
 #include "db/tablet_options.hh"
 #include "locator/load_sketch.hh"
@@ -143,6 +144,15 @@ db::tablet_options combine_tablet_options(R&& opts) {
                 combined_opts.max_tablet_count = *opt.max_tablet_count;
             } else {
                 combined_opts.max_tablet_count = std::min(*combined_opts.max_tablet_count, *opt.max_tablet_count);
+            }
+        }
+        if (opt.pow2_count) {
+            // We need some way to resolve conflicts.
+            // pow2_count will be true if any of the options wants pow2_count, because
+            // we want to treat pow2_count == true as a requirement (for backwards compatibility)
+            // while pow2_count = false like a preference. Not a hard reason.
+            if (!combined_opts.pow2_count || *opt.pow2_count) {
+                combined_opts.pow2_count = *opt.pow2_count;
             }
         }
     }
@@ -1175,6 +1185,9 @@ public:
     future<> consider_scheduled_load(node_load_map& nodes) {
         const locator::topology& topo = _tm->get_topology();
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            if (is_migrating_table(table)) {
+                continue;
+            }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             for (auto&& [tid, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
@@ -1233,6 +1246,9 @@ public:
         utils::chunked_vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            if (is_migrating_table(table)) {
+                continue;
+            }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             co_await coroutine::maybe_yield();
             auto config = tmap.get_repair_scheduler_config();
@@ -1445,13 +1461,26 @@ public:
             }
 
             if (!t2_opt) {
-                on_internal_error(lblogger, format("Unable to find sibling tablet during co-location check for table {}", table));
+                return make_ready_future<>();
             }
             auto t2 = *t2_opt;
 
+            // Use the optimistic replica view (same as the load balancer uses for load accounting)
+            // instead of committed ti.replicas. This avoids a false non-co-located window that
+            // occurs when the two del_transition commits of a colocated LB migration land in
+            // different Raft rounds: after the first commit, ti.replicas diverge temporarily even
+            // though both tablets are still heading to the same shard. Using the optimistic view
+            // keeps finalize_resize populated throughout the migration and prevents the load
+            // balancer from starting cascading migrations in that window.
+            auto with_optimistic_replicas = [this](const tablet_desc& t) {
+                auto info = *t.info;
+                info.replicas = get_replicas_for_tablet_load(*t.info, t.transition);
+                return info;
+            };
+
             // Sibling tablets cannot be considered co-located if their tablet info is temporarily unmergeable.
-            // It can happen either has active repair task for example.
-            all_colocated &= bool(merge_tablet_info(*t1.info, *t2.info));
+            // It can happen if either has an active repair task, for example.
+            all_colocated &= bool(merge_tablet_info(with_optimistic_replicas(t1), with_optimistic_replicas(t2)));
             return make_ready_future<>();
         });
         if (all_colocated) {
@@ -1465,6 +1494,9 @@ public:
         table_resize_plan resize_plan;
 
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            if (is_migrating_table(table)) {
+                continue;
+            }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             if (!tmap.needs_merge()) {
                 continue;
@@ -1564,8 +1596,7 @@ public:
                 // Merge finalization will have to recheck that all sibling tablets are co-located.
 
                 if (!t2_opt) {
-                    on_internal_error(lblogger, format("Unable to find sibling tablet during co-location, with tablet count {}, for table {}",
-                                                       tmap.tablet_count(), table));
+                    return make_ready_future<>(); // Tablet doesn't have a sibling, it's already colocated.
                 }
                 auto t2 = *t2_opt;
 
@@ -1689,13 +1720,29 @@ public:
         return rs;
     }
 
+    // Returns true if the table is under vnodes-to-tablets migration.
+    // Such tables have a tablet map but their keyspace RS doesn't use tablets.
+    // They should be excluded from load balancing.
+    bool is_migrating_table(table_id table) {
+        auto t = _db.get_tables_metadata().get_table_if_exists(table);
+        if (!t) {
+            return false;
+        }
+        auto& ks = _db.find_keyspace(t->schema()->ks_name());
+        return !ks.get_replication_strategy().uses_tablets();
+    }
+
     struct table_sizing {
         size_t current_tablet_count; // Tablet count in group0.
         size_t target_tablet_count; // Tablet count wanted by scheduler.
         sstring target_tablet_count_reason; // Winning rule for target_tablet_count value.
         std::optional<uint64_t> avg_tablet_size; // nullopt when stats not yet available.
+        bool pow2_count; // Whether tablet count for the table should be a power of two.
 
-        size_t target_tablet_count_aligned; // target_tablet_count aligned to power of 2.
+        // Final tablet count.
+        // It's target_tablet_count aligned to power of 2 if pow2_count == true.
+        size_t target_tablet_count_aligned;
+
         resize_decision::way_type resize_decision; // Decision which should be emitted to achieve target_tablet_count_aligned.
     };
 
@@ -1767,6 +1814,64 @@ public:
         return {tablet_count, format("min_per_shard_tablet_count={:.3f} in DC {}", min_per_shard_tablet_count, *winning_dc)};
     }
 
+    std::optional<uint64_t> get_avg_tablet_size(const tablet_map& tmap, table_id table, tablet_id tid) const {
+        if (!_table_load_stats) {
+            return std::nullopt;
+        }
+
+        if (_force_capacity_based_balancing) {
+            if (auto i = _table_load_stats->tables.find(table); i != _table_load_stats->tables.end()) {
+                return i->second.size_in_bytes / tmap.tablet_count();
+            }
+            return std::nullopt;
+        }
+
+        return _table_load_stats->get_avg_tablet_size(tmap, global_tablet_id{table, tid});
+    }
+
+    // Produces merge plan.
+    // This is not about deciding if we should merge, but how to do a merge.
+    // Returns resize_decision::none if we cannot decide how to do a merge, e.g. due to missing tablet stats.
+    resize_decision_way make_merge_decision(table_id table, const tablet_map& tmap) const {
+        if (tmap.tablet_count() % 2 == 0) {
+            return resize_decision::merge{};
+        }
+
+        if (!_db.features().arbitrary_tablet_boundaries) {
+            on_internal_error(lblogger, format("Odd tablet count found for table {}, but arbitrary_tablet_boundaries feature is disabled", table));
+        }
+
+        if (_force_capacity_based_balancing) {
+            // We don't have per-tablet stats. Choose at random among even-indexed ids.
+            return resize_decision::merge{
+                .isolated_tablet = tablet_id((rand_int() % div_ceil(tmap.tablet_count(), 2)) * 2)
+            };
+        }
+
+        // Choose the largest tablet because that will minimize imbalance post-merge.
+        // Choose among even-indexed ids, because only then all other tablets have siblings.
+        uint64_t max_size = 0;
+        std::optional<tablet_id> max_tid;
+        for (size_t i = 0; i < tmap.tablet_count(); i += 2) {
+            auto tid = tablet_id(i);
+            if (auto tablet_size = get_avg_tablet_size(tmap, table, tid)) {
+                lblogger.trace("Tablet {}:{} has average size of {}", table, tid, tablet_size);
+                if (!max_tid || *tablet_size > max_size) {
+                    max_size = *tablet_size;
+                    max_tid = tid;
+                }
+            } else {
+                lblogger.info("Cannot pick isolated replica for merge decision of table {}: stats incomplete for tablet {}", table, tid);
+                return resize_decision::none{};
+            }
+        }
+
+        lblogger.debug("Picked {}.{} as isolated tablet for merge", table, *max_tid);
+        return resize_decision::merge{
+            .isolated_tablet = max_tid
+        };
+    }
+
     future<sizing_plan> make_sizing_plan(schema_ptr new_table = nullptr, const tablet_aware_replication_strategy* new_rs = nullptr) {
         std::unordered_map<table_id, const tablet_aware_replication_strategy*> rs_by_table;
         sizing_plan plan;
@@ -1785,6 +1890,9 @@ public:
         auto process_table = [&] (table_id table, const locator::table_group_set& tables, schema_ptr s, db::tablet_options tablet_options, const tablet_aware_replication_strategy* rs, size_t tablet_count) {
             table_sizing& table_plan = plan.tables[table];
             table_plan.current_tablet_count = tablet_count;
+            table_plan.pow2_count = tablet_options.pow2_count.value_or(
+                    _db.features().arbitrary_tablet_boundaries ? db::tablet_options::default_pow2_count : true);
+
             rs_by_table[table] = rs;
 
             // for a group of co-located tablets of size g with average tablet size t, the migration unit
@@ -1850,7 +1958,7 @@ public:
                     // so it would get cancelled only when crossing back the half-way point.
                     if (avg_tablet_size < target_min_tablet_size(target_tablet_size) ||
                         (cur_decision.is_merge() && avg_tablet_size <= target_tablet_size)) {
-                        tablet_count_from_size /= 2;
+                        tablet_count_from_size = div_ceil(tablet_count_from_size, 2);
                     }
                 }
 
@@ -1881,14 +1989,16 @@ public:
             table_plan.target_tablet_count = target_tablet_count.tablet_count;
             table_plan.target_tablet_count_reason = target_tablet_count.reason;
 
-            lblogger.debug("Table {} ({}.{}) target_tablet_count: {} ({})", table, s->ks_name(), s->cf_name(),
-                    table_plan.target_tablet_count, table_plan.target_tablet_count_reason);
+            lblogger.debug("Table {} ({}.{}) target_tablet_count: {} ({}), pow2_count: {}, opt: {}", table, s->ks_name(), s->cf_name(),
+                    table_plan.target_tablet_count, table_plan.target_tablet_count_reason, table_plan.pow2_count, tablet_options.to_map());
         };
 
         for (const auto& [table, tables] : _tm->tablets().all_table_groups()) {
+            if (is_migrating_table(table)) {
+                continue;
+            }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             auto [s, rs] = get_schema_and_rs(table);
-
             auto tablet_options = combine_tablet_options(
                     tables | std::views::transform([&] (table_id table) { return _db.get_tables_metadata().get_table_if_exists(table); })
                            | std::views::filter([] (auto t) { return t != nullptr; })
@@ -2010,12 +2120,27 @@ public:
         //   table_plan.resize_decision
 
         for (auto&& [table, table_plan] : plan.tables) {
-            table_plan.target_tablet_count_aligned = 1u << log2ceil(table_plan.target_tablet_count);
+            if (!table_plan.pow2_count) {
+                table_plan.target_tablet_count_aligned = table_plan.target_tablet_count;
+            } else {
+                table_plan.target_tablet_count_aligned = 1u << log2ceil(table_plan.target_tablet_count);
+            }
 
             if (table_plan.target_tablet_count_aligned > table_plan.current_tablet_count) {
                 table_plan.resize_decision = locator::resize_decision::split();
             } else if (table_plan.target_tablet_count_aligned < table_plan.current_tablet_count) {
-                table_plan.resize_decision = locator::resize_decision::merge();
+                // Needed to avoid oscillations, because we reduce the count by a factor of 2.
+                // FIXME: Once we have a way to split individual tablets, we can achieve exactly the desired tablet count.
+                if (div_ceil(table_plan.current_tablet_count, 2) >= table_plan.target_tablet_count_aligned) {
+                    auto& tmap = _tm->tablets().get_tablet_map(table);
+                    auto cur_decision = tmap.resize_decision();
+                    if (cur_decision.is_merge()) {
+                        // Preserve isolated tablet choice if we're already merging
+                        table_plan.resize_decision = std::get<resize_decision::merge>(cur_decision.way);
+                    } else {
+                        table_plan.resize_decision = make_merge_decision(table, tmap);
+                    }
+                }
             }
 
             lblogger.debug("Table {}, {} => {} ({}: {}), resize: {}", table,
@@ -2414,12 +2539,11 @@ public:
             return;
         }
         auto siblings = tmap.sibling_tablets(tablet.tablet);
-        if (!siblings) {
-            on_internal_error(lblogger, format("Unable to find sibling tablet of {} during merge", tablet));
+        if (siblings.second) {
+            auto left_sibling = global_tablet_id{tablet.table, siblings.first};
+            auto right_sibling = global_tablet_id {tablet.table, *siblings.second};
+            erase_candidate(shard_info, migration_tablet_set {colocated_tablets {left_sibling, right_sibling}});
         }
-        auto left_sibling = global_tablet_id{tablet.table, siblings->first};
-        auto right_sibling = global_tablet_id{tablet.table, siblings->second};
-        erase_candidate(shard_info, migration_tablet_set{colocated_tablets{left_sibling, right_sibling}});
     }
 
     void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
@@ -3581,6 +3705,9 @@ public:
         // Compute tablet load on nodes.
 
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            if (is_migrating_table(table)) {
+                continue;
+            }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
 
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
@@ -3717,6 +3844,9 @@ public:
         _disk_used_per_table.clear();
 
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            if (is_migrating_table(table)) {
+                continue;
+            }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             uint64_t total_tablet_count = 0;
             uint64_t total_tablet_sizes = 0;
@@ -3798,8 +3928,11 @@ public:
                     total_tablet_count += tids.size();
                     total_tablet_sizes += tablet_sizes_sum;
                     if (tmap.needs_merge() && tids.size() == 2) {
-                        // Exclude both sibling tablets if either haven't finished migration yet. That's to prevent balancer from
-                        // un-doing the colocation.
+                        // Exclude both sibling tablets if either hasn't finished migration yet. That's to prevent
+                        // the load balancer from un-doing co-location while it's still in progress.
+                        // Once both are stable, allow load balancing to act on the co-located pair.
+                        // During drain, we similarly wait for both to finish migrating and then add them as
+                        // a candidate so drain can migrate the co-located pair together off the draining node.
                         if (!migrating(t1) && !migrating(t2)) {
                             auto candidate = colocated_tablets{global_tablet_id{table, t1.tid}, global_tablet_id{table, t2->tid}};
                             add_candidate(shard_load_info, migration_tablet_set{std::move(candidate), tablet_sizes_sum});
@@ -3946,10 +4079,6 @@ public:
         auto lb = make_load_balancer(tm, nullptr, nullptr, nullptr, {});
         auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
         auto& table_plan = plan.tables[s.id()];
-        if (table_plan.target_tablet_count_aligned != table_plan.target_tablet_count) {
-            lblogger.info("Rounding up tablet count from {} to {} for table {}.{}", table_plan.target_tablet_count,
-                    table_plan.target_tablet_count_aligned, s.ks_name(), s.cf_name());
-        }
         auto tablet_count = table_plan.target_tablet_count_aligned;
         auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
         return map;
@@ -4070,7 +4199,7 @@ private:
     future<tablet_map> split_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(tablets.tablet_count() * 2);
+        tablet_map new_tablets(tablets.tablet_count() * 2, tablets.has_raft_info(), tablet_map::initialized_later());
 
         for (tablet_id tid : tablets.tablet_ids()) {
             co_await coroutine::maybe_yield();
@@ -4080,8 +4209,8 @@ private:
 
             auto& tablet_info = tablets.get_tablet_info(tid);
 
-            new_tablets.set_tablet(new_left_tid, tablet_info);
-            new_tablets.set_tablet(new_right_tid, tablet_info);
+            new_tablets.emplace_tablet(new_left_tid, tablets.get_split_token(tid), tablet_info);
+            new_tablets.emplace_tablet(new_right_tid, tablets.get_last_token(tid), tablet_info);
         }
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
@@ -4089,21 +4218,28 @@ private:
         co_return std::move(new_tablets);
     }
 
-    // The merging of tablet is completely based on the power-of-two constraint.
-    // Tablet of ids X and X+1 are merged into new tablet id (X >> 1).
     future<tablet_map> merge_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(tablets.tablet_count() / 2);
+        tablet_map new_tablets(div_ceil(tablets.tablet_count(), 2), tablets.has_raft_info(), tablet_map::initialized_later());
 
-        for (tablet_id tid : new_tablets.tablet_ids()) {
-            co_await coroutine::maybe_yield();
+        std::optional<tablet_id> new_tid = new_tablets.first_tablet();
+        co_await tablets.for_each_sibling_tablets([&] (tablet_desc left, std::optional<tablet_desc> right) {
+            if (!new_tid) {
+                on_internal_error(lblogger, "Invalid merge, more sibling sets than new tablets.");
+            }
 
-            tablet_id old_left_tid = tablet_id(tid.value() << 1);
-            tablet_id old_right_tid = tablet_id(old_left_tid.value() + 1);
+            if (!right) {
+                new_tablets.emplace_tablet(*new_tid, tablets.get_last_token(left.tid), *left.info);
+                new_tid = new_tablets.next_tablet(*new_tid);
+                return make_ready_future<>();
+            }
 
-            auto& left_tablet_info = tablets.get_tablet_info(old_left_tid);
-            auto& right_tablet_info = tablets.get_tablet_info(old_right_tid);
+            tablet_id old_left_tid = left.tid;
+            tablet_id old_right_tid = right->tid;
+
+            auto& left_tablet_info = *left.info;
+            auto& right_tablet_info = *right->info;
 
             auto sorted = [] (tablet_replica_set set) {
                 std::ranges::sort(set, std::less<tablet_replica>());
@@ -4122,7 +4258,13 @@ private:
             }
             lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->sstables_repaired_at);
 
-            new_tablets.set_tablet(tid, *merged_tablet_info);
+            new_tablets.emplace_tablet(*new_tid, tablets.get_last_token(old_right_tid), *merged_tablet_info);
+            new_tid = new_tablets.next_tablet(*new_tid);
+            return make_ready_future<>();
+        });
+
+        if (new_tid) {
+            on_internal_error(lblogger, "Invalid merge, more new tablets than sibling sets.");
         }
 
         lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",

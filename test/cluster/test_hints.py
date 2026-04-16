@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2024-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 import asyncio
 import pytest
@@ -419,5 +419,76 @@ async def test_hint_to_pending(manager: ManagerClient):
             task.cancel()
         for task in done:
             task.result()
+
+        assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_hint_to_leaving_when_reducing_rf(manager: ManagerClient):
+    '''
+    This test checks if hint_sender sends a mutation to a leaving replica if the mutation
+    belongs to a tablet which is being removed due to RF--. This is needed to improve
+    consistency. https://scylladb.atlassian.net/browse/SCYLLADB-287
+    '''
+    # We have only one shard to force the two sets of hints to the same shard and avoid
+    # the problem with waiting for hint sync point timing out when the only hint on a shard has been dropped
+    # https://scylladb.atlassian.net/browse/SCYLLADB-1192
+    cmdline = ['--smp=1', "--logger-log-level", "hints_manager=trace"]
+    servers = await manager.servers_add(3, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ], cmdline=cmdline)
+    cql = await manager.get_cql_exclusive(servers[0])
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r2', 'r3']}") as ks:
+        table = f"{ks}.t"
+        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int) WITH tablets = {{'min_tablet_count': 1}};")
+        host_ids = [await manager.get_host_id(server.server_id) for server in servers]
+
+        # Stop the servers with replicas
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await manager.others_not_see_server(servers[1].ip_addr)
+        await manager.server_stop_gracefully(servers[2].server_id)
+        await manager.others_not_see_server(servers[2].ip_addr)
+
+        # This will cause the hint for host_ids[1] to be dropped
+        await manager.api.enable_injection(servers[0].ip_addr, 'drop_hint_for_host', one_shot=False, parameters={'hint_host_dst': host_ids[1]})
+
+        # This will attempt to write the hints for both replicas, but only the write for the hint for host_ids[2] will succeed
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ANY))
+
+        # Write another record, but this time disable dropping the hint. This is needed to get around the problem
+        # where waiting for the hint sync point times out when we only have a single hint which was dropped
+        # https://scylladb.atlassian.net/browse/SCYLLADB-1192
+        await manager.api.disable_injection(servers[0].ip_addr, 'drop_hint_for_host')
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1)", consistency_level=ConsistencyLevel.ANY))
+
+        await manager.api.enable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
+        await manager.server_start(servers[1].server_id)
+        await manager.server_start(servers[2].server_id)
+
+        coord = await get_topology_coordinator(manager)
+        coord_serv = await find_server_by_host_id(manager, servers, coord)
+        await manager.api.enable_injection(coord_serv.ip_addr, "stream_tablet_wait", one_shot=False)
+
+        alter_rf_fut = cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{'class' : 'NetworkTopologyStrategy', 'dc1': ['r2']}}")
+
+        async def migration_reached_streaming():
+            stages = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='{ks}' ALLOW FILTERING")
+            logger.info(f"Current stages: {[row.stage for row in stages]}")
+            return set(["streaming"]) == set([row.stage for row in stages]) or None
+        await wait_for(migration_reached_streaming, time.time() + 60)
+
+        sync_point = await create_sync_point(manager.api.client, servers[0].ip_addr)
+
+        # Complete hints handoff
+        await manager.api.disable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay")
+        assert await await_sync_point(manager.api.client, servers[0].ip_addr, sync_point, 30)
+
+        await manager.api.disable_injection(coord_serv.ip_addr, "stream_tablet_wait")
+
+        await alter_rf_fut
 
         assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]

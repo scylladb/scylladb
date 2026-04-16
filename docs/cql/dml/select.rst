@@ -117,11 +117,15 @@ set will be that of the alias. For instance::
    clause, not in the ``ORDER BY`` clause, ...). You must use the original column name instead.
 
 
+.. _select-writetime-ttl:
+
 ``WRITETIME`` and ``TTL`` function
 ```````````````````````````````````
 
 Selection supports two special functions (which aren't allowed anywhere else): ``WRITETIME`` and ``TTL``. Both functions
-take only one argument, and that argument *must* be a column name (so, for instance, ``TTL(3)`` is invalid).
+take only one argument, which must be either a column name, a subscript expression of the form ``collection_column[element]``
+for an individual element of a non-frozen map or set collection, or a field selection of the form ``udt_column.field``
+for an individual field of a non-frozen user-defined type column (so, for instance, ``TTL(3)`` is invalid).
 
 Those functions let you retrieve meta-information that is stored internally for each column, namely:
 
@@ -131,7 +135,60 @@ You can read more about the ``TIMESTAMP`` retrieved by ``WRITETIME`` in the :ref
 
 - ``TTL`` retrieves the remaining time to live (in *seconds*) for the value of the column, if it set to expire, or ``null`` otherwise.
 
-You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this ScyllaDB University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_. 
+You can read more about TTL in the :doc:`documentation </cql/time-to-live>` and also in `this ScyllaDB University lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_.
+
+**Using** ``WRITETIME`` **and** ``TTL`` **on map and set collection elements**
+
+For a non-frozen map or set column, each element is stored as an independent cell and may have its own write timestamp and TTL.
+You can retrieve the per-element timestamp or TTL by subscripting the column with the element::
+
+    -- Create a table with a map column and a set column
+    CREATE TABLE t (pk int PRIMARY KEY, m map<int, int>, s set<int>);
+
+    -- Insert elements with an explicit timestamp
+    INSERT INTO t (pk, m, s) VALUES (1, {1: 10, 2: 20}, {1, 2}) USING TIMESTAMP 1000000;
+
+    -- Update one element with a newer timestamp
+    UPDATE t USING TIMESTAMP 2000000 SET m = m + {2: 30}, s = s + {3} WHERE pk = 1;
+
+    -- WRITETIME(m[key]) returns the write timestamp of that specific map element
+    SELECT WRITETIME(m[1]), WRITETIME(m[2]) FROM t WHERE pk = 1;
+    -- Returns: 1000000 | 2000000
+
+    -- WRITETIME(s[element]) returns the write timestamp of that specific set element
+    SELECT WRITETIME(s[1]), WRITETIME(s[3]) FROM t WHERE pk = 1;
+    -- Returns: 1000000 | 2000000
+
+    -- TTL(m[key]) returns the remaining TTL of that specific map element
+    INSERT INTO t (pk, m) VALUES (1, {1: 10}) USING TTL 3600;
+    SELECT TTL(m[1]) FROM t WHERE pk = 1;
+    -- Returns the remaining TTL in seconds for element m[1]
+
+Note that ``WRITETIME(m)`` and ``TTL(m)`` on an entire non-frozen map or set column are **not** supported —
+since each element may have a different timestamp or TTL, there is no single meaningful value to return.
+Only ``WRITETIME(m[key])`` and ``TTL(m[key])`` (for a specific map key) or ``WRITETIME(s[element])``
+and ``TTL(s[element])`` (for a specific set element) are allowed.
+
+**Using** ``WRITETIME`` **and** ``TTL`` **on user-defined type fields**
+
+For a non-frozen user-defined type (UDT) column, each field is stored as an independent cell and may have its own
+write timestamp and TTL. You can retrieve the per-field timestamp or TTL using dot notation::
+
+    CREATE TYPE address (street text, city text);
+    CREATE TABLE person (pk int PRIMARY KEY, addr address);
+
+    -- Write two fields at different timestamps
+    UPDATE person USING TIMESTAMP 1000000 SET addr.street = '123 Main St' WHERE pk = 1;
+    UPDATE person USING TIMESTAMP 2000000 SET addr.city = 'Springfield' WHERE pk = 1;
+
+    -- WRITETIME(udt_column.field) returns the write timestamp of that specific UDT field
+    SELECT WRITETIME(addr.street), WRITETIME(addr.city) FROM person WHERE pk = 1;
+    -- Returns: 1000000 | 2000000
+
+    -- TTL(udt_column.field) returns the remaining TTL of that specific UDT field
+    UPDATE person USING TTL 3600 SET addr.street = 'Oak Ave' WHERE pk = 1;
+    SELECT TTL(addr.street) FROM person WHERE pk = 1;
+    -- Returns the remaining TTL in seconds for addr.street
 
 .. _where-clause:
 

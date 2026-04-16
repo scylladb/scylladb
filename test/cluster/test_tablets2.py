@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2023-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from typing import Any
 from cassandra.query import ConsistencyLevel, SimpleStatement
@@ -2290,6 +2290,7 @@ async def test_split_stopped_on_shutdown(manager: ManagerClient):
         await shutdown_task
 
         errors = await log.grep_for_errors(from_mark=log_mark)
+        errors = await manager.filter_errors(errors)
         assert errors == []
 
         await manager.server_start(server.server_id)

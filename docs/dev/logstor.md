@@ -68,11 +68,9 @@ The `buffered_writer` manages multiple write buffers for user writes, an active 
 
 ### Enabling Logstor
 
-To use logstor, enable it in the configuration:
+To use logstor, enable the experimental feature in the configuration:
 
 ```yaml
-enable_logstor: true
-
 experimental_features:
   - logstor
 ```
@@ -122,3 +120,88 @@ SELECT * FROM keyspace.table_name;
 ```cql
 DELETE FROM keyspace.table_name WHERE pk = 1;
 ```
+
+## On-Disk Format
+
+### Files
+
+Segments are stored in large pre-allocated files on disk. Each file holds a fixed number of segments determined by the `file_size / segment_size` ratio. File names follow the pattern:
+
+```
+ls_{shard_id}-{file_id}-Data.db
+```
+
+Files are pre-formatted (zero-filled) before use.
+
+### Segments
+
+Each segment is a contiguous fixed-size region within a file (default 128KB). A segment is identified by a `log_segment_id` (a 32-bit integer index), which maps to a file and offset within that file.
+
+A segment contains one or more **buffers** written sequentially. Each buffer is 4KB-block-aligned. A segment has one of two kinds:
+
+- **mixed**: written by normal user writes; may contain records from multiple tables and compaction groups. Contains multiple buffers.
+- **full**: written by compaction or the separator; contains records from a single table and token range. Contains exactly one buffer.
+
+### Buffer Layout
+
+A buffer within a segment has the following layout:
+
+```
+buffer_header
+(segment_header)?       -- present only when kind == full
+record_1
+record_2
+...
+record_n
+zero_padding            -- to align the entire buffer to block_alignment (4096 bytes)
+```
+
+buffer_header, segment_header, and records are aligned by `record_alignment` (8 bytes).
+
+#### Buffer Header
+
+A serialized form of `write_buffer::buffer_header`.
+
+| Offset | Size | Field       | Description |
+|--------|------|-------------|-------------|
+| 0      | 4    | `magic`     | `0x4C475342` ("LGSB"). Used to detect valid buffers during recovery. |
+| 4      | 4    | `data_size` | Size in bytes of all record data following the header(s). |
+| 8      | 2    | `seg_gen`   | Segment generation number. Incremented each time the segment slot is reused. Used during recovery to discard stale data. |
+| 10     | 1    | `kind`      | Segment kind: `0` = mixed, `1` = full. |
+| 11     | 1    | `version`   | Version of the write buffer format. |
+| 12     | 4    | `crc`       | CRC32 of all other fields in the buffer header. Used for validating the header. |
+
+#### Segment Header (full segments only)
+
+Immediately follows the buffer header when `kind == full`.
+
+A serialized form of `write_buffer::segment_header`.
+
+| Offset | Size | Field         | Description |
+|--------|------|---------------|-------------|
+| 16     | 16   | `table`       | UUID of the table this segment belongs to. |
+| 32     | 8    | `first_token` | Minimum token of all records in the segment (raw token number). |
+| 40     | 8    | `last_token`  | Maximum token of all records in the segment (raw token number). |
+
+#### Records
+
+Each record within the buffer is structured as:
+
+```
+record_header (4 bytes)
+record_data   (variable)
+zero_padding  -- to align to record_alignment (8 bytes)
+```
+
+**Record Header:**
+
+| Offset | Size | Field       | Description |
+|--------|------|-------------|-------------|
+| 0      | 4    | `data_size` | Size in bytes of the serialized `log_record` that follows. |
+
+**Record Data:**
+
+The record data is the serialized form of a `log_record`, which contains:
+- `key`: the partition key (`primary_index_key`), including a `decorated_key` with a token and partition key bytes.
+- `generation`: a 16-bit write generation number, used during recovery to resolve conflicts when the same key appears in multiple segments.
+- `mut`: the full partition value as a `canonical_mutation`.

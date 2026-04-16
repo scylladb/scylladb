@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <seastar/core/seastar.hh>
@@ -15,14 +15,17 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/core/bitops.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/json/json_elements.hh>
 
 #include "dht/decorated_key.hh"
+#include "readers/mutation_reader.hh"
 #include "replica/database.hh"
 #include "replica/data_dictionary_impl.hh"
 #include "replica/compaction_group.hh"
+#include "replica/logstor/compaction.hh"
 #include "replica/query_state.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
@@ -34,6 +37,7 @@
 #include "utils/logalloc.hh"
 #include "utils/checked-file-impl.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/div_ceil.hh"
 #include "view_info.hh"
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
@@ -218,17 +222,6 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
 }
 
 mutation_reader
-table::make_logstor_mutation_reader(schema_ptr s,
-                                   reader_permit permit,
-                                   const dht::partition_range& pr,
-                                   const query::partition_slice& slice,
-                                   tracing::trace_state_ptr trace_state,
-                                   streamed_mutation::forwarding fwd,
-                                   mutation_reader::forwarding fwd_mr) const {
-    return _logstor->make_reader(std::move(s), logstor_index(), std::move(permit), pr, slice, std::move(trace_state));
-}
-
-mutation_reader
 table::make_mutation_reader(schema_ptr s,
                            reader_permit permit,
                            const dht::partition_range& range,
@@ -241,7 +234,7 @@ table::make_mutation_reader(schema_ptr s,
     }
 
     if (_logstor) [[unlikely]] {
-        return make_logstor_mutation_reader(s, std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
+        return _logstor->make_reader(s, logstor_index(), std::move(permit), range, slice, std::move(trace_state));
     }
 
     std::vector<mutation_reader> readers;
@@ -749,8 +742,8 @@ public:
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override {
         return get_compaction_group();
     }
-    size_t log2_storage_groups() const override {
-        return 0;
+    compaction_group& compaction_group_for_logstor_segment(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) const override {
+        return get_compaction_group();
     }
     storage_group& storage_group_for_token(dht::token token) const override {
         return *_single_sg;
@@ -805,6 +798,7 @@ class tablet_storage_group_manager final : public storage_group_manager {
     std::optional<utils::phased_barrier::operation> _pending_merge_fiber_work;
     // Holds compaction reenabler which disables compaction temporarily during tablet merge
     std::vector<background_merge_guard> _compaction_reenablers_for_merging;
+    std::vector<logstor::compaction_reenabler> _compaction_reenablers_for_logstor_merging;
 private:
     const schema_ptr& schema() const {
         return _t.schema();
@@ -825,9 +819,7 @@ private:
     // that were previously split.
     void handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
-    // Called when coordinator executes tablet merge. Tablet ids X and X+1 are merged into
-    // the new tablet id (X >> 1). In practice, that means storage groups for X and X+1
-    // are merged into a new storage group with id (X >> 1).
+    // Called when coordinator executes tablet merge.
     void handle_tablet_merge_completion(locator::effective_replication_map_ptr old_erm,
                                         const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
 
@@ -849,8 +841,8 @@ private:
         auto idx = tablet_id_for_token(t);
 #ifndef SCYLLA_BUILD_MODE_RELEASE
         if (idx >= tablet_count()) {
-            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size_log2={} size={} token={}",
-                                                    idx, log2_storage_groups(), tablet_count(), t));
+            on_fatal_internal_error(tlogger, format("storage_group_of: index out of range: idx={} size={} token={}",
+                                                    idx, tablet_count(), t));
         }
         auto& sg = storage_group_for_id(idx);
         if (!t.is_minimum() && !t.is_maximum() && !sg.token_range().contains(t, dht::token_comparator())) {
@@ -861,14 +853,31 @@ private:
         return idx;
     }
 
+    // Returns true if the sstable is currently being repaired. Checks the in-memory
+    // being_repaired flag first, then falls back to a durable check: if the sstable's
+    // repaired_at equals sstables_repaired_at+1 and the tablet is undergoing repair
+    // (i.e. tablet_transition_kind::repair), the sstable belongs to the current repair
+    // round but sstables_repaired_at+1 hasn't been committed to Raft yet (race window).
+    bool is_being_repaired(const sstables::shared_sstable& sst, int64_t sstables_repaired_at) const noexcept {
+        if (!sst->being_repaired.uuid().is_null()) {
+            return true;
+        }
+        auto repaired_at = sst->get_stats_metadata().repaired_at;
+        if (repaired_at != sstables_repaired_at + 1) {
+            return false;
+        }
+        auto& cg = compaction_group_for_sstable(sst);
+        auto trinfo = tablet_map().get_tablet_transition_info(locator::tablet_id(cg.group_id()));
+        return trinfo && trinfo->transition == locator::tablet_transition_kind::repair;
+    }
+
     repair_classifier_func make_repair_sstable_classifier_func() const {
-        // FIXME: implement it for incremental repair!
-        return [] (const sstables::shared_sstable& sst, int64_t sstables_repaired_at) {
+        return [this] (const sstables::shared_sstable& sst, int64_t sstables_repaired_at) {
             bool is_repaired = repair::is_repaired(sstables_repaired_at, sst);
             if (is_repaired) {
                 return repair_sstable_classification::repaired;
             } else {
-                if (!sst->being_repaired.uuid().is_null()) {
+                if (is_being_repaired(sst, sstables_repaired_at)) {
                     return repair_sstable_classification::repairing;
                 } else {
                     return repair_sstable_classification::unrepaired;
@@ -929,11 +938,10 @@ public:
     compaction_group& compaction_group_for_token(dht::token token) const override;
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override;
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override;
+    compaction_group& compaction_group_for_token_range(sstring desc, dht::token first_token, dht::token last_token) const;
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
+    compaction_group& compaction_group_for_logstor_segment(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) const override;
 
-    size_t log2_storage_groups() const override {
-        return log2ceil(tablet_map().tablet_count());
-    }
     storage_group& storage_group_for_token(dht::token token) const override {
         return storage_group_for_id(storage_group_of(token));
     }
@@ -1046,6 +1054,11 @@ bool storage_group::set_split_mode() {
         return false;
     }
     if (!splitting_mode()) {
+        // Don't create new compaction groups if the main cg has compaction disabled
+        if (_main_cg->compaction_disabled()) {
+            tlogger.debug("storage_group::set_split_mode: split ready groups not created due to compaction disabled on the main group");
+            return false;
+        }
         auto create_cg = [this] () -> compaction_group_ptr {
             // TODO: use the actual sub-ranges instead, to help incremental selection on the read path.
             return compaction_group::make_empty_group(*_main_cg);
@@ -1089,6 +1102,10 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
         co_await cm.perform_offstrategy(*view, tablet_split_task_info);
         co_await cm.perform_split_compaction(*view, opt, tablet_split_task_info);
     }
+
+    if (_t.uses_logstor()) {
+        co_await get_logstor_compaction_manager().split_compaction(_t, *this, opt.classifier);
+    }
 }
 
 future<> compaction_group::discard_logstor_segments() {
@@ -1123,6 +1140,12 @@ logstor::separator_buffer& compaction_group::get_separator_buffer(size_t write_s
     return *_logstor_separator;
 }
 
+future<utils::chunked_vector<logstor::segment_snapshot>> compaction_group::take_logstor_snapshot() {
+    auto compaction_disable_guard = co_await get_logstor_compaction_manager().disable_compaction(*this);
+    auto snp = co_await get_logstor_segment_manager().make_snapshot(*this);
+    co_return std::move(snp);
+}
+
 future<> storage_group::split(compaction::compaction_type_options::split opt, tasks::task_info tablet_split_task_info) {
     if (set_split_mode()) {
         co_return;
@@ -1138,6 +1161,7 @@ future<> storage_group::split(compaction::compaction_type_options::split opt, ta
         }
         auto holder = cg->async_gate().hold();
         co_await cg->flush();
+        co_await cg->flush_separator();
         co_await cg->split(opt, tablet_split_task_info);
     }
 }
@@ -1159,6 +1183,24 @@ lw_shared_ptr<const sstables::sstable_set> storage_group::make_sstable_set() con
         underlying.emplace_back(cg->make_sstable_set());
     }
     return make_lw_shared(sstables::make_compound_sstable_set(schema, std::move(underlying)));
+}
+
+future<utils::chunked_vector<logstor::segment_snapshot>> storage_group::take_logstor_snapshot() const {
+    if (_split_ready_groups.empty() && _merging_groups.empty()) {
+        co_return co_await _main_cg->take_logstor_snapshot();
+    }
+    utils::chunked_vector<logstor::segment_snapshot> snp;
+    for (const auto& cg : _merging_groups) {
+        if (!cg->empty()) {
+            auto cg_snp = co_await cg->take_logstor_snapshot();
+            snp.insert(snp.end(), std::make_move_iterator(cg_snp.begin()), std::make_move_iterator(cg_snp.end()));
+        }
+    }
+    for (const auto& cg : _split_ready_groups) {
+        auto cg_snp = co_await cg->take_logstor_snapshot();
+        snp.insert(snp.end(), std::make_move_iterator(cg_snp.begin()), std::make_move_iterator(cg_snp.end()));
+    }
+    co_return std::move(snp);
 }
 
 lw_shared_ptr<const sstables::sstable_set> table::sstable_set_for_tombstone_gc(const compaction_group& cg) const {
@@ -1266,6 +1308,14 @@ dht::token_range table::get_token_range_after_split(const dht::token& token) con
     return _sg_manager->get_token_range_after_split(token);
 }
 
+counter_id table::get_counter_id(const mutation& m) const {
+    if (uses_tablets()) {
+        return storage_group_for_token(m.token()).main_compaction_group()->get_counter_id();
+    } else {
+        return counter_id(_erm->get_token_metadata().get_my_id().uuid());
+    }
+}
+
 std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
     std::unique_ptr<storage_group_manager> ret;
     if (uses_tablets()) {
@@ -1278,6 +1328,14 @@ std::unique_ptr<storage_group_manager> table::make_storage_group_manager() {
 
 compaction_group* table::get_compaction_group(size_t id) const {
     return storage_group_for_id(id).main_compaction_group().get();
+}
+
+compaction_group* table::get_any_compaction_group() const {
+    auto& groups = _sg_manager->storage_groups();
+    if (groups.empty()) {
+        return nullptr;
+    }
+    return groups.begin()->second->main_compaction_group().get();
 }
 
 storage_group& table::storage_group_for_token(dht::token token) const {
@@ -1331,9 +1389,38 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
     return _sg_manager->compaction_group_for_key(key, s);
 }
 
+compaction_group& tablet_storage_group_manager::compaction_group_for_token_range(sstring desc, dht::token first_token, dht::token last_token) const {
+    auto first_id = storage_group_of(first_token);
+    auto last_id = storage_group_of(last_token);
+
+    auto tablet_desc = [this] (locator::tablet_id id) {
+        return format("{} (replica set: {})", id, tablet_map().get_tablet_info(id).replicas);
+    };
+
+    if (first_id != last_id) {
+        on_internal_error(tlogger, format("Unable to load {} that belongs to tablets {} and {}",
+                                          desc,
+                                          tablet_desc(locator::tablet_id(first_id)),
+                                          tablet_desc(locator::tablet_id(last_id))));
+    }
+
+    try {
+        auto& sg = storage_group_for_id(first_id);
+        return *sg.select_compaction_group(
+                first_token,
+                last_token,
+                tablet_map());
+    } catch (std::out_of_range& e) {
+        on_internal_error(tlogger, format("Unable to load {} of tablet {}, due to {}",
+                                          desc,
+                                          tablet_desc(locator::tablet_id(first_id)),
+                                          e.what()));
+    }
+}
+
 compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
-    auto first_id = storage_group_of(sst->get_first_decorated_key().token());
-    auto last_id = storage_group_of(sst->get_last_decorated_key().token());
+    auto first_token = sst->get_first_decorated_key().token();
+    auto last_token = sst->get_last_decorated_key().token();
 
     auto sstable_desc = [] (const sstables::shared_sstable& sst) {
         auto& identifier_opt = sst->sstable_identifier();
@@ -1343,33 +1430,21 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(con
                       identifier_opt ? identifier_opt->to_sstring() : "unknown",
                       originating_host_id_opt ? originating_host_id_opt->to_sstring() : "unknown");
     };
-    auto tablet_desc = [this] (locator::tablet_id id) {
-        return format("{} (replica set: {})", id, tablet_map().get_tablet_info(id).replicas);
-    };
 
-    if (first_id != last_id) {
-        on_internal_error(tlogger, format("Unable to load SSTable {} that belongs to tablets {} and {}",
-                                          sstable_desc(sst),
-                                          tablet_desc(locator::tablet_id(first_id)),
-                                          tablet_desc(locator::tablet_id(last_id))));
-    }
+    return compaction_group_for_token_range(sstable_desc(sst), first_token, last_token);
+}
 
-    try {
-        auto& sg = storage_group_for_id(first_id);
-        return *sg.select_compaction_group(
-                sst->get_first_decorated_key().token(),
-                sst->get_last_decorated_key().token(),
-                tablet_map());
-    } catch (std::out_of_range& e) {
-        on_internal_error(tlogger, format("Unable to load SSTable {} of tablet {}, due to {}",
-                                          sstable_desc(sst),
-                                          tablet_desc(locator::tablet_id(first_id)),
-                                          e.what()));
-    }
+compaction_group& tablet_storage_group_manager::compaction_group_for_logstor_segment(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) const {
+    auto desc = format("logstor segment {}", seg_id);
+    return compaction_group_for_token_range(std::move(desc), first_token, last_token);
 }
 
 compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
     return _sg_manager->compaction_group_for_sstable(sst);
+}
+
+compaction_group& table::compaction_group_for_logstor_segment(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) const {
+    return _sg_manager->compaction_group_for_logstor_segment(seg_id, first_token, last_token);
 }
 
 future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
@@ -1452,6 +1527,23 @@ future<utils::chunked_vector<sstables::shared_sstable>> table::take_sstable_set_
         result.push_back(sst);
     });
     co_return result;
+}
+
+future<utils::chunked_vector<logstor::segment_snapshot>> table::take_logstor_snapshot(dht::token_range tr) {
+    utils::chunked_vector<logstor::segment_snapshot> snp;
+    for (auto& sg : storage_groups_for_token_range(tr)) {
+        co_await sg->flush_separator();
+
+        auto deletion_guard = co_await get_sstable_list_permit();
+
+        auto sg_snp = co_await sg->take_logstor_snapshot();
+        snp.insert(snp.end(), std::make_move_iterator(sg_snp.begin()), std::make_move_iterator(sg_snp.end()));
+    }
+    co_return std::move(snp);
+}
+
+future<std::unique_ptr<logstor::segment_stream_sink>> table::create_logstor_segment_sink(replica::database& db) {
+    return get_logstor_segment_manager().create_segment_output_stream(db);
 }
 
 future<utils::chunked_vector<sstables::entry_descriptor>>
@@ -1641,13 +1733,16 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
     }
 }
 
-bool table::add_logstor_segment(logstor::segment_descriptor& seg_desc, dht::token first_token, dht::token last_token) {
-    auto& cg = compaction_group_for_token(first_token);
-    if (&cg != &compaction_group_for_token(last_token)) {
+bool table::add_logstor_segment(logstor::log_segment_id seg_id, logstor::segment_descriptor& seg_desc, dht::token first_token, dht::token last_token) {
+    dht::token_range tr(first_token, last_token);
+    if (storage_groups_for_token_range(tr).size() == 1) {
+        auto& cg = compaction_group_for_logstor_segment(seg_id, first_token, last_token);
+        cg.add_logstor_segment(seg_desc);
+        return true;
+    } else {
+        // the segment doesn't fit in a single storage group. need to write to separator.
         return false;
     }
-    cg.add_logstor_segment(seg_desc);
-    return true;
 }
 
 logstor::separator_buffer& table::get_logstor_separator_buffer(dht::token token, size_t write_size) {
@@ -2121,7 +2216,9 @@ uint64_t compaction_group::live_disk_space_used() const noexcept {
 }
 
 sstables::file_size_stats compaction_group::live_disk_space_used_full_stats() const noexcept {
-    return _main_sstables->get_file_size_stats() + _maintenance_sstables->get_file_size_stats();
+    auto logstor_size = logstor_disk_space_used();
+    return _main_sstables->get_file_size_stats() + _maintenance_sstables->get_file_size_stats()
+        + sstables::file_size_stats{logstor_size, logstor_size};
 }
 
 uint64_t storage_group::live_disk_space_used() const {
@@ -2321,6 +2418,15 @@ compaction_group::merge_sstables_from(compaction_group& group) {
         backlog_tracker_adjust_charges({}, sstables_to_merge);
     });
     _t.rebuild_statistics();
+}
+
+future<>
+compaction_group::merge_logstor_segments_from(compaction_group& group) {
+    if (!_t.uses_logstor()) {
+        co_return;
+    }
+    auto permit = co_await _t.get_sstable_list_permit();
+    co_await _logstor_segments->merge(*group._logstor_segments);
 }
 
 future<>
@@ -3056,7 +3162,10 @@ future<> compaction_group::stop(sstring reason) noexcept {
 }
 
 bool compaction_group::empty() const noexcept {
-    return _memtables->empty() && live_sstable_count() == 0 && _sstable_add_gate.get_count() == 0;
+    return _memtables->empty() && live_sstable_count() == 0 && _sstable_add_gate.get_count() == 0
+        && (_logstor_segments ? _logstor_segments->empty() : true)
+        && (_logstor_separator ? _logstor_separator->empty() : true)
+        && _separator_flushes.empty();
 }
 
 const schema_ptr& compaction_group::schema() const {
@@ -3313,7 +3422,7 @@ void tablet_storage_group_manager::handle_tablet_split_completion(const locator:
 }
 
 future<> tablet_storage_group_manager::merge_completion_fiber() {
-    co_await coroutine::switch_to(_t.get_config().streaming_scheduling_group);
+    co_await coroutine::switch_to(_t.get_config().maintenance_scheduling_group);
 
     while (!_t.async_gate().is_closed()) {
         try {
@@ -3322,6 +3431,7 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
             auto cf_name = schema()->cf_name();
             // Enable compaction after merge is done.
             auto cres = std::exchange(_compaction_reenablers_for_merging, {});
+            auto logstor_cres = std::exchange(_compaction_reenablers_for_logstor_merging, {});
             co_await for_each_storage_group_gently([ks_name, cf_name] (storage_group& sg) -> future<> {
                 auto main_group = sg.main_compaction_group();
                 tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} started",
@@ -3340,6 +3450,7 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
                         co_await sleep(std::chrono::seconds(60));
                     }
                     co_await main_group->merge_sstables_from(*group);
+                    co_await main_group->merge_logstor_segments_from(*group);
                 }
                 co_await sg.remove_empty_merging_groups();
                 tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} finished",
@@ -3365,40 +3476,64 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(locator::effec
     size_t new_tablet_count = new_tmap.tablet_count();
     storage_group_map new_storage_groups;
 
-    unsigned log2_reduce_factor = log2ceil(old_tablet_count / new_tablet_count);
-    unsigned merge_size = 1 << log2_reduce_factor;
+    // The algorithm assumes that every new tablet has a last token which is equal to the last token of some old tablet.
+    // The old and new counts can be arbitrary, given that this holds.
 
-    if (merge_size != 2) {
-        throw std::runtime_error(format("Tablet count was not reduced by a factor of 2 (old: {}, new {}) for table {}",
+    if (old_tablet_count < new_tablet_count) {
+        throw std::runtime_error(format("Tablet count should be smaller on merge (old: {}, new {}) for table {}",
                                  old_tablet_count, new_tablet_count, table_id));
     }
 
-    for (auto& [id, sg] : _storage_groups) {
-        // Pick first (even) tablet of each sibling pair.
-        if (id % merge_size != 0) {
-            continue;
-        }
-        auto new_tid = id >> log2_reduce_factor;
-        auto new_range = new_tmap.get_token_range(locator::tablet_id(new_tid));
-        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_range, make_repair_sstable_classifier_func());
-        for (auto& view : new_cg->all_views()) {
+    locator::tablet_id current_new(0); // Valid when bool(new_sg)
+    lw_shared_ptr<storage_group> new_sg;
+
+    auto open_new_group = [&] (locator::tablet_id new_tid) {
+        current_new = new_tid;
+        new_sg = allocate_storage_group(new_tmap, new_tid, new_tmap.get_token_range(new_tid));
+        for (auto& view : new_sg->main_compaction_group()->all_views()) {
             auto cre = _t.get_compaction_manager().stop_and_disable_compaction_no_wait(*view, "tablet merging");
             _compaction_reenablers_for_merging.push_back(background_merge_guard{std::move(cre), old_erm});
         }
-        auto new_sg = make_lw_shared<storage_group>(std::move(new_cg));
+        if (_t.uses_logstor()) {
+            _compaction_reenablers_for_logstor_merging.push_back(
+                    _t.get_logstor_compaction_manager().disable_compaction_no_wait(*new_sg->main_compaction_group()));
+        }
+    };
 
-        for (unsigned i = 0; i < merge_size; i++) {
-            auto group_id = id + i;
+    auto seal_new_group = [&] {
+        new_storage_groups[size_t(current_new)] = std::move(new_sg);
+    };
 
-            auto it = _storage_groups.find(group_id);
-            if (it == _storage_groups.end()) {
-                throw std::runtime_error(format("Unable to find sibling tablet of id for table {}", group_id, table_id));
+    std::optional<locator::tablet_id> tid = old_tmap.first_tablet();
+    while (tid) {
+        locator::tablet_id group_id = *tid;
+        tid = old_tmap.next_tablet(*tid);
+
+        auto it = _storage_groups.find(size_t(group_id));
+        if (it == _storage_groups.end()) {
+            continue;
+        }
+
+        auto old_first_token = old_tmap.get_first_token(group_id);
+        if (new_sg && old_first_token > new_tmap.get_last_token(current_new)) {
+            seal_new_group();
+        }
+
+        if (!new_sg) {
+            auto new_id = new_tmap.get_tablet_id(old_tmap.get_last_token(group_id));
+            if (old_first_token < new_tmap.get_first_token(new_id)) {
+                on_internal_error(tlogger, format("Old tablet {} (range: {}) is not enclosed in new tablet {} (range: {})",
+                                  group_id, old_tmap.get_token_range(group_id), new_id, new_tmap.get_token_range(new_id)));
             }
+            open_new_group(new_id);
+        }
+
+        {
             auto& sg = it->second;
-            sg->for_each_compaction_group([&new_sg, new_range, new_tid, group_id] (const compaction_group_ptr& cg) {
-                cg->update_id(new_tid);
+            sg->for_each_compaction_group([&] (const compaction_group_ptr& cg) {
+                cg->update_id(size_t(current_new));
                 tlogger.debug("Adding merging_group: sstables_repaired_at={} old_range={} new_range={} old_tid={} new_tid={} old_group_id={}",
-                        cg->get_sstables_repaired_at(), cg->token_range(), new_range, cg->group_id(), new_tid, group_id);
+                        cg->get_sstables_repaired_at(), cg->token_range(), new_sg->token_range(), cg->group_id(), current_new, group_id);
                 new_sg->add_merging_group(cg);
             });
             // Cannot wait for group to be closed, since it can only return after some long-running operation
@@ -3409,7 +3544,9 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(locator::effec
                });
             });
         }
-        new_storage_groups[new_tid] = std::move(new_sg);
+    }
+    if (new_sg) {
+        seal_new_group();
     }
     _storage_groups = std::move(new_storage_groups);
     _pending_merge_fiber_work = _merge_fiber_barrier.start();
@@ -3474,10 +3611,22 @@ void tablet_storage_group_manager::update_effective_replication_map(
     for_each_storage_group([&] (size_t group_id, storage_group& sg) {
         const locator::tablet_id tid = static_cast<locator::tablet_id>(group_id);
         const locator::tablet_info& tinfo = new_tablet_map->get_tablet_info(tid);
-        const bool tombstone_gc_enabled = std::ranges::contains(tinfo.replicas, this_replica);
+        const bool is_pending_replica = !std::ranges::contains(tinfo.replicas, this_replica);
+        const bool tombstone_gc_enabled = !is_pending_replica;
 
-        sg.for_each_compaction_group([tombstone_gc_enabled] (const compaction_group_ptr& cg_ptr) {
+        // construct a counter id for use in local counter updates.
+        // there is a single replica in a rack, so we can reuse a single counter id for all replicas
+        // in a rack. replicas in different racks use different counter ids.
+        // during migration there are two active counter replicas in a rack, then the pending
+        // replica uses a variation of the rack's counter id, so there are at most two distinct
+        // counter ids per rack.
+        auto rack_uuid = erm.get_topology().get_rack_uuid();
+        auto my_counter_uuid = is_pending_replica ? utils::UUID_gen::negate(rack_uuid) : rack_uuid;
+        counter_id my_counter_id(my_counter_uuid);
+
+        sg.for_each_compaction_group([tombstone_gc_enabled, my_counter_id] (const compaction_group_ptr& cg_ptr) {
             cg_ptr->set_tombstone_gc_enabled(tombstone_gc_enabled);
+            cg_ptr->set_counter_id(my_counter_id);
         });
     });
 
@@ -3922,7 +4071,22 @@ public:
 
 using snapshot_sstable_set = foreign_ptr<std::unique_ptr<utils::chunked_vector<sstables::sstable_snapshot_metadata>>>;
 
-static future<> write_manifest(const locator::topology& topology, snapshot_writer& writer, std::vector<snapshot_sstable_set> sstable_sets, std::vector<snapshot_tablet_info> tablets, sstring name, db::snapshot_options opts, schema_ptr schema, std::optional<int64_t> tablet_count) {
+static std::string get_tablets_type(locator::tablet_layout layout) {
+    switch (layout) {
+        case locator::tablet_layout::pow_of_2: return "powof2";
+        case locator::tablet_layout::arbitrary: return "arbitrary";
+    }
+    on_internal_error(tlogger, format("Unknown tablet layout: {}", static_cast<int>(layout)));
+}
+
+static future<> write_manifest(const locator::topology& topology,
+                               snapshot_writer& writer,
+                               std::vector<snapshot_sstable_set> sstable_sets,
+                               std::vector<snapshot_tablet_info> tablets,
+                               sstring name, db::snapshot_options opts,
+                               schema_ptr schema,
+                               std::optional<int64_t> tablet_count,
+                               std::optional<locator::tablet_layout> tablet_layout) {
     manifest_json manifest;
 
     manifest_json::info info;
@@ -3949,7 +4113,7 @@ static future<> write_manifest(const locator::topology& topology, snapshot_write
     table.keyspace_name = schema->ks_name();
     table.table_name = schema->cf_name();
     table.table_id = to_sstring(schema->id());
-    table.tablets_type = tablet_count ? "powof2" : "none";
+    table.tablets_type = tablet_layout ? get_tablets_type(*tablet_layout) : "none";
     table.tablet_count = tablet_count.value_or(0);
     manifest.table = std::move(table);
 
@@ -4085,12 +4249,14 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         tlogger.debug("snapshot {}: seal_snapshot", name);
         const auto& topology = sharded_db.local().get_token_metadata().get_topology();
         std::optional<int64_t> tablet_count;
+        std::optional<locator::tablet_layout> tablet_layout;
         std::vector<snapshot_tablet_info> tablets;
         std::unordered_set<size_t> tids;
         if (t.uses_tablets()) {
             auto erm = t.get_effective_replication_map();
             auto& tm = erm->get_token_metadata().tablets().get_tablet_map(s->id());
             tablet_count = tm.tablet_count();
+            tablet_layout = tm.get_layout();
             for (auto& ssts : sstable_sets) {
                 for (auto& sst : *ssts) {
                     auto tok = sst.first_token;
@@ -4109,7 +4275,8 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                 }
             }
         }
-        co_await write_manifest(topology, *writer, std::move(sstable_sets), std::move(tablets), name, std::move(opts), s, tablet_count).handle_exception([&] (std::exception_ptr ptr) {
+        co_await write_manifest(topology, *writer, std::move(sstable_sets), std::move(tablets), name, std::move(opts), s,
+                                tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
@@ -4273,6 +4440,12 @@ future<> compaction_group::flush() noexcept {
 future<> storage_group::flush() noexcept {
     for (auto& cg : compaction_groups_immediate()) {
         co_await cg->flush();
+    }
+}
+
+future<> storage_group::flush_separator() noexcept {
+    for (auto& cg : compaction_groups_immediate()) {
+        co_await cg->flush_separator();
     }
 }
 
@@ -4734,7 +4907,8 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
     auto holder = cg.async_gate().hold();
 
     if (_logstor) [[unlikely]] {
-        return _logstor->write(m, cg, std::move(holder));
+        auto ss_holder = cg.sstable_add_gate().hold();
+        return _logstor->write(m, cg, std::move(ss_holder));
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h), &cg, holder = std::move(holder)] () mutable {
@@ -4753,7 +4927,8 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
     auto holder = cg.async_gate().hold();
 
     if (_logstor) [[unlikely]] {
-        return _logstor->write(m.unfreeze(m_schema), cg, std::move(holder));
+        auto ss_holder = cg.sstable_add_gate().hold();
+        return _logstor->write(m.unfreeze(m_schema), cg, std::move(ss_holder));
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder)]() mutable {
@@ -5362,6 +5537,11 @@ future<> compaction_group::cleanup() {
     // Since permit is still held, all actions below will be executed atomically:
     co_await _t._cache.invalidate(std::move(updater), p_range);
     _t._cache.refresh_snapshot();
+
+    if (_t.uses_logstor()) {
+        co_await _t.logstor_index().erase(p_range);
+        co_await discard_logstor_segments();
+    }
 
     co_await _t.delete_sstables_atomically(permit, _sstables_compacted_but_not_deleted);
     // Clearing sstables_compacted_but_not_deleted only on success allows a retry caused

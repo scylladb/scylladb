@@ -1611,6 +1611,7 @@ CREATE TABLE system.topology (
     cleanup_status text,
     datacenter text,
     ignore_msb int,
+    intended_storage_mode text,
     node_state text,
     num_tokens int,
     rack text,
@@ -1663,6 +1664,7 @@ CREATE TABLE system.topology (
 - `tokens_string`: Alternative representation of tokens
 - `shard_count`: Number of shards on the node
 - `ignore_msb`: MSB bits to ignore for token calculation
+- `intended_storage_mode`: Intended storage mode for tables under vnodes-to-tablets migration. The node switches to this mode on next restart.
 - `cleanup_status`: Status of cleanup operations
 - `supported_features`: Features supported by this node
 - `request_id`: ID of the current topology request for this node

@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "utils/assert.hh"
@@ -354,35 +354,6 @@ static service::query_state& internal_distributed_query_state() {
     static thread_local service::query_state qs(cs, empty_service_permit());
     return qs;
 };
-
-future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring view_name) const {
-    auto host_id = _sp.local_db().get_token_metadata().get_my_id();
-    return _qp.execute_internal(
-            format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
-            db::consistency_level::ONE,
-            internal_distributed_query_state(),
-            { std::move(ks_name), std::move(view_name), host_id.uuid(), "STARTED" },
-            cql3::query_processor::cache_internal::no).discard_result();
-}
-
-future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring view_name) const {
-    auto host_id = _sp.local_db().get_token_metadata().get_my_id();
-    return _qp.execute_internal(
-            format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
-            db::consistency_level::ONE,
-            internal_distributed_query_state(),
-            { "SUCCESS", std::move(ks_name), std::move(view_name), host_id.uuid() },
-            cql3::query_processor::cache_internal::no).discard_result();
-}
-
-future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_name) const {
-    return _qp.execute_internal(
-            format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
-            db::consistency_level::ONE,
-            internal_distributed_query_state(),
-            { std::move(ks_name), std::move(view_name) },
-            cql3::query_processor::cache_internal::no).discard_result();
-}
 
 /* We want to make sure that writes/reads to/from CDC management-related distributed tables
  * are consistent: a read following an acknowledged write to the same partition should contact

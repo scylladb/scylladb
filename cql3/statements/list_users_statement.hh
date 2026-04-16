@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -22,6 +22,8 @@ class list_users_statement : public authentication_statement {
 public:
 
     std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
+
+    virtual seastar::shared_ptr<const metadata> get_result_metadata() const override;
 
     future<> check_access(query_processor& qp, const service::client_state&) const override;
     future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor&

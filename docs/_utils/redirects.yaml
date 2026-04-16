@@ -1,6 +1,12 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Move the Upgrade Support (About Upgrade) page
+
+/stable/upgrade/about-upgrade.html: https://docs.scylladb.com/stable/versioning/upgrade-policy.html 
+/branch-2025.4/upgrade/about-upgrade.html: https://docs.scylladb.com/stable/versioning/upgrade-policy.html 
+/branch-2026.1/upgrade/about-upgrade.html: https://docs.scylladb.com/stable/versioning/upgrade-policy.html 
+
 # Move the OS Support page
 
 /stable/getting-started/os-support.html: https://docs.scylladb.com/stable/versioning/os-support-per-version.html

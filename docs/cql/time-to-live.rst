@@ -97,7 +97,33 @@ The ``gc_grace_seconds`` parameter is defined :ref:`here <create-table-general-o
 TTL for a Collection
 ^^^^^^^^^^^^^^^^^^^^
 
-You can set the TTL on a per element basis for collections. An example of how to do this, is shown in the :ref:`Maps <maps>` CQL Reference.
+You can set the TTL on a per element basis for collections.
+
+See for example the :ref:`Maps <maps>` CQL Reference for map collections.
+For a non-frozen map or set column, each element is stored independently and can have its own TTL. You can query the
+remaining TTL for a specific map element using ``TTL(map_column[key])`` or for a specific set element using
+``TTL(set_column[element])``:
+
+.. code-block:: cql
+
+    CREATE TABLE t (pk int PRIMARY KEY, m map<int, int>, s set<int>);
+    INSERT INTO t (pk, m, s) VALUES (1, {1: 10}, {100}) USING TTL 3600;
+    UPDATE t USING TTL 7200 SET m = m + {2: 20}, s = s + {200} WHERE pk = 1;
+
+    -- Returns the remaining TTL for each map element independently
+    SELECT TTL(m[1]), TTL(m[2]) FROM t WHERE pk = 1;
+
+    -- Returns the remaining TTL for each set element independently
+    SELECT TTL(s[100]), TTL(s[200]) FROM t WHERE pk = 1;
+
+Similarly, you can retrieve the write timestamp of a specific map element using ``WRITETIME(map_column[key])``
+or of a specific set element using ``WRITETIME(set_column[element])``.
+
+For a non-frozen user-defined type (UDT) column, each field is also stored independently and can have its own TTL.
+You can query the remaining TTL or write timestamp of a specific field using dot notation:
+``TTL(udt_column.field)`` and ``WRITETIME(udt_column.field)``.
+
+See the :ref:`WRITETIME and TTL function <select-writetime-ttl>` section for details.
 
 Notes
 ^^^^^

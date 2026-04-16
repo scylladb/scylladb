@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -44,6 +44,7 @@ using file_stream_id = utils::tagged_uuid<struct file_stream_id_tag>;
 enum class file_ops : uint16_t {
     stream_sstables,
     load_sstables,
+    stream_logstor_segments,
 };
 
 // For STREAM_BLOB verb

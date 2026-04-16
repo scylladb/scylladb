@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 
@@ -690,12 +690,17 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
     }
     if (tablets_enabled) {
         BOOST_REQUIRE(tablets_type.has_value());
-        BOOST_REQUIRE_EQUAL(*tablets_type, "powof2");
         BOOST_REQUIRE(manifest_table.HasMember("tablet_count"));
         auto& tablet_count_json = manifest_table["tablet_count"];
         BOOST_REQUIRE(tablet_count_json.IsNumber());
         uint64_t tablet_count = tablet_count_json.GetInt64();
-        BOOST_REQUIRE_EQUAL(tablet_count, 1 << log2ceil(tablet_count));
+        if (*tablets_type == "powof2") {
+            BOOST_REQUIRE_EQUAL(tablet_count, 1 << log2ceil(tablet_count));
+        } else if (*tablets_type == "arbitrary") {
+            BOOST_REQUIRE_GE(tablet_count, 1);
+        } else {
+            BOOST_FAIL(format("Unknown tablets_type in manifest: {}", *tablets_type));
+        }
     } else {
         if (tablets_type) {
             BOOST_REQUIRE_EQUAL(*tablets_type, "none");
@@ -1264,6 +1269,7 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_selection_test) {
     auto sched_groups = get_scheduling_groups().get();
 
     scheduling_group_and_expected_semaphore.emplace_back(sched_groups.compaction_scheduling_group, system_semaphore);
+    scheduling_group_and_expected_semaphore.emplace_back(sched_groups.maintenance_compaction_scheduling_group, streaming_semaphore);
     scheduling_group_and_expected_semaphore.emplace_back(sched_groups.memory_compaction_scheduling_group, system_semaphore);
     scheduling_group_and_expected_semaphore.emplace_back(sched_groups.streaming_scheduling_group, streaming_semaphore);
     scheduling_group_and_expected_semaphore.emplace_back(sched_groups.statement_scheduling_group, user_semaphore);
@@ -1315,6 +1321,7 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_query_selection_test) {
     auto sched_groups = get_scheduling_groups().get();
 
     scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.compaction_scheduling_group, system_max_result_size);
+    scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.maintenance_compaction_scheduling_group, system_max_result_size);
     scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.memory_compaction_scheduling_group, system_max_result_size);
     scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.streaming_scheduling_group, maintenance_max_result_size);
     scheduling_group_and_expected_max_result_size.emplace_back(sched_groups.statement_scheduling_group, user_max_result_size);

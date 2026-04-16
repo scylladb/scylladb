@@ -1,20 +1,23 @@
 #
 # Copyright (C) 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+from typing import Tuple
+
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import gather_safely, wait_for
+from test.pylib.util import gather_safely, wait_for, Host
 from test.cluster.util import new_test_keyspace, new_test_table, reconnect_driver
 from test.pylib.internal_types import HostID, ServerInfo
-from cassandra import ReadTimeout, WriteTimeout
+from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replicas
 
+import asyncio
 import pytest
 import logging
 import time
@@ -24,6 +27,13 @@ import asyncio
 
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
+DEFAULT_CMDLINE = [
+        '--logger-log-level', 'sc_groups_manager=debug',
+        '--logger-log-level', 'sc_coordinator=debug'
+    ]
 
 
 async def wait_for_leader(manager: ManagerClient, s: ServerInfo, group_id: str):
@@ -109,14 +119,7 @@ async def get_table_raft_group_id(manager: ManagerClient, ks: str, table: str):
 async def test_basic_write_read(manager: ManagerClient):
 
     logger.info("Bootstrapping cluster")
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
-    cmdline = [
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug'
-    ]
-    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     logger.info("Load host_id-s for servers")
@@ -129,7 +132,7 @@ async def test_basic_write_read(manager: ManagerClient):
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
     logger.info("Creating a strongly-consistent keyspace")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         logger.info("Creating a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -249,19 +252,12 @@ async def test_multi_shard_write_read(manager: ManagerClient):
     succeed and that we can read back all data correctly.
     """
     logger.info("Bootstrapping cluster with 4 shards per node")
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
-    cmdline = [
-        '--smp=4',
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug'
-    ]
-    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
+    cmdline = DEFAULT_CMDLINE + ['--smp=4']
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     logger.info("Creating a strongly-consistent keyspace with 4 tablets")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 4} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             for j in range(50):
                 await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({j}, {j})")
@@ -280,19 +276,14 @@ async def test_sc_multishard_metadata_reads(manager: ManagerClient):
     """
     Verify that multi-shard reads of raft metadata for strongly-consistent tables work correctly.
     """
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
-    cmdline = [
+    cmdline = DEFAULT_CMDLINE + [
         '--smp=4',
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug',
         '--logger-log-level', 'fixed_shard=trace',
     ]
-    server = await manager.server_add(config=config, cmdline=cmdline)
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
             table_id = await manager.get_table_id(ks, table_name)
@@ -379,19 +370,14 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
     on a single-node cluster, we don't start reading/writing raft metadata
     from/to incorrect shards.
     """
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
-    cmdline = [
+    cmdline = DEFAULT_CMDLINE + [
         '--smp=2',
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug',
         '--logger-log-level', 'fixed_shard=trace',
     ]
-    server = await manager.server_add(config=config, cmdline=cmdline)
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
 
             # Write some rows to trigger raft table updates
@@ -433,18 +419,11 @@ async def test_sc_persistence_with_compaction(manager: ManagerClient):
     directly, bit it does compact SSTables written with them, so in this test we
     verify that after compaction the raft metadata is still readable and correct.
     """
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
-    cmdline = [
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug',
-        '--logger-log-level', 'fixed_shard=trace',
-    ]
-    server = await manager.server_add(config=config, cmdline=cmdline)
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'fixed_shard=trace']
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
 
             # Create multiple SSTables by doing writes with flushes in between
@@ -484,18 +463,11 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
     Verify that metadata for strongly-consistent tables is recovered
     after a non-graceful stop (crash simulation).
     """
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
-    cmdline = [
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug',
-        '--logger-log-level', 'fixed_shard=trace',
-    ]
-    server = await manager.server_add(config=config, cmdline=cmdline)
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'fixed_shard=trace']
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             # Write some rows to trigger raft table updates
             for pk in range(20):
@@ -525,17 +497,11 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_no_schema_when_apply_write(manager: ManagerClient):
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
-    cmdline = [
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug'
-    ]
-    servers = await manager.servers_add(2, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
     # because we want `servers[2]` to receive Raft commands from others.
-    servers += [await manager.server_add(config=config | {'error_injections_at_startup': ['avoid_being_raft_leader']}, cmdline=cmdline, property_file={'dc':'my_dc', 'rack': 'rack3'})]
+    config = DEFAULT_CONFIG | {'error_injections_at_startup': ['avoid_being_raft_leader']}
+    servers += [await manager.server_add(config=config, cmdline=DEFAULT_CMDLINE, property_file={'dc':'my_dc', 'rack': 'rack3'})]
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -545,7 +511,7 @@ async def test_no_schema_when_apply_write(manager: ManagerClient):
                 return host
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         # Drop incoming append entries from group0 (schema changes) on `servers[2]` after the table is created,
@@ -576,17 +542,11 @@ async def test_no_schema_when_apply_write(manager: ManagerClient):
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_old_schema_when_apply_write(manager: ManagerClient):
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
-    cmdline = [
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug'
-    ]
-    servers = await manager.servers_add(2, config=config, cmdline=cmdline, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
     # because we want `servers[2]` to receive Raft commands from others.
-    servers += [await manager.server_add(config=config | {'error_injections_at_startup': ['avoid_being_raft_leader']}, cmdline=cmdline, property_file={'dc':'my_dc', 'rack': 'rack3'})]
+    config = DEFAULT_CONFIG | {'error_injections_at_startup': ['avoid_being_raft_leader']}
+    servers += [await manager.server_add(config=config, cmdline=DEFAULT_CMDLINE, property_file={'dc':'my_dc', 'rack': 'rack3'})]
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -596,7 +556,7 @@ async def test_old_schema_when_apply_write(manager: ManagerClient):
                 return host
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         group_id = await get_table_raft_group_id(manager, ks, 'test')
@@ -629,17 +589,10 @@ async def test_reject_user_provided_timestamps(manager: ManagerClient):
     user-provided timestamps in queries to strongly consistent tables.
     """
 
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
-    cmdline = [
-        '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug'
-    ]
-    server = await manager.server_add(config=config, cmdline=cmdline)
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([server])
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'local'") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
             error_msg = "Strongly consistent queries don't support user-provided timestamps"
             with pytest.raises(InvalidRequest, match=error_msg):
@@ -677,7 +630,7 @@ async def test_forward_cql_prepared_with_bound_values(manager: ManagerClient):
     servers = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc='dc1')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
-    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND consistency = 'local'")
+    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND consistency = 'global'")
     async with new_test_keyspace(manager, ks_opts) as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, value int") as table:
             table_name = table.split('.')[-1]
@@ -714,7 +667,7 @@ async def test_forward_cql_cache_invalidation(manager: ManagerClient):
     servers = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc='dc1')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
-    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'local'")
+    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'")
     async with new_test_keyspace(manager, ks_opts) as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, value int") as table:
             table_name = table.split('.')[-1]
@@ -757,7 +710,7 @@ async def test_forward_cql_exception_passthrough(manager: ManagerClient):
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
-    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'local'")
+    ks_opts = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'")
     async with new_test_keyspace(manager, ks_opts) as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, value int") as table:
             table_name = table.split('.')[-1]
@@ -809,3 +762,540 @@ async def test_forward_cql_exception_passthrough(manager: ManagerClient):
 
             await manager.api.message_injection(leader_host.address, "wait_before_handling_forwarded_request")
             await manager.api.message_injection(non_leader_replica_host.address, "wait_before_handling_forwarded_request")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_timed_out_queries(manager: ManagerClient):
+    """
+    A simple test verifying that we don't get stuck for an indefinite amount
+    of time while reading from or writing to a strongly consistent table.
+    As soon as the deadline for a query ends, the operation should be canceled\
+    and a time-out exception should be returned.
+
+    This test focuses on a Raft operation being the potential reason for
+    getting stuck. It should be aborted when we reach the deadline.
+    """
+
+    s1 = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([s1])
+
+    log = await manager.server_open_log(s1.server_id)
+
+    async def try_query_with_timeout(exception_type, stmt: str, error_injection_name: str, timeout_sec: float):
+        await manager.api.enable_injection(s1.ip_addr, error_injection_name, one_shot=True)
+
+        mark = await log.mark()
+        request_timeout_ms = 100
+
+        stmt_fut = cql.run_async(f"{stmt} USING TIMEOUT {request_timeout_ms}ms")
+        await log.wait_for(error_injection_name, from_mark=mark)
+
+        sleep_length = timeout_sec + (request_timeout_ms / 1000)
+        await asyncio.sleep(sleep_length)
+
+        await manager.api.message_injection(s1.ip_addr, error_injection_name)
+
+        try:
+            await stmt_fut
+            return False
+        except Exception as e:
+            if isinstance(e, exception_type):
+                assert f"Query timed out for {table}" in str(e)
+                return True
+            pytest.fail(f"Unexpected exception: {e}")
+
+    async def try_query(exception_type, stmt: str, error_injection_name: str):
+        # We cannot predict if the relevant timer will be triggered in time.
+        # Even in not-really-extreme situations, it can take more time
+        # than we expect. To avoid flakiness, we're going to attempt to
+        # observe a timeout with an ever increasing margin of error.
+        #
+        # Most of the time, this will succeed during the first try,
+        # so it shouldn't have a relevant impact on the length of the test.
+        timeout_sec = 0.1
+        while True:
+            result = await try_query_with_timeout(exception_type, stmt, error_injection_name, timeout_sec)
+            if result:
+                break
+            if timeout_sec > 60:
+                pytest.fail("Reached the maximum number of attempts")
+            timeout_sec *= 2
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)")
+
+
+            async def try_read(error_injection_name: str):
+                await try_query(ReadTimeout, f"SELECT * FROM {table} WHERE pk = 0", error_injection_name)
+
+            async def try_write(error_injection_name: str):
+                await try_query(WriteTimeout, f"INSERT INTO {table} (pk, v) VALUES (7, 23)", error_injection_name)
+
+            # Case 1: Reads.
+            read_error_injecitons = [
+                "sc_coordinator_wait_before_acquire_server",
+                "sc_coordinator_wait_before_query_read_barrier"
+            ]
+            for error_injection_name in read_error_injecitons:
+                await try_read(error_injection_name)
+
+            # Sanity check: Nothing broke and we can still read from the table.
+            res = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0")
+            assert res[0].v == 13
+
+            # Case 2: Writes.
+            write_error_injections = [
+                "sc_coordinator_wait_before_acquire_server",
+                "sc_coordinator_wait_before_begin_mutate",
+                "sc_coordinator_wait_before_add_entry"
+            ]
+            for error_injection_name in write_error_injections:
+                await try_write(error_injection_name)
+
+            # Sanity check: Nothing broke and we can still write to the table.
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (17, 7)")
+
+    # Case 3: Waiting for the leader during a write.
+
+    # To trigger the timeout we want, we need to make sure that
+    # groups_manager::begin_mutate will want to return need_wait_for_leader,
+    # and that it will never succeed. This will do the job.
+    await manager.api.enable_injection(s1.ip_addr, "sc_leader_info_updater_wait_before_setting_leader_info", one_shot=True)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            with pytest.raises(WriteTimeout, match=f"Query timed out for {table}"):
+                await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (11, 13) USING TIMEOUT 100ms")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_queries_while_dropping_table(manager: ManagerClient):
+    """
+    A simple test that verifies that ongoing reads and writes are not interrupted
+    by a tablet migration. We simulate the process by dropping a table.
+
+    We verify that:
+    - New reads and writes are rejected with a proper error.
+    - Ongoing reads and writes are not interrupted by a tablet migration
+      (which boils down to successful executions of Raft methods).
+    - Ongoing reads can still eventually observe that the table has
+      been dropped.
+    - Ongoing writes should also finish successfully if they've reached
+      the strongly consistent coordinator.
+    """
+
+    s1 = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([s1])
+
+    log = await manager.server_open_log(s1.server_id)
+    mark = await log.mark()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table_name = "my_table"
+        table = f"{ks}.{table_name}"
+
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+        await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)")
+
+        await gather_safely(*[
+            manager.api.enable_injection(s1.ip_addr, "sc_coordinator_wait_before_query_read_barrier", one_shot=True),
+            manager.api.enable_injection(s1.ip_addr, "sc_coordinator_wait_before_add_entry", one_shot=True)
+        ])
+
+        read_fut = cql.run_async(f"SELECT * FROM {table} WHERE pk = 0")
+        write_fut = cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (7, 17)")
+
+        await asyncio.gather(*[
+            asyncio.create_task(log.wait_for("sc_coordinator_wait_before_query_read_barrier", from_mark=mark)),
+            asyncio.create_task(log.wait_for("sc_coordinator_wait_before_add_entry", from_mark=mark))
+        ])
+
+        mark = await log.mark()
+
+        await cql.run_async(f"DROP TABLE {table}")
+
+        # Sanity check: The table was really dropped and we can no longer read or write to it.
+        with pytest.raises(InvalidRequest, match="unconfigured table"):
+            await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0")
+        with pytest.raises(InvalidRequest, match="unconfigured table"):
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (13, 11)")
+
+        # Wait for the Raft group to be removed. This should happen almost immediately
+        # after dropping the table, but let's avoid any potential cause of flakiness.
+        await log.wait_for(r"schedule_raft_group_deletion\(\): group id \S+: starting", from_mark=mark)
+
+        await asyncio.gather(*[
+            asyncio.create_task(manager.api.message_injection(s1.ip_addr, "sc_coordinator_wait_before_query_read_barrier")),
+            asyncio.create_task(manager.api.message_injection(s1.ip_addr, "sc_coordinator_wait_before_add_entry"))
+        ])
+
+        # Make sure that the read noticed that the table had been dropped.
+        with pytest.raises(Exception, match="Can't find a column family"):
+            await read_fut
+        # The groups manager waits for all ongoing queries to finish before
+        # it aborts the Raft server. Thanks to this, the write will succeed.
+        # No matter if we get a `no_such_column_family` exception when later
+        # applying the mutation in the state machine or not, there will be
+        # no exception thrown, so the write will still look like a success.
+        # And that's the desired behavior.
+        await write_fut
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_queries_when_shutting_down(manager: ManagerClient):
+    """
+    A simple test verifying that pending reads and writes are canceled
+    when the node starts shutting down.
+
+    The potential cause of the hanging we're testing here comes from being
+    stuck at a Raft operation when reading from strongly consistent table.
+    """
+
+    smp = 2
+    config = DEFAULT_CONFIG | {"request_timeout_on_shutdown_in_seconds": 1}
+    cmdline = DEFAULT_CMDLINE + [
+        f"--smp={smp}",
+        "--logger-log-level", "cql_server=debug",
+        "--logger-log-level", "sc_coordinator=trace"
+    ]
+
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async def pick_leader_info(host_id: HostID) -> Tuple[Host, ServerInfo]:
+        for host, server in zip(hosts, servers):
+            srv_host_id = await manager.get_host_id(server.server_id)
+            if srv_host_id == host_id:
+                return (host, server)
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    async def get_leader(keyspace: str, table: str) -> Tuple[Host, ServerInfo]:
+        logger.info("Select raft group id for the tablet")
+        group_id = await get_table_raft_group_id(manager, keyspace, table)
+
+        logger.info(f"Get current leader for the group {group_id}")
+        leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+
+        logger.info(f"Leader of group {group_id} is {leader_host_id}")
+
+        leader_host, leader_info = await pick_leader_info(leader_host_id)
+        logger.info(f"Further information on leader of group {group_id}: server_id={leader_info.server_id}, ip={leader_info.ip_addr}")
+
+        return (leader_host, leader_info)
+
+    prevent_read_injection = "sc_coordinator_wait_before_query_read_barrier"
+    prevent_write_injection = "sc_coordinator_wait_before_add_entry"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            _, table_name = table.split(".")
+            leader_host, leader_info = await get_leader(ks, table_name)
+
+            log = await manager.server_open_log(leader_info.server_id)
+            mark = await log.mark()
+
+            await asyncio.gather(*[
+                asyncio.create_task(manager.api.enable_injection(leader_info.ip_addr, prevent_read_injection, one_shot=True)),
+                asyncio.create_task(manager.api.enable_injection(leader_info.ip_addr, prevent_write_injection, one_shot=True))
+            ])
+
+            read_fut = cql.run_async(f"SELECT * FROM {table} WHERE pk = 0", host=leader_host)
+            write_fut = cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
+
+            await asyncio.gather(*[
+                asyncio.create_task(log.wait_for(prevent_read_injection, from_mark=mark)),
+                asyncio.create_task(log.wait_for(prevent_write_injection, from_mark=mark))
+            ])
+
+            mark = await log.mark()
+            stop_fut = asyncio.create_task(manager.server_stop_gracefully(leader_info.server_id))
+            
+            delta = 0.1
+            timeout = 60
+
+            # We don't know which shard coordiantes the request,
+            # so we need to wait for all of them
+            while delta < timeout:
+                matches = await log.grep(r"generic_server::shutdown completed", from_mark=mark)
+                if len(matches) >= smp:
+                    break
+                logger.debug(f"Grepped matches={matches}")
+                await asyncio.sleep(delta)
+                delta *= 2
+            if delta >= timeout:
+                pytest.fail("Exceeded timeout")
+
+            mark = await log.mark()
+
+            await asyncio.gather(*[
+                asyncio.create_task(manager.api.message_injection(leader_info.ip_addr, prevent_read_injection)),
+                asyncio.create_task(manager.api.message_injection(leader_info.ip_addr, prevent_write_injection))
+            ])
+
+            await asyncio.gather(*[
+                asyncio.create_task(log.wait_for(rf"mutate\(\): request timed out with error .*, table {table}", from_mark=mark)),
+                asyncio.create_task(log.wait_for(rf"query\(\): request timed out with error .*, table {table}", from_mark=mark))
+            ])
+
+            # We cannot predict what the result of the query is going to be.
+            # Technically, we could ensure either outcome, but it requires
+            # playing with more error injections. We don't really care about
+            # the result (the test just wants to make sure we stop the node
+            # fast enough), so let's just log it and call it a day.
+            try:
+                await read_fut
+                logger.debug("The read ended successfully")
+            except Exception as e:
+                logger.debug(f"The read ended in an exception: {e}")
+                pass
+            try:
+                await write_fut
+                logger.debug("The write ended successfully")
+            except Exception as e:
+                logger.debug(f"The write ended in an exception: {e}")
+                pass
+
+            await stop_fut
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_abort_forwarded_write_upon_shutdown(manager: ManagerClient):
+    """
+    Test verifying that forwarded writes to strongly consistent tables are
+    aborted upon the shutdown of the target replica.
+    """
+
+    smp = 2
+    config = DEFAULT_CONFIG | {"request_timeout_on_shutdown_in_seconds": 1}
+    cmdline = DEFAULT_CMDLINE + [
+        f"--smp={smp}",
+        "--logger-log-level", "cql_server=debug",
+        "--logger-log-level", "sc_coordinator=trace"
+    ]
+
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async def pick_leader_info(host_id: HostID) -> Tuple[Host, ServerInfo]:
+        for host, server in zip(hosts, servers):
+            srv_host_id = await manager.get_host_id(server.server_id)
+            if srv_host_id == host_id:
+                return (host, server)
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    async def get_leader(keyspace: str, table: str) -> Tuple[Host, ServerInfo]:
+        logger.info("Select raft group id for the tablet")
+        group_id = await get_table_raft_group_id(manager, keyspace, table)
+
+        logger.info(f"Get current leader for the group {group_id}")
+        leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+
+        logger.info(f"Leader of group {group_id} is {leader_host_id}")
+
+        leader_host, leader_info = await pick_leader_info(leader_host_id)
+        logger.info(f"Further information on leader of group {group_id}: server_id={leader_info.server_id}, ip={leader_info.ip_addr}")
+
+        return (leader_host, leader_info)
+
+    prevent_write_injection = "sc_coordinator_wait_before_add_entry"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            _, table_name = table.split(".")
+            leader_host, leader_info = await get_leader(ks, table_name)
+
+            nonleader_host, nonleader_info = next((host, server) for host, server in zip(hosts, servers) if host != leader_host)
+            logger.debug(f"Targetting host={nonleader_host}: server_id={nonleader_info.server_id}, ip={nonleader_info.ip_addr}")
+
+            log = await manager.server_open_log(leader_info.server_id)
+            mark = await log.mark()
+
+            await manager.api.enable_injection(leader_info.ip_addr, prevent_write_injection, one_shot=True)
+
+            # Send the mutation to a NON-leader.
+            write_fut = cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=nonleader_host)
+
+            await log.wait_for(prevent_write_injection, from_mark=mark)
+            mark = await log.mark()
+
+            stop_fut = asyncio.create_task(manager.server_stop_gracefully(leader_info.server_id))
+
+            delta = 0.1
+            timeout = 60
+
+            # We don't know which shard coordiantes the request,
+            # so we need to wait for all of them
+            while delta < timeout:
+                matches = await log.grep(r"generic_server::shutdown completed", from_mark=mark)
+                if len(matches) >= smp:
+                    break
+                logger.debug(f"Grepped matches={matches}")
+                await asyncio.sleep(delta)
+                delta *= 2
+            if delta >= timeout:
+                pytest.fail("Exceeded timeout")
+
+            mark = await log.mark()
+
+            await manager.api.message_injection(leader_info.ip_addr, prevent_write_injection)
+            await log.wait_for(rf"mutate\(\): request timed out with error .*, table {table}")
+
+            # It doesn't matter what the outcome is, but let's await the future
+            # (as we should) and log the result.
+            try:
+                await write_fut
+                logger.debug("The write ended successfully")
+            except Exception as e:
+                logger.debug(f"The write ended in an exception: {e}")
+                pass
+
+            await stop_fut
+
+
+@pytest.mark.skip(reason="SCYLLADB-1056")
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerClient):
+    """
+    This test verifies that ongoing executions of state_machine::apply are
+    aborted when their corresponding Raft group is being removed. We test
+    that by dropping the table, but it should also correspond to other cases
+    like tablet migration.
+
+    For a similar scenario during a node shutdown, see test_abort_state_machine_apply_during_shutdown.
+    """
+
+    cmdline = DEFAULT_CMDLINE + ["--logger-log-level", "sc_state_machine=debug:raft=debug"]
+    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "rack1"})
+
+    # We want to prevent target_server from becoming the leader of either group0
+    # or the strongly consistent Raft group so it might not have the latest
+    # schema version and is forced to perform a read barrier.
+    config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    target_server = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack2"})
+
+    cql, [leader_host, _] = await manager.get_ready_cql([leader_server, target_server])
+
+    leader_host_id, target_host_id = await gather_safely(*[
+        manager.get_host_id(leader_server.server_id),
+        manager.get_host_id(target_server.server_id)
+    ])
+
+    wait_before_apply_injection = "strong_consistency_state_machine_wait_before_apply"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table_name = "my_table"
+        table = f"{ks}.{table_name}"
+
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+        group_id = await get_table_raft_group_id(manager, ks, table_name)
+        leader_host_id = await wait_for_leader(manager, leader_server, group_id)
+        assert leader_host_id != target_host_id
+
+        await gather_safely(*[
+            manager.api.enable_injection(target_server.ip_addr, wait_before_apply_injection, one_shot=True),
+            manager.api.enable_injection(target_server.ip_addr, "sc_state_machine_return_empty_schema", one_shot=True)
+        ])
+
+        log = await manager.server_open_log(target_server.server_id)
+        mark = await log.mark()
+
+        # We won't wait for the follower to apply the state, so we can await this right away.
+        await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
+
+        await log.wait_for(wait_before_apply_injection, from_mark=mark)
+        mark = await log.mark()
+
+        await cql.run_async(f"DROP TABLE {table}")
+        # Wait until the Raft group has started being removed.
+        await log.wait_for(rf"schedule_raft_group_deletion\(\): starting aborting raft server for group id {group_id}", from_mark=mark)
+        mark = await log.mark()
+
+        # At this point, the Raft server should already be getting aborted,
+        # so we can resume state_machine::apply.
+        await manager.api.message_injection(target_server.ip_addr, wait_before_apply_injection)
+        # Verify that state_machine::apply was really aborted.
+        await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="SCYLLADB-1056")
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient):
+    """
+    This test verifies that ongoing executions of state_machine::apply are
+    aborted when a node is shutting down.
+
+    For a similar scenario after dropping a table, see test_abort_state_machine_apply_after_dropping_table.
+    """
+
+    cmdline = DEFAULT_CMDLINE + ["--logger-log-level", "sc_state_machine=debug:raft=debug"]
+    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "rack1"})
+
+    # We want to prevent target_server from becoming the leader of either group0
+    # or the strongly consistent Raft group so it might not have the latest
+    # schema version and is forced to perform a read barrier.
+    config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    target_server = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack2"})
+
+    cql, [leader_host, target_host] = await manager.get_ready_cql([leader_server, target_server])
+
+    leader_host_id, target_host_id = await gather_safely(*[
+        manager.get_host_id(leader_server.server_id),
+        manager.get_host_id(target_server.server_id)
+    ])
+
+    wait_before_apply_injection = "strong_consistency_state_machine_wait_before_apply"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table_name = "my_table"
+        table = f"{ks}.{table_name}"
+
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+        group_id = await get_table_raft_group_id(manager, ks, table_name)
+        leader_host_id = await wait_for_leader(manager, leader_server, group_id)
+        assert leader_host_id != target_host_id
+
+        await gather_safely(*[
+            manager.api.enable_injection(target_server.ip_addr, wait_before_apply_injection, one_shot=True),
+            manager.api.enable_injection(target_server.ip_addr, "sc_state_machine_return_empty_schema", one_shot=True)
+        ])
+
+        log = await manager.server_open_log(target_server.server_id)
+        mark = await log.mark()
+
+        # We won't wait for the follower to apply the state, so we can await this right away.
+        await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
+
+        await log.wait_for(wait_before_apply_injection, from_mark=mark)
+        mark = await log.mark()
+
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(target_server.server_id))
+        # Wait until the Raft group has started being removed.
+        await log.wait_for(rf"schedule_raft_group_deletion\(\): starting aborting raft server for group id {group_id}", from_mark=mark)
+        mark = await log.mark()
+
+        # At this point, the Raft server should already be getting aborted,
+        # so we can resume state_machine::apply.
+        await manager.api.message_injection(target_server.ip_addr, wait_before_apply_injection)
+        # Verify that state_machine::apply was really aborted.
+        await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
+
+        # The test framework should verify that we haven't observed any errors
+        # during the stopping procedure.
+        await stop_task
+
+        await manager.server_start(target_server.server_id)
+        cql, [target_host] = await manager.get_ready_cql([target_server])
+
+        rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0", host=target_host)
+        assert len(rows) == 1
+        assert rows[0].v == 13

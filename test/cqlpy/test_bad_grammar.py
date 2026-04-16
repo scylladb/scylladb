@@ -1,6 +1,6 @@
 # Copyright 2023-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # A collection of tests for grammar that should be rejected, but wasn't at
 # some point in the past.

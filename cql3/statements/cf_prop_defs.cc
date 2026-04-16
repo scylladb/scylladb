@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include "cql3/statements/cf_prop_defs.hh"
@@ -197,7 +197,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         if (!db.features().tablet_options) {
             throw exceptions::configuration_exception("tablet options cannot be used until all nodes in the cluster enable this feature");
         }
-        db::tablet_options::validate(*tablet_options_map);
+        db::tablet_options::validate(*tablet_options_map, db.features());
     }
 
     if (has_property(KW_STORAGE_ENGINE)) {
@@ -205,9 +205,6 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         if (storage_engine == "logstor") {
             if (!db.features().logstor) {
                 throw exceptions::configuration_exception(format("The experimental feature 'logstor' must be enabled in order to use the 'logstor' storage engine."));
-            }
-            if (!db.get_config().enable_logstor()) {
-                throw exceptions::configuration_exception(format("The configuration option 'enable_logstor' must be set to true in the configuration in order to use the 'logstor' storage engine."));
             }
         } else {
             throw exceptions::configuration_exception(format("Illegal value for '{}'", KW_STORAGE_ENGINE));

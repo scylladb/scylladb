@@ -3,14 +3,13 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <gnutls/crypto.h>
 #include "utils/aws_sigv4.hh"
 #include "utils/hashers.hh"
 #include "bytes.hh"
-#include "db_clock.hh"
 
 using namespace std::chrono_literals;
 
@@ -48,8 +47,8 @@ static std::string apply_sha256(const std::vector<temporary_buffer<char>>& msg) 
     return to_hex(hasher.finalize());
 }
 
-std::string format_time_point(db_clock::time_point tp) {
-    time_t time_point_repr = db_clock::to_time_t(tp);
+std::string format_time_point(lowres_system_clock::time_point tp) {
+    time_t time_point_repr = lowres_system_clock::to_time_t(tp);
     std::string time_point_str;
     time_point_str.resize(17);
     ::tm time_buf;
@@ -61,8 +60,8 @@ std::string format_time_point(db_clock::time_point tp) {
 
 void check_expiry(std::string_view signature_date) {
     //FIXME: The default 15min can be changed with X-Amz-Expires header - we should honor it
-    std::string expiration_str = format_time_point(db_clock::now() - 15min);
-    std::string validity_str = format_time_point(db_clock::now() + 15min);
+    std::string expiration_str = format_time_point(lowres_system_clock::now() - 15min);
+    std::string validity_str = format_time_point(lowres_system_clock::now() + 15min);
     if (signature_date < expiration_str) {
         throw std::runtime_error(
                 fmt::format("Signature expired: {} is now earlier than {} (current time - 15 min.)",

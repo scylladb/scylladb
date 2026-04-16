@@ -108,6 +108,8 @@ The computed number of tablets a table will have is based on several parameters 
   See :ref:`Per-table tablet options <cql-per-table-tablet-options>` for details.
 * Table-level option ``'max_tablet_count'``. This option sets the maximum number of tablets for the given table
   See :ref:`Per-table tablet options <cql-per-table-tablet-options>` for details.
+* Table-level option ``pow2_count``. This option, when set to true, forces the number of tablets for a given table to be a power of 2.
+  See :ref:`Per-table tablet options <cql-per-table-tablet-options>` for details.
 * Config option ``'tablets_initial_scale_factor'``. This option sets the minimal number of tablets per shard
   per table globally. This option can be overridden by the table-level option: ``'min_per_shard_tablet_count'``.
   ``'tablets_initial_scale_factor'`` is ignored if either the keyspace option ``'initial'`` or table-level
@@ -126,8 +128,10 @@ will be used as the number of tablets for the given table.
     When both ``'min_tablet_count'`` and ``'max_tablet_count'`` are set together, ScyllaDB validates the
     combination by computing **effective** bounds:
 
-    * The **effective minimum** is the smallest power of 2 that is greater than or equal to ``min_tablet_count``.
-    * The **effective maximum** is the largest power of 2 that is less than or equal to ``max_tablet_count``.
+    * The **effective minimum** is the smallest power of 2 that is greater than or equal to ``min_tablet_count`` if ``pow2_count`` is true,
+        or simply ``min_tablet_count`` otherwise.
+    * The **effective maximum** is the largest power of 2 that is less than or equal to ``max_tablet_count`` if ``pow2_count`` is true,
+        or simply ``max_tablet_count`` otherwise.
 
     ScyllaDB validates that the effective minimum does not exceed the effective maximum. If it does,
     the ``CREATE TABLE`` statement will be rejected with an error. To avoid ambiguity, it is recommended

@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
 import re
@@ -21,7 +21,7 @@ def get_node_metrics(node_ip: str, metrics: list[str], port="9180"):
     filter_metrics = [metric for metric in prometheus_get(node_ip, port).splitlines() if not metric.startswith("#")]
     for metric in filter_metrics:
         for metric_name in metrics:
-            if re.search(metric_name, metric):
+            if re.search(metric_name + r"[\s{]", metric):
                 val = metric.split()[-1]
                 try:
                     val = int(val)

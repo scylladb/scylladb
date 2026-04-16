@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include "client_state.hh"
@@ -232,6 +232,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::VERSIONS),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::CDC_STREAMS),
         auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::CDC_TIMESTAMPS),
+        auth::make_data_resource(db::system_keyspace::NAME, db::system_keyspace::TABLETS),
     };
 
     if ((cmd.resource.kind() == auth::resource_kind::data && cmd.permission == auth::permission::SELECT && is_vector_indexed.has_value() && is_vector_indexed.value()) ||

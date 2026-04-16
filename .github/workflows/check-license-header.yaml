@@ -7,7 +7,7 @@ on:
 
 env:
   HEADER_CHECK_LINES: 10
-  LICENSE: "LicenseRef-ScyllaDB-Source-Available-1.0"
+  LICENSE: "LicenseRef-ScyllaDB-Source-Available-1.1"
   CHECKED_EXTENSIONS: ".cc .hh .py"
 
 jobs:

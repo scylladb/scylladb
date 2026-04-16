@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <exception>
@@ -47,7 +47,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/as_future.hh>
-#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
@@ -287,7 +286,9 @@ mutation_reader repair_reader::make_reader(
     const dht::sharder& remote_sharder,
     unsigned remote_shard,
     gc_clock::time_point compaction_time,
-    incremental_repair_meta inc) {
+    incremental_repair_meta inc,
+    uint64_t multishard_reader_buffer_hint_size,
+    bool multishard_reader_enable_read_ahead) {
     switch (strategy) {
         case read_strategy::local: {
             auto ms = mutation_source([&cf, compaction_time] (
@@ -313,12 +314,11 @@ mutation_reader repair_reader::make_reader(
         }
         case read_strategy::multishard_split: {
             std::optional<size_t> multishard_reader_buffer_size;
-            const auto& dbconfig = db.local().get_config();
-            if (dbconfig.repair_multishard_reader_buffer_hint_size()) {
+            if (multishard_reader_buffer_hint_size) {
                 // Setting the repair buffer size as the multishard reader's buffer
                 // size helps avoid extra cross-shard round-trips and possible
                 // evict-recreate cycles.
-                multishard_reader_buffer_size = dbconfig.repair_multishard_reader_buffer_hint_size();
+                multishard_reader_buffer_size = multishard_reader_buffer_hint_size;
             }
             return make_multishard_streaming_reader(db, _schema, _permit, [this] {
                 auto shard_range = _sharder.next();
@@ -326,7 +326,7 @@ mutation_reader repair_reader::make_reader(
                     return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
                 }
                 return std::optional<dht::partition_range>();
-            }, compaction_time, multishard_reader_buffer_size, read_ahead(dbconfig.repair_multishard_reader_enable_read_ahead()));
+            }, compaction_time, multishard_reader_buffer_size, read_ahead(multishard_reader_enable_read_ahead));
         }
         case read_strategy::multishard_filter: {
             return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range, compaction_time, {}, read_ahead::yes),
@@ -354,14 +354,17 @@ repair_reader::repair_reader(
     uint64_t seed,
     read_strategy strategy,
     gc_clock::time_point compaction_time,
-    incremental_repair_meta inc)
+    incremental_repair_meta inc,
+    uint64_t multishard_reader_buffer_hint_size,
+    bool multishard_reader_enable_read_ahead)
     : _schema(s)
     , _permit(std::move(permit))
     , _range(dht::to_partition_range(range))
     , _sharder(remote_sharder, range, remote_shard)
     , _seed(seed)
     , _local_read_op(strategy == read_strategy::local ? std::optional(cf.read_in_progress()) : std::nullopt)
-    , _reader(make_reader(db, cf, strategy, remote_sharder, remote_shard, compaction_time, inc))
+    , _reader(make_reader(db, cf, strategy, remote_sharder, remote_shard, compaction_time, inc,
+                          multishard_reader_buffer_hint_size, multishard_reader_enable_read_ahead))
 { }
 
 future<mutation_fragment_opt>
@@ -1321,7 +1324,9 @@ private:
                     return read_strategy;
                 }),
                 _compaction_time,
-                _incremental_repair_meta);
+                _incremental_repair_meta,
+                _rs.get_config().repair_multishard_reader_buffer_hint_size(),
+                bool(_rs.get_config().repair_multishard_reader_enable_read_ahead()));
         }
         try {
             while (cur_size < _max_row_buf_size) {
@@ -2177,8 +2182,13 @@ public:
         auto& cm = table.get_compaction_manager();
         int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
 
-        auto modifier = [repaired_at] (sstables::sstable& new_sst) {
+        // Keep the new sstables marked as being_repaired until repair_update_compaction_ctrl
+        // is called (after sstables_repaired_at is committed to Raft). This is an additional
+        // in-memory guard; the classifier itself also protects these sstables via the
+        // repaired_at > sstables_repaired_at check.
+        auto modifier = [repaired_at, session = _frozen_topology_guard] (sstables::sstable& new_sst) {
             new_sst.update_repaired_at(repaired_at);
+            new_sst.mark_as_being_repaired(session);
         };
 
         std::unordered_map<compaction::compaction_group_view*, std::vector<sstables::shared_sstable>> sstables_by_group;
@@ -2625,7 +2635,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     auto permit = co_await seastar::get_units(_flush_hints_batchlog_sem, 1);
     bool updated = false;
     auto now = gc_clock::now();
-    auto cache_time = std::chrono::milliseconds(get_db().local().get_config().repair_hints_batchlog_flush_cache_time_in_ms());
+    auto cache_time = std::chrono::milliseconds(_config.repair_hints_batchlog_flush_cache_time_in_ms());
     auto cache_disabled = cache_time == std::chrono::milliseconds(0);
     auto flush_time = now;
     db::all_batches_replayed all_replayed = db::all_batches_replayed::yes;
@@ -3495,7 +3505,7 @@ public:
                     // To save memory and have less different conditions, we
                     // use the estimation for RBNO repair as well.
 
-                    _estimated_partitions *= _shard_task.db.local().get_config().repair_partition_count_estimation_ratio();
+                    _estimated_partitions *= _shard_task.rs.get_config().repair_partition_count_estimation_ratio();
                 }
 
                 parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
@@ -3631,7 +3641,8 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
         sharded<db::view::view_building_worker>& vbw,
         tasks::task_manager& tm,
         service::migration_manager& mm,
-        size_t max_repair_memory)
+        size_t max_repair_memory,
+        config cfg)
     : _tsm(tsm)
     , _gossiper(gossiper)
     , _messaging(ms)
@@ -3646,6 +3657,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
     , _node_ops_metrics(_repair_module)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)
+    , _config(std::move(cfg))
 {
     tm.register_module("repair", _repair_module);
     if (this_shard_id() == 0) {
@@ -3656,7 +3668,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
 
 future<> repair_service::start(utils::disk_space_monitor* dsm) {
     if (dsm && (this_shard_id() == 0)) {
-        _out_of_space_subscription = dsm->subscribe(_db.local().get_config().critical_disk_utilization_level, [this] (auto threshold_reached) {
+        _out_of_space_subscription = dsm->subscribe(_config.critical_disk_utilization_level, [this] (auto threshold_reached) {
             if (threshold_reached) {
                 return container().invoke_on_all([] (repair_service& rs) { return rs.drain(); });
             }
@@ -3764,7 +3776,32 @@ future<> repair_service::load_history() {
 
         rlogger.info("Loading repair history for keyspace={}, table={}, table_uuid={}",
                 table->schema()->ks_name(), table->schema()->cf_name(), table_uuid);
-        co_await _sys_ks.local().get_repair_history(table_uuid, [this] (const auto& entry) -> future<> {
+
+        // Collect entries into batches and flush each batch via a single
+        // copy-on-write update, avoiding O(N²) complexity when there are many
+        // repair history entries (SCYLLADB-104).  The batch size is bounded to
+        // limit peak memory usage: the repair history table currently has no
+        // bound on the number of entries and can grow large.
+        static constexpr size_t max_batch_size = 1000;
+        std::vector<shared_tombstone_gc_state::repair_time_update> updates;
+        updates.reserve(max_batch_size);
+
+        auto flush = [&] () -> future<> {
+            if (updates.empty()) {
+                co_return;
+            }
+            try {
+                co_await get_db().invoke_on_all([table_uuid, &updates] (replica::database& local_db) {
+                    auto& gc_state = local_db.get_compaction_manager().get_shared_tombstone_gc_state();
+                    gc_state.batch_update_repair_time(table_uuid, updates);
+                });
+            } catch (...) {
+                rlogger.warn("Failed to update repair history time for table_uuid={}: {}", table_uuid, std::current_exception());
+            }
+            updates.clear();
+        };
+
+        co_await _sys_ks.local().get_repair_history(table_uuid, [this, &updates, &flush] (const auto& entry) -> future<> {
             get_repair_module().check_in_shutdown();
             auto start = entry.range_start == std::numeric_limits<int64_t>::min() ? dht::minimum_token() : dht::token::from_int64(entry.range_start);
             auto end = entry.range_end == std::numeric_limits<int64_t>::min() ? dht::maximum_token() : dht::token::from_int64(entry.range_end);
@@ -3772,16 +3809,13 @@ future<> repair_service::load_history() {
             auto repair_time = to_gc_clock(entry.ts);
             rlogger.debug("Loading repair history for keyspace={}, table={}, table_uuid={}, repair_time={}, range={}",
                     entry.ks, entry.cf, entry.table_uuid, entry.ts, range);
-            try {
-                co_await get_db().invoke_on_all([table_uuid = entry.table_uuid, range, repair_time] (replica::database& local_db) {
-                    auto& gc_state = local_db.get_compaction_manager().get_shared_tombstone_gc_state();
-                    gc_state.update_repair_time(table_uuid, range, repair_time);
-                });
-            } catch (...) {
-                rlogger.warn("Failed to update repair history time for keyspace={}, table={}, range={}, repair_time={}",
-                        entry.ks, entry.cf, range, repair_time);
+            updates.emplace_back(range, repair_time);
+            if (updates.size() >= max_batch_size) {
+                co_await flush();
             }
         });
+
+        co_await flush();
     }));
   } catch (const abort_requested_exception&) {
     // Ignore

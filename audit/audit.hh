@@ -3,21 +3,22 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #pragma once
 
 #include "seastarx.hh"
 #include "utils/log.hh"
 #include "utils/observable.hh"
-#include "db/consistency_level.hh"
-#include "locator/token_metadata_fwd.hh"
+#include "service/client_state.hh"
+#include "db/consistency_level_type.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/util/log.hh>
 
 #include "enum_set.hh"
 
 #include <memory>
+#include <optional>
 
 namespace db {
 
@@ -70,12 +71,15 @@ using category_set = enum_set<super_enum<statement_category, statement_category:
                                                              statement_category::AUTH,
                                                              statement_category::ADMIN>>;
 
-class audit_info final {
+// Holds the audit metadata for a single request: the operation category,
+// target keyspace/table, and the query string to be logged.
+class audit_info {
+protected:
     statement_category _category;
     sstring _keyspace;
     sstring _table;
     sstring _query;
-    bool _batch;
+    bool _batch; // used only for unpacking batches in CQL, not relevant for Alternator
 public:
     audit_info(statement_category cat, sstring keyspace, sstring table, bool batch)
         : _category(cat)
@@ -83,8 +87,17 @@ public:
         , _table(std::move(table))
         , _batch(batch)
     { }
-    void set_query_string(const std::string_view& query_string) {
-        _query = sstring(query_string);
+    // 'operation' is for the cases where the query string does not contain it, like with Alternator
+    audit_info& set_query_string(std::string_view query_string, std::string_view operation = {}) {
+        return set_query_string(sstring(query_string), sstring(operation));
+    }
+    audit_info& set_query_string(const sstring& query_string, const sstring& operation = "") {
+        if(!operation.empty()) {
+            _query = operation + "|" + query_string;
+        } else {
+            _query = query_string;
+        }
+        return *this;
     }
     const sstring& keyspace() const { return _keyspace; }
     const sstring& table() const { return _table; }
@@ -95,6 +108,23 @@ public:
 };
 
 using audit_info_ptr = std::unique_ptr<audit_info>;
+
+// Audit info for Alternator requests.
+// Unlike CQL, where the consistency level is available from query_options and
+// passed separately to audit::log(), Alternator has no query_options, so we
+// store the CL inside the audit_info object.
+// Consistency level is optional: only data read/write operations (GetItem,
+// PutItem, Query, Scan, etc.) have a meaningful CL. Schema operations and
+// metadata queries pass std::nullopt.
+class audit_info_alternator final : public audit_info {
+    std::optional<db::consistency_level> _cl;
+public:
+    audit_info_alternator(statement_category cat, sstring keyspace, sstring table, std::optional<db::consistency_level> cl = std::nullopt)
+        : audit_info(cat, std::move(keyspace), std::move(table), false), _cl(cl)
+    {}
+
+    std::optional<db::consistency_level> get_cl() const { return _cl; }
+};
 
 class storage_helper;
 
@@ -142,13 +172,15 @@ public:
     future<> start(const db::config& cfg);
     future<> stop();
     future<> shutdown();
-    bool should_log(const audit_info* audit_info) const;
+    bool should_log(const audit_info& audit_info) const;
+    bool will_log(statement_category cat, std::string_view keyspace = {}, std::string_view table = {}) const;
     bool should_log_login() const { return _audited_categories.contains(statement_category::AUTH); }
-    future<> log(const audit_info* audit_info, service::query_state& query_state, const cql3::query_options& options, bool error);
+    future<> log(const audit_info& audit_info, const service::client_state& client_state, std::optional<db::consistency_level> cl, bool error);
     future<> log_login(const sstring& username, socket_address client_ip, bool error) noexcept;
 };
 
-future<> inspect(shared_ptr<cql3::cql_statement> statement, service::query_state& query_state, const cql3::query_options& options, bool error);
+future<> inspect(const audit_info_alternator& audit_info, const service::client_state& client_state, bool error);
+future<> inspect(shared_ptr<cql3::cql_statement> statement, const service::query_state& query_state, const cql3::query_options& options, bool error);
 
 future<> inspect_login(const sstring& username, socket_address client_ip, bool error);
 

@@ -1,5 +1,5 @@
 # Copyright 2026-present ScyllaDB
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # Dockerfile to build a toolchain with recent GCC and Clang/LLVM on Fedora Rawhide.
 # This can be used to look for regressions or incompatibilities in the toolchain under

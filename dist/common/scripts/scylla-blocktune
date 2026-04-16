@@ -5,7 +5,7 @@
 #
 
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 import argparse
 from scylla_blocktune import tune_yaml, tune_fs, tune_dev

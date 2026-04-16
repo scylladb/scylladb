@@ -1,6 +1,6 @@
 # Copyright 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from test.nodetool.rest_api_mock import expected_request
 from test.nodetool.utils import check_nodetool_fails_with

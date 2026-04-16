@@ -1,6 +1,6 @@
 # Copyright 2023-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 ###############################################################################
 # Tests for CQL casting, e.g `blob_column = (blob)(int)123`

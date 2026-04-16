@@ -1,6 +1,6 @@
 # Copyright 2019-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # This file contains "test fixtures", a pytest concept described in
 # https://docs.pytest.org/en/latest/fixture.html.
@@ -16,6 +16,7 @@ import re
 
 from test.alternator.util import create_test_table, is_aws, scylla_log
 from test.cqlpy.conftest import host  # add required fixtures
+from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.suite.python import add_host_option
 from urllib.parse import urlparse
@@ -60,7 +61,7 @@ def pytest_collection_modifyitems(config, items):
     if config.getoption("--runveryslow"):
         # --runveryslow given in cli: do not skip veryslow tests
         return
-    skip_veryslow = pytest.mark.skip(reason="need --runveryslow option to run")
+    skip_veryslow = pytest.mark.skip_env(reason="need --runveryslow option to run")
     for item in items:
         if "veryslow" in item.keywords:
             item.add_marker(skip_veryslow)
@@ -455,4 +456,4 @@ def cql(dynamodb):
     except NoHostAvailable:
         pytest.skip('Could not connect to Scylla-only CQL API')
     yield ret
-    cluster.shutdown()
+    safe_driver_shutdown(cluster)

@@ -6,7 +6,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include "storage_service.hh"
@@ -20,7 +20,6 @@
 #include "raft/raft.hh"
 #include "auth/cache.hh"
 #include <ranges>
-#include <seastar/core/shard_id.hh>
 #include <seastar/core/sleep.hh>
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service/qos/service_level_controller.hh"
@@ -68,6 +67,7 @@
 #include <seastar/core/thread.hh>
 #include <algorithm>
 #include "locator/local_strategy.hh"
+#include "locator/tablet_replication_strategy.hh"
 #include "utils/user_provided_param.hh"
 #include "version.hh"
 #include "streaming/stream_blob.hh"
@@ -118,11 +118,9 @@
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
 #include "cql3/query_processor.hh"
-#include "service/qos/service_level_controller.hh"
 #include <csignal>
 #include "utils/labels.hh"
 #include "view_info.hh"
-#include "raft/raft.hh"
 #include "debug.hh"
 
 #include <boost/algorithm/string/split.hpp>
@@ -349,30 +347,6 @@ bool storage_service::is_replacing() {
     // That said, we should just stop supporting it and force users
     // to move to the new, replace_node_first_boot config option.
     return !cfg.replace_address().empty();
-}
-
-bool storage_service::is_first_node() {
-    if (is_replacing()) {
-        return false;
-    }
-    auto seeds = _gossiper.get_seeds();
-    if (seeds.empty()) {
-        return false;
-    }
-    // Node with the smallest IP address is chosen as the very first node
-    // in the cluster. The first node is the only node that does not
-    // bootstrap in the cluster. All other nodes will bootstrap.
-    std::vector<gms::inet_address> sorted_seeds(seeds.begin(), seeds.end());
-    std::sort(sorted_seeds.begin(), sorted_seeds.end());
-    if (sorted_seeds.front() == get_broadcast_address()) {
-        slogger.info("I am the first node in the cluster. Skip bootstrap. Node={}", get_broadcast_address());
-        return true;
-    }
-    return false;
-}
-
-bool storage_service::should_bootstrap() {
-    return !_sys_ks.local().bootstrap_complete() && !is_first_node();
 }
 
 /* Broadcasts the chosen tokens through gossip,
@@ -693,25 +667,6 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
     _topology_state_machine.reload_count++;
     auto& topology = _topology_state_machine._topology;
-
-    // the view_builder is migrated to v2 in view_builder::migrate_to_v2.
-    // it writes a v2 version mutation as topology_change, then we get here
-    // to update the service to start using the v2 table.
-    auto view_builder_version = co_await _sys_ks.local().get_view_builder_version();
-    switch (view_builder_version) {
-        case db::system_keyspace::view_builder_version_t::v1_5:
-            co_await _view_builder.invoke_on_all([] (db::view::view_builder& vb) -> future<> {
-                co_await vb.upgrade_to_v1_5();
-            });
-            break;
-        case db::system_keyspace::view_builder_version_t::v2:
-            co_await _view_builder.invoke_on_all([] (db::view::view_builder& vb) -> future<> {
-                co_await vb.upgrade_to_v2();
-            });
-            break;
-        default:
-            break;
-    }
 
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
         return fs.enable(topology.enabled_features | std::ranges::to<std::set<std::string_view>>());
@@ -1416,14 +1371,11 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
 
     insert_join_request_mutations.emplace_back(co_await _sys_ks.local().make_auth_version_mutation(write_timestamp, db::system_keyspace::auth_version_t::v2));
 
+    insert_join_request_mutations.emplace_back(co_await _sys_ks.local().make_view_builder_version_mutation(write_timestamp, db::system_keyspace::view_builder_version_t::v2));
+
     auto sl_driver_mutations = co_await qos::service_level_controller::get_create_driver_service_level_mutations(_sys_ks.local(), write_timestamp);
     for (auto& m : sl_driver_mutations) {
         insert_join_request_mutations.emplace_back(m);
-    }
-
-    if (!utils::get_local_injector().is_enabled("skip_vb_v2_version_mut")) {
-        insert_join_request_mutations.emplace_back(
-                co_await _sys_ks.local().make_view_builder_version_mutation(write_timestamp, db::system_keyspace::view_builder_version_t::v2));
     }
 
     topology_change change{std::move(insert_join_request_mutations)};
@@ -1574,9 +1526,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         raft_replace_info = raft_group0::replace_info {
             .raft_id = raft::server_id{ri->host_id.uuid()},
         };
-    } else if (should_bootstrap()) {
-        co_await check_for_endpoint_collision(initial_contact_nodes);
-    } else {
+    } else if (_sys_ks.local().bootstrap_complete()) {
         slogger.info("Performing gossip shadow round, initial_contact_nodes={}", initial_contact_nodes);
         co_await _gossiper.do_shadow_round(initial_contact_nodes, gms::gossiper::mandatory::no);
         _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
@@ -1832,7 +1782,7 @@ future<> storage_service::on_change(gms::inet_address endpoint, locator::host_id
     slogger.debug("endpoint={} on_change:     states={}, permit_id={}", endpoint, states, pid);
 
     auto ep_state = _gossiper.get_endpoint_state_ptr(host_id);
-    if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
+    if (!ep_state || _gossiper.is_left(*ep_state)) {
         slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
         co_return;
     }
@@ -1917,12 +1867,8 @@ std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for
 
     auto set_field = [&]<typename T> (std::optional<T>& field,
             const gms::versioned_value& value,
-            std::string_view name,
-            bool managed_by_raft)
+            std::string_view name)
     {
-        if (managed_by_raft) {
-            return;
-        }
         try {
             field = T(value.value());
         } catch (...) {
@@ -1931,31 +1877,17 @@ std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for
         }
     };
 
+    // Fields managed by raft are skipped here
     for (const auto& [state, value] : app_state_map) {
         switch (state) {
-        case application_state::DC:
-            set_field(get_peer_info().data_center, value, "data_center", true);
-            break;
         case application_state::INTERNAL_IP:
-            set_field(get_peer_info().preferred_ip, value, "preferred_ip", false);
-            break;
-        case application_state::RACK:
-            set_field(get_peer_info().rack, value, "rack", true);
-            break;
-        case application_state::RELEASE_VERSION:
-            set_field(get_peer_info().release_version, value, "release_version", true);
+            set_field(get_peer_info().preferred_ip, value, "preferred_ip");
             break;
         case application_state::RPC_ADDRESS:
-            set_field(get_peer_info().rpc_address, value, "rpc_address", false);
+            set_field(get_peer_info().rpc_address, value, "rpc_address");
             break;
         case application_state::SCHEMA:
-            set_field(get_peer_info().schema_version, value, "schema_version", false);
-            break;
-        case application_state::TOKENS:
-            // tokens are updated separately
-            break;
-        case application_state::SUPPORTED_FEATURES:
-            set_field(get_peer_info().supported_features, value, "supported_features", true);
+            set_field(get_peer_info().schema_version, value, "schema_version");
             break;
         default:
             break;
@@ -2237,7 +2169,26 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
                 if (auto pt_rs = rs->maybe_as_per_table()) {
                     erm = pt_rs->make_replication_map(id, tmptr);
                 } else {
-                    erm = change.pending_effective_replication_maps[this_shard_id()][table_schema->ks_name()];
+                    const locator::abstract_replication_strategy *old_rs = ss.get_database().column_family_exists(id)
+                            ? &ss.get_database().find_column_family(id).get_effective_replication_map()->get_replication_strategy()
+                            : nullptr;
+                    if (old_rs && old_rs->uses_tablets()) {
+                        // The table is under vnodes-to-tablets migration:
+                        // the keyspace uses vnodes, but the table uses a tablet-based ERM.
+                        // Preserve the tablet flavor of the ERM.
+                        // The ERM flavor is a node-local setting that expresses
+                        // the node's storage organization, which can change only
+                        // on startup after resharding (while the node is offline).
+                        // It is determined on startup by the distributed loader.
+                        auto old_tablet_rs = old_rs->maybe_as_tablet_aware();
+                        locator::replication_strategy_params params(rs->get_config_options(), old_tablet_rs->get_initial_tablets(), old_tablet_rs->get_consistency());
+                        auto& ks = ss.get_database().find_keyspace(table_schema->ks_name());
+                        auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(ks.metadata()->strategy_name(), params, tmptr->get_topology());
+                        auto pt_rs = tablet_rs->maybe_as_per_table();
+                        erm = pt_rs->make_replication_map(id, tmptr);
+                    } else {
+                        erm = change.pending_effective_replication_maps[this_shard_id()][table_schema->ks_name()];
+                    }
                 }
                 if (table_schema->is_view()) {
                     change.pending_view_erms[this_shard_id()].emplace(id, std::move(erm));
@@ -2405,27 +2356,6 @@ future<> storage_service::wait_for_group0_stop() {
     }
 }
 
-future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes) {
-    slogger.debug("Starting shadow gossip round to check for endpoint collision");
-
-    return seastar::async([this, initial_contact_nodes] {
-        bool found_bootstrapping_node = false;
-        auto local_features = _feature_service.supported_feature_set();
-        do {
-            slogger.info("Performing gossip shadow round");
-            _gossiper.do_shadow_round(initial_contact_nodes, gms::gossiper::mandatory::yes).get();
-            _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
-            auto addr = get_broadcast_address();
-            if (!_gossiper.is_safe_for_bootstrap(addr)) {
-                throw std::runtime_error(::format("A node with address {} already exists, cancelling join. "
-                    "Use replace_address if you want to replace this node.", addr));
-            }
-        } while (found_bootstrapping_node);
-        slogger.info("Checking bootstrapping/leaving/moving nodes: ok (check_for_endpoint_collision)");
-        _gossiper.reset_endpoint_state_map().get();
-    });
-}
-
 future<> storage_service::remove_endpoint(inet_address endpoint, gms::permit_id pid) {
     auto host_id_opt = _gossiper.try_get_host_id(endpoint);
     if (host_id_opt) {
@@ -2476,17 +2406,6 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         replace_address = *node;
     } else {
         replace_host_id = _gossiper.get_host_id(replace_address);
-    }
-
-    auto state = _gossiper.get_endpoint_state_ptr(replace_host_id);
-    if (!state) {
-        throw std::runtime_error(::format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
-    }
-
-    // Reject to replace a node that has left the ring
-    auto status = _gossiper.get_gossip_status(replace_host_id);
-    if (status == gms::versioned_value::STATUS_LEFT || status == gms::versioned_value::REMOVED_TOKEN) {
-        throw std::runtime_error(::format("Cannot replace_address {} because it has left the ring, status={}", replace_address, status));
     }
 
     auto dc_rack = get_dc_rack_for(replace_host_id).value_or(locator::endpoint_dc_rack::default_location);
@@ -2631,6 +2550,14 @@ sstring storage_service::get_release_version() {
 
 sstring storage_service::get_schema_version() {
     return _db.local().get_version().to_sstring();
+}
+
+cluster_info storage_service::describe_cluster() const {
+    return cluster_info{
+        .cluster_name = _gossiper.get_cluster_name(),
+        .partitioner = _gossiper.get_partitioner_name(),
+        .snitch_name = _snitch.local()->get_name()
+    };
 }
 
 static constexpr auto UNREACHABLE = "UNREACHABLE";
@@ -2782,12 +2709,7 @@ future<> storage_service::raft_decommission() {
     rtlogger.info("decommission: waiting for completion (request ID: {})", request_id);
     auto error = co_await wait_for_topology_request_completion(request_id);
 
-    if (error.empty()) {
-        // Need to set it otherwise gossiper will try to send shutdown on exit
-        rtlogger.info("decommission: successfully removed from topology (request ID: {}), updating gossip status", request_id);
-        co_await _gossiper.add_local_application_state(std::pair(gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count())));
-        rtlogger.info("Decommission succeeded. Request ID: {}", request_id);
-    } else  {
+    if (!error.empty()) {
         auto err = fmt::format("Decommission failed. See earlier errors ({}). Request ID: {}", error, request_id);
         rtlogger.error("{}", err);
         throw std::runtime_error(err);
@@ -3804,14 +3726,14 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
 }
 
 future<utils::chunked_vector<dht::token_range_endpoints>>
-storage_service::describe_ring_for_table(const sstring& keyspace_name, const sstring& table_name) const {
-    slogger.debug("describe_ring for table {}.{}", keyspace_name, table_name);
-    auto& t = _db.local().find_column_family(keyspace_name, table_name);
+storage_service::describe_ring_for_table(table_id tid) const {
+    auto& t = _db.local().find_column_family(tid);
+    const auto& schema = *t.schema();
+    slogger.debug("describe_ring for table {}.{}", schema.ks_name(), schema.cf_name());
     if (!t.uses_tablets()) {
-        auto ranges = co_await describe_ring(keyspace_name);
+        auto ranges = co_await describe_ring(schema.ks_name());
         co_return ranges;
     }
-    table_id tid = t.schema()->id();
     auto erm = t.get_effective_replication_map();
     auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
     const auto& topology = erm->get_topology();
@@ -3968,6 +3890,365 @@ future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_
     wake_up_topology_state_machine();
 }
 
+future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.prepare_for_tablets_migration(ks_name);
+        });
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as);
+
+        auto& db = _db.local();
+        auto& ks = db.find_keyspace(ks_name);
+
+        if (ks.uses_tablets()) {
+            throw std::runtime_error(fmt::format("Keyspace {} already uses tablets", ks_name));
+        }
+
+        const auto& cf_meta_data = ks.metadata().get()->cf_meta_data();
+        if (cf_meta_data.empty()) {
+            throw std::runtime_error(fmt::format("Keyspace {} has no tables to migrate. To use tablets, recreate the keyspace with tablets enabled", ks_name));
+        }
+
+        const auto& tm = get_token_metadata();
+        const auto& sorted_tokens = tm.sorted_tokens();
+        size_t tablet_count = sorted_tokens.size();
+        if (!std::has_single_bit(tablet_count)) {
+            throw std::runtime_error(fmt::format("Table migration requires vnodes to be a power of two. Current value: {}", tablet_count));
+        }
+
+        auto topology = co_await get_system_keyspace().load_topology_state({});
+        for (const auto& [server_id, replica_state]: topology.normal_nodes) {
+            if (replica_state.storage_mode) {
+                throw std::runtime_error(fmt::format("Another migration is in progress (node '{}' has intended storage mode '{}') - cannot start tablets migration."
+                        " Please wait for the current migration to finish and retry.",
+                        server_id, *replica_state.storage_mode));
+            }
+        }
+
+        // Stateful lambdas for round-robin shard assignment per node.
+        std::unordered_map<locator::host_id, std::function<shard_id()>> next_shard_for;
+        tm.for_each_token_owner([&] (const locator::node& node) {
+            auto host = node.host_id();
+            next_shard_for[host] = [num_shards = node.get_shard_count(), idx = 0u]() mutable {
+                return shard_id(idx++ % num_shards);
+            };
+        });
+
+        slogger.info("Building tablet maps for tables in keyspace {} with {} tablet(s)", ks_name, tablet_count);
+
+        // Build a tablet_map from vnode token boundaries.
+        //
+        // The map contains one tablet per vnode. The replicas of each tablet are
+        // the same as the replicas of the corresponding vnode. Shards are assigned
+        // in round-robin fashion per node so that tablets are evenly distributed
+        // within each node.
+        // (FIXME: we should consider tablet sizes as well)
+        //
+        // This map will serve as a template for per-table tablet map mutations.
+        // Each table in the keyspace receives its own tablet map, but all maps
+        // have identical tablet boundaries and replica placement.
+
+        auto erm = ks.get_static_effective_replication_map();
+
+        locator::tablet_map tmap(tablet_count);
+        for (size_t i = 0; i < tablet_count; ++i) {
+            auto tablet = locator::tablet_id(i);
+            auto vnode_replica_hosts = erm->get_natural_replicas(sorted_tokens[i], true);
+            locator::tablet_replica_set tablet_replicas;
+            for (auto host : vnode_replica_hosts) {
+                tablet_replicas.push_back(locator::tablet_replica{host, next_shard_for[host]()});
+            }
+            tmap.set_tablet(tablet, locator::tablet_info(std::move(tablet_replicas)));
+            if (tmap.get_last_token(tablet) != sorted_tokens[i]) {
+                throw std::runtime_error(fmt::format("vnode token {} is not aligned; cannot be used as tablet boundary (expected: {})", sorted_tokens[i], tmap.get_last_token(tablet)));
+            }
+        }
+
+        std::vector<std::pair<table_id, sstring>> tables_to_migrate;
+
+        for (const auto& [name, schema] : cf_meta_data) {
+            auto tid = schema->id();
+            auto& cf = db.find_column_family(tid);
+
+            if (cf.uses_tablets()) {
+                slogger.info("Table {}.{} already uses tablets, skipping", ks_name, name);
+                continue;
+            }
+            tables_to_migrate.push_back({tid, name});
+        }
+
+        if (tables_to_migrate.empty()) {
+            slogger.info("All tables in keyspace {} already use tablets, nothing to do", ks_name);
+            co_return;
+        }
+
+        // Build tablet map mutations for all tables and persist them to group0 (system.tablets)
+        // in a single command.
+        //
+        // FIXME: Tablet map mutations for large keyspaces should be split into
+        // multiple group0 commands to avoid hitting the command size limit.
+        // To maintain atomicity against concurrent migration requests
+        // (e.g., finalization) and prevent failures from group0 conflicts, we
+        // should turn this into a topology request.
+        utils::chunked_vector<canonical_mutation> updates;
+        for (const auto& [tid, cf_name] : tables_to_migrate) {
+            co_await replica::tablet_map_to_mutations(
+                tmap,
+                tid,
+                ks_name,
+                cf_name,
+                guard.write_timestamp(),
+                _feature_service,
+                [&] (mutation m) -> future<> {
+                    updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                });
+        }
+
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
+            fmt::format("migrate keyspace {} to tablets", ks_name));
+
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as);
+        } catch (group0_concurrent_modification&) {
+            slogger.info("migrate_to_tablets: concurrent modification, retrying");
+            continue;
+        }
+
+        for (const auto& [tid, cf_name] : tables_to_migrate) {
+            slogger.info("Successfully built tablet map for table {}.{} ({} tablet(s))",
+                         ks_name, cf_name, tablet_count);
+        }
+        break;
+    }
+}
+
+future<> storage_service::set_node_intended_storage_mode(intended_storage_mode mode) {
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [mode] (auto& ss) {
+            return ss.set_node_intended_storage_mode(mode);
+        });
+    }
+
+    auto& raft_server = _group0->group0_server();
+    auto holder = _group0->hold_group0_gate();
+
+    slogger.info("Setting intended storage mode for node {} to {}", raft_server.id(), mode);
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        // Make sure that a migration has been started, i.e.,
+        // prepare_for_tablets_migration() has been called for at least one
+        // keyspace. prepare_for_tablets_migration() will fail if
+        // intended_storage_mode is already set for any node.
+        const auto& tablet_metadata = get_token_metadata().tablets();
+        bool has_any_migrating_table = false;
+        for (const auto& ks : _db.local().get_non_system_keyspaces()) {
+            auto& keyspace = _db.local().find_keyspace(ks);
+            if (!keyspace.uses_tablets()) {
+                for (const auto& schema : keyspace.metadata()->tables()) {
+                    if (tablet_metadata.has_tablet_map(schema->id())) {
+                        has_any_migrating_table = true;
+                        break;
+                    }
+                }
+            }
+            if (has_any_migrating_table) {
+                break;
+            }
+        }
+        if (!has_any_migrating_table) {
+            throw std::runtime_error(::format("Cannot set intended storage mode to {}: no migration is in progress. You need to start a migration first.", mode));
+        }
+
+        auto it = _topology_state_machine._topology.find(raft_server.id());
+        if (!it) {
+            throw std::runtime_error(::format("Node {} is not a member of the cluster", raft_server.id()));
+        }
+
+        const auto& rs = it->second;
+
+        if (rs.state != node_state::normal) {
+            throw std::runtime_error(::format("Node {} is not in the normal state (current state: {})", raft_server.id(), rs.state));
+        }
+
+        if (rs.storage_mode == mode) {
+            slogger.info("Node {} already has intended storage mode set to {}, skipping", raft_server.id(), mode);
+            co_return;
+        }
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.with_node(raft_server.id())
+               .set("intended_storage_mode", mode);
+
+        topology_change change{{builder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
+            ::format("set intended storage mode for node {} to {}", raft_server.id(), mode));
+
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as);
+        } catch (group0_concurrent_modification&) {
+            slogger.info("set_node_intended_storage_mode: concurrent modification, retrying");
+            continue;
+        }
+        break;
+    }
+
+    slogger.info("Successfully set intended storage mode for node {} to {}", raft_server.id(), mode);
+}
+
+future<storage_service::keyspace_migration_status> storage_service::get_tablets_migration_status(const sstring& ks_name) {
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [&ks_name] (auto& ss) {
+            return ss.get_tablets_migration_status(ks_name);
+        });
+    }
+
+    auto& db = _db.local();
+    auto& ks = db.find_keyspace(ks_name);
+
+    keyspace_migration_status result;
+    result.keyspace = ks_name;
+
+    if (ks.uses_tablets()) {
+        result.status = "tablets";
+        co_return result;
+    }
+
+    const auto& tm = get_token_metadata();
+    const auto& tablet_metadata = tm.tablets();
+
+    auto tables = ks.metadata()->tables();
+
+    // Check whether all tables have tablet maps (i.e. migration was started).
+    bool has_tablet_maps = !tables.empty() && std::ranges::all_of(tables, [&] (const auto& schema) {
+        return tablet_metadata.has_tablet_map(schema->id());
+    });
+
+    if (!has_tablet_maps) {
+        result.status = "vnodes";
+        co_return result;
+    }
+
+    result.status = "migrating_to_tablets";
+
+    // Pick one table and query system.tablet_sizes to find which nodes
+    // report tablet sizes (i.e. have loaded tablet-based ERMs).
+    auto sample_table_id = tables.front()->id();
+
+    // FIXME: system.tablet_sizes might return stale data (load stats in the topology coordinator are cached).
+    auto rs = co_await _qp.execute_internal(
+            "SELECT replicas FROM system.tablet_sizes WHERE table_id = ?",
+            {sample_table_id.uuid()},
+            cql3::query_processor::cache_internal::no);
+
+    // Collect all host_ids that appear in the replicas map across all tablets.
+    std::unordered_set<locator::host_id> nodes_reporting_tablets;
+    for (const auto& row : *rs) {
+        if (row.has("replicas")) {
+            auto replicas_map = row.get_map<utils::UUID, int64_t>("replicas");
+            for (const auto& [host_uuid, size] : replicas_map) {
+                nodes_reporting_tablets.insert(locator::host_id(host_uuid));
+            }
+        }
+    }
+
+    const auto& topo = _topology_state_machine._topology;
+    for (const auto& [server_id, rs] : topo.normal_nodes) {
+        auto host_id = locator::host_id{server_id.uuid()};
+        bool reports_tablets = nodes_reporting_tablets.contains(host_id);
+
+        auto current_mode = reports_tablets
+            ? intended_storage_mode::tablets
+            : intended_storage_mode::vnodes;
+        auto intended_mode = rs.storage_mode.value_or(intended_storage_mode::vnodes);
+
+        result.nodes.push_back(node_migration_status{
+            .host_id = host_id,
+            .current_mode = fmt::format("{}", current_mode),
+            .intended_mode = fmt::format("{}", intended_mode),
+        });
+    }
+
+    co_return result;
+}
+
+future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [&ks_name] (auto& ss) {
+            return ss.finalize_tablets_migration(ks_name);
+        });
+    }
+
+    slogger.info("Finalizing vnodes-to-tablets migration for keyspace '{}'", ks_name);
+
+    utils::UUID request_id;
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        auto& db = _db.local();
+        auto& ks = db.find_keyspace(ks_name);
+
+        if (ks.uses_tablets()) {
+            throw std::runtime_error(fmt::format("Keyspace '{}' already uses tablets", ks_name));
+        }
+
+        const auto& tm = get_token_metadata();
+        const auto& tablet_metadata = tm.tablets();
+
+        auto tables = ks.metadata()->tables();
+        if (tables.empty()) {
+            throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
+        }
+
+        for (const auto& schema : tables) {
+            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
+                    "all tables in keyspace '{}' must be prepared for migration before finalizing",
+                    ks_name, schema->cf_name(), ks_name));
+            }
+        }
+
+        slogger.info("All {} table(s) in keyspace '{}' have tablet maps, submitting finalization request",
+                     tables.size(), ks_name);
+
+        request_id = guard.new_group0_state_id();
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.queue_global_topology_request_id(request_id);
+
+        topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+        rtbuilder.set("done", false)
+                 .set("start_time", db_clock::now())
+                 .set("request_type", global_topology_request::finalize_migration)
+                 .set_finalize_migration_data(ks_name);
+
+        topology_change change{{builder.build(), rtbuilder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
+            fmt::format("finalize vnodes-to-tablets migration for keyspace '{}'", ks_name));
+
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+        } catch (group0_concurrent_modification&) {
+            slogger.info("finalize_tablets_migration: concurrent modification, retrying");
+            continue;
+        }
+        break;
+    }
+
+    auto error = co_await wait_for_topology_request_completion(request_id);
+    if (!error.empty()) {
+        throw std::runtime_error(fmt::format("Migration finalization failed for keyspace '{}': {}", ks_name, error));
+    }
+
+    slogger.info("Successfully finalized vnodes-to-tablets migration for keyspace '{}'", ks_name);
+}
+
 future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {
     tasks::task_info tablet_split_task_info;
 
@@ -3983,6 +4264,8 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
             return db.find_column_family(table).split_all_storage_groups(tablet_split_task_info);
         });
     };
+
+    co_await utils::get_local_injector().inject("tablet_split_monitor_wait", utils::wait_for_message(1min));
 
     exponential_backoff_retry split_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
 
@@ -4702,7 +4985,13 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             }
         });
 
-        if (trinfo->transition != locator::tablet_transition_kind::intranode_migration && _feature_service.file_stream && _db.local().get_config().enable_file_stream()) {
+        auto& table = _db.local().find_column_family(tablet.table);
+        const bool file_stream_enabled = _feature_service.file_stream && _db.local().get_config().enable_file_stream();
+        if (table.uses_logstor() && !file_stream_enabled) {
+            throw std::runtime_error(fmt::format("Table {}.{} uses logstor, which requires file streaming to be enabled", table.schema()->ks_name(), table.schema()->cf_name()));
+        }
+
+        if (file_stream_enabled && (trinfo->transition != locator::tablet_transition_kind::intranode_migration || table.uses_logstor())) {
             co_await utils::get_local_injector().inject("migration_streaming_wait", [] (auto& handler) {
                 rtlogger.info("migration_streaming_wait: start");
                 return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
@@ -5440,6 +5729,8 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     }
 }
 
+
+
 future<> storage_service::await_topology_quiesced() {
     auto holder = _async_gate.hold();
 
@@ -5850,9 +6141,7 @@ void storage_service::init_messaging_service() {
             // apply only for "legacy" snapshot pull RPCs.
             std::vector<table_id> additional_tables;
             if (params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id()) {
-                if (ss._feature_service.view_build_status_on_group0) {
-                    additional_tables.push_back(db::system_keyspace::view_build_status_v2()->id());
-                }
+                additional_tables.push_back(db::system_keyspace::view_build_status_v2()->id());
                 if (ss._feature_service.compression_dicts) {
                     additional_tables.push_back(db::system_keyspace::dicts()->id());
                 }

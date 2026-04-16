@@ -1,6 +1,6 @@
 # Copyright 2024-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 #############################################################################
 # Although regular column values are only limited by 31 bits (2GB),

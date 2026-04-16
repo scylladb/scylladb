@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2024-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
 # - New items should be added to the end of the list
@@ -17,7 +17,8 @@ ERROR_INJECTIONS = (
     "stop_after_starting_cdc_generation_service",
     "stop_after_starting_group0_service",
     "stop_after_starting_auth_service",
-    "stop_during_gossip_shadow_round",
+    # do_shadow_round() is no longer called during fresh bootstrap since c17c4806a1
+    "REMOVED_stop_during_gossip_shadow_round",
     "stop_after_saving_tokens",
     "stop_after_starting_gossiping",
     "stop_after_sending_join_node_request",

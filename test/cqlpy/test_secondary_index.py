@@ -1,9 +1,10 @@
 # Copyright 2020-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # Tests for secondary indexes
 
+import json
 import random
 import itertools
 import time
@@ -2030,6 +2031,82 @@ def test_index_in_system_schema_indexes(cql, built_index):
     # to be the true, and doesn't accidentally regress.
     assert res[0].kind == 'COMPOSITES'
     assert res[0].options == {'target': 'v'}
+
+# Test that the "target" option in system_schema.indexes is serialized
+# correctly for secondary indexes on collection columns.
+# This format is critical for backward compatibility, as it's read from
+# disk on startup to rebuild indexes. An incompatible change would prevent
+# existing indexes from being recreated after an upgrade.
+def test_global_collection_index_target_serialization(cql, test_keyspace):
+    schema = "p int PRIMARY KEY, m map<int,int>, fl frozen<list<int>>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Scylla normalizes full(col) targets to just the column name;
+        # Cassandra keeps the full(col) prefix.
+        full_target = "fl" if is_scylla(cql) else "full(fl)"
+        cases = [
+            ("keys(m)", "keys(m)"),
+            ("values(m)", "values(m)"),
+            ("entries(m)", "entries(m)"),
+            ("full(fl)", full_target),
+        ]
+        for index_expr, expected_target in cases:
+            index_name = unique_name()
+            cql.execute(f"CREATE INDEX {index_name} ON {table}({index_expr})")
+            wait_for_index(cql, test_keyspace, index_name)
+
+            res = [r for r in cql.execute('select * from system_schema.indexes')
+                   if r.index_name == index_name]
+
+            assert len(res) == 1
+            assert res[0].kind == 'COMPOSITES'
+            assert res[0].options == {'target': expected_target}, \
+                f"For index expression '{index_expr}': expected target '{expected_target}', got '{res[0].options}'"
+
+# Test that the "target" option in system_schema.indexes is serialized
+# correctly when the indexed column name contains special characters
+# (e.g., upper-case, spaces, braces, or keywords like "keys(m)").
+# The encoding uses the CQL quoted-identifier form, so e.g. column "hEllo"
+# is stored as '"hEllo"'. An incompatible change here would break index
+# lookup after an upgrade.
+def test_global_index_target_serialization_quoted_names(cql, test_keyspace):
+    # Column names requiring quoting in CQL (mixed-case, space, characters
+    # that would otherwise be confused with target-format prefixes or JSON).
+    quoted_names = ['"hEllo"', '"x y"', '"keys(m)"']
+    schema = 'p int PRIMARY KEY, ' + ', '.join(name + " int" for name in quoted_names)
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for name in quoted_names:
+            index_name = unique_name()
+            cql.execute(f"CREATE INDEX {index_name} ON {table}({name})")
+            wait_for_index(cql, test_keyspace, index_name)
+
+            res = [r for r in cql.execute('select * from system_schema.indexes')
+                   if r.index_name == index_name]
+
+            assert len(res) == 1
+            assert res[0].kind == 'COMPOSITES'
+            # The target is the CQL representation of the column name,
+            # i.e., quoted exactly as provided in the CREATE INDEX statement.
+            assert res[0].options == {'target': name}, \
+                f"For column {name}: got target '{res[0].options}'"
+
+# Test that the "target" option in system_schema.indexes is serialized
+# correctly for local secondary indexes. This format is critical for
+# backward compatibility, as it's read from disk on startup to rebuild
+# indexes. An incompatible change would prevent existing local indexes
+# from being recreated after an upgrade.
+def test_local_index_target_serialization(cql, test_keyspace, scylla_only):
+    schema = "a int, b int, c int, v int, PRIMARY KEY ((a, b), c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}((a, b), v)")
+        wait_for_index(cql, test_keyspace, index_name)
+
+        res = [r for r in cql.execute('select * from system_schema.indexes')
+               if r.index_name == index_name]
+
+        assert len(res) == 1
+        # The target for a local secondary index is stored as JSON.
+        assert json.loads(res[0].options['target']) == {"pk": ["a", "b"], "ck": ["v"]}
 
 # Test index representation in REST API
 def test_index_in_API(cql, test_keyspace):

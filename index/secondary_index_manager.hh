@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -106,7 +106,7 @@ public:
     virtual void validate(const schema &schema, const cql3::statements::index_specific_prop_defs &properties,
             const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs,
         const data_dictionary::database& db) const = 0;
-    virtual table_schema_version index_version(const schema& schema) = 0;
+    virtual utils::UUID index_version(const schema& schema) = 0;
 };
 
 struct stats {

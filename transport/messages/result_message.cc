@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "result_message.hh"
@@ -20,7 +20,7 @@ std::ostream& operator<<(std::ostream& os, const result_message::void_message& m
 }
 
 std::ostream& operator<<(std::ostream& os, const result_message::bounce& msg) {
-    fmt::print(os, "{{result_message::bounce to host {}, shard {} }}", msg.move_to_host(), msg.move_to_shard());
+    fmt::print(os, "{{result_message::bounce to host {}, shard {} }}", msg.target_host(), msg.target_shard());
     return os;
 }
 

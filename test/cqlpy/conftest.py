@@ -1,6 +1,6 @@
 # Copyright 2020-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use. A "fixture" is some
@@ -250,6 +250,14 @@ def has_tablets(cql, this_dc):
 @pytest.fixture(scope="function")
 def skip_without_tablets(scylla_only, has_tablets):
     if not has_tablets:
+        pytest.skip("Test needs tablets experimental feature on")
+
+
+# Like skip_without_tablets but does not require scylla_only, so Cassandra
+# tests using this fixture will run (Cassandra has no tablet prerequisite).
+@pytest.fixture(scope="function")
+def skip_on_scylla_vnodes(cql, has_tablets):
+    if is_scylla(cql) and not has_tablets:
         pytest.skip("Test needs tablets experimental feature on")
 
 # Recent versions of Scylla deprecated the "WITH COMPACT STORAGE" feature,

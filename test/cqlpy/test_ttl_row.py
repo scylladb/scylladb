@@ -1,6 +1,6 @@
 # Copyright 2026-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 #############################################################################
 # Functional tests for the per-row TTL feature. Note that this is a distinct

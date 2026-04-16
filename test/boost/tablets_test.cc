@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 
@@ -76,10 +76,11 @@ static api::timestamp_type current_timestamp(cql_test_env& e) {
 }
 
 static
-void verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata& tm, api::timestamp_type& ts) {
+tablet_metadata verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata& tm, api::timestamp_type& ts) {
     save_tablet_metadata(env.local_db(), tm, ts++).get();
     auto tm2 = read_tablet_metadata(env.local_qp()).get();
     BOOST_REQUIRE_EQUAL(tm, tm2);
+    return tm2;
 }
 
 static
@@ -189,6 +190,162 @@ void mutate_tablets(cql_test_env& e, seastar::noncopyable_function<future<>(tabl
     abort_source as;
     auto guard = e.get_raft_group0_client().start_operation(as).get();
     mutate_tablets(e, guard, std::move(mutator));
+}
+
+SEASTAR_TEST_CASE(test_tablet_id_map_different_density_test) {
+    // Exercise different density of buckets by scaling token space, out of which we pick only first few tokens.
+    for (int num_tokens : {7, 8, 11, 16}) {
+        testlog.info("L{}: {} tokens", __LINE__, num_tokens);
+        auto tokens = dht::get_uniform_tokens(num_tokens);
+
+        auto map = tablet_id_map(3);
+        map.push_back(tokens[1], tablet_id(0));
+        map.push_back(tokens[3], tablet_id(1));
+        map.push_back(dht::last_token(), tablet_id(2));
+
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::minimum_token()), tablet_id(0));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[0]), tablet_id(0));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[1]), tablet_id(0));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[2]), tablet_id(1));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[3]), tablet_id(1));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[4]), tablet_id(2));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(tokens[5]), tablet_id(2));
+        BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::maximum_token()), tablet_id(2));
+    }
+
+    for (int num_tokens : {3, 4, 7, 11}) {
+        testlog.info("L{}: {} tokens", __LINE__, num_tokens);
+        auto tokens = dht::get_uniform_tokens(num_tokens);
+
+        // Verify tokens concentrated in the front
+        {
+            auto map = tablet_id_map(3);
+            auto last0 = tokens[0];
+            auto last1 = tokens[1];
+            auto last2 = dht::last_token();
+            map.push_back(last0, tablet_id(0));
+            map.push_back(last1, tablet_id(1));
+            map.push_back(last2, tablet_id(2));
+
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::minimum_token()), tablet_id(0));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::token::midpoint(dht::first_token(), last0)), tablet_id(0));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(last0), tablet_id(0));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::token::midpoint(last0, last1)), tablet_id(1));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(last1), tablet_id(1));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::token::midpoint(last1, last2)), tablet_id(2));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::maximum_token()), tablet_id(2));
+        }
+
+        // Verify tokens concentrated in the back
+        {
+            auto map = tablet_id_map(3);
+            auto last0 = tokens[tokens.size() - 3];
+            auto last1 = tokens[tokens.size() - 2];
+            auto last2 = tokens[tokens.size() - 1];
+            map.push_back(last0, tablet_id(0));
+            map.push_back(last1, tablet_id(1));
+            map.push_back(last2, tablet_id(2));
+
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::minimum_token()), tablet_id(0));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::token::midpoint(dht::first_token(), last0)), tablet_id(0));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(last0), tablet_id(0));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::token::midpoint(last0, last1)), tablet_id(1));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(last1), tablet_id(1));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::token::midpoint(last1, last2)), tablet_id(2));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::maximum_token()), tablet_id(2));
+        }
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_tablet_id_map_building) {
+    auto uniform_tokens = dht::get_uniform_tokens(8);
+
+    auto map = tablet_id_map(7);
+    auto tablet_0_last = dht::token(uniform_tokens[0]).next().next();
+    auto tablet_1_last = dht::token(uniform_tokens[2]).next();
+    auto tablet_2_last = tablet_1_last.next(); // tablet 2 owns only 1 token.
+    auto tablet_3_last = tablet_2_last.next().next();
+    auto tablet_4_last = dht::token(uniform_tokens[3]);
+    auto tablet_5_last = dht::token::midpoint(dht::token(uniform_tokens[3]), dht::token(uniform_tokens[4]));
+    auto tablet_6_last = dht::last_token();
+
+    map.push_back(dht::raw_token(tablet_0_last), tablet_id(0));
+    map.push_back(dht::raw_token(tablet_1_last), tablet_id(1));
+    map.push_back(dht::raw_token(tablet_2_last), tablet_id(2));
+    map.push_back(dht::raw_token(tablet_3_last), tablet_id(3));
+    map.push_back(dht::raw_token(tablet_4_last), tablet_id(4));
+    map.push_back(dht::raw_token(tablet_5_last), tablet_id(5));
+    map.push_back(dht::raw_token(tablet_6_last), tablet_id(6));
+
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(uniform_tokens[0]), tablet_id(0));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(uniform_tokens[1]), tablet_id(1));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(uniform_tokens[2]), tablet_id(1));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(uniform_tokens[3]), tablet_id(4));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(uniform_tokens[4]), tablet_id(6));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(uniform_tokens[5]), tablet_id(6));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(uniform_tokens[6]), tablet_id(6));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(uniform_tokens[7]), tablet_id(6));
+
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_0_last), tablet_id(0));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_1_last), tablet_id(1));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_2_last), tablet_id(2));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_3_last), tablet_id(3));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_4_last), tablet_id(4));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_5_last), tablet_id(5));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_6_last), tablet_id(6));
+
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_0_last.next()), tablet_id(1));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_1_last.next()), tablet_id(2));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_2_last.next()), tablet_id(3));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_3_last.next()), tablet_id(4));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_4_last.next()), tablet_id(5));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(tablet_5_last.next()), tablet_id(6));
+
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::minimum_token()), tablet_id(0));
+    BOOST_REQUIRE_EQUAL(map.get_tablet_id(dht::maximum_token()), tablet_id(6));
+
+    return make_ready_future<>();
+}
+
+static
+utils::chunked_vector<dht::raw_token> get_random_tokens(size_t n) {
+    utils::chunked_vector<dht::raw_token> last_tokens;
+    for (size_t i = 0; i < n; ++i) {
+        last_tokens.push_back(dht::raw_token(dht::token::get_random_token()));
+    }
+    std::sort(last_tokens.begin(), last_tokens.end());
+    return last_tokens;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_id_map_cloning) {
+    for (int n_tokens : {1, 2, 7, 13, 16}) {
+        auto last_tokens = get_random_tokens(n_tokens);
+        last_tokens.back() = dht::raw_token(dht::last_token());
+        auto map = tablet_id_map(last_tokens);
+        auto map_cloned = map.clone_gently().get();
+
+        int t_idx = 0;
+        for (auto&& t: last_tokens) {
+            testlog.trace("last token {} of tablet {} bucket {}", t, t_idx, dht::compaction_group_of(map.log2_count(), t));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(t), tablet_id(t_idx));
+            BOOST_REQUIRE_EQUAL(map.get_tablet_id(t), map_cloned.get_tablet_id(t));
+
+            if (t < last_tokens.back()) {
+                auto next_t = dht::token(t).next();
+                BOOST_REQUIRE_EQUAL(map.get_tablet_id(next_t), map_cloned.get_tablet_id(next_t));
+                BOOST_REQUIRE_EQUAL(map.get_tablet_id(next_t), tablet_id(t_idx + 1));
+            }
+
+            if (t > dht::first_token()) {
+                auto prev_t = dht::token(dht::raw_token(t.value - 1));
+                BOOST_REQUIRE_EQUAL(map.get_tablet_id(prev_t), map_cloned.get_tablet_id(prev_t));
+            }
+
+            ++t_idx;
+        }
+    }
 }
 
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
@@ -374,8 +531,155 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             }
 
             verify_tablet_metadata_persistence(e, tm, ts);
+
+            // Change resize decision of table1 to merge
+            {
+                tablet_map tmap(1);
+                tmap.set_resize_decision(locator::resize_decision(locator::resize_decision::merge{}, 2));
+                tmap.set_resize_task_info(locator::tablet_task_info::make_merge_request());
+                tm.set_tablet_map(table1, std::move(tmap));
+
+                auto tm2 = verify_tablet_metadata_persistence(e, tm, ts);
+                auto& decision = tm2.get_tablet_map(table1).resize_decision();
+                BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::merge>(decision.way));
+                BOOST_REQUIRE_EQUAL(decision.sequence_number, 2);
+                BOOST_REQUIRE(std::get<locator::resize_decision::merge>(decision.way).isolated_tablet == std::nullopt);
+            }
+
+            // Change resize decision of table1 to merge
+            {
+                tablet_map tmap(1);
+                tmap.set_resize_decision(locator::resize_decision(
+                        locator::resize_decision::merge{ .isolated_tablet = tablet_id(7) }, 3));
+                tmap.set_resize_task_info(locator::tablet_task_info::make_merge_request());
+                tm.set_tablet_map(table1, std::move(tmap));
+
+                auto tm2 = verify_tablet_metadata_persistence(e, tm, ts);
+                auto& decision = tm2.get_tablet_map(table1).resize_decision();
+                BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::merge>(decision.way));
+                BOOST_REQUIRE_EQUAL(decision.sequence_number, 3);
+                BOOST_REQUIRE(std::get<locator::resize_decision::merge>(decision.way).isolated_tablet == tablet_id(7));
+            }
         }
     }, tablet_cql_test_config());
+}
+
+using sibling_map = std::vector<std::pair<tablet_id, std::optional<tablet_id>>>;
+
+static
+sibling_map get_siblings(const tablet_map& tmap) {
+    sibling_map result;
+    tmap.for_each_sibling_tablets([&] (tablet_desc first, std::optional<tablet_desc> second) {
+        result.emplace_back(std::make_pair(first.tid, second.transform([] (const tablet_desc& s) { return s.tid; })));
+        return make_ready_future<>();
+    }).get();
+    return result;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_siblings) {
+    {
+        tablet_map tmap(1);
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), std::nullopt));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), std::nullopt }
+        }));
+    }
+
+    {
+        tablet_map tmap(2);
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(1), std::nullopt));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), std::nullopt },
+            { tablet_id(1), std::nullopt }
+        }));
+    }
+
+    {
+        tablet_map tmap(3);
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(1), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(2)) == std::make_pair(tablet_id(2), std::nullopt));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), std::nullopt },
+            { tablet_id(1), std::nullopt },
+            { tablet_id(2), std::nullopt }
+        }));
+    }
+
+    // Merge even count
+    {
+        tablet_map tmap(4);
+        tmap.set_resize_decision(locator::resize_decision{
+            locator::resize_decision::merge{},
+            1
+        });
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(2)) == std::make_pair(tablet_id(2), tablet_id(3)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(3)) == std::make_pair(tablet_id(2), tablet_id(3)));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), tablet_id(1) },
+            { tablet_id(2), tablet_id(3) }
+        }));
+    }
+
+    // Isolate middle tablet
+    {
+        tablet_map tmap(5);
+        tmap.set_resize_decision(locator::resize_decision{
+            locator::resize_decision::merge{ .isolated_tablet = tablet_id(2) },
+            1
+        });
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(2)) == std::make_pair(tablet_id(2), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(3)) == std::make_pair(tablet_id(3), tablet_id(4)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(4)) == std::make_pair(tablet_id(3), tablet_id(4)));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), tablet_id(1) },
+            { tablet_id(2), std::nullopt },
+            { tablet_id(3), tablet_id(4) }
+        }));
+    }
+
+    // Isolate first tablet
+    {
+        tablet_map tmap(5);
+        tmap.set_resize_decision(locator::resize_decision{
+            locator::resize_decision::merge{ .isolated_tablet = tablet_id(0) },
+            1
+        });
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(1), tablet_id(2)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(2)) == std::make_pair(tablet_id(1), tablet_id(2)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(3)) == std::make_pair(tablet_id(3), tablet_id(4)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(4)) == std::make_pair(tablet_id(3), tablet_id(4)));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), std::nullopt },
+            { tablet_id(1), tablet_id(2) },
+            { tablet_id(3), tablet_id(4) }
+        }));
+    }
+
+    // Isolate last tablet
+    {
+        tablet_map tmap(5);
+        tmap.set_resize_decision(locator::resize_decision{
+            locator::resize_decision::merge{ .isolated_tablet = tablet_id(4) },
+            1
+        });
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(2)) == std::make_pair(tablet_id(2), tablet_id(3)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(3)) == std::make_pair(tablet_id(2), tablet_id(3)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(4)) == std::make_pair(tablet_id(4), std::nullopt));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), tablet_id(1) },
+            { tablet_id(2), tablet_id(3) },
+            { tablet_id(4), std::nullopt }
+        }));
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_invalid_colocated_tables) {
@@ -1201,7 +1505,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
 
-        static const auto resize_decision = locator::resize_decision("split", 1);
+        static const auto resize_decision = locator::resize_decision(locator::resize_decision::split(), 1);
 
         {
             tablet_mutation_builder b(ts++, table1);
@@ -2128,6 +2432,152 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_internode_and_intra_merge_colocatio
     }, cfg).get();
 }
 
+void set_tablet_opts(cql_test_env& e, table_id table, const std::map<sstring, sstring>& opts) {
+    auto s = e.local_db().find_column_family(table).schema();
+    auto opts_string = fmt::to_string(fmt::join(opts | std::views::transform([] (auto&& e) {
+        return fmt::format("'{}': '{}'", e.first, e.second);
+    }), ", "));
+    e.execute_cql(fmt::format("alter table \"{}\".\"{}\" with tablets = {{{}}}",
+                         s->ks_name(), s->cf_name(), opts_string)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merge_chooses_best_replica_with_odd_count) {
+    auto cfg = cql_test_config{};
+    cfg.db_config->tablets_per_shard_goal.set(10000); // Inhibit scaling-down of the count.
+    do_with_cql_env_thread([](auto& e) {
+        auto& stm = e.shared_token_metadata().local();
+
+        auto loc = stm.get()->get_topology().get_location();
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 1, loc);
+
+        // Choose the count so that it is even, but halving it repeatedly will produce odd numbers.
+        // In this case: 258 = binary 100000010
+        // Each merge does div_ceil() on the count, so the sequence will be:
+        // 258 -> 129 -> 65 -> 33 -> 17 -> 9 -> 5 -> 3 -> 2 -> 1
+        // This is the hard case for whole-table merge, which has to pick the right tablet to isolate
+        // to prevent large deviation of tablet sizes. If merge always chooses the last tablet to be isolated,
+        // it will be tiny after all merges are done.
+        size_t initial_count = 258;
+        auto ks_name = add_keyspace(e, {{loc.dc, 1}}, 1);
+        auto opts = std::map<sstring, sstring>({
+            {"min_tablet_count", std::to_string(initial_count)},
+            {"pow2_count", "false"}
+        });
+        auto table1 = add_table(e, ks_name, opts).get();
+
+        // Set sizes, small enough to allow for arbitrary merging.
+        topo.get_shared_load_stats().set_tablet_sizes(stm.get(), table1, 1);
+
+        {
+            auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+            BOOST_REQUIRE(tmap.tablet_count() == initial_count);
+        }
+
+        // Pick a count which will make the table go through several merges,
+        // but is large enough so that we can assess imbalance.
+        size_t final_count = 5;
+        opts["min_tablet_count"] = std::to_string(final_count);
+        set_tablet_opts(e, table1, opts);
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+        BOOST_REQUIRE(tmap.tablet_count() == final_count);
+
+        min_max_tracker<uint64_t> size_minmax;
+        tmap.for_each_tablet([&] (tablet_id tid, const locator::tablet_info& tinfo) {
+            auto tablet_size = topo.get_shared_load_stats().get()->get_avg_tablet_size(tmap, global_tablet_id{table1, tid});
+            BOOST_REQUIRE(tablet_size.has_value());
+            testlog.info("Tablet {} size: {}", tid, *tablet_size);
+            size_minmax.update(*tablet_size);
+            return make_ready_future<>();
+        }).get();
+
+        // The largest tablet should be no smaller than the average tablet size (sanity check).
+        BOOST_REQUIRE_GE(size_minmax.max(), initial_count / final_count);
+
+        // The smallest tablet should be no smaller than half of the largest tablet.
+        BOOST_REQUIRE_GE(size_minmax.min(), size_minmax.max() / 2);
+    }, std::move(cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merge_stale_isolated_tablet_reproducer_odd_even_even) {
+    auto cfg = cql_test_config{};
+    cfg.db_config->tablets_per_shard_goal.set(10000); // Inhibit scaling-down of the count.
+    do_with_cql_env_thread([](auto& e) {
+        auto& stm = e.shared_token_metadata().local();
+
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 2);
+        topo.add_node(node_state::normal, 2);
+        topo.add_node(node_state::normal, 2);
+
+        const size_t initial_count = 7; // odd -> even -> even merge sequence starts here
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto opts = std::map<sstring, sstring>({
+            {"min_tablet_count", std::to_string(initial_count)},
+            {"pow2_count", "false"}
+        });
+        auto table1 = add_table(e, ks_name, opts).get();
+
+        auto& load_stats = topo.get_shared_load_stats();
+        load_stats.set_tablet_sizes(stm.get(), table1, 1);
+
+        // Make tablet 0 the largest so odd-count merge should isolate tablet 0.
+        auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+        auto tid0 = tmap.first_tablet();
+        locator::range_based_tablet_id rb_tid0{table1, tmap.get_token_range(tid0)};
+        for (auto& r : tmap.get_tablet_info(tid0).replicas) {
+            load_stats.set_tablet_size(r.host, rb_tid0, 100);
+        }
+
+        // First stage: force exactly one odd->even merge: 7 -> 4.
+        opts["min_tablet_count"] = "4";
+        set_tablet_opts(e, table1, opts);
+
+        // Apply exactly one balancing iteration so the merge decision is emitted but not finalized.
+        bool first_iteration_done = false;
+        rebalance_tablets(e, &load_stats, {}, [&] (const migration_plan&) {
+            if (first_iteration_done) {
+                return true;
+            }
+            first_iteration_done = true;
+            return false;
+        });
+
+        {
+            auto& decision = stm.get()->tablets().get_tablet_map(table1).resize_decision();
+            BOOST_REQUIRE(decision.is_merge());
+            BOOST_REQUIRE(std::get<locator::resize_decision::merge>(decision.way).isolated_tablet == tablet_id(0));
+        }
+
+        // Finalize first merge fully, reaching even count 4.
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).tablet_count() == 4);
+
+        // Second stage: another merge request on an even count, 4 -> 2.
+        opts["min_tablet_count"] = "2";
+        set_tablet_opts(e, table1, opts);
+
+        bool second_iteration_done = false;
+        rebalance_tablets(e, &load_stats, {}, [&] (const migration_plan&) {
+            if (second_iteration_done) {
+                return true;
+            }
+            second_iteration_done = true;
+            return false;
+        });
+
+        auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
+        auto& decision = tm_from_disk.get_tablet_map(table1).resize_decision();
+        BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::merge>(decision.way));
+
+        // Expected for the second (even-count) merge: no isolated tablet.
+        // This assertion reproduces the current bug by failing with stale tablet_id(0).
+        BOOST_REQUIRE(std::get<locator::resize_decision::merge>(decision.way).isolated_tablet == std::nullopt);
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
@@ -2221,6 +2671,44 @@ SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion) {
             }
         }
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_map_layout) {
+    auto cfg = cql_test_config{};
+    cfg.db_config->tablets_per_shard_goal.set(10000); // Inhibit scaling-down of the count.
+    do_with_cql_env_thread([](auto& e) {
+        auto& stm = e.shared_token_metadata().local();
+
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 1);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto min_10 = std::map<sstring, sstring>({{"min_tablet_count", "10"}, {"pow2_count", "false"}}); // 10 -> 5 -> 3 -> 2
+        auto min_8 = std::map<sstring, sstring>({{"min_tablet_count", "8"}, {"pow2_count", "false"}});
+        auto min_2 = std::map<sstring, sstring>({{"min_tablet_count", "2"}, {"pow2_count", "false"}});
+        auto table1 = add_table(e, ks_name, min_10).get();
+        auto table2 = add_table(e, ks_name, min_8).get();
+        auto table3 = add_table(e, ks_name, min_8).get();
+
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).tablet_count() == 10);
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table2).tablet_count() == 8);
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table3).tablet_count() == 8);
+
+        BOOST_REQUIRE(tablet_layout::arbitrary == stm.get()->tablets().get_tablet_map(table1).get_layout());
+        BOOST_REQUIRE(tablet_layout::pow_of_2 == stm.get()->tablets().get_tablet_map(table2).get_layout());
+        BOOST_REQUIRE(tablet_layout::pow_of_2 == stm.get()->tablets().get_tablet_map(table3).get_layout());
+
+        topo.get_shared_load_stats().set_tablet_sizes(stm.get(), table1, 1);
+
+        set_tablet_opts(e, table1, min_2);
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        // Even though the count is a power-of-two, boundaries are not aligned due to odd-count merge,
+        // so the layout should remain arbitrary.
+        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).tablet_count() == 2);
+        BOOST_REQUIRE(tablet_layout::arbitrary == stm.get()->tablets().get_tablet_map(table1).get_layout());
+        return make_ready_future<>();
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_colocation_skipped_on_excluded_nodes) {
@@ -2621,8 +3109,12 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_count_respected_with_rack_list) {
             load_sketch load(tmptr);
             load.populate_dc(dc).get();
             auto l = load.get_shard_minmax(host1);
-            BOOST_REQUIRE_EQUAL(l.min(), 16);
-            BOOST_REQUIRE_EQUAL(l.max(), 16);
+            // At least 10 because of tablets_initial_scale_factor.
+            // At most 16 due to rounding to power-of-two.
+            BOOST_REQUIRE_GE(l.min(), 10);
+            BOOST_REQUIRE_GE(l.max(), 10);
+            BOOST_REQUIRE_LE(l.min(), 16);
+            BOOST_REQUIRE_LE(l.max(), 16);
         }
 
         check_rack_list(tm_topo, tmptr->tablets().get_tablet_map(table), dc, rack_list{rack1.rack}, bad_nodes);
@@ -2690,20 +3182,21 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_shrinks_respecting_rack_allocation)
         auto t3_1 = add_table(e, ks3).get();
         auto t3_2 = add_table(e, ks3).get();
 
-        stats.set_size(t1_1, 0);
-        stats.set_size(t1_2, 0);
-        stats.set_size(t1_3, 0);
-        stats.set_size(t1_4, 0);
-        stats.set_size(t1_5, 0);
-        stats.set_size(t2_1, 0);
-        stats.set_size(t3_1, 0);
-        stats.set_size(t3_2, 0);
+        auto& stm = e.shared_token_metadata().local();
+
+        {
+            auto tmptr = stm.get();
+            stats.set_tablet_sizes(tmptr, t1_1, 1);
+            stats.set_tablet_sizes(tmptr, t1_2, 1);
+            stats.set_tablet_sizes(tmptr, t1_3, 1);
+            stats.set_tablet_sizes(tmptr, t1_4, 1);
+            stats.set_tablet_sizes(tmptr, t1_5, 1);
+            stats.set_tablet_sizes(tmptr, t2_1, 1);
+            stats.set_tablet_sizes(tmptr, t3_1, 1);
+            stats.set_tablet_sizes(tmptr, t3_2, 1);
+        }
 
         rebalance_tablets(e, &stats);
-
-        auto& stm = e.shared_token_metadata().local();
-        auto tmptr = stm.get();
-        auto& tm_topo = tmptr->get_topology();
 
         auto& tmeta = stm.get()->tablets();
         BOOST_REQUIRE_EQUAL(2, tmeta.get_tablet_map(t1_1).tablet_count());
@@ -2715,6 +3208,15 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_shrinks_respecting_rack_allocation)
         BOOST_REQUIRE_EQUAL(8, tmeta.get_tablet_map(t2_1).tablet_count());
 
         BOOST_REQUIRE_EQUAL(8, tmeta.get_tablet_map(t3_1).tablet_count());
+
+        // When pow2_count is switched to false, this should be changed to 6. Rationale:
+        // Both tables want 16 tablets/shard due to min_tablets_per_shard.
+        // They will be scaled down by 10/16 = 5/8 due to per-shard limit.
+        // The first table which already has 8 tablets, would have to shrink to 5, but can't - it's higher than 8/2.
+        // So it stays at 8.
+        // The second table receives the desired count at creation time, so can start with 5.
+        // Rounded up to an even number, so 6.
+        // Once we make splits per-tablet, we will be able to even out the count.
         BOOST_REQUIRE_EQUAL(8, tmeta.get_tablet_map(t3_2).tablet_count());
     }, cfg).get();
 }
@@ -3904,7 +4406,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
             keyspaces.push_back(add_keyspace(e, {{topo.dc(), rf}}, initial_tablets));
             auto table = add_table(e, keyspaces.back()).get();
             mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
-                tablet_map tmap(initial_tablets);
+                tablet_map tmap = tmeta.get_tablet_map(table).clone();
                 for (auto tid : tmap.tablet_ids()) {
                     // Choose replicas randomly while loading racks evenly.
                     std::vector<host_id> replica_hosts = allocate_replicas_in_racks(racks, rf, hosts_by_rack);
@@ -4246,8 +4748,10 @@ SEASTAR_THREAD_TEST_CASE(test_size_based_load_balancing_table_load) {
             table_sizes[table_id] = table_size;
             table_size /= 2;
         }
-        // Add another table with 1 byte per tablet
-        table_size = tablet_count;
+        // Add another table with 4 bytes per tablet
+        // Should be larger than 1 to account for potential splits when capacity increases.
+        // If it had 1 byte per tablet, splits would turn tablet size into 0 on subdivision, which brings table load to 0.
+        table_size = tablet_count * 4;
         auto table_id = create_table_and_set_tablet_sizes(e, topo, ks_name, tablet_count, table_size);
         table_sizes[table_id] = table_size;
 
@@ -4373,6 +4877,7 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
         {
             auto& stm = e.shared_token_metadata().local();
             auto tm = stm.get();
+            // When pow2_count is switched to false, 256 should be changed to 200.
             BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 256);
             BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 64);
 
@@ -4885,6 +5390,21 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
     return make_ready_future<>();
 }
 
+// We want to generate the same uniform boundaries if tablet count is a power-of-two as
+// we did before implementing support for arbitrary token boundaries.
+// So that when advertising a "power of two" layout, e.g in the snapshot descriptor,
+// it means the same thing for all scylla versions.
+SEASTAR_THREAD_TEST_CASE(test_get_uniform_tokens_is_compatible_with_dht_last_token_of_compaction_group) {
+    for (auto log2count : {0ul, 1ul, 2ul, 3ul, 10ul}) {
+        auto tokens = dht::get_uniform_tokens(1ul << log2count);
+        for (size_t i = 0; i < tokens.size(); i++) {
+            testlog.debug("i {}, token {}", i, tokens[i]);
+            BOOST_REQUIRE_EQUAL(tokens[i], dht::last_token_of_compaction_group(log2count, i));
+            thread::maybe_yield();
+        }
+    }
+}
+
 SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     static constexpr size_t tablet_count = 128;
     locator::tablet_map tmap(tablet_count);
@@ -4916,6 +5436,20 @@ SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     }
 
     return make_ready_future<>();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_get_split_token_is_compatible_with_old_behavior) {
+    for (auto tablet_count : {1ul, 2ul, 128ul, 1ul << log2ceil(100'000ul)}) {
+        locator::tablet_map tmap(tablet_count);
+
+        for (size_t id = 0; id < tablet_count; id++) {
+            testlog.debug("tablet_count {}, id {}", tablet_count, id);
+            auto split_tok = tmap.get_split_token(tablet_id(id));
+            BOOST_REQUIRE_EQUAL(split_tok, dht::last_token_of_compaction_group(log2ceil(tablet_count * 2), id * 2));
+        }
+
+        thread::maybe_yield();
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
@@ -4983,7 +5517,7 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
         auto guard = e.get_raft_group0_client().start_operation(as).get();
         stm.mutate_token_metadata([&](token_metadata& tm) -> future<> {
             tablet_metadata& tmeta = tm.tablets();
-            tablet_map tmap(initial_tablets);
+            tablet_map tmap = tmeta.get_tablet_map(table1).clone();
             locator::resize_decision decision;
             // leaves growing mode, allowing for merge decision.
             decision.sequence_number = decision.next_sequence_number();
@@ -6037,8 +6571,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablets_describe_ring) {
 
         auto ks = add_keyspace(e, {{topo.dc(), num_racks}}, num_racks * nodes_per_rack);
         auto table = add_table(e, ks, std::map<sstring, sstring>({{"min_tablet_count", std::to_string(min_tablet_count)}})).get();
-        auto s = db.find_schema(table);
-        auto ring = ss.describe_ring_for_table(s->ks_name(), s->cf_name()).get();
+        auto ring = ss.describe_ring_for_table(table).get();
         BOOST_REQUIRE_GE(ring.size(), min_tablet_count);
     }, cfg).get();
 }

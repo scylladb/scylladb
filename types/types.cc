@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <boost/lexical_cast.hpp>
@@ -37,6 +37,7 @@
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 #include <seastar/net/inet_address.hh>
+#include <type_traits>
 #include <unordered_set>
 #include "utils/big_decimal.hh"
 #include "utils/date.h"
@@ -54,6 +55,9 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
+
+static_assert(std::is_nothrow_move_constructible_v<data_value>);
+static_assert(std::is_nothrow_move_assignable_v<data_value>);
 
 static logging::logger tlogger("types");
 
@@ -3709,6 +3713,46 @@ bytes_ostream serialize_for_cql(const abstract_type& type, collection_mutation_v
     });
 }
 
+bytes_ostream serialize_for_cql_with_timestamps(const abstract_type& type, collection_mutation_view v) {
+    throwing_assert(type.is_multi_cell());
+    return v.with_deserialized(type, [&] (collection_mutation_view_description mv) -> bytes_ostream {
+        // Step 1: produce regular CQL bytes (copy of mv is made inside serialize_for_cql_aux, mv is still valid after)
+        bytes_ostream cql = visit(type, make_visitor(
+            [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, mv); },
+            [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, mv); },
+            [&] (const user_type_impl& utype) { return serialize_for_cql_aux(utype, mv); },
+            [&] (const abstract_type& o) -> bytes_ostream {
+                throw std::runtime_error(format("serialize_for_cql_with_timestamps: unsupported type {}", o.name()));
+            }
+        ));
+
+        // Step 2: build extended format:
+        // [uint32: cql byte length][cql bytes]
+        // [int32: entry count][count entries: (int32 keylen)(key bytes)(int64 timestamp)(int64 expiry, -1 if no TTL)]
+        bytes_ostream out;
+        write_simple<uint32_t>(out, uint32_t(cql.size()));
+        out.append(cql);
+        auto count_slot = out.write_place_holder(collection_size_len());
+        int elements = 0;
+        for (auto&& e : mv.cells) {
+            if (e.second.is_live(mv.tomb, false)) {
+                bytes_view key = e.first;
+                write_simple<int32_t>(out, int32_t(key.size()));
+                out.write(key);
+                write_simple<int64_t>(out, e.second.timestamp());
+                int64_t expiry_raw = -1;
+                if (e.second.is_live_and_has_ttl()) {
+                    expiry_raw = e.second.expiry().time_since_epoch().count();
+                }
+                write_simple<int64_t>(out, expiry_raw);
+                ++elements;
+            }
+        }
+        write_collection_size(count_slot, elements);
+        return out;
+    });
+}
+
 bytes serialize_field_index(size_t idx) {
     if (idx >= size_t(std::numeric_limits<int16_t>::max())) {
         // should've been rejected earlier, but just to be sure...
@@ -3799,7 +3843,7 @@ data_value::data_value(const data_value& v) : _value(nullptr), _type(v._type) {
 }
 
 data_value&
-data_value::operator=(data_value&& x) {
+data_value::operator=(data_value&& x) noexcept {
     auto tmp = std::move(x);
     std::swap(tmp._value, this->_value);
     std::swap(tmp._type, this->_type);
@@ -3887,6 +3931,10 @@ data_value::data_value(empty_type_representation e) : data_value(make_new(empty_
 }
 
 sstring data_value::to_parsable_string() const {
+    if (is_null()) {
+        return "null";
+    }
+
     // For some reason trying to do it using fmt::format refuses to compile
     // auto to_parsable_str_transform = std::views::transform([](const data_value& dv) -> sstring {
     //     return dv.to_parsable_string();

@@ -1,6 +1,6 @@
 # Copyright 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 """
 Tests for Alternator (DynamoDB API) ports with proxy protocol v2 support.

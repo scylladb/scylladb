@@ -5,13 +5,14 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
 
 #include "utils/assert.hh"
 #include "bytes.hh"
+#include "cql3/expr/collection_cell_metadata.hh"
 #include "schema/schema_fwd.hh"
 #include "query/query-result-reader.hh"
 #include "selector.hh"
@@ -69,6 +70,7 @@ private:
     ::shared_ptr<metadata> _metadata;
     const bool _collect_timestamps;
     const bool _collect_TTLs;
+    const bool _collect_collection_timestamps;
     const bool _contains_static_columns;
     bool _is_trivial;
 protected:
@@ -78,7 +80,9 @@ protected:
         std::vector<const column_definition*> columns,
         std::vector<lw_shared_ptr<column_specification>> metadata_,
         bool collect_timestamps,
-        bool collect_TTLs, trivial is_trivial = trivial::no);
+        bool collect_TTLs,
+        bool collect_collection_timestamps,
+        trivial is_trivial = trivial::no);
 
     virtual ~selection() {}
 public:
@@ -197,6 +201,7 @@ public:
     std::vector<bytes> current_clustering_key;
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
+    std::vector<cql3::expr::collection_cell_metadata> _collection_element_metadata;
     const query_options* _options;
 private:
     const gc_clock::time_point _now;

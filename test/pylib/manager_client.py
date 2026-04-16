@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2022-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 """Manager client.
    Communicates with Manager server via socket.
@@ -227,7 +227,7 @@ class ManagerClient:
 
         return errors
     
-    async def filter_errors(self, errors: list[str]):
+    async def filter_errors(self, errors: list[str] | list[list[str]]):
         exclude_errors_pattern = re.compile("|".join(f"{p}" for p in {
             *self.ignore_log_patterns,
             *self.ignore_cores_log_patterns,
@@ -255,7 +255,13 @@ class ManagerClient:
             # Expected Raft errors on decommission-abort or node restart with MV.
             r"raft_topology - raft_topology_cmd.*failed with: raft::request_aborted",
         }))
-        return [e for e in errors if not exclude_errors_pattern.search(e)]
+        # Support both list[str] (from distinct_errors=True) and
+        # list[list[str]] (from distinct_errors=False), matching against
+        # the first line of each error group.
+        def match_line(e):
+            line = e[0] if isinstance(e, list) else e
+            return not exclude_errors_pattern.search(line)
+        return [e for e in errors if match_line(e)]
 
     async def find_cores(self) -> dict[ServerInfo, list[str]]:
         """Find core files on all servers"""

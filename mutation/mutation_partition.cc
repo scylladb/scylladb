@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <seastar/core/coroutine.hh>
@@ -692,9 +692,13 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, data_type typ
         type = map_type_impl::get_instance(ctype.name_comparator(), ctype.value_comparator(), true);
     }
 
+    bytes_ostream serialized = ((type->is_map() || type->is_set() || type->is_user_type()) && type->is_multi_cell()
+                && slice.options.contains<query::partition_slice::option::send_collection_timestamps>())
+            ? serialize_for_cql_with_timestamps(*type, std::move(v))
+            : serialize_for_cql(*type, std::move(v));
     w.add().write().skip_timestamp()
         .skip_expiry()
-        .write_fragmented_value(serialize_for_cql(*type, std::move(v)))
+        .write_fragmented_value(std::move(serialized))
         .skip_ttl()
         .end_qr_cell();
 }

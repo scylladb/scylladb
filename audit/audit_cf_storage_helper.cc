@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "audit/audit_cf_storage_helper.hh"
@@ -129,7 +129,7 @@ future<> audit_cf_storage_helper::stop() {
 future<> audit_cf_storage_helper::write(const audit_info* audit_info,
                                     socket_address node_ip,
                                     socket_address client_ip,
-                                    db::consistency_level cl,
+                                    std::optional<db::consistency_level> cl,
                                     const sstring& username,
                                     bool error) {
     return _table.insert(_qp, _mm, _dummy_query_state, make_data, audit_info, node_ip, client_ip, cl, username, error);
@@ -145,7 +145,7 @@ future<> audit_cf_storage_helper::write_login(const sstring& username,
 cql3::query_options audit_cf_storage_helper::make_data(const audit_info* audit_info,
                                                        socket_address node_ip,
                                                        socket_address client_ip,
-                                                       db::consistency_level cl,
+                                                       std::optional<db::consistency_level> cl,
                                                        const sstring& username,
                                                        bool error) {
     auto time = std::chrono::system_clock::now();
@@ -154,7 +154,7 @@ cql3::query_options audit_cf_storage_helper::make_data(const audit_info* audit_i
     auto date = millis_since_epoch / ticks_per_day * ticks_per_day;
     thread_local static int64_t last_nanos = 0;
     auto time_id = utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(last_nanos, time));
-    auto consistency_level = fmt::format("{}", cl);
+    auto consistency_level = cl ? format("{}", *cl) : sstring("");
     std::vector<cql3::raw_value> values {
         cql3::raw_value::make_value(timestamp_type->decompose(date)),
         cql3::raw_value::make_value(inet_addr_type->decompose(node_ip.addr())),

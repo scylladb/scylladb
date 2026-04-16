@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -159,8 +159,6 @@ private:
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
-    serialized_action _throughput_updater;
-    std::optional<utils::observer<uint32_t>> _throughput_option_observer;
     serialized_action _update_compaction_static_shares_action;
     utils::observer<float> _compaction_static_shares_observer;
     utils::observer<float> _compaction_max_shares_observer;
@@ -190,7 +188,6 @@ private:
 
     void stop_tasks(const std::vector<shared_ptr<compaction::compaction_task_executor>>& tasks, sstring reason) noexcept;
     future<> await_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>>, bool task_stopped) const noexcept;
-    future<> update_throughput(uint32_t value_mbs);
 
     // Return the largest fan-in of currently running compactions
     unsigned current_compaction_fan_in_threshold() const;

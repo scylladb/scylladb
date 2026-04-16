@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <algorithm>
@@ -460,8 +460,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
     , _corrupt_data_handler(std::make_unique<db::system_table_corrupt_data_handler>(db::system_table_corrupt_data_handler::config{.entry_ttl = std::chrono::days(10)}, db::corrupt_data_handler::register_metrics::yes))
     , _nop_corrupt_data_handler(std::make_unique<db::nop_corrupt_data_handler>(db::corrupt_data_handler::register_metrics::no))
-    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, *_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.streaming_scheduling_group, &sstm))
-    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, *_nop_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.streaming_scheduling_group))
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, *_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.maintenance_scheduling_group, &sstm))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, *_nop_corrupt_data_handler, configure_sstables_manager(_cfg, dbcfg), feat, _row_cache_tracker, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, _cfg.extensions().sstable_file_io_extensions(), dbcfg.maintenance_scheduling_group))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _mnotifier(mn)
@@ -635,8 +635,10 @@ database::setup_metrics() {
                        sm::description("Counts sstables that survived the clustering key filtering. "
                                        "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
 
+        // NOTE: dropped_view_updates is registered as a metric but never incremented in the current
+        // codebase. Consider removing it entirely if it is confirmed dead.
         sm::make_counter("dropped_view_updates", _cf_stats.dropped_view_updates,
-                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. "))(basic_level),
+                       sm::description("Counts the number of view updates that have been dropped due to cluster overload. "))(basic_level).set_skip_when_empty(),
 
        sm::make_counter("view_building_paused", _cf_stats.view_building_paused,
                       sm::description("Counts the number of times view building process was paused (e.g. due to node unavailability). ")),
@@ -655,7 +657,7 @@ database::setup_metrics() {
                        sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached."))(basic_level),
 
         sm::make_counter("total_writes_rejected_due_to_out_of_space_prevention", _stats->total_writes_rejected_due_to_out_of_space_prevention,
-                       sm::description("Counts write operations which were rejected due to disabled user tables writes."))(basic_level),
+                       sm::description("Counts write operations which were rejected due to disabled user tables writes."))(basic_level).set_skip_when_empty(),
 
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
@@ -704,11 +706,13 @@ database::setup_metrics() {
         sm::make_counter("multishard_query_unpopped_bytes", _stats->multishard_query_unpopped_bytes,
                        sm::description("The total number of bytes that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
 
+        // NOTE: multishard_query_failed_reader_stops appears to have no increment site in the
+        // current codebase. Consider removing it entirely if it is confirmed dead.
         sm::make_counter("multishard_query_failed_reader_stops", _stats->multishard_query_failed_reader_stops,
-                       sm::description("The number of times the stopping of a shard reader failed.")),
+                       sm::description("The number of times the stopping of a shard reader failed.")).set_skip_when_empty(),
 
         sm::make_counter("multishard_query_failed_reader_saves", _stats->multishard_query_failed_reader_saves,
-                       sm::description("The number of times the saving of a shard reader failed.")),
+                       sm::description("The number of times the saving of a shard reader failed.")).set_skip_when_empty(),
 
         sm::make_total_operations("counter_cell_lock_acquisition", _cl_stats->lock_acquisitions,
                                  sm::description("The number of acquired counter cell locks.")),
@@ -811,7 +815,7 @@ bool database::is_in_critical_disk_utilization_mode() const {
     return false;
 }
 
-future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
+future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::optional<service::intended_storage_mode> storage_mode) {
     using namespace db::schema_tables;
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
@@ -849,7 +853,7 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
     co_await do_parse_schema_tables(proxy, db::schema_tables::TABLES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         std::map<sstring, schema_ptr> tables = co_await create_tables_from_tables_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(tables, [&] (auto& t) -> future<> {
-            co_await this->add_column_family_and_make_directory(t.second, replica::database::is_new_cf::no);
+            co_await this->add_column_family_and_make_directory(t.second, replica::database::is_new_cf::no, storage_mode);
             auto s = t.second;
             // Recreate missing column mapping entries in case
             // we failed to persist them for some reason after a schema change
@@ -864,7 +868,7 @@ future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, s
         std::vector<view_ptr> views = co_await create_views_from_schema_partition(proxy, v.second);
         co_await coroutine::parallel_for_each(views, [&] (auto&& v) -> future<> {
             check_no_legacy_secondary_index_mv_schema(*this, v, nullptr);
-            co_await this->add_column_family_and_make_directory(v, replica::database::is_new_cf::no);
+            co_await this->add_column_family_and_make_directory(v, replica::database::is_new_cf::no, storage_mode);
         });
     }));
 }
@@ -1156,7 +1160,7 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
+void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata, std::optional<service::intended_storage_mode> storage_mode) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
@@ -1168,7 +1172,21 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         }
         erm = pt_rs->make_replication_map(schema->id(), metadata_ptr);
     } else {
-        erm = ks.get_static_effective_replication_map();
+        auto metadata_ptr = not_commited_new_metadata ? not_commited_new_metadata : _shared_token_metadata.get();
+        auto table_is_migrating = metadata_ptr->tablets().has_tablet_map(schema->id());
+        if (table_is_migrating && storage_mode.has_value() && storage_mode.value() == service::intended_storage_mode::tablets) {
+            // Table under vnode-to-tablet migration: the keyspace uses vnode-based
+            // replication but this table already has a tablet map persisted in group0.
+            // Build a tablet-aware RS with the same replication options so the table
+            // gets a tablet ERM (and thus a tablet_storage_group_manager).
+            locator::replication_strategy_params params(rs.get_config_options(), 0, std::nullopt);
+            auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(
+                    ks.metadata()->strategy_name(), params, metadata_ptr->get_topology());
+            auto pt_rs = tablet_rs->maybe_as_per_table();
+            erm = pt_rs->make_replication_map(schema->id(), metadata_ptr);
+        } else {
+            erm = ks.get_static_effective_replication_map();
+        }
     }
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
@@ -1181,11 +1199,8 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     }
 
     if (schema->logstor_enabled()) {
-        if (!_cfg.enable_logstor()) {
-            throw std::runtime_error(fmt::format("The table {}.{} is using logstor storage but logstor is not enabled in the configuration", schema->ks_name(), schema->cf_name()));
-        }
         if (!_logstor) {
-            on_internal_error(dblog, "The table is using logstor but logstor is not initialized");
+            throw std::runtime_error(fmt::format("The table {}.{} is using logstor storage but logstor is not initialized", schema->ks_name(), schema->cf_name()));
         }
         cf->init_logstor(_logstor.get());
         dblog.info0("Table {}.{} is using logstor storage", schema->ks_name(), schema->cf_name());
@@ -1211,12 +1226,12 @@ future<> database::make_column_family_directory(schema_ptr schema) {
     co_await cf.init_storage();
 }
 
-future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
+future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new, std::optional<service::intended_storage_mode> storage_mode) {
     auto lock = co_await get_tables_metadata().hold_write_lock();
     auto& ks = find_keyspace(schema->ks_name());
     std::exception_ptr ex;
     try {
-        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
+        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new, nullptr, storage_mode);
     } catch (...) {
         ex = std::current_exception();
     }
@@ -1570,6 +1585,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _config.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
+    cfg.maintenance_scheduling_group = _config.maintenance_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.enable_node_aggregated_table_metrics = db_config.enable_node_aggregated_table_metrics();
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
@@ -1710,7 +1726,10 @@ request_class classify_request(const database_config& _dbcfg) {
             || current_group == _dbcfg.memtable_to_cache_scheduling_group) {
         return request_class::system;
     // Requests done on behalf of view update generation run in the streaming group
-    } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
+    } else if (current_group == _dbcfg.streaming_scheduling_group
+            || current_group == _dbcfg.backup_scheduling_group
+            || current_group == _dbcfg.maintenance_scheduling_group
+            || current_group == _dbcfg.maintenance_compaction_scheduling_group) {
         return request_class::maintenance;
     // Everything else is considered a user request
     } else {
@@ -2030,10 +2049,12 @@ future<mutation> database::read_and_transform_counter_mutation_to_shards(mutatio
         co_await seastar::sleep(std::chrono::milliseconds(100));
     }
 
+    counter_id my_counter_id = cf.get_counter_id(m);
+
     // ...now, that we got existing state of all affected counter
     // cells we can look for our shard in each of them, increment
     // its clock and apply the delta.
-    transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable(), get_token_metadata().get_my_id());
+    transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable(), my_counter_id);
 
     co_return std::move(m);
 }
@@ -2519,6 +2540,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_
     cfg.memtable_scheduling_group = _dbcfg.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _dbcfg.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;
+    cfg.maintenance_scheduling_group = _dbcfg.maintenance_scheduling_group;
     cfg.enable_metrics_reporting = _cfg.enable_keyspace_column_family_metrics();
 
     cfg.view_update_memory_semaphore_limit = max_memory_pending_view_updates();
@@ -2700,7 +2722,7 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
         _compaction_manager.enable();
     }
     co_await init_commitlog();
-    if (_cfg.enable_logstor()) {
+    if (_cfg.check_experimental(db::experimental_features_t::feature::LOGSTOR)) {
         co_await init_logstor();
     }
 }

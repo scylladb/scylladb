@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -113,11 +113,15 @@ public:
     virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
-    virtual std::optional<unsigned> move_to_shard() const override {
+    virtual const result_message::bounce* as_bounce() const override {
+        return this;
+    }
+
+    unsigned target_shard() const {
         return _shard;
     }
 
-    locator::host_id move_to_host() const {
+    locator::host_id target_host() const {
         return _host;
     }
 

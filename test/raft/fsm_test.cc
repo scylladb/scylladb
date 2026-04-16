@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "raft/raft.hh"
@@ -242,6 +242,39 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     cfg.leave_joint();
     cfg.enter_joint({{server_addr_from_id(id1), is_voter::yes}, {server_addr_from_id(id2), is_voter::yes}, {server_addr_from_id(id5), is_voter::no}});
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
+}
+
+// Test that a voter demoted to non-voter during joint configuration
+// retains can_vote=true (from the previous config) in the tracker.
+// Before the fix, set_configuration processed the current config first
+// (setting can_vote=false for the demoted node), then skipped updating
+// can_vote when processing the previous config (where the node is still
+// a voter). This caused broadcast_read_quorum to skip the node.
+BOOST_AUTO_TEST_CASE(test_tracker_voter_demotion_joint_config) {
+    auto id1 = id(), id2 = id(), id3 = id();
+
+    // Start with a 3-node all-voter configuration.
+    raft::configuration cfg = config_from_ids({id1, id2, id3});
+
+    // Enter joint config: demote id3 from voter to non-voter.
+    cfg.enter_joint({
+        {server_addr_from_id(id1), is_voter::yes},
+        {server_addr_from_id(id2), is_voter::yes},
+        {server_addr_from_id(id3), is_voter::no},
+    });
+
+    raft::tracker tracker;
+    tracker.set_configuration(cfg, index_t{1});
+
+    // id3 is a non-voter in current config but a voter in previous config.
+    // During joint consensus it must still be treated as a voter.
+    auto pr3 = tracker.find(id3);
+    BOOST_CHECK_NE(pr3, nullptr);
+    BOOST_CHECK_EQUAL(pr3->can_vote, is_voter::yes);
+
+    // id1 and id2 should remain voters.
+    BOOST_CHECK_EQUAL(tracker.find(id1)->can_vote, is_voter::yes);
+    BOOST_CHECK_EQUAL(tracker.find(id2)->can_vote, is_voter::yes);
 }
 
 BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {

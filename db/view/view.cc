@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include <chrono>
@@ -2183,16 +2183,14 @@ future<> view_update_generator::mutate_MV(
     });
 }
 
-view_builder::view_builder(replica::database& db, db::system_keyspace& sys_ks, db::system_distributed_keyspace& sys_dist_ks, service::migration_notifier& mn, view_update_generator& vug, service::raft_group0_client& group0_client, cql3::query_processor& qp)
+view_builder::view_builder(replica::database& db, db::system_keyspace& sys_ks, service::migration_notifier& mn, view_update_generator& vug, service::raft_group0_client& group0_client, cql3::query_processor& qp)
         : _db(db)
         , _sys_ks(sys_ks)
-        , _sys_dist_ks(sys_dist_ks)
         , _group0_client(group0_client)
         , _qp(qp)
         , _mnotifier(mn)
         , _vug(vug)
         , _permit(_db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "view_builder", db::no_timeout, {}))
-        , _upgrade_phaser("view_builder::upgrade_phaser")
 {
     setup_metrics();
 }
@@ -2559,44 +2557,23 @@ static future<> announce_with_raft(
 }
 
 future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_name) {
-    co_await write_view_build_status(
-        [this, ks_name, view_name] () -> future<> {
-            auto host_id = _db.get_token_metadata().get_my_id();
-            co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
-                        return _sys_ks.make_view_build_status_mutation(ts, {ks_name, view_name}, host_id, build_status::STARTED);
-                    }, "view builder: mark view build STARTED");
-        },
-        [this, ks_name, view_name] () -> future<> {
-            co_await _sys_dist_ks.start_view_build(std::move(ks_name), std::move(view_name));
-        }
-    );
+    auto host_id = _db.get_token_metadata().get_my_id();
+    co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
+                return _sys_ks.make_view_build_status_mutation(ts, {ks_name, view_name}, host_id, build_status::STARTED);
+            }, "view builder: mark view build STARTED");
 }
 
 future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_name) {
-    co_await write_view_build_status(
-        [this, ks_name, view_name] () -> future<> {
-            auto host_id = _db.get_token_metadata().get_my_id();
-            co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
-                        return _sys_ks.make_view_build_status_update_mutation(ts, {ks_name, view_name}, host_id, build_status::SUCCESS);
-                    }, "view builder: mark view build SUCCESS");
-        },
-        [this, ks_name, view_name] () -> future<> {
-            co_await _sys_dist_ks.finish_view_build(std::move(ks_name), std::move(view_name));
-        }
-    );
+    auto host_id = _db.get_token_metadata().get_my_id();
+    co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
+                return _sys_ks.make_view_build_status_update_mutation(ts, {ks_name, view_name}, host_id, build_status::SUCCESS);
+            }, "view builder: mark view build SUCCESS");
 }
 
 future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_name) {
-    co_await write_view_build_status(
-        [this, ks_name, view_name] () -> future<> {
-            co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (auto ts) {
-                        return _sys_ks.make_remove_view_build_status_mutation(ts, {ks_name, view_name});
-                    }, "view builder: delete view build status");
-        },
-        [this, ks_name, view_name] () -> future<> {
-            co_await _sys_dist_ks.remove_view(std::move(ks_name), std::move(view_name));
-        }
-    );
+    co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (auto ts) {
+                return _sys_ks.make_remove_view_build_status_mutation(ts, {ks_name, view_name});
+            }, "view builder: delete view build status");
 }
 
 static future<std::unordered_map<locator::host_id, sstring>>
@@ -2618,13 +2595,8 @@ view_status_common(cql3::query_processor& qp, sstring ks_name, sstring cf_name, 
 }
 
 future<std::unordered_map<locator::host_id, sstring>> view_builder::view_status(sstring ks_name, sstring view_name) const {
-    if (_view_build_status_on == view_build_status_location::group0) {
-        co_return co_await view_status_common(_qp, db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2,
-                std::move(ks_name), std::move(view_name), db::consistency_level::LOCAL_ONE);
-    } else {
-        co_return co_await view_status_common(_qp, db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS,
-                std::move(ks_name), std::move(view_name), db::consistency_level::ONE);
-    }
+    co_return co_await view_status_common(_qp, db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2,
+            std::move(ks_name), std::move(view_name), db::consistency_level::LOCAL_ONE);
 }
 
 future<std::unordered_map<sstring, sstring>>
@@ -2874,12 +2846,6 @@ future<> view_builder::generate_mutations_on_node_left(replica::database& db, db
     // When a node is removed, we delete all its rows from the view_build_status table together with
     // the topology update operation.
 
-    if (!db.features().view_build_status_on_group0) {
-        // We didn't upgrade to the v2 table yet. nothing to delete, and other nodes
-        // may not know about the v2 table.
-        co_return;
-    }
-
     auto& qp = sys_ks.query_processor();
     muts.reserve(muts.size() + db.get_views().size());
     // We expect the table to have a row for each existing view, so generate delete mutations for all views.
@@ -2892,142 +2858,7 @@ future<> view_builder::generate_mutations_on_node_left(replica::database& db, db
     }
 }
 
-future<> view_builder::migrate_to_v1_5(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard) {
-    // Update the view builder version to v1_5
-    auto version_mut = co_await sys_ks.make_view_builder_version_mutation(guard.write_timestamp(), db::system_keyspace::view_builder_version_t::v1_5);
-
-    // write the version as topology_change so that we can apply
-    // the change to the view_builder service in topology_state_load
-    service::topology_change change {
-        .mutations{canonical_mutation(std::move(version_mut))},
-    };
-
-    auto group0_cmd = group0_client.prepare_command(std::move(change), guard, "migrate view_build_status to v1_5");
-    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
-}
-
-future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard) {
-    inject_failure("view_builder_migrate_to_v2");
-
-    auto schema = qp.db().find_schema(db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS);
-
-    // `system_distributed` keyspace has RF=3 and we need to scan it with CL=ALL
-    // To support migration on cluster with 1 or 2 nodes, set appropriate CL
-    auto nodes_count = tmptr->get_normal_token_owners().size();
-    auto cl = db::consistency_level::ALL;
-    if (nodes_count == 1) {
-        cl = db::consistency_level::ONE;
-    } else if (nodes_count == 2) {
-        cl = db::consistency_level::TWO;
-    }
-
-    auto rows = co_await qp.execute_internal(
-        format("SELECT keyspace_name, view_name, host_id, status, WRITETIME(status) AS ts FROM {}.{}", db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS),
-        cl,
-        view_builder_query_state(),
-        {},
-        cql3::query_processor::cache_internal::no);
-
-    auto col_names = schema->all_columns() | std::views::transform([] (const auto& col) {return col.name_as_cql_string(); }) | std::ranges::to<std::vector<sstring>>();
-    auto col_names_str = fmt::to_string(fmt::join(col_names, ", "));
-    sstring val_binders_str = "?";
-    for (size_t i = 1; i < col_names.size(); ++i) {
-        val_binders_str += ", ?";
-    }
-
-    utils::chunked_vector<mutation> migration_muts;
-    migration_muts.reserve(rows->size() + 1);
-
-    // Insert all valid rows into the new table.
-    // Note the tables have the same schema.
-    for (const auto& row: *rows) {
-        // Skip adding the row if it doesn't belong to a known node.
-        // In the v1 table we may have left over rows that belong to nodes that were removed
-        // and we didn't clean them, so do that now.
-        auto host_id = row.get_as<utils::UUID>("host_id");
-        if (!tmptr->get_topology().find_node(locator::host_id(host_id))) {
-            vlogger.warn("Dropping a row from view_build_status: host {} does not exist", host_id);
-            continue;
-        }
-
-        // Skip adding left over rows that don't belong to known views.
-        auto ks_name = row.get_as<sstring>("keyspace_name");
-        auto view_name = row.get_as<sstring>("view_name");
-        if (!sys_ks.local_db().has_schema(ks_name, view_name)) {
-            vlogger.warn("Dropping a row from view_build_status: view {}.{} does not exist", ks_name, view_name);
-            continue;
-        }
-
-        std::vector<data_value_or_unset> values;
-        for (const auto& col: schema->all_columns()) {
-            if (row.has(col.name_as_text())) {
-                values.push_back(col.type->deserialize(row.get_blob_unfragmented(col.name_as_text())));
-            } else {
-                values.push_back(unset_value{});
-            }
-        }
-
-        // keep the row timestamp so it won't overwrite newer writes
-        auto row_ts = row.get_as<api::timestamp_type>("ts");
-
-        auto muts = co_await qp.get_mutations_internal(
-            seastar::format("INSERT INTO {}.{} ({}) VALUES ({})",
-                db::system_keyspace::NAME,
-                db::system_keyspace::VIEW_BUILD_STATUS_V2,
-                col_names_str,
-                val_binders_str),
-            view_builder_query_state(),
-            row_ts,
-            std::move(values));
-        if (muts.size() != 1) {
-            on_internal_error(vlogger, format("expecting single insert mutation, got {}", muts.size()));
-        }
-        migration_muts.push_back(std::move(muts[0]));
-    }
-
-    // Update the view builder version to v2
-    auto version_mut = co_await sys_ks.make_view_builder_version_mutation(guard.write_timestamp(), db::system_keyspace::view_builder_version_t::v2);
-    migration_muts.push_back(std::move(version_mut));
-
-    // write the version as topology_change so that we can apply
-    // the change to the view_builder service in topology_state_load
-    service::topology_change change {
-        .mutations{migration_muts.begin(), migration_muts.end()},
-    };
-
-    auto group0_cmd = group0_client.prepare_command(std::move(change), guard, "migrate view_build_status to v2");
-    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
-}
-
-future<> view_builder::upgrade_to_v1_5() {
-    if (_view_build_status_on == view_build_status_location::sys_dist_ks) {
-        // drain all write operations to the old table and start writing to both tables.
-        // note that we wait here only for operations that access the dist table and not group0, otherwise
-        // we get a deadlock.
-        _view_build_status_on = view_build_status_location::both;
-        co_await _upgrade_phaser.advance_and_await();
-    }
-}
-
-future<> view_builder::upgrade_to_v2() {
-    if (_view_build_status_on == view_build_status_location::group0) {
-        co_return;
-    }
-
-    _view_build_status_on = view_build_status_location::group0;
-
-    if (_init_virtual_table_on_upgrade) {
-        init_virtual_table();
-    }
-}
-
 void view_builder::init_virtual_table() {
-    if (_view_build_status_on != view_build_status_location::group0) {
-        // we didn't upgrade to v2 yet. defer the operation
-        _init_virtual_table_on_upgrade = true;
-        return;
-    }
-
     // We set the old system_distributed.view_build_status table to read virtually
     // from system.view_build_status_v2 in order to make the transition transparent for
     // readers of the table and maintain compatibility.

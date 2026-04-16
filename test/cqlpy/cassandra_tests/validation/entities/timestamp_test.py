@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Modifications: Copyright 2021-present ScyllaDB
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
 
@@ -129,7 +129,7 @@ def testTimestampsOnUnsetColumnsWide(cql, test_keyspace):
                    [2, 2, None, None],
                    [3, 3, 3, 1])
 
-@pytest.mark.skip(reason="a very slow test (6 seconds), skipping it")
+@pytest.mark.skip_slow(reason="a very slow test (6 seconds), skipping it")
 def testTimestampAndTTLPrepared(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, i int, PRIMARY KEY (k, c))") as table:
         execute(cql, table, "INSERT INTO %s (k, c, i) VALUES (1, 1, 1) USING TIMESTAMP ? AND TTL ?;", 1, 5)
@@ -146,7 +146,7 @@ def testTimestampAndTTLPrepared(cql, test_keyspace):
         time.sleep(6)
         assert_empty(execute(cql, table, "SELECT k, c, i, writetime(i) FROM %s "))
 
-@pytest.mark.skip(reason="a very slow test (6 seconds), skipping it")
+@pytest.mark.skip_slow(reason="a very slow test (6 seconds), skipping it")
 def testTimestampAndTTLUpdatePrepared(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, i int, PRIMARY KEY (k, c))") as table:
         execute(cql, table, "UPDATE %s USING TIMESTAMP ? AND TTL ? SET i=1 WHERE k=1 AND c = 1 ;", 1, 5)

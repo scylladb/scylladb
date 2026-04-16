@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -109,6 +109,17 @@ struct repair_task_progress {
 };
 
 class repair_service : public seastar::peering_sharded_service<repair_service> {
+public:
+    struct config {
+        utils::updateable_value<bool> enable_small_table_optimization_for_rbno = utils::updateable_value<bool>(true);
+        utils::updateable_value<uint32_t> repair_hints_batchlog_flush_cache_time_in_ms = utils::updateable_value<uint32_t>(60*1000);
+        utils::updateable_value<double> repair_partition_count_estimation_ratio = utils::updateable_value<double>(0.1);
+        utils::updateable_value<float> critical_disk_utilization_level = utils::updateable_value<float>(0.98);
+        utils::updateable_value<uint64_t> repair_multishard_reader_buffer_hint_size = utils::updateable_value<uint64_t>(1024 * 1024);
+        utils::updateable_value<uint64_t> repair_multishard_reader_enable_read_ahead = utils::updateable_value<uint64_t>(0);
+    };
+
+private:
     sharded<service::topology_state_machine>& _tsm;
     sharded<gms::gossiper>& _gossiper;
     netw::messaging_service& _messaging;
@@ -162,6 +173,9 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
             sstring keyspace, std::vector<sstring> cfs,
             std::unordered_set<locator::host_id> ignore_nodes);
 
+    config _config;
+    static config default_config() { return {}; }
+
 public:
     std::unordered_map<locator::global_tablet_id, std::vector<seastar::rwlock::holder>> _repair_compaction_locks;
 
@@ -177,11 +191,14 @@ public:
             sharded<db::view::view_building_worker>& vbw,
             tasks::task_manager& tm,
             service::migration_manager& mm,
-            size_t max_repair_memory
+            size_t max_repair_memory,
+            repair_service::config cfg = default_config()
             );
     ~repair_service();
     future<> start(utils::disk_space_monitor* dsm);
     future<> stop();
+
+    const config& get_config() const noexcept { return _config; }
 
     // shutdown() stops all ongoing repairs started on this node (and
     // prevents any further repairs from being started). It returns a future

@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include <functional>
@@ -202,6 +202,10 @@ std::optional<sstring> secondary_index_manager::custom_index_class(const schema&
 
 // This function returns a factory, as the custom index class should be lightweight, preferably not holding any state.
 // We prefer this over a static custom index class instance, as it allows us to avoid any issues with thread safety.
+//
+// Note: SAI class names (StorageAttachedIndex, sai) are not listed here
+// because maybe_rewrite_sai_to_vector_index() in create_index_statement.cc
+// rewrites them to "vector_index" before the index metadata is persisted.
 std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_manager::get_custom_class_factory(const sstring& class_name) {
     sstring lower_class_name = class_name;
     std::transform(lower_class_name.begin(), lower_class_name.end(), lower_class_name.begin(), ::tolower);

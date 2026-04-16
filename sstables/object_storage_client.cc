@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <string>
@@ -81,6 +81,9 @@ public:
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs, abort_source* as) override {
         return _client->put_object(name.str(), std::move(bufs), as);
     }
+    future<> copy_object(object_name src, object_name dst, abort_source* as) override {
+        return _client->copy_object(src.str(), dst.str(), std::nullopt, std::nullopt, as);
+    }
     future<> delete_object(object_name name) override {
         return _client->delete_object(name.str());
     }
@@ -95,6 +98,9 @@ public:
     }
     data_source make_download_source(object_name name, abort_source* as) override {
         return _client->make_chunked_download_source(name.str(), s3::full_range, as);
+    }
+    future<bool> object_exists(object_name name, abort_source* as) override {
+        return _client->object_exists(name.str(), as);
     }
     abstract_lister make_object_lister(std::string bucket, std::string prefix, lister::filter_type filter) override {
         return abstract_lister::make<s3::client::bucket_lister>(_client, std::move(bucket), std::move(prefix), std::move(filter));
@@ -152,6 +158,9 @@ public:
         co_await sink.flush();
         co_await sink.close();
     }
+    future<> copy_object(object_name src, object_name dst, abort_source*) override {
+        return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object());
+    }
     future<> delete_object(object_name name) override {
         return _client->delete_object(name.bucket(), name.object());
     }
@@ -169,6 +178,9 @@ public:
     }
     data_source make_download_source(object_name name, abort_source* as) override {
         return _client->create_download_source(name.bucket(), name.object(), as);
+    }
+    future<bool> object_exists(object_name name, abort_source* as) override {
+        return _client->object_exists(name.bucket(), name.object(), as);
     }
     abstract_lister make_object_lister(std::string bucket, std::string prefix, lister::filter_type filter) override {
         class list_impl : public abstract_lister::impl {

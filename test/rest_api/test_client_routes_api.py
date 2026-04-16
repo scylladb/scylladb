@@ -1,6 +1,6 @@
 # Copyright 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 import uuid
 
 def make_entry(key_seed, data_seed):

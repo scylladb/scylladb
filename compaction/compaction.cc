@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 /*
@@ -44,6 +44,7 @@
 #include "dht/partition_filter.hh"
 #include "mutation_writer/shard_based_splitting_writer.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
+#include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "utils/assert.hh"
@@ -1933,6 +1934,7 @@ class resharding_compaction final : public compaction {
     };
     std::vector<estimated_values> _estimation_per_shard;
     std::vector<sstables::run_id> _run_identifiers;
+    bool _reshard_vnodes;
 private:
     // return estimated partitions per sstable for a given shard
     uint64_t partitions_per_sstable(shard_id s) const {
@@ -1945,7 +1947,11 @@ public:
         : compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker::no)
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
+        , _reshard_vnodes(descriptor.options.as<compaction_type_options::reshard>().vnodes_resharding)
     {
+        if (_reshard_vnodes && !_owned_ranges) {
+            on_internal_error(clogger, "Resharding vnodes requires owned_ranges");
+        }
         for (auto& sst : _sstables) {
             const auto& shards = sst->get_shards_for_this_sstable();
             auto size = sst->bytes_on_disk();
@@ -1983,8 +1989,25 @@ public:
     }
 
     mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
-        return [end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
-            return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
+        auto owned_ranges = _reshard_vnodes ? _owned_ranges : nullptr;
+        return [end_consumer = std::move(end_consumer), owned_ranges = std::move(owned_ranges)] (mutation_reader reader) mutable -> future<> {
+            if (owned_ranges) {
+                auto classify = [owned_ranges, it = owned_ranges->begin(), idx = mutation_writer::token_group_id(0)] (dht::token t) mutable -> mutation_writer::token_group_id {
+                    dht::token_comparator cmp;
+                    while (it != owned_ranges->end() && it->after(t, cmp)) {
+                        clogger.debug("Token {} is after current range {}: advancing to the next range", t, *it);
+                        ++it;
+                        ++idx;
+                    }
+                    if (it == owned_ranges->end() || !it->contains(t, cmp)) {
+                        on_internal_error(clogger, fmt::format("Token {} is outside of owned ranges", t));
+                    }
+                    return idx;
+                };
+                return mutation_writer::segregate_by_token_group(std::move(reader), std::move(classify), std::move(end_consumer));
+            } else {
+                return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
+            }
         };
     }
 

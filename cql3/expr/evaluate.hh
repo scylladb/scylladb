@@ -1,8 +1,9 @@
 // Copyright (C) 2023-present ScyllaDB
-// SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+// SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 #pragma once
 
+#include "collection_cell_metadata.hh"
 #include "expression.hh"
 
 #include "bytes.hh"
@@ -27,6 +28,7 @@ struct evaluation_inputs {
     std::span<const api::timestamp_type> static_and_regular_timestamps;  // indexes match `selection` member
     std::span<const int32_t> static_and_regular_ttls;  // indexes match `selection` member
     std::span<const cql3::raw_value> temporaries; // indexes match temporary::index
+    std::span<const collection_cell_metadata> collection_element_metadata; // indexes match `selection` member
 };
 
 // Takes a prepared expression and calculates its value.

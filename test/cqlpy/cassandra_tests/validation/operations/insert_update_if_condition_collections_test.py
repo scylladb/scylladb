@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Modifications: Copyright 2023-present ScyllaDB
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
 
@@ -266,7 +266,7 @@ def checkInvalidUDT(cql, table, condition, value, expected):
     assertInvalidThrow(cql, table, expected, "DELETE FROM %s WHERE k = 0 IF " + condition)
     assertRows(execute(cql, table, "SELECT * FROM %s"), row(0, value))
 
-@pytest.mark.xfail(reason="Issue #13624")
+# Reproduces #13624
 def testUDTField(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b text)") as typename:
         for frozen in [False, True]:   

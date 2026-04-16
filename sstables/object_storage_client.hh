@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -71,11 +71,13 @@ public:
     virtual ~object_storage_client() = default;
 
     virtual future<> put_object(object_name, ::memory_data_sink_buffers bufs, abort_source* = nullptr) = 0;
+    virtual future<> copy_object(object_name src, object_name dst, abort_source* = nullptr) = 0;
     virtual future<> delete_object(object_name) = 0;
     virtual file make_readable_file(object_name, abort_source* = nullptr) = 0;
     virtual data_sink make_data_upload_sink(object_name, std::optional<unsigned> max_parts_per_piece, abort_source* = nullptr) = 0;
     virtual data_sink make_upload_sink(object_name, abort_source* = nullptr) = 0;
     virtual data_source make_download_source(object_name, abort_source* = nullptr) = 0;
+    virtual future<bool> object_exists(object_name name, abort_source* as = nullptr) = 0;
 
     virtual abstract_lister make_object_lister(std::string bucket, std::string prefix, lister::filter_type) = 0;
 

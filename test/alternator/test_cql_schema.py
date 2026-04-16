@@ -1,6 +1,6 @@
 # Copyright 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # Tests for the underlying CQL schema (keyspace and table) which is used to
 # store an Alternator table and all its sub-tables (holding GSIs, LSIs and

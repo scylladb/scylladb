@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include <set>
@@ -53,7 +53,7 @@ index_specific_prop_defs::get_options() const {
     auto options = get_raw_options();
     options.emplace(db::index::secondary_index::custom_class_option_name, *custom_class);
     if (index_version.has_value()) {
-        options.emplace(db::index::secondary_index::index_version_option_name, index_version->to_sstring());
+        options.emplace(db::index::secondary_index::index_version_option_name, fmt::to_string(*index_version));
     }
     return options;
 }

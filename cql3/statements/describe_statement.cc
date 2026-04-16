@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #include <algorithm>
 #include <iterator>
@@ -49,7 +49,6 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "utils/overloaded_functor.hh"
-#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
 #include "utils/sorting.hh"
@@ -614,17 +613,14 @@ future<managed_bytes_opt> cluster_describe_statement::range_ownership(const serv
 }
 
 future<std::vector<std::vector<managed_bytes_opt>>> cluster_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {   
-    auto db = qp.db();
     auto& proxy = qp.proxy();
+    auto& ss = qp.storage_service();
 
-    auto cluster = to_managed_bytes(db.get_config().cluster_name());
-    auto partitioner = to_managed_bytes(db.get_config().partitioner());
-    auto snitch = to_managed_bytes(db.get_config().endpoint_snitch());
-
+    auto cluster_info = ss.describe_cluster();
     std::vector<managed_bytes_opt> row {
-        {cluster},
-        {partitioner},
-        {snitch}
+        {to_managed_bytes(cluster_info.cluster_name)},
+        {to_managed_bytes(cluster_info.partitioner)},
+        {to_managed_bytes(cluster_info.snitch_name)}
     };
 
     if (should_add_range_ownership(proxy.local_db(), client_state)) {

@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "expression.hh"
@@ -1031,7 +1031,7 @@ expression search_and_replace(const expression& e,
                     return cast{c.style, recurse(c.arg), c.type};
                 },
                 [&] (const field_selection& fs) -> expression {
-                    return field_selection{recurse(fs.structure), fs.field};
+                    return field_selection{recurse(fs.structure), fs.field, fs.field_idx, fs.type};
                 },
                 [&] (const subscript& s) -> expression {
                     return subscript {
@@ -1206,6 +1206,58 @@ cql3::raw_value do_evaluate(const field_selection& field_select, const evaluatio
 static
 cql3::raw_value
 do_evaluate(const column_mutation_attribute& cma, const evaluation_inputs& inputs) {
+    // Helper for WRITETIME/TTL on a collection element or UDT field: given the
+    // inner column and the serialized element key, validate the index and look
+    // up the per-element timestamp or TTL in collection_element_metadata.
+    auto lookup_element_attribute = [&](const column_value* inner_col, std::string_view context, bytes key) -> cql3::raw_value {
+        int32_t index = inputs.selection->index_of(*inner_col->col);
+        if (inputs.collection_element_metadata.empty() || index < 0 || size_t(index) >= inputs.collection_element_metadata.size()) {
+            on_internal_error(expr_logger, fmt::format("evaluating column_mutation_attribute {}: column {} is not in selection",
+                context, inner_col->col->name_as_text()));
+        }
+        const auto& meta = inputs.collection_element_metadata[index];
+        switch (cma.kind) {
+        case column_mutation_attribute::attribute_kind::writetime: {
+            const auto it = meta.timestamps.find(key);
+            if (it == meta.timestamps.end()) {
+                return cql3::raw_value::make_null();
+            }
+            return raw_value::make_value(data_value(it->second).serialize());
+        }
+        case column_mutation_attribute::attribute_kind::ttl: {
+            const auto it = meta.ttls.find(key);
+            // The test it->second <= 0 (rather than < 0) matches the
+            // single-TTL check ttl_v <= 0 below.
+            if (it == meta.ttls.end() || it->second <= 0) {
+                return cql3::raw_value::make_null();
+            }
+            return raw_value::make_value(data_value(it->second).serialize());
+        }
+        }
+        on_internal_error(expr_logger, fmt::format("evaluating column_mutation_attribute {} with unexpected kind", context));
+    };
+    // Handle WRITETIME(x.field) / TTL(x.field) on a UDT field
+    if (auto fs = expr::as_if<field_selection>(&cma.column)) {
+        auto inner_col = expr::as_if<column_value>(&fs->structure);
+        if (!inner_col) {
+            on_internal_error(expr_logger, fmt::format("evaluating column_mutation_attribute field_selection: inner expression is not a column: {}", fs->structure));
+        }
+        return lookup_element_attribute(inner_col, "field_selection", serialize_field_index(fs->field_idx));
+    }
+    // Handle WRITETIME(m[key]) / TTL(m[key]) on a map element
+    if (auto sub = expr::as_if<subscript>(&cma.column)) {
+        auto inner_col = expr::as_if<column_value>(&sub->val);
+        if (!inner_col) {
+            on_internal_error(expr_logger, fmt::format("evaluating column_mutation_attribute subscript: inner expression is not a column: {}", sub->val));
+        }
+        auto evaluated_key = evaluate(sub->sub, inputs);
+        if (evaluated_key.is_null()) {
+            return cql3::raw_value::make_null();
+        }
+        return evaluated_key.view().with_linearized([&] (bytes_view key_bv) {
+            return lookup_element_attribute(inner_col, "subscript", bytes(key_bv));
+        });
+    }
     auto col = expr::as_if<column_value>(&cma.column);
     if (!col) {
         on_internal_error(expr_logger, fmt::format("evaluating column_mutation_attribute of non-column {}", cma.column));

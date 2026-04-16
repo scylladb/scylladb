@@ -1,5 +1,5 @@
 // Copyright (C) 2023-present ScyllaDB
-// SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+// SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
@@ -3519,6 +3519,120 @@ BOOST_AUTO_TEST_CASE(evaluate_column_mutation_attribute) {
     BOOST_REQUIRE_EQUAL(evaluate(ttl_of_r, inputs2), null);
     BOOST_REQUIRE_EQUAL(evaluate(writetime_of_r, inputs2), null);
 
+}
+
+// Build a schema with a non-frozen map column, suitable for testing WRITETIME(m[k]) and TTL(m[k]).
+static schema_ptr make_map_test_schema() {
+    return schema_builder("test_ks", "test_cf")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("m", map_type_impl::get_instance(int32_type, int32_type, /*is_multi_cell=*/true), column_kind::regular_column)
+        .build();
+}
+
+// Test that WRITETIME(m[key]) returns the per-element timestamp from collection_cell_metadata.
+BOOST_AUTO_TEST_CASE(evaluate_writetime_map_element) {
+    auto s = make_map_test_schema();
+    const column_definition& map_col = s->regular_column_at(0);
+
+    // Subscript expression: m[1] and m[2]
+    auto sub1 = subscript{
+        .val = column_value(&map_col),
+        .sub = make_int_const(1),
+    };
+    auto sub2 = subscript{
+        .val = column_value(&map_col),
+        .sub = make_int_const(2),
+    };
+
+    auto writetime_m1 = column_mutation_attribute{
+        .kind = column_mutation_attribute::attribute_kind::writetime,
+        .column = sub1,
+    };
+    auto writetime_m2 = column_mutation_attribute{
+        .kind = column_mutation_attribute::attribute_kind::writetime,
+        .column = sub2,
+    };
+
+    // Build collection_cell_metadata: key1 -> ts1, key2 -> ts2
+    bytes key1 = int32_type->decompose(int32_t(1));
+    bytes key2 = int32_type->decompose(int32_t(2));
+    api::timestamp_type ts1 = 1000000;
+    api::timestamp_type ts2 = 2000000;
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(s, {
+        {"pk", make_int_raw(0)},
+        {"ck", make_int_raw(0)},
+        {"m",  mutation_column_value{make_int_int_map_raw({{1, 10}, {2, 20}}), ts1, -1}},
+    });
+
+    // Construct and attach collection_element_metadata for column index of "m"
+    int32_t m_index = inputs_data->selection->index_of(map_col);
+    std::vector<collection_cell_metadata> meta(inputs_data->timestamps.size());
+    meta[m_index].timestamps = {{key1, ts1}, {key2, ts2}};
+
+    inputs.collection_element_metadata = meta;
+
+    BOOST_REQUIRE_EQUAL(evaluate(writetime_m1, inputs), make_bigint_raw(ts1));
+    BOOST_REQUIRE_EQUAL(evaluate(writetime_m2, inputs), make_bigint_raw(ts2));
+}
+
+// Test that WRITETIME(m[key]) returns null for a key absent from the metadata.
+BOOST_AUTO_TEST_CASE(evaluate_writetime_map_element_missing_key) {
+    auto s = make_map_test_schema();
+    const column_definition& map_col = s->regular_column_at(0);
+
+    auto writetime_m99 = column_mutation_attribute{
+        .kind = column_mutation_attribute::attribute_kind::writetime,
+        .column = subscript{.val = column_value(&map_col), .sub = make_int_const(99)},
+    };
+
+    bytes key1 = int32_type->decompose(int32_t(1));
+    auto [inputs, inputs_data] = make_evaluation_inputs(s, {
+        {"pk", make_int_raw(0)},
+        {"ck", make_int_raw(0)},
+        {"m",  mutation_column_value{make_int_int_map_raw({{1, 10}}), 1000000, -1}},
+    });
+    int32_t m_index = inputs_data->selection->index_of(map_col);
+    std::vector<collection_cell_metadata> meta(inputs_data->timestamps.size());
+    meta[m_index].timestamps = {{key1, api::timestamp_type(1000000)}};
+    inputs.collection_element_metadata = meta;
+
+    BOOST_REQUIRE_EQUAL(evaluate(writetime_m99, inputs), cql3::raw_value::make_null());
+}
+
+// Test that TTL(m[key]) returns the per-element TTL from collection_cell_metadata,
+// and returns null when the TTL is -1 (no expiry).
+BOOST_AUTO_TEST_CASE(evaluate_ttl_map_element) {
+    auto s = make_map_test_schema();
+    const column_definition& map_col = s->regular_column_at(0);
+
+    auto ttl_m1 = column_mutation_attribute{
+        .kind = column_mutation_attribute::attribute_kind::ttl,
+        .column = subscript{.val = column_value(&map_col), .sub = make_int_const(1)},
+    };
+    auto ttl_m2 = column_mutation_attribute{
+        .kind = column_mutation_attribute::attribute_kind::ttl,
+        .column = subscript{.val = column_value(&map_col), .sub = make_int_const(2)},
+    };
+
+    bytes key1 = int32_type->decompose(int32_t(1));
+    bytes key2 = int32_type->decompose(int32_t(2));
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(s, {
+        {"pk", make_int_raw(0)},
+        {"ck", make_int_raw(0)},
+        {"m",  mutation_column_value{make_int_int_map_raw({{1, 10}, {2, 20}}), 1000000, -1}},
+    });
+    int32_t m_index = inputs_data->selection->index_of(map_col);
+    std::vector<collection_cell_metadata> meta(inputs_data->timestamps.size());
+    // key1 has TTL 3600, key2 has no TTL (-1)
+    meta[m_index].ttls = {{key1, int32_t(3600)}, {key2, int32_t(-1)}};
+    inputs.collection_element_metadata = meta;
+
+    BOOST_REQUIRE_EQUAL(evaluate(ttl_m1, inputs), make_int_raw(3600));
+    // TTL -1 means no expiry -> should return null
+    BOOST_REQUIRE_EQUAL(evaluate(ttl_m2, inputs), cql3::raw_value::make_null());
 }
 
 // It should be possible to prepare an empty conjunction

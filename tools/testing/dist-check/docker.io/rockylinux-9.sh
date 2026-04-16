@@ -5,7 +5,7 @@
 #
 
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
 trap 'echo "error $? in $0 line $LINENO"' ERR

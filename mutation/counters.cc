@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "utils/assert.hh"
@@ -175,10 +175,8 @@ std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, ato
 }
 
 
-void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset, locator::host_id local_host_id) {
+void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset, counter_id local_id) {
     // FIXME: allow current_state to be frozen_mutation
-
-    utils::UUID local_id = local_host_id.uuid();
 
     auto transform_new_row_to_shards = [&s = *m.schema(), clock_offset, local_id] (column_kind kind, auto& cells) {
         cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
@@ -188,7 +186,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
                 return; // continue -- we are in lambda
             }
             auto delta = acv.counter_update_value();
-            auto cs = counter_shard(counter_id(local_id), delta, clock_offset + 1);
+            auto cs = counter_shard(local_id, delta, clock_offset + 1);
             ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
         });
     };
@@ -212,7 +210,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
                 return; // continue -- we are in lambda
             }
             auto ccv = counter_cell_view(acv);
-            auto cs = ccv.get_shard(counter_id(local_id));
+            auto cs = ccv.get_shard(local_id);
             if (!cs) {
                 return; // continue
             }
@@ -232,7 +230,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             auto delta = acv.counter_update_value();
 
             if (shards.empty() || shards.front().first > id) {
-                auto cs = counter_shard(counter_id(local_id), delta, clock_offset + 1);
+                auto cs = counter_shard(local_id, delta, clock_offset + 1);
                 ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
             } else {
                 auto& cs = shards.front().second;

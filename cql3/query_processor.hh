@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -208,6 +208,8 @@ public:
     service::storage_proxy& proxy() {
         return _proxy;
     }
+
+    service::storage_service& storage_service();
 
     std::pair<std::reference_wrapper<service::strong_consistency::coordinator>, gate::holder>
     acquire_strongly_consistent_coordinator();

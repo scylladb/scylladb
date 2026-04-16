@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2018-present ScyllaDB
 #
-# SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+# SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
 #
 
 find_library (cryptopp_LIBRARY

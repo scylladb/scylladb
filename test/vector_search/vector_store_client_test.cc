@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "cql3/expr/expression.hh"
@@ -81,6 +81,25 @@ timeout_config make_query_timeout(std::chrono::seconds timeout) {
     cfg.cas_timeout = timeout;
     cfg.other_timeout = timeout;
     return cfg;
+}
+
+future<> do_with_vector_store_mock(std::function<future<>(cql_test_env&, vs_mock_server&)> func) {
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
+                vs.start_background_tasks();
+                co_await func(env, *server);
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await server->stop();
+            }));
 }
 
 } // namespace
@@ -583,7 +602,8 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
                 // Wait until requests are handled by s2
                 // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
                 BOOST_CHECK(co_await repeat_until(DNS_REFRESH_INTERVAL * 2, [&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    BOOST_CHECK(keys);
                     co_return s2->ann_requests().size() > 0;
                 }));
             },
@@ -647,7 +667,8 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    BOOST_CHECK(keys);
                     co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
@@ -711,7 +732,8 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    BOOST_CHECK(keys);
                     co_return !s1->ann_requests().empty() && !s2->ann_requests().empty();
                 }));
             },
@@ -920,7 +942,8 @@ SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_request
                 // Set request timeout to 100ms, hence max backoff time is 2x100ms = 200ms.
                 cfg.db_config->read_request_timeout_in_ms.set(100);
                 // Trigger status checking by making ANN request to unavailable server.
-                co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                BOOST_CHECK(!result);
                 co_await repeat_until([&unavail_s]() -> future<bool> {
                     // Wait for 1 ANN request + 4 status check connections (5 total)
                     co_return unavail_s->connections().size() > 4;
@@ -1222,32 +1245,19 @@ SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
 /// Verify that the HTTP error description from the vector store is propagated
 /// through the CQL interface as part of the invalid_request_exception message.
 SEASTAR_TEST_CASE(vector_store_client_cql_error_contains_http_error_description) {
-    auto server = co_await make_vs_mock_server();
+    co_await do_with_vector_store_mock([](cql_test_env& env, vs_mock_server& server) -> future<> {
+        co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
 
-    auto cfg = make_config();
-    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
-    co_await do_with_cql_env(
-            [&](cql_test_env& env) -> future<> {
-                auto schema = co_await create_test_table(env, "ks", "test");
-                auto& vs = env.local_qp().vector_store_client();
-                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
-                vs.start_background_tasks();
-                co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+        // Configure mock to return 404 with a specific error message
+        server.next_ann_response({status_type::not_found, "index does not exist"});
 
-                // Configure mock to return 404 with a specific error message
-                server->next_ann_response({status_type::not_found, "index does not exist"});
-
-                BOOST_CHECK_EXCEPTION(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"),
-                        exceptions::invalid_request_exception, [](const exceptions::invalid_request_exception& ex) {
-                            auto msg = std::string(ex.what());
-                            // Verify the error message contains both the HTTP status and the error description
-                            return msg.find("404") != std::string::npos && msg.find("index does not exist") != std::string::npos;
-                        });
-            },
-            cfg)
-            .finally(seastar::coroutine::lambda([&] -> future<> {
-                co_await server->stop();
-            }));
+        BOOST_CHECK_EXCEPTION(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"),
+                exceptions::invalid_request_exception, [](const exceptions::invalid_request_exception& ex) {
+                    auto msg = std::string(ex.what());
+                    // Verify the error message contains both the HTTP status and the error description
+                    return msg.find("404") != std::string::npos && msg.find("index does not exist") != std::string::npos;
+                });
+    });
 }
 
 // Create a vector index with an additional filtering column.
@@ -1257,23 +1267,20 @@ SEASTAR_TEST_CASE(vector_store_client_cql_error_contains_http_error_description)
 //     ANN ordering by vector requires the column to be indexed using 'vector_index'.
 // Reproduces SCYLLADB-635.
 SEASTAR_TEST_CASE(vector_store_client_vector_index_with_additional_filtering_column) {
-    auto server = co_await make_vs_mock_server();
+    co_await do_with_vector_store_mock([](cql_test_env& env, vs_mock_server&) -> future<> {
+        // Create a vector index on the embedding column, including ck1 for filtered ANN search support.
+        co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding, ck1) USING 'vector_index'");
 
-    auto cfg = make_config();
-    cfg.db_config->vector_store_primary_uri.set(format("http://server.node:{}", server->port()));
-    co_await do_with_cql_env(
-            [&](cql_test_env& env) -> future<> {
-                auto schema = co_await create_test_table(env, "ks", "test");
-                auto& vs = env.local_qp().vector_store_client();
-                configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
-                vs.start_background_tasks();
-                // Create a vector index on the embedding column, including ck1 for filtered ANN search support.
-                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding, ck1) USING 'vector_index'");
+        BOOST_CHECK_NO_THROW(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"));
+    });
+}
 
-                BOOST_CHECK_NO_THROW(co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"));
-            },
-            cfg)
-            .finally(seastar::coroutine::lambda([&] -> future<> {
-                co_await server->stop();
-            }));
+SEASTAR_TEST_CASE(vector_store_client_local_vector_index) {
+    co_await do_with_vector_store_mock([](cql_test_env& env, vs_mock_server&) -> future<> {
+        // Create a local vector index on the 'embedding' column.
+        co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test ((pk1, pk2), embedding) USING 'vector_index'");
+
+        BOOST_CHECK_NO_THROW(
+                co_await env.execute_cql("SELECT * FROM ks.test WHERE pk1 = 1 AND pk2 = 2 ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;"));
+    });
 }

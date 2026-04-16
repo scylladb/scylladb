@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "auth/certificate_authenticator.hh"
@@ -14,6 +14,7 @@
 #include <fmt/ranges.h>
 
 #include "utils/to_string.hh"
+#include "utils/error_injection.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
@@ -105,6 +106,9 @@ auth::authentication_option_set auth::certificate_authenticator::alterable_optio
 }
 
 future<std::optional<auth::authenticated_user>> auth::certificate_authenticator::authenticate(session_dn_func f) const {
+    if (auto user = utils::get_local_injector().inject_parameter("transport_early_auth_bypass")) {
+        co_return auth::authenticated_user{sstring(*user)};
+    }
     if (!f) {
         co_return std::nullopt;
     }

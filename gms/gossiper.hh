@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -91,7 +91,6 @@ struct loaded_endpoint_state {
 class gossiper : public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
 public:
     using clk = seastar::lowres_system_clock;
-    using ignore_features_of_local_node = bool_class<class ignore_features_of_local_node_tag>;
     using generation_for_nodes = std::unordered_map<locator::host_id, generation_type>;
 private:
     using messaging_verb = netw::messaging_verb;
@@ -198,18 +197,7 @@ private:
     endpoint_locks_map _endpoint_locks;
 
 public:
-    static constexpr std::array DEAD_STATES{
-        versioned_value::REMOVED_TOKEN,
-        versioned_value::STATUS_LEFT,
-    };
-    static constexpr std::array SILENT_SHUTDOWN_STATES{
-        versioned_value::REMOVED_TOKEN,
-        versioned_value::STATUS_LEFT,
-        versioned_value::STATUS_BOOTSTRAPPING,
-        versioned_value::STATUS_UNKNOWN,
-    };
     static constexpr std::chrono::milliseconds INTERVAL{1000};
-    static constexpr std::chrono::hours A_VERY_LONG_TIME{24 * 3};
 
     // Maximum difference between remote generation value and generation
     // value this node would get if this node were restarted that we are
@@ -241,7 +229,6 @@ private:
     /* initial seeds for joining the cluster */
     std::set<inet_address> _seeds;
 
-    std::map<locator::host_id, clk::time_point> _expire_time_endpoint_map;
 
     bool _in_shadow_round = false;
 
@@ -341,13 +328,6 @@ private:
     utils::chunked_vector<gossip_digest> make_random_gossip_digest() const;
 
 public:
-    /**
-     * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
-     *
-     * @param endpoint
-     * @param host_id
-     */
-    future<> advertise_token_removed(locator::host_id host_id, permit_id);
 
     /**
      * Do not call this method unless you know what you are doing.
@@ -363,7 +343,6 @@ public:
     future<generation_type> get_current_generation_number(locator::host_id endpoint) const;
     future<version_type> get_current_heart_beat_version(locator::host_id endpoint) const;
 
-    bool is_safe_for_bootstrap(inet_address endpoint) const;
 private:
     /**
      * Returns true if the chosen target was also a seed. False otherwise
@@ -383,7 +362,6 @@ private:
     future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
 
 public:
-    clk::time_point get_expire_time_for_endpoint(locator::host_id endpoint) const noexcept;
 
     // Gets a shared pointer to the endpoint_state, if exists.
     // Otherwise, returns a null ptr.
@@ -467,7 +445,7 @@ private:
 public:
     bool is_alive(locator::host_id id) const;
 
-    bool is_dead_state(const endpoint_state& eps) const;
+    bool is_left(const endpoint_state& eps) const;
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(std::vector<locator::host_id> nodes, std::chrono::milliseconds timeout);
@@ -589,16 +567,11 @@ public:
     bool is_enabled() const;
 
 public:
-    void add_expire_time_for_endpoint(locator::host_id endpoint, clk::time_point expire_time);
-
-    static clk::time_point compute_expire_time();
-public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const locator::host_id& endpoint) const;
     bool is_shutdown(const endpoint_state& eps) const;
     bool is_normal(const locator::host_id& endpoint) const;
     bool is_cql_ready(const locator::host_id& endpoint) const;
-    bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
     void force_newer_generation();
 public:
     std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;
@@ -615,12 +588,8 @@ private:
     gossip_address_map& _address_map;
     gossip_config _gcfg;
     condition_variable _failure_detector_loop_cv;
-    // Get features supported by a particular node
-    std::set<sstring> get_supported_features(locator::host_id endpoint) const;
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
-public:
-    // Get features supported by all the nodes this node knows about
-    std::set<sstring> get_supported_features(const std::unordered_map<locator::host_id, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const;
+    std::string get_node_status(const locator::host_id& endpoint) const noexcept;
 private:
     seastar::metrics::metric_groups _metrics;
 public:

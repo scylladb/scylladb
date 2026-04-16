@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -402,6 +402,10 @@ public:
 
     version_types get_version() const {
         return _version;
+    }
+
+    format_types get_format() const {
+        return _format;
     }
 
     // Returns the total bytes of all components.

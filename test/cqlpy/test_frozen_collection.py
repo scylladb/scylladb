@@ -1,6 +1,6 @@
 
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 #############################################################################
 # Various tests for the handling of frozen collections. Note that Cassandra

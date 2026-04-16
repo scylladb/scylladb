@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 import asyncio
 import logging
@@ -542,7 +542,7 @@ async def test_repair_failure_on_split_rejection(manager: ManagerClient, volumes
 
                     # Expect repair to fail when splitting new sstables
                     await log.wait_for("Repair for tablet migration of .* failed", from_mark=mark)
-                    await log.wait_for("Failed to load SSTable.*\(critical disk utilization\)", from_mark=mark)
+                    await log.wait_for(r"Failed to load SSTable.*\(critical disk utilization\)", from_mark=mark)
 
                     assert await log.grep(f"compaction.*Split {cf}", from_mark=mark) == []
 

@@ -192,13 +192,9 @@ For example, to configure ScyllaDB to use listen address `10.0.0.5`:
 $ docker run --name some-scylla -d scylladb/scylla --listen-address 10.0.0.5
 ```
 
-**Since: 1.4**
-
 #### `--alternator-address ADDR`
 
 The `--alternator-address` command line option configures the Alternator API listen address. The default value is the same as `--listen-address`.
-
-**Since: 3.2**
 
 #### `--alternator-port PORT`
 
@@ -210,21 +206,15 @@ For example, to configure ScyllaDB to listen to Alternator API at port `8000`:
 $ docker run --name some-scylla -d scylladb/scylla --alternator-port 8000
 ```
 
-**Since: 3.2**
-
 #### `--alternator-https-port PORT`
 
 The `--alternator-https-port` option is similar to `--alternator-port`, just enables an encrypted (HTTPS) port. Either the `--alternator-https-port` or `--alternator-http-port`, or both, can be used to enable Alternator.
 
 Note that the `--alternator-https-port` option also requires that files `/etc/scylla/scylla.crt` and `/etc/scylla/scylla.key` be inserted into the image. These files contain an SSL certificate and key, respectively.
 
-**Since: 4.2**
-
 #### `--alternator-write-isolation policy`
 
 The `--alternator-write-isolation` command line option chooses between four allowed write isolation policies described in docs/alternator/alternator.md. This option must be specified if Alternator is enabled - it does not have a default.
-
-**Since: 4.1**
 
 #### `--broadcast-address ADDR`
 
@@ -304,8 +294,6 @@ For example, to skip running I/O setup:
 $ docker run --name some-scylla -d scylladb/scylla --io-setup 0
 ```
 
-**Since: 4.3**
-
 #### `--cpuset CPUSET`
 
 The `--cpuset` command line option restricts ScyllaDB to run on only on CPUs specified by `CPUSET`.
@@ -341,25 +329,17 @@ For example, to enable the User Defined Functions (UDF) feature:
 $ docker run --name some-scylla -d scylladb/scylla --experimental-feature=udf
 ```
 
-**Since: 2.0**
-
 #### `--disable-version-check`
 
 The `--disable-version-check` disable the version validation check.
-
-**Since: 2.2**
 
 #### `--authenticator AUTHENTICATOR`
 
 The `--authenticator` command lines option allows to provide the authenticator class ScyllaDB will use. By default ScyllaDB uses the `AllowAllAuthenticator` which performs no credentials checks. The second option is using the `PasswordAuthenticator` parameter, which relies on username/password pairs to authenticate users.
 
-**Since: 2.3**
-
 #### `--authorizer AUTHORIZER`
 
 The `--authorizer` command lines option allows to provide the authorizer class ScyllaDB will use. By default ScyllaDB uses the `AllowAllAuthorizer` which allows any action to any user. The second option is using the `CassandraAuthorizer` parameter, which stores permissions in `system.permissions` table.
-
-**Since: 2025.4**
 
 #### `--dc NAME`
 

@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include <random>
@@ -2664,7 +2664,7 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
     // We use the first path for CDC mutations (if present) and the latter for "paxos mutations".
     // Attempts to send both kinds of mutations in one shot caused an infinite loop.
     future<> f_cdc = make_ready_future<>();
-    if (_schema->cdc_options().enabled()) {
+    if (cdc::cdc_enabled(*_schema)) {
         auto update_mut = decision->update.unfreeze(_schema);
         const auto base_tbl_id = update_mut.column_family_id();
         utils::chunked_vector<mutation> update_mut_vec{std::move(update_mut)};
@@ -3900,7 +3900,7 @@ void storage_proxy::register_cdc_operation_result_tracker(const storage_proxy::u
 
     for (auto& id : ids) {
         auto& h = get_write_response_handler(id.id);
-        if (h->get_schema()->cdc_options().enabled()) {
+        if (cdc::cdc_enabled(*h->get_schema())) {
             h->set_cdc_operation_result_tracker(tracker);
         }
     }
@@ -4916,6 +4916,7 @@ private:
     utils::small_vector<digest_and_last_pos, 3> _digest_results;
     api::timestamp_type _last_modified = api::missing_timestamp;
     size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
+    noncopyable_function<void()> _on_disconnect;
 
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _block_for, _data_result));
@@ -4927,6 +4928,7 @@ private:
         // we will not need them any more
         _data_result = foreign_ptr<lw_shared_ptr<query::result>>();
         _digest_results.clear();
+        _on_disconnect = {};
     }
 public:
     digest_read_resolver(shared_ptr<storage_proxy> proxy,
@@ -4997,6 +4999,7 @@ private:
         }
         if (is_completed()) {
             _timeout.cancel();
+            _on_disconnect = {};
             _done_promise.set_value(bo::success());
         }
     }
@@ -5004,10 +5007,15 @@ private:
         if (waiting_for(ep)) {
             _failed++;
         }
+        if (kind == error_kind::DISCONNECT && _on_disconnect) {
+            _on_disconnect();
+        }
         if (kind == error_kind::DISCONNECT && _block_for == _target_count_for_cl) {
-            // if the error is because of a connection disconnect and there is no targets to speculate
-            // wait for timeout in hope that the client will issue speculative read
-            // FIXME: resolver should have access to all replicas and try another one in this case
+            // if the error is because of a connection disconnect and there are
+            // no extra targets in _targets to speculate with, wait for timeout
+            // in hope that the client will issue a retry.
+            // FIXME: resolver should have access to all replicas and try
+            // another one in this case.
             fail_request(read_failure_exception_with_timeout(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result, _timeout.get_timeout()));
             return;
         }
@@ -5027,6 +5035,9 @@ private:
 public:
     future<result<digest_read_result>> has_cl() {
         return _cl_promise.get_future();
+    }
+    void set_on_disconnect(noncopyable_function<void()> cb) {
+        _on_disconnect = std::move(cb);
     }
     bool has_data() {
         return _data_result;
@@ -6057,6 +6068,11 @@ public:
             std::min(_cf->get_coordinator_read_latency_percentile(sr.get_value()), std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2)) :
             std::chrono::milliseconds(unsigned(sr.get_value()));
         _speculate_timer.arm(t);
+        resolver->set_on_disconnect([this] {
+            if (_speculate_timer.cancel()) {
+                _speculate_timer.arm(clock_type::now());
+            }
+        });
 
         // if CL + RR result in covering all replicas, getReadExecutor forces AlwaysSpeculating.  So we know
         // that the last replica in our list is "extra."

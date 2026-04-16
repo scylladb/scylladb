@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Copyright 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from cassandra.cluster import NoHostAvailable
 from contextlib import contextmanager

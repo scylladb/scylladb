@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Modifications: Copyright 2024-present ScyllaDB
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...cassandra_tests.porting import *
 

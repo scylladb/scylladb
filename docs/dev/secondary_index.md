@@ -37,8 +37,17 @@ Global index's target is usually just the indexed column name, unless the index 
  - index on map, set or list values: VALUES(v)
  - index on map entries: ENTRIES(v)
 
-Their serialization is just string representation, so:
-"v", "FULL(v)", "KEYS(v)", "VALUES(v)", "ENTRIES(v)" are all valid targets.
+Their serialization uses lowercase type names as prefixes, except for `full` which is serialized
+as just the column name (without any prefix):
+`"v"`, `"keys(v)"`, `"values(v)"`, `"entries(v)"` are valid targets; a frozen full collection
+index on column `v` is stored simply as `"v"` (same as a regular index).
+
+If the column name contains characters that could be confused with the above formats
+(e.g., a name containing parentheses or braces), it is escaped using the CQL
+quoted-identifier syntax (column_identifier::to_cql_string()), which wraps the
+name in double quotes and doubles any embedded double-quote characters. For example,
+a column named `hEllo` is stored as `"hEllo"`, and a column named `keys(m)` is
+stored as `"keys(m)"`.
 
 ## Local index
 

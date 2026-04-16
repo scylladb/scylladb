@@ -1,6 +1,6 @@
 # Copyright 2023-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 #############################################################################
 # Tests for preparing various kinds of statements. When a client asks to prepare

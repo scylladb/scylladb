@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <iterator>
@@ -90,6 +90,7 @@ future<scheduling_groups> get_scheduling_groups() {
     if (!_scheduling_groups) {
         _scheduling_groups.emplace();
         _scheduling_groups->compaction_scheduling_group = co_await create_scheduling_group("compaction", 1000);
+        _scheduling_groups->maintenance_compaction_scheduling_group = co_await create_scheduling_group("maintenance_compaction", 200);
         _scheduling_groups->memory_compaction_scheduling_group = co_await create_scheduling_group("mem_compaction", 1000);
         _scheduling_groups->streaming_scheduling_group = co_await create_scheduling_group("streaming", 200);
         _scheduling_groups->statement_scheduling_group = co_await create_scheduling_group("statement", 1000);
@@ -639,6 +640,7 @@ private:
             }
 
             dbcfg.compaction_scheduling_group = scheduling_groups.compaction_scheduling_group;
+            dbcfg.maintenance_compaction_scheduling_group = scheduling_groups.maintenance_compaction_scheduling_group;
             dbcfg.memory_compaction_scheduling_group = scheduling_groups.memory_compaction_scheduling_group;
             dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
             dbcfg.statement_scheduling_group = scheduling_groups.statement_scheduling_group;
@@ -672,7 +674,7 @@ private:
             auto get_cm_cfg = sharded_parameter([&] {
                 return compaction::compaction_manager::config {
                     .compaction_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
-                    .maintenance_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
+                    .maintenance_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.maintenance_compaction_scheduling_group},
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .max_shares = cfg->compaction_max_shares,
@@ -953,7 +955,7 @@ private:
                 _view_update_generator.stop().get();
             });
 
-            _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_sys_dist_ks), std::ref(_mnotifier), std::ref(_view_update_generator), std::ref(group0_client), std::ref(_qp)).get();
+            _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_mnotifier), std::ref(_view_update_generator), std::ref(group0_client), std::ref(_qp)).get();
             auto stop_view_builder = defer_verbose_shutdown("view builder", [this] {
                 _view_builder.stop().get();
             });

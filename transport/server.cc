@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "server.hh"
@@ -273,6 +273,12 @@ void cql_sg_stats::register_metrics()
         }
     }
 
+    transport_metrics.emplace_back(
+            sm::make_gauge("cql_pending_response_memory", [this] { return _pending_response_memory; },
+                             sm::description("Holds the total memory in bytes consumed by responses waiting to be sent."),
+                             {{"scheduling_group_name", cur_sg_name}}).set_skip_when_empty()
+    );
+
     new_metrics.add_group("transport", std::move(transport_metrics));
     _metrics = std::exchange(new_metrics, {});
 }
@@ -394,7 +400,8 @@ void cql_server::init_messaging_service() {
             co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
-                    std::move(req.client_state));
+                    std::move(req.client_state),
+                    &shard_svc._abort_source);
                 tracing::trace_state_ptr trace_state_ptr;
                 if (req.trace_info) {
                     trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*req.trace_info);
@@ -491,8 +498,8 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
         handling_node_bounce::yes));
 
     if (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&result)) {
-        auto host = (*bounce_msg)->move_to_host();
-        auto shard = (*bounce_msg)->move_to_shard().value();
+        auto host = (*bounce_msg)->target_host();
+        auto shard = (*bounce_msg)->target_shard();
         co_return forward_cql_execute_response{
             .status = forward_cql_status::redirect,
             .target_host = host,
@@ -1093,7 +1100,7 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     : generic_server::connection{server, std::move(fd), sem, std::move(initial_sem_units)}
     , _server(server)
     , _server_addr(server_addr)
-    , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr, bool(server._used_by_maintenance_socket))
+    , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr, bool(server._used_by_maintenance_socket), &server._abort_source)
     , _current_scheduling_group(server.get_scheduling_group_for_new_connection())
 {
     _shedding_timer.set_callback([this] {
@@ -1294,6 +1301,8 @@ future<> cql_server::connection::process_request() {
 
             future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave), stream] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
                 try {
+                    auto& sg_stats = _server.get_cql_sg_stats();
+                    size_t pending_response_size = 0;
                     if (response_f.failed()) {
                         const auto message = format("request processing failed, error [{}]", response_f.get_exception());
                         clogger.error("{}: {}", _client_state.get_remote_address(), message);
@@ -1301,9 +1310,22 @@ future<> cql_server::connection::process_request() {
                                                   message,
                                                   tracing::trace_state_ptr()));
                     } else {
-                        write_response(response_f.get(), std::move(mem_permit), _compression);
+                        auto response = response_f.get();
+                        // Account for response body size exceeding the initial estimate.
+                        auto resp_size = response->size();
+                        auto permit_size = mem_permit.count();
+                        if (resp_size > permit_size) {
+                            auto extra = resp_size - permit_size;
+                            auto extra_units = consume_units(_server._memory_available, extra);
+                            mem_permit.adopt(std::move(extra_units));
+                        }
+                        pending_response_size = resp_size;
+                        sg_stats._pending_response_memory += pending_response_size;
+                        write_response(std::move(response), _compression);
                     }
-                    _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
+                    _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave), permit = std::move(mem_permit), &sg_stats, pending_response_size] {
+                        sg_stats._pending_response_memory -= pending_response_size;
+                    });
                 } catch (...) {
                     clogger.error("{}: request processing failed: {}",
                                   _client_state.get_remote_address(), std::current_exception());
@@ -1446,6 +1468,10 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
             client_state.set_login(std::move(*opt_user));
             co_await client_state.check_user_can_login();
             client_state.maybe_update_per_service_level_params();
+            update_scheduling_group();
+            _authenticating = false;
+            _ready = true;
+            on_connection_ready();
             res = make_ready(stream, trace_state);
         } else {
             res = make_autheticate(stream, a.qualified_java_name(), trace_state);
@@ -1558,8 +1584,8 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     }
 
     return qp.local().execute_direct_without_checking_exception_message(query.assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
-        if (msg->move_to_shard()) {
-            return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
+        if (msg->as_bounce()) {
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
@@ -1676,8 +1702,8 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     tracing::trace(trace_state, "Processing a statement");
     return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
-        if (msg->move_to_shard()) {
-            return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
+        if (msg->as_bounce()) {
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
@@ -1815,8 +1841,8 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
     return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
             .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
-        if (msg->move_to_shard()) {
-            return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce>(msg)));
+        if (msg->as_bounce()) {
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
@@ -1864,9 +1890,9 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,
         version, permit, trace_state, init_trace, {}, dialect));
     while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
-        auto shard = (*bounce_msg)->move_to_shard().value();
+        auto shard = (*bounce_msg)->target_shard();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
-        auto target_host = (*bounce_msg)->move_to_host();
+        auto target_host = (*bounce_msg)->target_host();
         auto my_host_id = _query_processor.local().proxy().get_token_metadata_ptr()->get_topology().my_host_id();
         if (target_host == my_host_id) {
             // Shard bounce
@@ -1876,7 +1902,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
             msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version] (cql_server& server) -> future<process_fn_return_type> {
                 bytes_ostream linearization_buffer;
                 request_reader in(is, linearization_buffer);
-                auto local_client_state = gcs.get();
+                auto local_client_state = gcs.get(&server._abort_source);
                 auto local_trace_state = gt.get();
                 co_return co_await process_fn(local_client_state, server._query_processor, in, stream, version,
                         /* FIXME */empty_service_permit(), std::move(local_trace_state), false, cached_vals, dialect);
@@ -2142,9 +2168,9 @@ cql_server::connection::make_client_routes_change_event(const event::client_rout
     return response;
 }
 
-void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit, cql_compression compression)
+void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression)
 {
-    _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response), permit = std::move(permit)] () mutable {
+    _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
         cql_server::response& r = *response;
         auto del = make_deleter([response = std::move(response)] {});
         return r.write_message(_write_buf, _version, compression, std::move(del));
@@ -2545,7 +2571,6 @@ void cql_server::response::write(const cql3::metadata& m, const cql_metadata_id_
         flags.set<cql3::metadata::flag::NO_METADATA>();
     }
 
-    cql3::cql_metadata_id_type calculated_metadata_id{bytes{}};
     if (metadata_id.has_request_metadata_id() && metadata_id.has_response_metadata_id()) {
         if (metadata_id.get_request_metadata_id() != metadata_id.get_response_metadata_id()) {
             flags.remove<cql3::metadata::flag::NO_METADATA>();

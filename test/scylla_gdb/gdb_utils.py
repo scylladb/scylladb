@@ -1,6 +1,6 @@
 # Copyright 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 """
 GDB helper functions for `scylla_gdb` tests.
 They should be loaded to GDB by "-x {dir}/gdb_utils.py}",

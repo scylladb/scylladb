@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "select_statement.hh"
@@ -42,7 +42,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
     const auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
     auto query_result = co_await coordinator.get().query(_query_schema, *read_command,
-        key_ranges, state.get_trace_state(), timeout);
+        key_ranges, state.get_trace_state(), timeout, state.get_client_state().get_abort_source());
 
     using namespace service::strong_consistency;
     if (const auto* redirect = get_if<need_redirect>(&query_result)) {

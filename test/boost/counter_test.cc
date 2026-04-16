@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "mutation/counters.hh"
@@ -391,6 +391,7 @@ SEASTAR_TEST_CASE(test_counter_update_mutations) {
 SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
     return seastar::async([] {
         auto s = get_schema();
+        counter_id default_counter_id(locator::host_id::create_null_id().uuid());
 
         auto pk = partition_key::from_single_value(*s, int32_type->decompose(0));
         auto ck = clustering_key::from_single_value(*s, int32_type->decompose(0));
@@ -415,11 +416,11 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
         m3.set_static_cell(scol, std::move(c3));
 
         auto m0 = m1;
-        transform_counter_updates_to_shards(m0, nullptr, 0, locator::host_id::create_null_id());
+        transform_counter_updates_to_shards(m0, nullptr, 0, default_counter_id);
 
         auto empty = mutation(s, pk);
         auto m = m1;
-        transform_counter_updates_to_shards(m, &empty, 0, locator::host_id::create_null_id());
+        transform_counter_updates_to_shards(m, &empty, 0, default_counter_id);
         BOOST_REQUIRE_EQUAL(m, m0);
 
         auto ac = get_counter_cell(m);
@@ -439,7 +440,7 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
       }
 
         m = m2;
-        transform_counter_updates_to_shards(m, &m0, 0, locator::host_id::create_null_id());
+        transform_counter_updates_to_shards(m, &m0, 0, default_counter_id);
 
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
@@ -458,7 +459,7 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
       }
 
         m = m3;
-        transform_counter_updates_to_shards(m, &m0, 0, locator::host_id::create_null_id());
+        transform_counter_updates_to_shards(m, &m0, 0, default_counter_id);
         ac = get_counter_cell(m);
         BOOST_REQUIRE(!ac.is_live());
         ac = get_static_counter_cell(m);

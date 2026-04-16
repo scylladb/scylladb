@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "replica/memtable.hh"
@@ -193,7 +193,9 @@ SEASTAR_TEST_CASE(test_reader_with_different_strategies) {
             });
             auto read_all = [&](repair_reader::read_strategy strategy) -> future<std::vector<mutation_fragment>> {
                 auto reader = repair_reader(e.db(), cf, cf.schema(), make_reader_permit(e),
-                    random_range, remote_sharder, remote_shard, 0, strategy, gc_clock::now(), incremental_repair_meta());
+                    random_range, remote_sharder, remote_shard, 0, strategy, gc_clock::now(), incremental_repair_meta(),
+                    e.db_config().repair_multishard_reader_buffer_hint_size(),
+                    e.db_config().repair_multishard_reader_enable_read_ahead());
                 std::vector<mutation_fragment> result;
                 while (auto mf = co_await reader.read_mutation_fragment()) {
                     result.push_back(std::move(*mf));
@@ -284,7 +286,9 @@ static future<> run_repair_reader_corruption_test(random_mutation_generator::com
         auto test_range = dht::token_range::make_open_ended_both_sides();
         auto reader = repair_reader(e.db(), cf, cf.schema(), make_reader_permit(e),
             test_range, local_sharder, 0, 0, repair_reader::read_strategy::local,
-            gc_clock::now(), incremental_repair_meta());
+            gc_clock::now(), incremental_repair_meta(),
+            e.db_config().repair_multishard_reader_buffer_hint_size(),
+            e.db_config().repair_multishard_reader_enable_read_ahead());
 
         try {
             while (auto mf = co_await reader.read_mutation_fragment()) {

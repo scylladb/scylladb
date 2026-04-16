@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <iterator>
@@ -143,10 +143,18 @@ dht::token_range view_building_worker::get_tablet_token_range(table_id table_id,
 }
 
 future<> view_building_worker::drain() {
+    auto drain_started = std::exchange(_drain_started, started_drain::yes);
+    if (drain_started == started_drain::no) {
+        _drain_finished = shared_future(do_drain());
+    }
+    return _drain_finished.get_future();
+}
+
+future<> view_building_worker::do_drain() {
     if (!_as.abort_requested()) {
         _as.request_abort();
     }
-    _state._mutex.broken();
+    co_await _staging_sstables_mutex.wait();
     _staging_sstables_mutex.broken();
     _sstables_to_register_event.broken();
     if (this_shard_id() == 0) {
@@ -156,7 +164,9 @@ future<> view_building_worker::drain() {
         co_await std::move(state_observer);
         co_await _mnotifier.unregister_listener(this);
     }
-    co_await _state.clear();
+    co_await _state._mutex.wait();
+    _state._mutex.broken();
+    co_await _state.drain();
     co_await uninit_messaging_service();
 }
 
@@ -200,9 +210,7 @@ future<> view_building_worker::run_staging_sstables_registrator() {
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
-            auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
             co_await create_staging_sstable_tasks();
-            lock.return_all();
             _as.check();
             co_await _sstables_to_register_event.when();
         } catch (semaphore_aborted&) {
@@ -227,13 +235,45 @@ future<> view_building_worker::run_staging_sstables_registrator() {
     }
 }
 
+future<std::vector<foreign_ptr<semaphore_units<>>>> view_building_worker::lock_staging_mutex_on_multiple_shards(std::flat_set<shard_id> shards) {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    // Collect `_staging_sstables_mutex` locks from multiple shards,
+    // so other shards won't interact with their `_staging_sstables` map
+    // until the caller releases them.
+    std::vector<foreign_ptr<semaphore_units<>>> locks;
+    locks.resize(smp::count);
+    // Locks are acquired from multiple shards in parallel.
+    // This is the only place where multiple-shard locks are acquired at once
+    // and the method is called only once at a time (from `create_staging_sstable_tasks()`
+    // on shard 0), so no deadlock may occur.
+    co_await coroutine::parallel_for_each(shards, [&locks, &sharded_vbw = container()] (auto shard_id) -> future<> {
+        auto lock_ptr = co_await smp::submit_to(shard_id, [&sharded_vbw] () -> future<foreign_ptr<semaphore_units<>>> {
+            auto& vbw = sharded_vbw.local();
+            auto lock = co_await get_units(vbw._staging_sstables_mutex, 1, vbw._as);
+            co_return make_foreign(std::move(lock));
+        });
+        locks[shard_id] = std::move(lock_ptr);
+    });
+    co_return std::move(locks);
+}
+
 future<> view_building_worker::create_staging_sstable_tasks() {
+    // Explicitly lock shard0 beforehand to prevent other shards from modifying `_sstables_to_register` from `register_staging_sstable_tasks()`
+    auto lock0 = co_await get_units(_staging_sstables_mutex, 1, _as);
+
     if (_sstables_to_register.empty()) {
         co_return;
     }
 
-    utils::chunked_vector<canonical_mutation> cmuts;
+    auto shards = _sstables_to_register 
+        | std::views::values 
+        | std::views::join 
+        | std::views::transform([] (const auto& sst_info) { return sst_info.shard; }) 
+        | std::ranges::to<std::flat_set<shard_id>>();
+    shards.erase(0); // We're already holding shard0 lock
+    auto locks = co_await lock_staging_mutex_on_multiple_shards(std::move(shards));
 
+    utils::chunked_vector<canonical_mutation> cmuts;
     auto guard = co_await _group0.client().start_operation(_as);
     auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
     for (auto& [table_id, sst_infos]: _sstables_to_register) {
@@ -460,6 +500,16 @@ static std::unordered_set<table_id> get_ids_of_all_views(replica::database& db, 
     }) | std::ranges::to<std::unordered_set>();;
 }
 
+void view_building_worker::state::start_batch(std::unique_ptr<batch> batch) {
+    if (_drained) {
+        on_internal_error(vbw_logger, "view_building_worker::state was already drained");
+    } else if (_batch) {
+        on_internal_error(vbw_logger, fmt::format("view_building_worker::state::start_batch(): some batch (tasks: {}) is already running", _batch->tasks | std::views::keys));
+    }
+    _batch = std::move(batch);
+    _batch->start();
+}
+
 // If `state::processing_base_table` is different that the `view_building_state::currently_processed_base_table`,
 // clear the state, save and flush new base table
 future<> view_building_worker::state::update_processing_base_table(replica::database& db, const view_building_state& building_state, abort_source& as) {
@@ -485,6 +535,10 @@ future<> view_building_worker::state::clean_up_after_batch() {
 
 // Flush base table, set is as currently processing base table and save which views exist at the time of flush
 future<> view_building_worker::state::flush_base_table(replica::database& db, table_id base_table_id, abort_source& as) {
+    if (_drained) {
+        on_internal_error(vbw_logger, "view_building_worker::state was already drained");
+    }
+
     auto cf = db.find_column_family(base_table_id).shared_from_this();
     co_await when_all(cf->await_pending_writes(), cf->await_pending_streams());
     co_await flush_base(cf, as);
@@ -501,6 +555,11 @@ future<> view_building_worker::state::clear() {
     processing_base_table.reset();
     completed_tasks.clear();
     flushed_views.clear();
+}
+
+future<> view_building_worker::state::drain() {
+    _drained = true;
+    co_await clear();
 }
 
 view_building_worker::batch::batch(sharded<view_building_worker>& vbw, std::unordered_map<utils::UUID, view_building_task> tasks, table_id base_id, locator::tablet_replica replica)
@@ -667,24 +726,34 @@ future<> view_building_worker::do_build_range(table_id base_id, std::vector<tabl
 }
 
 future<> view_building_worker::do_process_staging(table_id table_id, dht::token last_token) {
-    if (_staging_sstables[table_id].empty()) {
+    auto table = _db.get_tables_metadata().get_table(table_id).shared_from_this();
+    std::vector<sstables::shared_sstable> sstables_to_process;
+
+    try {
+        // Acquire `_staging_sstables_mutex` to prevent `create_staging_sstable_tasks()` from
+        // concurrently modifying `_staging_sstables` (moving entries from `_sstables_to_register`)
+        // while we read them.
+        auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
+        auto& tablet_map = table->get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(table_id);
+        auto tid = tablet_map.get_tablet_id(last_token);
+        auto tablet_range = tablet_map.get_token_range(tid);
+
+        // Select sstables belonging to the tablet (identified by `last_token`)
+        for (auto& sst: _staging_sstables[table_id]) {
+            auto sst_last_token = sst->get_last_decorated_key().token();
+            if (tablet_range.contains(sst_last_token, dht::token_comparator())) {
+                sstables_to_process.push_back(sst);
+            }
+        }
+        lock.return_all();
+    } catch (semaphore_aborted&) {
+        vbw_logger.warn("Semaphore was aborted while waiting to removed processed sstables for table {}", table_id);
         co_return;
     }
 
-    auto table = _db.get_tables_metadata().get_table(table_id).shared_from_this();
-    auto& tablet_map = table->get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(table_id);
-    auto tid = tablet_map.get_tablet_id(last_token);
-    auto tablet_range = tablet_map.get_token_range(tid);
-
-    // Select sstables belonging to the tablet (identified by `last_token`)
-    std::vector<sstables::shared_sstable> sstables_to_process;
-    for (auto& sst: _staging_sstables[table_id]) {
-        auto sst_last_token = sst->get_last_decorated_key().token();
-        if (tablet_range.contains(sst_last_token, dht::token_comparator())) {
-            sstables_to_process.push_back(sst);
-        }
+    if (sstables_to_process.empty()) {
+        co_return;
     }
-
     co_await _vug.process_staging_sstables(std::move(table), sstables_to_process);
 
     try {
@@ -799,8 +868,8 @@ future<std::vector<utils::UUID>> view_building_worker::work_on_tasks(raft::term_
         }
 
         // Create and start the batch
-        _state._batch = std::make_unique<batch>(container(), std::move(tasks), *building_state.currently_processed_base_table, my_replica);
-        _state._batch->start();
+        auto batch = std::make_unique<view_building_worker::batch>(container(), std::move(tasks), *building_state.currently_processed_base_table, my_replica);
+        _state.start_batch(std::move(batch));
     }
 
     if (std::ranges::all_of(ids, [&] (auto& id) { return !_state._batch->tasks.contains(id); })) {

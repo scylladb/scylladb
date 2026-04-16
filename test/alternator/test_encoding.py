@@ -1,6 +1,6 @@
 # Copyright 2026-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # Tests for the on-disk encoding of Alternator data. Specifically, these
 # tests verify that the internal format used to store DynamoDB attribute

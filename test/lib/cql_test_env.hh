@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -76,6 +76,7 @@ namespace db {
 
 struct scheduling_groups {
     scheduling_group compaction_scheduling_group;
+    scheduling_group maintenance_compaction_scheduling_group;
     scheduling_group memory_compaction_scheduling_group;
     scheduling_group streaming_scheduling_group;
     scheduling_group statement_scheduling_group;

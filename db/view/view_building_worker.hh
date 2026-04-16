@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -14,6 +14,7 @@
 #include <seastar/core/shared_future.hh>
 #include <unordered_map>
 #include <unordered_set>
+#include <flat_set>
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
 #include "raft/raft.hh"
@@ -98,11 +99,14 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
         std::unordered_set<table_id> flushed_views;
 
         semaphore _mutex = semaphore(1);
+        bool _drained = false;
         // All of the methods below should be executed while holding `_mutex` unit!
+        void start_batch(std::unique_ptr<batch> batch);
         future<> update_processing_base_table(replica::database& db, const view_building_state& building_state, abort_source& as);
         future<> flush_base_table(replica::database& db, table_id base_table_id, abort_source& as);
         future<> clean_up_after_batch();
         future<> clear();
+        future<> drain();
     };
 
     // Wrapper which represents information needed to create
@@ -169,14 +173,24 @@ private:
     future<> do_process_staging(table_id base_id, dht::token last_token);
 
     future<> run_staging_sstables_registrator();
-    // Caller must hold units from `_staging_sstables_mutex`
+    // Acquires `_staging_sstables_mutex` on all shards internally,
+    // so callers must not hold `_staging_sstables_mutex` when invoking it.
     future<> create_staging_sstable_tasks();
     future<> discover_existing_staging_sstables();
     std::unordered_map<table_id, std::vector<staging_sstable_task_info>> discover_local_staging_sstables(building_tasks building_tasks);
+    // Acquire `_staging_sstables_mutex` on multiple shards in parallel.
+    // Must be called only from shard 0.
+    // Must be called ONLY by `create_staging_sstable_tasks()` and only once at a time to avoid deadlock.
+    future<std::vector<foreign_ptr<semaphore_units<>>>> lock_staging_mutex_on_multiple_shards(std::flat_set<shard_id> shards);
 
     void init_messaging_service();
     future<> uninit_messaging_service();
     future<std::vector<utils::UUID>> work_on_tasks(raft::term_t term, std::vector<utils::UUID> ids);
+
+    using started_drain = bool_class<struct started_drain_tag>;
+    started_drain _drain_started = started_drain::no;
+    shared_future<> _drain_finished;
+    future<> do_drain();
 };
 
 }

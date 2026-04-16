@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #pragma once
 
@@ -12,17 +12,21 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/rwlock.hh>
+#include <seastar/core/fstream.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "bytes_fwd.hh"
+#include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "replica/logstor/write_buffer.hh"
+#include "replica/logstor/compaction.hh"
 #include "types.hh"
 #include "utils/updateable_value.hh"
 
 namespace replica {
 
 class database;
+class table;
 
 namespace logstor {
 
@@ -75,6 +79,21 @@ struct table_segment_stats {
     }
 };
 
+struct segment_snapshot {
+    log_segment_id segment_id;
+    segment_ref seg_ref;
+    noncopyable_function<future<seastar::input_stream<char>>(const file_input_stream_options&)> source;
+};
+
+class segment_stream_sink {
+public:
+    virtual ~segment_stream_sink() = default;
+    virtual log_segment_id segment_id() const noexcept = 0;
+    virtual future<output_stream<char>> output() = 0;
+    virtual future<> close() = 0;
+    virtual future<> abort() = 0;
+};
+
 class segment_manager_impl;
 class log_index;
 
@@ -97,14 +116,11 @@ public:
     future<> start();
     future<> stop();
 
-    future<log_location> write(write_buffer& wb);
+    future<> write(write_buffer& wb);
 
     future<log_record> read(log_location location);
 
     void free_record(log_location location);
-
-    future<> for_each_record(const std::vector<log_segment_id>& segments,
-                            std::function<future<>(log_location, log_record)> callback);
 
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
@@ -119,6 +135,12 @@ public:
     size_t get_memory_usage() const;
 
     future<> await_pending_writes();
+
+    future<utils::chunked_vector<segment_snapshot>> make_snapshot(compaction_group& cg);
+
+    // Create an output stream to write a segment (for receiving from remote node)
+    // Allocates a new local segment and returns an output stream for writing to the segment.
+    future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(replica::database&);
 
     friend class segment_manager_impl;
 

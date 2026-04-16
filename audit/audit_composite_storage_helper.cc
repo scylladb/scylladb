@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <seastar/core/loop.hh>
@@ -42,7 +42,7 @@ future<> audit_composite_storage_helper::stop() {
 future<> audit_composite_storage_helper::write(const audit_info* audit_info,
                                                socket_address node_ip,
                                                socket_address client_ip,
-                                               db::consistency_level cl,
+                                               std::optional<db::consistency_level> cl,
                                                const sstring& username,
                                                bool error) {
     return seastar::parallel_for_each(

@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -370,7 +370,6 @@ public:
     named_value<bool> enable_in_memory_data_store;
     named_value<bool> enable_cache;
     named_value<bool> enable_commitlog;
-    named_value<bool> enable_logstor;
     named_value<bool> volatile_system_keyspace_for_testing;
     named_value<uint16_t> api_port;
     named_value<sstring> api_address;
@@ -630,6 +629,9 @@ public:
     named_value<bool> compaction_enforce_min_threshold;
     named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
 
+    named_value<uint32_t> maintenance_io_throughput_mb_per_sec;
+    named_value<uint32_t> backup_io_throughput_mb_per_sec;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
@@ -687,3 +689,42 @@ future<> update_relabel_config_from_file(const std::string& name);
 std::vector<sstring> split_comma_separated_list(std::string_view comma_separated_list);
 
 } // namespace utils
+
+namespace utils {
+
+// Declaration of the explicit specialization for seed_provider_type's
+// add_command_line_option must appear before the extern template declaration
+// below, to satisfy [temp.expl.spec]: a member specialization must be
+// declared before any explicit instantiation (including extern template) of
+// the enclosing class template.
+template <>
+void config_file::named_value<db::config::seed_provider_type>::add_command_line_option(
+        boost::program_options::options_description_easy_init&);
+
+} // namespace utils
+
+// Explicit instantiation declarations for named_value<T> specializations
+// that use db-specific types. The definitions live in db/config.cc.
+// Together with the declarations in utils/config_file.hh (for primitive
+// types), this ensures the heavy template bodies from config_file_impl.hh
+// (boost::program_options, boost::lexical_cast, boost::regex, yaml-cpp)
+// are compiled only once.
+extern template struct utils::config_file::named_value<db::tri_mode_restriction>;
+extern template struct utils::config_file::named_value<db::seed_provider_type>;
+extern template struct utils::config_file::named_value<db::hints::host_filter>;
+extern template struct utils::config_file::named_value<utils::UUID>;
+extern template struct utils::config_file::named_value<db::error_injection_at_startup>;
+extern template struct utils::config_file::named_value<compression_parameters>;
+extern template struct utils::config_file::named_value<enum_option<db::experimental_features_t>>;
+extern template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
+extern template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
+extern template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+extern template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
+extern template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
+extern template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;
+extern template struct utils::config_file::named_value<std::vector<enum_option<db::replication_strategy_restriction_t>>>;
+extern template struct utils::config_file::named_value<std::vector<enum_option<db::consistency_level_restriction_t>>>;
+extern template struct utils::config_file::named_value<std::vector<db::error_injection_at_startup>>;
+extern template struct utils::config_file::named_value<std::vector<std::unordered_map<sstring, sstring>>>;
+extern template struct utils::config_file::named_value<std::unordered_map<sstring, seastar::log_level>>;
+extern template struct utils::config_file::named_value<std::vector<db::object_storage_endpoint_param>>;

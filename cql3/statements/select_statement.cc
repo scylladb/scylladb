@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include "cql3/statements/strong_consistency/select_statement.hh"
@@ -231,6 +231,20 @@ select_statement::select_statement(schema_ptr schema,
     _opts.set_if<query::partition_slice::option::bypass_cache>(_parameters->bypass_cache());
     _opts.set_if<query::partition_slice::option::distinct>(_parameters->is_distinct());
     _opts.set_if<query::partition_slice::option::reversed>(_is_reversed);
+    detect_range_scan();
+}
+
+void select_statement::detect_range_scan() {
+    if (_ks_sel == ks_selector::NONSYSTEM) {
+        if (_restrictions->need_filtering() ||
+                _restrictions->partition_key_restrictions_is_empty() ||
+                (_restrictions->has_token_restrictions() &&
+                 !find(_restrictions->get_partition_key_restrictions(), expr::oper_t::EQ))) {
+            _range_scan = true;
+            if (!_parameters->bypass_cache())
+                _range_scan_no_bypass_cache = true;
+        }
+    }
 }
 
 db::timeout_clock::duration select_statement::get_timeout(const service::client_state& state, const query_options& options) const {
@@ -997,16 +1011,6 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
                                                            std::unique_ptr<attributes> attrs)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, std::move(limit), std::move(per_partition_limit), stats, std::move(attrs)}
 {
-    if (_ks_sel == ks_selector::NONSYSTEM) {
-        if (_restrictions->need_filtering() ||
-                _restrictions->partition_key_restrictions_is_empty() ||
-                (_restrictions->has_token_restrictions() &&
-                 !find(_restrictions->get_partition_key_restrictions(), expr::oper_t::EQ))) {
-            _range_scan = true;
-            if (!_parameters->bypass_cache())
-                _range_scan_no_bypass_cache = true;
-        }
-    }
 }
 
 bool check_needs_allow_filtering_anyway(const restrictions::statement_restrictions& restrictions) {

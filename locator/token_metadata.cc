@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "token_metadata.hh"
@@ -367,6 +367,8 @@ future<> token_metadata_impl::clear_gently() noexcept {
     co_await utils::clear_gently(_sorted_tokens);
     co_await _topology.clear_gently();
     co_await _tablets.clear_gently();
+    co_await utils::clear_gently(_topology_change_info);
+    _topology_change_info.reset();
     co_return;
 }
 

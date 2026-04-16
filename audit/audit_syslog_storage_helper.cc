@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include "audit/audit_syslog_storage_helper.hh"
@@ -101,18 +101,19 @@ future<> audit_syslog_storage_helper::stop() {
 future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
                                             socket_address node_ip,
                                             socket_address client_ip,
-                                            db::consistency_level cl,
+                                            std::optional<db::consistency_level> cl,
                                             const sstring& username,
                                             bool error) {
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     tm time;
     localtime_r(&now, &time);
+    auto cl_str = cl ? format("{}", *cl) : sstring("");
     sstring msg = seastar::format(R"(<{}>{:%h %e %T} scylla-audit: node="{}", category="{}", cl="{}", error="{}", keyspace="{}", query="{}", client_ip="{}", table="{}", username="{}")",
                                     LOG_NOTICE | LOG_USER,
                                     time,
                                     node_ip,
                                     audit_info->category_string(),
-                                    cl,
+                                    cl_str,
                                     (error ? "true" : "false"),
                                     audit_info->keyspace(),
                                     json_escape(audit_info->query()),

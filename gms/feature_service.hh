@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -121,7 +121,6 @@ public:
     gms::feature topology_requests_type_column { *this, "TOPOLOGY_REQUESTS_TYPE_COLUMN"sv };
     gms::feature native_reverse_queries { *this, "NATIVE_REVERSE_QUERIES"sv };
     gms::feature zero_token_nodes { *this, "ZERO_TOKEN_NODES"sv };
-    gms::feature view_build_status_on_group0 { *this, "VIEW_BUILD_STATUS_ON_GROUP0"sv };
     gms::feature views_with_tablets { *this, "VIEWS_WITH_TABLETS"sv };
     gms::feature group0_limited_voters { *this, "GROUP0_LIMITED_VOTERS"sv };
     gms::feature compaction_history_upgrade { *this, "COMPACTION_HISTORY_UPGRADE"};
@@ -179,6 +178,9 @@ public:
     gms::feature topology_noop_request { *this, "TOPOLOGY_NOOP_REQUEST"sv };
     gms::feature tablets_intermediate_fallback_cleanup { *this, "TABLETS_INTERMEDIATE_FALLBACK_CLEANUP"sv };
     gms::feature batchlog_v2 { *this, "BATCHLOG_V2"sv };
+    gms::feature vnodes_to_tablets_migrations { *this, "VNODES_TO_TABLETS_MIGRATIONS"sv };
+    gms::feature writetime_ttl_individual_element { *this, "WRITETIME_TTL_INDIVIDUAL_ELEMENT"sv };
+    gms::feature arbitrary_tablet_boundaries { *this, "ARBITRARY_TABLET_BOUNDARIES"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

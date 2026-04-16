@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -204,6 +204,11 @@ public:
         // is a lot of dead rows. This flag is needed during rolling upgrades to support
         // old coordinators which do not tolerate pages with no live rows.
         allow_mutation_read_page_without_live_row,
+        // When set, multi-cell collection cells and non-frozen UDT cells in
+        // the query result use an extended format that embeds per-element
+        // timestamps and expiries to support WRITETIME(col[key])/TTL(col[key])
+        // and WRITETIME(col.field)/TTL(col.field) selectors.
+        send_collection_timestamps,
     };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
@@ -219,7 +224,8 @@ public:
         option::bypass_cache,
         option::always_return_static_content,
         option::range_scan_data_variant,
-        option::allow_mutation_read_page_without_live_row>>;
+        option::allow_mutation_read_page_without_live_row,
+        option::send_collection_timestamps>>;
     clustering_row_ranges _row_ranges;
 public:
     column_id_vector static_columns; // TODO: consider using bitmap

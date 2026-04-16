@@ -3,7 +3,7 @@
 #
 
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
 set(kmip_ver "2.1.0t")

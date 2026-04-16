@@ -181,6 +181,7 @@ internode_compression controls whether traffic between nodes is compressed.
 
 * all  - all traffic is compressed.
 * dc   - traffic between different datacenters is compressed.
+* rack - traffic between different racks is compressed.
 * none - nothing is compressed (default).
 
 Configuring TLS/SSL in scylla.yaml

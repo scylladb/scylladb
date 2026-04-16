@@ -1,6 +1,6 @@
 # Copyright 2021-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 import pytest
 import sys
@@ -420,11 +420,11 @@ def test_storage_service_snapshot_mv_si(cql, this_dc, rest_api):
                     })
 
                 with new_secondary_index(cql, table, 'v', 'si') as si:
-                    named_index_desc = cql.execute(f"DESC INDEX {si}").one()
-                    with new_test_snapshot(rest_api, keyspace, named_index_desc.name) as snap:
+                    index_name = si.split('.')[1]
+                    with new_test_snapshot(rest_api, keyspace, index_name) as snap:
                         verify_snapshot_details(rest_api, {
                             'key': snap,
-                            'value': [{'ks': keyspace, 'cf': named_index_desc.name, 'total': 0, 'live': 0}]
+                            'value': [{'ks': keyspace, 'cf': index_name, 'total': 0, 'live': 0}]
                         })
 
                 ks, cf = table.split('.')
@@ -437,7 +437,140 @@ def test_storage_service_snapshot_mv_si(cql, this_dc, rest_api):
                         if data['key'] == snapshot:
                             assert len([v for v in data['value'] if not v['ks'].startswith('system')]) == 1
 
-# ...but not when the snapshot is automatic (pre-scrub).
+# Verify that deleting a snapshot works correctly when multiple keyspaces are
+# specified in a single DELETE request together with a table name filter.
+# The filter should keep its plain table-name meaning in each keyspace.
+def test_snapshot_delete_cf_multi_keyspace(cql, this_dc, rest_api):
+    ks_opts = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}"
+    with new_test_keyspace(cql, ks_opts) as ks1:
+        with new_test_keyspace(cql, ks_opts) as ks2:
+            # Use the same table name in both keyspaces so the cf filter
+            # matches in both when deleting.
+            cf = unique_name()
+            other_cf = unique_name()
+            cql.execute(f"CREATE TABLE {ks1}.{cf} (p int PRIMARY KEY, v text)")
+            cql.execute(f"CREATE TABLE {ks2}.{cf} (p int PRIMARY KEY, v text)")
+            cql.execute(f"CREATE TABLE {ks1}.{other_cf} (p int PRIMARY KEY, v text)")
+            tag = f"test_snapshot_{int(time.time() * 1000)}"
+
+            for ks in [ks1, ks2]:
+                resp = rest_api.send("POST", "storage_service/snapshots",
+                                     {"tag": tag, "kn": ks, "cf": cf})
+                resp.raise_for_status()
+            resp = rest_api.send("POST", "storage_service/snapshots",
+                                 {"tag": tag, "kn": ks1, "cf": other_cf})
+            resp.raise_for_status()
+
+            verify_snapshot_details(rest_api, {
+                'key': tag,
+                'value': [
+                    {'ks': ks1, 'cf': cf, 'total': 0, 'live': 0},
+                    {'ks': ks2, 'cf': cf, 'total': 0, 'live': 0},
+                    {'ks': ks1, 'cf': other_cf, 'total': 0, 'live': 0},
+                ]
+            })
+
+            # Delete using multiple keyspaces + table name filter.
+            resp = rest_api.send("DELETE", "storage_service/snapshots",
+                                 {"tag": tag, "kn": f"{ks1},{ks2}", "cf": cf})
+            resp.raise_for_status()
+
+            # Verify that only snapshots matching the requested cf were deleted.
+            verify_snapshot_details(rest_api, {
+                'key': tag,
+                'value': [
+                    {'ks': ks1, 'cf': other_cf, 'total': 0, 'live': 0},
+                ]
+            })
+
+
+# Verify that the same logical secondary-index name is resolved independently
+# in each keyspace during multi-keyspace snapshot deletion.
+def test_snapshot_delete_cf_multi_keyspace_secondary_index(cql, this_dc, rest_api):
+    ks_opts = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}"
+    with new_test_keyspace(cql, ks_opts) as ks1:
+        with new_test_keyspace(cql, ks_opts) as ks2:
+            schema = 'p int PRIMARY KEY, v text'
+            with new_test_table(cql, ks1, schema) as table1:
+                with new_test_table(cql, ks2, schema) as table2:
+                    with new_secondary_index(cql, table1, 'v', 'si'):
+                        with new_secondary_index(cql, table2, 'v', 'si'):
+                            tag = f"test_snapshot_{int(time.time() * 1000)}"
+
+                            for ks in [ks1, ks2]:
+                                resp = rest_api.send("POST", "storage_service/snapshots",
+                                                     {"tag": tag, "kn": ks, "cf": "si"})
+                                resp.raise_for_status()
+
+                            verify_snapshot_details(rest_api, {
+                                'key': tag,
+                                'value': [
+                                    {'ks': ks1, 'cf': 'si', 'total': 0, 'live': 0},
+                                    {'ks': ks2, 'cf': 'si', 'total': 0, 'live': 0},
+                                ]
+                            })
+
+                            resp = rest_api.send("DELETE", "storage_service/snapshots",
+                                                 {"tag": tag, "kn": f"{ks1},{ks2}", "cf": "si"})
+                            resp.raise_for_status()
+
+                            resp = rest_api.send("GET", "storage_service/snapshots")
+                            for data in resp.json():
+                                if data['key'] == tag:
+                                    remaining = [v for v in data['value'] if v['ks'] in (ks1, ks2)]
+                                    assert remaining == [], f"Expected no snapshots, got {remaining}"
+
+
+# Vector indexes do not have backing view tables, so snapshot requests that use
+# their logical names must be rejected as bad requests.
+def test_storage_service_snapshot_vector_index_rejected(cql, this_dc, rest_api, scylla_only, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        schema = 'p int PRIMARY KEY, v vector<float, 3>'
+        with new_test_table(cql, keyspace, schema) as table:
+            cql.execute(f"CREATE CUSTOM INDEX ann_idx ON {table}(v) USING 'vector_index'")
+            resp = rest_api.send("POST", "storage_service/snapshots",
+                                 {"tag": f"test_snapshot_{int(time.time() * 1000)}", "kn": keyspace, "cf": "ann_idx"})
+            assert resp.status_code == requests.codes.bad_request
+
+
+# Same for DELETE: a vector index name is not a snapshotable table filter.
+def test_snapshot_delete_cf_vector_index_rejected(cql, this_dc, rest_api, scylla_only, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        schema = 'p int PRIMARY KEY, v vector<float, 3>'
+        with new_test_table(cql, keyspace, schema) as table:
+            cql.execute(f"CREATE CUSTOM INDEX ann_idx ON {table}(v) USING 'vector_index'")
+            with new_test_snapshot(rest_api, keyspaces=keyspace) as tag:
+                resp = rest_api.send("DELETE", "storage_service/snapshots",
+                                     {"tag": tag, "kn": keyspace, "cf": "ann_idx"})
+                assert resp.status_code == requests.codes.bad_request
+
+
+# Verify that multi-keyspace deletion resolves every keyspace before deleting
+# anything. If one keyspace has a secondary index and another has a vector
+# index with the same logical name, the request must fail without deleting the
+# secondary-index snapshot.
+def test_snapshot_delete_cf_multi_keyspace_mixed_index_kinds_is_atomic(cql, this_dc, rest_api, scylla_only, skip_without_tablets):
+    ks_opts = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}"
+    with new_test_keyspace(cql, ks_opts) as ks_si:
+        with new_test_keyspace(cql, ks_opts) as ks_vector:
+            with new_test_table(cql, ks_si, 'p int PRIMARY KEY, v text') as table_si:
+                with new_test_table(cql, ks_vector, 'p int PRIMARY KEY, v vector<float, 3>') as table_vector:
+                    with new_secondary_index(cql, table_si, 'v', 'shared_idx'):
+                        cql.execute(f"CREATE CUSTOM INDEX shared_idx ON {table_vector}(v) USING 'vector_index'")
+                        tag = f"test_snapshot_{int(time.time() * 1000)}"
+
+                        with new_test_snapshot(rest_api, keyspaces=ks_si, tables='shared_idx', tag=tag):
+                            resp = rest_api.send("DELETE", "storage_service/snapshots",
+                                                 {"tag": tag, "kn": f"{ks_si},{ks_vector}", "cf": "shared_idx"})
+                            assert resp.status_code == requests.codes.bad_request
+
+                            verify_snapshot_details(rest_api, {
+                                'key': tag,
+                                'value': [{'ks': ks_si, 'cf': 'shared_idx', 'total': 0, 'live': 0}]
+                            })
+
+# Keyspace scrub takes an automatic pre-scrub snapshot, so it must still work
+# when the keyspace contains materialized views or secondary indexes.
 def test_materialized_view_pre_scrub_snapshot(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
         schema = 'p int, v text, primary key (p)'

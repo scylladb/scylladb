@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <algorithm>
@@ -288,6 +288,14 @@ public:
 
     rjson::value get(sstring path, http::request::query_parameters_type params) {
         return do_request("GET", std::move(path), std::move(params));
+    }
+
+    rjson::value put(sstring path, std::unordered_map<sstring, sstring> params = {}) {
+        return do_request("PUT", std::move(path), std::move(params));
+    }
+
+    rjson::value put(sstring path, http::request::query_parameters_type params) {
+        return do_request("PUT", std::move(path), std::move(params));
     }
 
     // delete is a reserved keyword, using del instead
@@ -2438,6 +2446,68 @@ void cluster_snapshot_operation(scylla_rest_client& client, const bpo::variables
     fmt::print(std::cout, "Snapshot directory: {}\n", params["tag"]);
 }
 
+void migrate_to_tablets_start_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm["keyspace"].empty()) {
+        throw std::invalid_argument("keyspace is required");
+    }
+    auto keyspace = vm["keyspace"].as<sstring>();
+    client.post(fmt::format("/storage_service/vnode_tablet_migrations/keyspaces/{}", keyspace));
+}
+
+void migrate_to_tablets_upgrade_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.put("/storage_service/vnode_tablet_migrations/node/storage_mode", {{"intended_mode", "tablets"}});
+}
+
+void migrate_to_tablets_downgrade_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    client.put("/storage_service/vnode_tablet_migrations/node/storage_mode", {{"intended_mode", "vnodes"}});
+}
+
+void migrate_to_tablets_status_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm["keyspace"].empty()) {
+        throw std::invalid_argument("keyspace is required");
+    }
+    auto keyspace = vm["keyspace"].as<sstring>();
+    auto res = client.get(fmt::format("/storage_service/vnode_tablet_migrations/keyspaces/{}", keyspace));
+
+    auto node_status = [] (std::string_view current_mode, std::string_view intended_mode) -> std::string_view {
+        if (intended_mode == "vnodes" && current_mode == "vnodes") {
+            return "uses vnodes";
+        } else if (intended_mode == "tablets" && current_mode == "tablets") {
+            return "uses tablets";
+        } else if (intended_mode == "tablets" && current_mode == "vnodes") {
+            return "migrating to tablets";
+        } else {
+            return "migrating to vnodes";
+        }
+    };
+
+    fmt::print(std::cout, "Keyspace: {}\n", rjson::to_string_view(res["keyspace"]));
+    fmt::print(std::cout, "Status: {}\n", rjson::to_string_view(res["status"]));
+
+    const auto& nodes = res["nodes"].GetArray();
+    if (!nodes.Empty()) {
+        fmt::print(std::cout, "\nNodes:\n");
+        Tabulate table;
+        table.add("Host ID", "Status");
+        for (const auto& node : nodes) {
+            auto current = rjson::to_string_view(node["current_mode"]);
+            auto intended = rjson::to_string_view(node["intended_mode"]);
+            table.add(
+                std::string(rjson::to_string_view(node["host_id"])),
+                std::string(node_status(current, intended)));
+        }
+        table.print();
+    }
+}
+
+void migrate_to_tablets_finalize_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm["keyspace"].empty()) {
+        throw std::invalid_argument("keyspace is required");
+    }
+    auto keyspace = vm["keyspace"].as<sstring>();
+    client.post(fmt::format("/storage_service/vnode_tablet_migrations/keyspaces/{}/finalization", keyspace));
+}
+
 void sstableinfo_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::vector<keyspace_and_table> requests;
     if (vm.contains("table")) {
@@ -4341,6 +4411,88 @@ For more information, see: {}
             },
             {
                 listsnapshots_operation
+            }
+        },
+        {
+            {
+                "migrate-to-tablets",
+                "Manage vnodes-to-tablets migration",
+R"(
+Migrate a keyspace from vnodes to tablets.
+
+Subcommands:
+  start <keyspace>     Prepare a keyspace for migration from vnodes to tablets
+  upgrade              Set this node's intended storage mode to tablets
+  downgrade            Set this node's intended storage mode back to vnodes
+  status <keyspace>    Show migration status for a keyspace
+  finalize <keyspace>  Finalize the migration for a keyspace
+)",
+                { },
+                {
+                    typed_option<sstring>("command", "The name of the subcommand", 1),
+                },
+                {
+                    {
+                        "start",
+                        "Prepare a keyspace for migration from vnodes to tablets",
+                        "",
+                        { },
+                        {
+                            typed_option<sstring>("keyspace", "The keyspace to migrate", 1),
+                        },
+                    },
+                    {
+                        "upgrade",
+                        "Set this node's intended storage mode to tablets",
+                        "",
+                        { },
+                        { },
+                    },
+                    {
+                        "downgrade",
+                        "Set this node's intended storage mode back to vnodes",
+                        "",
+                        { },
+                        { },
+                    },
+                    {
+                        "status",
+                        "Show migration status for a keyspace",
+                        "",
+                        { },
+                        {
+                            typed_option<sstring>("keyspace", "The keyspace to check status for", 1),
+                        },
+                    },
+                    {
+                        "finalize",
+                        "Finalize the migration for a keyspace",
+                        "",
+                        { },
+                        {
+                            typed_option<sstring>("keyspace", "The keyspace to finalize", 1),
+                        },
+                    },
+                }
+            },
+            {
+                {
+                    {
+                        "start", { migrate_to_tablets_start_operation },
+                    },
+                    {
+                        "upgrade", { migrate_to_tablets_upgrade_operation },
+                    },
+                    {
+                        "downgrade", { migrate_to_tablets_downgrade_operation },
+                    },
+                    {
+                        "status", { migrate_to_tablets_status_operation },
+                    },
+                    {
+                        "finalize", { migrate_to_tablets_finalize_operation },
+                    },
+                }
             }
         },
         {

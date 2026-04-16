@@ -6,7 +6,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -35,7 +35,6 @@
 #include <seastar/core/gate.hh>
 #include "replica/database_fwd.hh"
 #include "streaming/stream_reason.hh"
-#include <seastar/core/sharded.hh>
 #include "service/migration_listener.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -56,7 +55,6 @@
 class node_ops_cmd_request;
 class node_ops_cmd_response;
 class node_ops_info;
-enum class node_ops_cmd : uint32_t;
 class repair_service;
 class protocol_server;
 
@@ -159,6 +157,12 @@ struct token_metadata_change {
     future<> destroy();
 };
 
+struct cluster_info {
+    sstring cluster_name;
+    sstring partitioner;
+    sstring snitch_name;
+};
+
 class schema_getter {
 public:
     virtual flat_hash_map<sstring, locator::replication_strategy_ptr> get_keyspaces_replication() const = 0;
@@ -177,7 +181,6 @@ class storage_service : public service::migration_listener, public gms::i_endpoi
 private:
     using token = dht::token;
     using token_range_endpoints = dht::token_range_endpoints;
-    using endpoint_details = dht::endpoint_details;
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
     using shared_token_metadata = locator::shared_token_metadata;
@@ -214,7 +217,6 @@ private:
 
     sstring _operation_in_progress;
     seastar::metrics::metric_groups _metrics;
-    using client_shutdown_hook = noncopyable_function<void()>;
     std::vector<protocol_server*> _protocol_servers;
     std::vector<std::any> _listeners;
     named_gate _async_gate;
@@ -283,6 +285,27 @@ public:
     future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata);
     void wake_up_topology_state_machine() noexcept;
     future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
+
+    // Prepares a vnode-based keyspace for migration to tablets.
+    // Builds tablet maps from vnode token boundaries for all tables and
+    // persists them to group0.
+    future<> prepare_for_tablets_migration(const sstring& ks_name);
+
+    struct node_migration_status {
+        locator::host_id host_id;
+        sstring current_mode;  // "vnodes" or "tablets"
+        sstring intended_mode; // "vnodes" or "tablets"
+    };
+
+    struct keyspace_migration_status {
+        sstring keyspace;
+        sstring status; // "vnodes", "migrating_to_tablets", or "tablets"
+        std::vector<node_migration_status> nodes;
+    };
+
+    future<keyspace_migration_status> get_tablets_migration_status(const sstring& ks_name);
+    future<> set_node_intended_storage_mode(intended_storage_mode mode);
+    future<> finalize_tablets_migration(const sstring& ks_name);
 
     void start_tablet_split_monitor();
 private:
@@ -453,8 +476,6 @@ private:
 
 public:
 
-    future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes);
-
     future<> join_cluster(sharded<service::storage_proxy>& proxy,
             start_hint_manager start_hm, gms::generation_type new_generation);
 
@@ -471,9 +492,7 @@ public:
     future<> wait_for_group0_stop();
 
 private:
-    bool should_bootstrap();
     bool is_replacing();
-    bool is_first_node();
     future<> start_sys_dist_ks() const;
     future<> join_topology(sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
@@ -507,7 +526,7 @@ public:
 
     future<utils::chunked_vector<token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
-    future<utils::chunked_vector<dht::token_range_endpoints>> describe_ring_for_table(const sstring& keyspace_name, const sstring& table_name) const;
+    future<utils::chunked_vector<dht::token_range_endpoints>> describe_ring_for_table(table_id tid) const;
 
     /**
      * Retrieve a map of tokens to endpoints, including the bootstrapping ones.
@@ -631,6 +650,8 @@ public:
 
     sstring get_schema_version();
 
+    cluster_info describe_cluster() const;
+
     future<std::unordered_map<sstring, std::vector<sstring>>> describe_schema_versions();
 
 
@@ -714,9 +735,6 @@ public:
     future<> removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes);
     future<> mark_excluded(const std::vector<locator::host_id>&);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, std::optional<locator::host_id> coordinator_host_id, node_ops_cmd_request req);
-    void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
-    future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
-    void on_node_ops_registered(node_ops_id);
 
     future<mode> get_operation_mode();
 

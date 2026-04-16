@@ -131,6 +131,7 @@ function(maybe_limit_stack_usage_in_KB stack_usage_threshold_in_KB config)
   check_cxx_compiler_flag(${_stack_usage_threshold_flag} _stack_usage_flag_supported)
   if(_stack_usage_flag_supported)
     add_compile_options($<$<CONFIG:${config}>:${_stack_usage_threshold_flag}>)
+    add_compile_options($<$<CONFIG:${config}>:-Wno-error=stack-usage=>)
   endif()
 endfunction()
 
@@ -260,6 +261,23 @@ endif()
 
 # Force SHA1 build-id generation
 add_link_options("LINKER:--build-id=sha1")
+
+# Match configure.py: add -fno-lto globally. configure.py adds -fno-lto to
+# all binaries (except standalone cpp_apps like patchelf) via the per-binary
+# $libs variable. LTO-enabled targets (scylla binary in RelWithDebInfo) will
+# override with -flto=thin -ffat-lto-objects via enable_lto().
+add_link_options(-fno-lto)
+
+# Match configure.py:2633-2636 — sanitizer link flags for standalone binaries
+# (e.g. patchelf) that don't link Seastar.  Seastar-linked targets get these
+# via seastar_libs (configure.py:2649).
+# Coverage mode gets sanitizer link flags via the seastar target instead
+# (see CMakeLists.txt), matching configure.py where only seastar_libs_coverage
+# carries -fsanitize (not cxx_ld_flags).
+add_link_options(
+  $<$<CONFIG:Debug,Sanitize>:-fsanitize=address>
+  $<$<CONFIG:Debug,Sanitize>:-fsanitize=undefined>)
+
 include(CheckLinkerFlag)
 set(Scylla_USE_LINKER
     ""

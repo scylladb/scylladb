@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 
@@ -45,20 +45,18 @@ cql_test_config auth_on(bool with_authorizer = true) {
 }
 
 SEASTAR_TEST_CASE(test_default_authenticator) {
-    return do_with_cql_env([](cql_test_env& env) {
+    co_await do_with_cql_env_thread([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
         BOOST_REQUIRE(!a.require_authentication());
         BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::allow_all_authenticator_name);
-        return make_ready_future();
     });
 }
 
 SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
-    return do_with_cql_env([](cql_test_env& env) {
+    co_await do_with_cql_env_thread([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
         BOOST_REQUIRE(a.require_authentication());
         BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::password_authenticator_name);
-        return make_ready_future();
     }, auth_on(false));
 }
 
@@ -79,93 +77,65 @@ authenticate(cql_test_env& env, std::string_view username, std::string_view pass
     });
 }
 
-template <typename Exception, typename... Args>
-future<> require_throws(seastar::future<Args...> fut) {
-    return fut.then_wrapped([](auto completed_fut) {
-        try {
-            completed_fut.get();
-            BOOST_FAIL("Required an exception to be thrown");
-        } catch (const Exception&) {
-            // Ok.
-        }
-    });
-}
-
 SEASTAR_TEST_CASE(test_password_authenticator_operations) {
-    /**
-     * Not using seastar::async due to apparent ASan bug.
-     * Enjoy the slightly less readable code.
-     */
-    return do_with_cql_env([](cql_test_env& env) {
+    co_await do_with_cql_env_thread([](cql_test_env& env) {
         static const sstring username("fisk");
         static const sstring password("notter");
 
         // check non-existing user
-        return require_throws<exceptions::authentication_exception>(
-            authenticate(env, username, password)).then([&env] {
-            return seastar::async([&env] () {
-                cquery_nofail(env, format("CREATE ROLE {} WITH PASSWORD = '{}' AND LOGIN = true", username, password));
-            }).then([&env] () {
-                return authenticate(env, username, password);
-            }).then([] (auth::authenticated_user user) {
-                BOOST_REQUIRE(!auth::is_anonymous(user));
-                BOOST_REQUIRE_EQUAL(*user.name, username);
-            });
-        }).then([&env] {
-            return require_throws<exceptions::authentication_exception>(authenticate(env, username, "hejkotte"));
-        }).then([&env] {
-            //
-            // A role must be explicitly marked as being allowed to log in.
-            //
+        BOOST_REQUIRE_THROW(authenticate(env, username, password).get(),
+                exceptions::authentication_exception);
 
-            return do_with(
-                    auth::role_config_update{},
-                    auth::authentication_options{},
-                    [&env](auto& config_update, const auto& options) {
-                config_update.can_login = false;
+        cquery_nofail(env, format("CREATE ROLE {} WITH PASSWORD = '{}' AND LOGIN = true", username, password));
 
-                return seastar::async([&env] {
-                    do_with_mc(env, [&env] (auto& mc) {
-                        auth::authentication_options opts;
-                        auth::role_config_update conf;
-                        conf.can_login = false;
-                        auth::alter_role(env.local_auth_service(), username, conf, opts, mc).get();
-                    });
-                    // has to be in a separate transaction to observe results of alter role
-                    do_with_mc(env, [&env] (auto& mc) {
-                        require_throws<exceptions::authentication_exception>(authenticate(env, username, password)).get();
-                    });
-                });
-            });
-        }).then([&env] {
-            // sasl
-            auto& a = env.local_auth_service().underlying_authenticator();
-            auto sasl = a.new_sasl_challenge();
+        auto user = authenticate(env, username, password).get();
+        BOOST_REQUIRE(!auth::is_anonymous(user));
+        BOOST_REQUIRE_EQUAL(*user.name, username);
 
-            BOOST_REQUIRE(!sasl->is_complete());
+        BOOST_REQUIRE_THROW(authenticate(env, username, "hejkotte").get(),
+                exceptions::authentication_exception);
 
-            bytes b;
-            int8_t i = 0;
-            b.append(&i, 1);
-            b.insert(b.end(), username.begin(), username.end());
-            b.append(&i, 1);
-            b.insert(b.end(), password.begin(), password.end());
+        //
+        // A role must be explicitly marked as being allowed to log in.
+        //
 
-            sasl->evaluate_response(b);
-            BOOST_REQUIRE(sasl->is_complete());
+        do_with_mc(env, [&env] (auto& mc) {
+            auth::authentication_options opts;
+            auth::role_config_update conf;
+            conf.can_login = false;
+            auth::alter_role(env.local_auth_service(), username, conf, opts, mc).get();
+        });
+        // has to be in a separate transaction to observe results of alter role
+        do_with_mc(env, [&env] (auto& mc) {
+            BOOST_REQUIRE_THROW(authenticate(env, username, password).get(),
+                    exceptions::authentication_exception);
+        });
 
-            return sasl->get_authenticated_user().then([](auth::authenticated_user user) {
-                BOOST_REQUIRE(!auth::is_anonymous(user));
-                BOOST_REQUIRE_EQUAL(*user.name, username);
-            });
-        }).then([&env] {
-            // check deleted user
-            return seastar::async([&env] {
-                do_with_mc(env, [&env] (auto& mc) {
-                    auth::drop_role(env.local_auth_service(), username, mc).get();
-                    require_throws<exceptions::authentication_exception>(authenticate(env, username, password)).get();
-                });
-            });
+        // sasl
+        auto& a = env.local_auth_service().underlying_authenticator();
+        auto sasl = a.new_sasl_challenge();
+
+        BOOST_REQUIRE(!sasl->is_complete());
+
+        bytes b;
+        int8_t i = 0;
+        b.append(&i, 1);
+        b.insert(b.end(), username.begin(), username.end());
+        b.append(&i, 1);
+        b.insert(b.end(), password.begin(), password.end());
+
+        sasl->evaluate_response(b);
+        BOOST_REQUIRE(sasl->is_complete());
+
+        auto sasl_user = sasl->get_authenticated_user().get();
+        BOOST_REQUIRE(!auth::is_anonymous(sasl_user));
+        BOOST_REQUIRE_EQUAL(*sasl_user.name, username);
+
+        // check deleted user
+        do_with_mc(env, [&env] (auto& mc) {
+            auth::drop_role(env.local_auth_service(), username, mc).get();
+            BOOST_REQUIRE_THROW(authenticate(env, username, password).get(),
+                    exceptions::authentication_exception);
         });
     }, auth_on(false));
 }
@@ -188,25 +158,25 @@ void require_table_protected(cql_test_env& env, const char* table) {
 } // anonymous namespace
 
 SEASTAR_TEST_CASE(roles_table_is_protected) {
-    return do_with_cql_env_thread([] (cql_test_env& env) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
         require_table_protected(env, "system.roles");
     }, auth_on());
 }
 
 SEASTAR_TEST_CASE(role_members_table_is_protected) {
-    return do_with_cql_env_thread([] (cql_test_env& env) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
         require_table_protected(env, "system.role_members");
     }, auth_on());
 }
 
 SEASTAR_TEST_CASE(role_permissions_table_is_protected) {
-    return do_with_cql_env_thread([] (cql_test_env& env) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
         require_table_protected(env, "system.role_permissions");
     }, auth_on());
 }
 
 SEASTAR_TEST_CASE(test_alter_with_timeouts) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
+    co_await do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "CREATE ROLE user1 WITH PASSWORD = 'pass' AND LOGIN = true");
         cquery_nofail(e, "CREATE ROLE user2 WITH PASSWORD = 'pass' AND LOGIN = true");
         cquery_nofail(e, "CREATE ROLE user3 WITH PASSWORD = 'pass' AND LOGIN = true");
@@ -300,7 +270,7 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
 }
 
 SEASTAR_TEST_CASE(test_alter_with_workload_type) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
+    co_await do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "CREATE ROLE user1 WITH PASSWORD = 'pass' AND LOGIN = true");
         cquery_nofail(e, "CREATE ROLE user2 WITH PASSWORD = 'pass' AND LOGIN = true");
         cquery_nofail(e, "CREATE ROLE user3 WITH PASSWORD = 'pass' AND LOGIN = true");
@@ -358,7 +328,7 @@ SEASTAR_TEST_CASE(test_alter_with_workload_type) {
 }
 
 SEASTAR_TEST_CASE(test_try_to_create_role_with_hashed_password_and_password) {
-    return do_with_cql_env_thread([] (cql_test_env& env) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
         BOOST_REQUIRE_THROW(
             env.execute_cql("CREATE ROLE jane WITH HASHED PASSWORD = 'something' AND PASSWORD = 'something'").get(),
             exceptions::syntax_exception);
@@ -366,7 +336,7 @@ SEASTAR_TEST_CASE(test_try_to_create_role_with_hashed_password_and_password) {
 }
 
 SEASTAR_TEST_CASE(test_try_to_create_role_with_password_and_hashed_password) {
-    return do_with_cql_env_thread([] (cql_test_env& env) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
         BOOST_REQUIRE_THROW(
             env.execute_cql("CREATE ROLE jane WITH PASSWORD = 'something' AND HASHED PASSWORD = 'something'").get(),
             exceptions::syntax_exception);
@@ -374,7 +344,7 @@ SEASTAR_TEST_CASE(test_try_to_create_role_with_password_and_hashed_password) {
 }
 
 SEASTAR_TEST_CASE(test_try_create_role_with_hashed_password_as_anonymous_user) {
-    return do_with_cql_env_thread([] (cql_test_env& env) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
         env.local_client_state().set_login(auth::anonymous_user());
         env.refresh_client_state().get();
         BOOST_REQUIRE(auth::is_anonymous(*env.local_client_state().user()));
@@ -386,7 +356,7 @@ SEASTAR_TEST_CASE(test_create_roles_with_hashed_password_and_log_in) {
     // This test ensures that Scylla allows for creating roles with hashed passwords
     // following the format of one of the supported algorithms, as well as logging in
     // as that role is performed successfully.
-    return do_with_cql_env_thread([] (cql_test_env& env) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
         // Pairs of form (password, hashed password).
         constexpr std::pair<std::string_view, std::string_view> passwords[] = {
             // bcrypt's.
@@ -417,7 +387,7 @@ SEASTAR_TEST_CASE(test_create_roles_with_hashed_password_and_log_in) {
 }
 
 SEASTAR_TEST_CASE(test_try_login_after_creating_roles_with_hashed_password) {
-    return do_with_cql_env_thread([] (cql_test_env& env) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
         // Note: crypt(5) specifies:
         //
         //    "Hashed passphrases are always entirely printable ASCII, and do not contain any whitespace
@@ -434,7 +404,7 @@ SEASTAR_TEST_CASE(test_try_login_after_creating_roles_with_hashed_password) {
 }
 
 SEASTAR_TEST_CASE(test_try_describe_schema_with_internals_and_passwords_as_anonymous_user) {
-    return do_with_cql_env_thread([] (cql_test_env& env) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
         env.local_client_state().set_login(auth::anonymous_user());
         env.refresh_client_state().get();
         BOOST_REQUIRE(auth::is_anonymous(*env.local_client_state().user()));

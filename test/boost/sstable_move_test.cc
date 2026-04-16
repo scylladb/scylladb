@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <filesystem>
@@ -13,6 +13,8 @@
 #include "utils/lister.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/sstable_test_env.hh"
+#include "test/lib/sstable_utils.hh"
+#include "test/lib/simple_schema.hh"
 #include "sstable_test.hh"
 
 using namespace sstables;
@@ -139,4 +141,38 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_exists_failure) {
     auto [ dst_sst, new_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), gen_2);
     dst_sst->close_files().get();
     BOOST_REQUIRE_THROW(test(src_sst).move_to_new_dir(new_dir, gen_2).get(), malformed_sstable_exception);
+}
+
+// Test that filesystem_storage::clone preserves the input sstable state.
+// An sstable in staging is cloned and re-loaded; the re-loaded clone should still
+// be in staging (i.e. state() == staging and requires_view_building() == true).
+SEASTAR_THREAD_TEST_CASE(test_sstable_clone_preserves_staging_state) {
+    auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+    test_env env({}, *scf);
+    auto stop_env = defer([&env] { env.stop().get(); });
+
+    simple_schema ss;
+    auto schema = ss.schema();
+
+    // Create an sstable in normal state.
+    auto sst = make_sstable_containing(env.make_sst_factory(schema), {ss.new_mutation("key1")});
+
+    // Move it to staging state.
+    sst->change_state(sstable_state::staging).get();
+    BOOST_REQUIRE(sst->state() == sstable_state::staging);
+
+    // Clone the staging sstable to a new generation.  The clone should land in the
+    // same (staging) directory as the source.
+    auto clone_gen = env.new_generation();
+    sst->clone(clone_gen).get();
+
+    // Load the cloned sstable from the staging directory.  We use the storage
+    // prefix of the source (which is the staging sub-directory) so that the
+    // loader can find the files, mirroring what distributed_loader does.
+    auto staging_dir = sst->get_storage().prefix();
+    auto cloned_sst = env.reusable_sst(schema, staging_dir, clone_gen).get();
+
+    // Assert that the cloned sstable preserves the staging state.
+    BOOST_REQUIRE(cloned_sst->state() == sstable_state::staging);
+    BOOST_REQUIRE(cloned_sst->requires_view_building());
 }

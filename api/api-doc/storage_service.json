@@ -743,7 +743,7 @@
                "parameters":[
                   {
                      "name":"tag",
-                     "description":"the tag given to the snapshot",
+                     "description":"The snapshot tag to delete. If omitted, all snapshots are removed.",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -751,7 +751,7 @@
                   },
                   {
                      "name":"kn",
-                     "description":"Comma-separated keyspaces name that their snapshot will be deleted",
+                     "description":"Comma-separated list of keyspace names to delete snapshots from. If omitted, snapshots are deleted from all keyspaces.",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -759,7 +759,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"an optional table name that its snapshot will be deleted",
+                     "description":"A table name used to filter which table's snapshots are deleted. If omitted or empty, snapshots for all tables are eligible. When provided together with 'kn', the table is looked up in each listed keyspace independently. For secondary indexes, the logical index name (e.g. 'myindex') can be used and is resolved automatically.",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -3167,6 +3167,83 @@
       },
 
       {
+         "path":"/storage_service/vnode_tablet_migrations/keyspaces/{keyspace}",
+         "operations":[{
+             "method":"POST",
+             "summary":"Start vnodes-to-tablets migration for all tables in a keyspace",
+             "type":"void",
+             "nickname":"create_vnode_tablet_migration",
+             "produces":["application/json"],
+             "parameters":[
+                 {
+                     "name":"keyspace",
+                     "description":"Keyspace name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                 }
+             ]
+         },
+         {
+             "method":"GET",
+             "summary":"Get a keyspace's vnodes-to-tablets migration status",
+             "type":"vnode_tablet_migration_status",
+             "nickname":"get_vnode_tablet_migration",
+             "produces":["application/json"],
+             "parameters":[
+                 {
+                     "name":"keyspace",
+                     "description":"Keyspace name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                 }
+             ]
+         }]
+      },
+      {
+         "path":"/storage_service/vnode_tablet_migrations/node/storage_mode",
+         "operations":[{
+             "method":"PUT",
+             "summary":"Set the intended storage mode for this node during vnodes-to-tablets migration",
+             "type":"void",
+             "nickname":"set_vnode_tablet_migration_node_storage_mode",
+             "produces":["application/json"],
+             "parameters":[
+                 {
+                     "name":"intended_mode",
+                     "description":"Intended storage mode (tablets or vnodes)",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                 }
+             ]
+         }]
+      },
+      {
+         "path":"/storage_service/vnode_tablet_migrations/keyspaces/{keyspace}/finalization",
+         "operations":[{
+             "method":"POST",
+             "summary":"Finalize vnodes-to-tablets migration for all tables in a keyspace",
+             "type":"void",
+             "nickname":"finalize_vnode_tablet_migration",
+             "produces":["application/json"],
+             "parameters":[
+                 {
+                     "name":"keyspace",
+                     "description":"Keyspace name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                 }
+             ]
+         }]
+      },
+      {
          "path":"/storage_service/quiesce_topology",
          "operations":[
             {
@@ -3781,6 +3858,45 @@
             "ratio":{
                "type":"float",
                "description":"The resulting compression ratio (estimated on a random sample of files)"
+            }
+         }
+      },
+      "vnode_tablet_migration_node_status":{
+         "id":"vnode_tablet_migration_node_status",
+         "description":"Node storage mode info during vnodes-to-tablets migration",
+         "properties":{
+            "host_id":{
+               "type":"string",
+               "description":"The host ID"
+            },
+            "current_mode":{
+               "type":"string",
+               "description":"The current storage mode: `vnodes` or `tablets`"
+            },
+            "intended_mode":{
+               "type":"string",
+               "description":"The intended storage mode: `vnodes` or `tablets`"
+            }
+         }
+      },
+      "vnode_tablet_migration_status":{
+         "id":"vnode_tablet_migration_status",
+         "description":"Vnodes-to-tablets migration status for a keyspace",
+         "properties":{
+            "keyspace":{
+               "type":"string",
+               "description":"The keyspace name"
+            },
+            "status":{
+               "type":"string",
+               "description":"The migration status: `vnodes` (not started), `migrating_to_tablets` (in progress), or `tablets` (complete)"
+            },
+            "nodes":{
+               "type":"array",
+               "items":{
+                  "$ref":"vnode_tablet_migration_node_status"
+               },
+               "description":"Per-node storage mode information. Empty if the keyspace is not being migrated."
             }
          }
       }

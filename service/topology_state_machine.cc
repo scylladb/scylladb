@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include "topology_state_machine.hh"
@@ -210,6 +210,7 @@ static std::unordered_map<global_topology_request, sstring> global_topology_requ
     {global_topology_request::truncate_table, "truncate_table"},
     {global_topology_request::snapshot_tables, "snapshot_tables"},
     {global_topology_request::noop_request, "noop_request"},
+    {global_topology_request::finalize_migration, "finalize_migration"},
 };
 
 global_topology_request global_topology_request_from_string(const sstring& s) {
@@ -235,6 +236,20 @@ cleanup_status cleanup_status_from_string(const sstring& s) {
         }
     }
     throw std::runtime_error(fmt::format("cannot map name {} to cleanup_status", s));
+}
+
+static std::unordered_map<intended_storage_mode, sstring> intended_storage_mode_to_name_map = {
+    {intended_storage_mode::vnodes, "vnodes"},
+    {intended_storage_mode::tablets, "tablets"},
+};
+
+intended_storage_mode intended_storage_mode_from_string(const sstring& s) {
+    for (auto&& e : intended_storage_mode_to_name_map) {
+        if (e.second == s) {
+            return e.first;
+        }
+    }
+    throw std::runtime_error(fmt::format("cannot map name {} to intended_storage_mode", s));
 }
 
 future<> topology_state_machine::await_not_busy() {
@@ -387,6 +402,11 @@ future<> topology_state_machine::abort_request(service::raft_group0& group0,
 auto fmt::formatter<service::cleanup_status>::format(service::cleanup_status status,
                                                      fmt::format_context& ctx) const -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "{}", service::cleanup_status_to_name_map[status]);
+}
+
+auto fmt::formatter<service::intended_storage_mode>::format(service::intended_storage_mode mode,
+                                                     fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", service::intended_storage_mode_to_name_map[mode]);
 }
 
 auto fmt::formatter<service::topology::transition_state>::format(service::topology::transition_state s,

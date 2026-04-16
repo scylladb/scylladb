@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <unordered_map>
@@ -270,6 +270,34 @@ template <>
 const config_type& config_type_for<std::vector<enum_option<db::consistency_level_restriction_t>>>() {
     static config_type ct(
         "consistency level list", printable_vector_to_json<enum_option<db::consistency_level_restriction_t>>);
+    return ct;
+}
+
+template <>
+const config_type& config_type_for<enum_option<db::experimental_features_t>>() {
+    static config_type ct(
+        "experimental feature", printable_to_json<enum_option<db::experimental_features_t>>);
+    return ct;
+}
+
+template <>
+const config_type& config_type_for<enum_option<db::replication_strategy_restriction_t>>() {
+    static config_type ct(
+        "replication strategy", printable_to_json<enum_option<db::replication_strategy_restriction_t>>);
+    return ct;
+}
+
+template <>
+const config_type& config_type_for<enum_option<db::consistency_level_restriction_t>>() {
+    static config_type ct(
+        "consistency level", printable_to_json<enum_option<db::consistency_level_restriction_t>>);
+    return ct;
+}
+
+template <>
+const config_type& config_type_for<db::error_injection_at_startup>() {
+    static config_type ct(
+        "error injection", printable_to_json<db::error_injection_at_startup>);
     return ct;
 }
 
@@ -1291,7 +1319,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_in_memory_data_store(this, "enable_in_memory_data_store", value_status::Used, false, "Enable in memory mode (system tables are always persisted).")
     , enable_cache(this, "enable_cache", value_status::Used, true, "Enable cache.")
     , enable_commitlog(this, "enable_commitlog", value_status::Used, true, "Enable commitlog.")
-    , enable_logstor(this, "enable_logstor", value_status::Used, false, "Enable the logstor storage engine.")
     , volatile_system_keyspace_for_testing(this, "volatile_system_keyspace_for_testing", value_status::Used, false, "Don't persist system keyspace - testing only!")
     , api_port(this, "api_port", value_status::Used, 10000, "Http Rest API port.")
     , api_address(this, "api_address", value_status::Used, "", "Http Rest API address.")
@@ -1650,6 +1677,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Set the minimum interval in seconds between flushing all tables before each major compaction (default is 86400)."
         "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments."
         "Set to 0 to disable automatic flushing all tables before major compaction.")
+    , maintenance_io_throughput_mb_per_sec(this, "maintenance_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
+        "Throttles background I/O to the specified total throughput (in MiBs/s) across the entire system. Background I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables background IO throttling. It is recommended to set the value for this parameter to be 75% of network bandwidth")
+    , backup_io_throughput_mb_per_sec(this, "backup_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
+        "Throttles backup I/O to the specified total throughput (in MiBs/s) across the entire system")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")
@@ -1938,6 +1969,47 @@ std::unordered_map<sstring, db::tablets_mode_t::mode> db::tablets_mode_t::map() 
 }
 
 template struct utils::config_file::named_value<seastar::log_level>;
+
+// Explicit instantiation definitions for all named_value<T> specializations
+// declared extern in config_file.hh and config.hh.  This file is the only
+// translation unit that includes config_file_impl.hh (which contains the
+// full template bodies), so all the heavy boost / yaml-cpp machinery is
+// compiled exactly once here instead of in every TU that includes config.hh.
+
+// Primitive / standard types (extern-declared in utils/config_file.hh):
+template struct utils::config_file::named_value<bool>;
+template struct utils::config_file::named_value<uint16_t>;
+template struct utils::config_file::named_value<uint32_t>;
+template struct utils::config_file::named_value<uint64_t>;
+template struct utils::config_file::named_value<int32_t>;
+template struct utils::config_file::named_value<int64_t>;
+template struct utils::config_file::named_value<float>;
+template struct utils::config_file::named_value<double>;
+template struct utils::config_file::named_value<sstring>;
+template struct utils::config_file::named_value<std::string>;
+template struct utils::config_file::named_value<utils::config_file::string_map>;
+template struct utils::config_file::named_value<utils::config_file::string_list>;
+
+// db-specific types (extern-declared in db/config.hh):
+template struct utils::config_file::named_value<db::tri_mode_restriction>;
+template struct utils::config_file::named_value<db::seed_provider_type>;
+template struct utils::config_file::named_value<db::hints::host_filter>;
+template struct utils::config_file::named_value<utils::UUID>;
+template struct utils::config_file::named_value<db::error_injection_at_startup>;
+template struct utils::config_file::named_value<compression_parameters>;
+template struct utils::config_file::named_value<enum_option<db::experimental_features_t>>;
+template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
+template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
+template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
+template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
+template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;
+template struct utils::config_file::named_value<std::vector<enum_option<db::replication_strategy_restriction_t>>>;
+template struct utils::config_file::named_value<std::vector<enum_option<db::consistency_level_restriction_t>>>;
+template struct utils::config_file::named_value<std::vector<db::error_injection_at_startup>>;
+template struct utils::config_file::named_value<std::vector<std::unordered_map<sstring, sstring>>>;
+template struct utils::config_file::named_value<std::unordered_map<sstring, seastar::log_level>>;
+template struct utils::config_file::named_value<std::vector<db::object_storage_endpoint_param>>;
 
 namespace utils {
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+// SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 // Copyright 2021-present ScyllaDB
 
 #pragma once

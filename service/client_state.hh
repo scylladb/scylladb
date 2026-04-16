@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -76,14 +76,15 @@ public:
             : _cs(cs), _auth_service(auth_service), _sl_controller(sl_controller) {}
         friend client_state;
     public:
-        client_state get() const {
-            return client_state(_cs, _auth_service, _sl_controller);
+        client_state get(abort_source* as = nullptr) const {
+            return client_state(_cs, _auth_service, _sl_controller, as);
         }
     };
 private:
     client_state(const client_state* cs,
         seastar::sharded<auth::service>* auth_service,
-        seastar::sharded<qos::service_level_controller>* sl_controller)
+        seastar::sharded<qos::service_level_controller>* sl_controller,
+        abort_source* as)
             : _keyspace(cs->_keyspace)
             , _user(cs->_user)
             , _auth_state(cs->_auth_state)
@@ -94,6 +95,7 @@ private:
             , _sl_controller(sl_controller ? &sl_controller->local() : nullptr)
             , _default_timeout_config(cs->_default_timeout_config)
             , _timeout_config(cs->_timeout_config)
+            , _as(as)
             , _enabled_protocol_extensions(cs->_enabled_protocol_extensions)
     {}
     friend client_state_for_another_shard;
@@ -153,6 +155,11 @@ private:
 
     workload_type _workload_type = workload_type::unspecified;
 
+    // Used to communicate with the code executing user requests.
+    // It's a way to indicate that we might abort processing the
+    // request, e.g. if the corresponding connection has been severed.
+    abort_source* _as{nullptr};
+
 public:
     struct internal_tag {};
     struct external_tag {};
@@ -211,14 +218,16 @@ public:
                  qos::service_level_controller* sl_controller,
                  timeout_config timeout_config,
                  const socket_address& remote_address = socket_address(),
-                 bool bypass_auth_checks = false)
+                 bool bypass_auth_checks = false,
+                 abort_source* as = nullptr)
             : _is_internal(false)
             , _bypass_auth_checks(bypass_auth_checks)
             , _remote_address(remote_address)
             , _auth_service(&auth_service)
             , _sl_controller(sl_controller)
             , _default_timeout_config(timeout_config)
-            , _timeout_config(timeout_config) {
+            , _timeout_config(timeout_config)
+            , _as(as) {
         if (!auth_service.underlying_authenticator().require_authentication()) {
             _user = auth::authenticated_user();
         }
@@ -244,29 +253,32 @@ public:
         return *_sl_controller;
     }
 
-    client_state(internal_tag) : client_state(internal_tag{}, infinite_timeout_config)
+    client_state(internal_tag, abort_source* as = nullptr) : client_state(internal_tag{}, infinite_timeout_config, as)
     {}
 
-    client_state(internal_tag, const timeout_config& config)
+    client_state(internal_tag, const timeout_config& config, abort_source* as = nullptr)
             : _keyspace("system")
             , _is_internal(true)
             , _bypass_auth_checks(true)
             , _default_timeout_config(config)
             , _timeout_config(config)
+            , _as(as)
     {}
 
-    client_state(internal_tag, auth::service& auth_service, qos::service_level_controller& sl_controller, sstring username)
+    client_state(internal_tag, auth::service& auth_service, qos::service_level_controller& sl_controller, sstring username, abort_source* as = nullptr)
         : _user(auth::authenticated_user(username))
         , _auth_state(auth_state::READY)
         , _is_internal(true)
         , _bypass_auth_checks(true)
         , _auth_service(&auth_service)
         , _sl_controller(&sl_controller)
+        , _as(as)
     {}
 
     client_state(auth::service& auth_service,
                  qos::service_level_controller* sl_controller,
-                 forwarded_client_state&& forwarded_state)
+                 forwarded_client_state&& forwarded_state,
+                 abort_source* as = nullptr)
             : _keyspace(std::move(forwarded_state.keyspace))
             , _user(forwarded_state.username ? auth::authenticated_user(*forwarded_state.username) : auth::authenticated_user{})
             , _auth_state(auth_state::READY)
@@ -277,6 +289,7 @@ public:
             , _sl_controller(sl_controller)
             , _default_timeout_config(forwarded_state.timeout_config)
             , _timeout_config(std::move(forwarded_state.timeout_config))
+            , _as(as)
             , _enabled_protocol_extensions(cql_transport::cql_protocol_extension_enum_set::from_mask(
                     forwarded_state.protocol_extensions_mask))
     {}
@@ -390,6 +403,16 @@ public:
             throw exceptions::invalid_request_exception("No keyspace has been specified. USE a keyspace, or explicitly specify keyspace.tablename");
         }
         return _keyspace;
+    }
+
+    abort_source& get_abort_source() {
+        if (_as == nullptr) {
+            utils::on_internal_error("client_state::get_abort_source(): Tried to dereference nullptr");
+        }
+        return *_as;
+    }
+    abort_source* get_abort_source_ptr() noexcept {
+        return _as;
     }
 
     /**

@@ -3,12 +3,13 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #pragma once
 
 #include "dht/decorated_key.hh"
 #include "dht/ring_position.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 #include "types.hh"
 #include "utils/bptree.hh"
 #include "utils/double-decker.hh"
@@ -90,6 +91,15 @@ public:
         return std::nullopt;
     }
 
+    bool is_record_alive(const primary_index_key& key, log_location location) {
+        auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
+        if (it != _partitions.end()) {
+            return it->_e.location == location;
+        } else {
+            return false;
+        }
+    }
+
     std::optional<index_entry> exchange(const primary_index_key& key, index_entry new_entry) {
         partitions_type::bound_hint hint;
         auto i = _partitions.lower_bound(key.dk, dht::ring_position_comparator(*_schema), hint);
@@ -115,11 +125,11 @@ public:
         return false;
     }
 
-    std::pair<bool, std::optional<index_entry>> insert_if_newer(const primary_index_key& key, index_entry new_entry) {
+    std::pair<bool, std::optional<index_entry>> insert_if_newer(const primary_index_key& key, index_entry new_entry, bool prefer_on_tie) {
         partitions_type::bound_hint hint;
         auto i = _partitions.lower_bound(key.dk, dht::ring_position_comparator(*_schema), hint);
         if (hint.match) {
-            if (i->_e.generation < new_entry.generation) {
+            if (i->_e.generation < new_entry.generation || (i->_e.generation == new_entry.generation && prefer_on_tie)) {
                 auto old_entry = i->_e;
                 i->_e = std::move(new_entry);
                 return {true, std::make_optional(old_entry)};
@@ -141,6 +151,19 @@ public:
             return true;
         }
         return false;
+    }
+
+    future<> erase(const dht::partition_range& pr) {
+        dht::ring_position_comparator cmp(*_schema);
+        auto it = _partitions.lower_bound(dht::ring_position_view::for_range_start(pr), cmp);
+        auto end_it = _partitions.lower_bound(dht::ring_position_view::for_range_end(pr), cmp);
+        while (it != end_it) {
+            auto prev = it;
+            ++it;
+            prev.erase(dht::raw_token_less_comparator{});
+            --_key_count;
+            co_await coroutine::maybe_yield();
+        }
     }
 
     auto begin() const noexcept { return _partitions.begin(); }

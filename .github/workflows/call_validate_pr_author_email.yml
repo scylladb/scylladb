@@ -7,6 +7,11 @@ on:
       - synchronize
       - reopened
 
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
 jobs:
   validate_pr_author_email:
     uses: scylladb/github-automation/.github/workflows/validate_pr_author_email.yml@main

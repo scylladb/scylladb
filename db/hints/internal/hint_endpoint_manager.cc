@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #include "db/hints/internal/hint_endpoint_manager.hh"
 
@@ -50,11 +50,18 @@ future<> hint_endpoint_manager::do_store_hint(schema_ptr s, lw_shared_ptr<const 
     size_t mut_size = fm->representation().size();
     shard_stats().size_of_hints_in_progress += mut_size;
 
-    if (utils::get_local_injector().enter("slow_down_writing_hints")) {
-        co_await seastar::sleep(std::chrono::seconds(10));
-    }
+    co_await utils::get_local_injector().inject("slow_down_writing_hints", std::chrono::seconds(10));
 
     try {
+        co_await utils::get_local_injector().inject("drop_hint_for_host", [&] (auto& handler) -> future<> {
+            // drop the hint, but only for the host given in the parameters
+            const std::string_view host_dst = handler.template get<std::string_view>("hint_host_dst").value();
+            if (host_dst == end_point_key().to_sstring()) {
+                throw std::runtime_error(::format("Dropping hint for host {}", host_dst));
+            }
+            return make_ready_future<>();
+        });
+
         const auto shared_lock = co_await get_shared_lock(file_update_mutex());
 
         hints_store_ptr log_ptr = co_await get_or_load();

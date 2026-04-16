@@ -8,13 +8,13 @@ the LICENSE-ScyllaDB-Source-Available.md file in the top-level directory.
 
 Individual files contain the following tag:
 
-  SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+  SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 Some files are derived from Apache projects. These are dual-licensed
 with the Apache License (version 2) and ScyllaDB-Source-Available-1.0.
 They contain the following tag:
 
-  SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+  SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
 
 ### `musl libc` files
 

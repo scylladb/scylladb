@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -70,7 +70,7 @@ class distributed_loader {
     static future<> reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, compaction::reshape_mode mode,
             sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator, std::function<bool (const sstables::shared_sstable&)> filter);
     static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator,
-            compaction::owned_ranges_ptr owned_ranges_ptr = nullptr);
+            compaction::owned_ranges_ptr owned_ranges_ptr = nullptr, bool vnodes_resharding = false);
     static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir, sstables::sstable_directory::process_flags flags);
     static future<> lock_table(global_table_ptr&, sharded<sstables::sstable_directory>& dir);
     static future<size_t> make_sstables_available(sstables::sstable_directory& dir,

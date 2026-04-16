@@ -11,7 +11,12 @@ sys.path.insert(0, os.path.abspath('./_ext'))
 sys.path.insert(0, os.path.abspath(".."))
 
 # -- Global variables
+# FLAG selects the build variant (`manual`, `opensource`, `enterprise`)
 FLAG = os.getenv('FLAG', 'manual')
+if FLAG:
+    tags.add(FLAG)  # noqa: F821 - `tags` is injected into conf.py's namespace by Sphinx
+if FLAG == 'opensource':
+    tags.add('experimental')  # noqa: F821
 
 # Set the project name
 PROJECT = "ScyllaDB Manual"
@@ -32,13 +37,13 @@ if FLAG == 'opensource':
 MULTIVERSION_CONFIG = fetch_multiversion_configuration(VERSIONS_URL)
 TAGS = MULTIVERSION_CONFIG.get("tags", [])
 BRANCHES = MULTIVERSION_CONFIG.get("branches", ["master"])
-# Set the latest version. 
+# Set the latest version.
 LATEST_VERSION = MULTIVERSION_CONFIG.get("latest", "master")
 # Set which versions are not released yet.
 UNSTABLE_VERSIONS = MULTIVERSION_CONFIG.get("unstable", [])
 # Set which versions are deprecated.
 DEPRECATED_VERSIONS = MULTIVERSION_CONFIG.get("deprecated", [])
-    
+
 # -- General configuration
 
 # Add any Sphinx extension module names here, as strings.
@@ -199,6 +204,3 @@ html_baseurl = BASE_URL
 # Dictionary of values to pass into the template engine’s context for all pages
 html_context = {"html_baseurl": html_baseurl, "flag": FLAG}
 
-def setup(app):
-    if 'opensource' in app.tags:
-        app.tags.add('experimental')

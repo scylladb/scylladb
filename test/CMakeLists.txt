@@ -41,49 +41,51 @@ function(add_scylla_test name)
   else()
     set(src "${name}.cc")
   endif()
-  add_executable(${name} ${src})
-  add_dependencies(tests ${name})
 
+  # CMake requires globally unique target names.  Prefix with the
+  # directory path (e.g., test/manual/hint_test → test_manual_hint_test)
+  # to avoid collisions between suites, while keeping the output binary
+  # name matching configure.py via OUTPUT_NAME.
   cmake_path(RELATIVE_PATH CMAKE_CURRENT_SOURCE_DIR
     BASE_DIRECTORY "${CMAKE_SOURCE_DIR}"
     OUTPUT_VARIABLE dirname)
+  string(REPLACE "/" "_" _target_prefix "${dirname}")
+  set(target "${_target_prefix}_${name}")
+
+  add_executable(${target} ${src})
+  set_target_properties(${target} PROPERTIES OUTPUT_NAME ${name})
+  add_dependencies(tests ${target})
+
   list(APPEND scylla_tests "${dirname}/${name}")
   set(scylla_tests "${scylla_tests}" PARENT_SCOPE)
 
-  if(Scylla_ENABLE_LTO)
-    # The runtime benefits of LTO don't outweight the compile time costs for tests.
-    target_link_options(${name} PRIVATE
-      $<$<CONFIG:RelWithDebInfo>:-fno-lto>)
-  endif()
-
-  target_include_directories(${name}
+  target_include_directories(${target}
     PRIVATE
       ${CMAKE_SOURCE_DIR})
-  target_link_libraries(${name}
+  target_link_libraries(${target}
     PRIVATE
       test-lib
       Seastar::seastar
       xxHash::xxhash)
   if(kind STREQUAL "SEASTAR")
-    target_link_libraries(${name}
+    target_link_libraries(${target}
       PRIVATE
         Seastar::seastar_testing)
-    target_compile_definitions(${name}
-      PRIVATE
-        SEASTAR_TESTING_MAIN)
+    # SEASTAR_TESTING_MAIN is provided by add_compile_definitions() in
+    # the top-level CMakeLists.txt, matching configure.py's global define.
   elseif(kind STREQUAL "BOOST")
-    target_link_libraries(${name}
+    target_link_libraries(${target}
       PRIVATE
         Boost::unit_test_framework)
   elseif(kind STREQUAL "UNIT")
-    target_link_libraries(${name}
+    target_link_libraries(${target}
       PRIVATE
         Seastar::seastar_testing)
   else()
     message(FATAL_ERROR "unknown test KIND: ${kind}")
   endif()
   if(parsed_args_LIBRARIES)
-    target_link_libraries(${name}
+    target_link_libraries(${target}
       PRIVATE
         ${parsed_args_LIBRARIES})
   endif()

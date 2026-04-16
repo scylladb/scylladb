@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2022-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 """
 Test consistency of schema changes with topology changes.
@@ -409,6 +409,16 @@ async def create_new_test_keyspace(cql: Session, opts, host=None):
     # Use CREATE KEYSPACE IF NOT EXISTS as a workaround for
     # https://github.com/scylladb/python-driver/issues/317
     await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} {opts}", host=host)
+    # Explicitly wait for schema agreement
+    # Respect max_schema_agreement_wait so that callers using
+    # disable_schema_agreement_wait() are not overridden.
+    wait_time = cql.cluster.max_schema_agreement_wait
+    if wait_time and wait_time > 0:
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: cql.cluster.control_connection.wait_for_schema_agreement(wait_time=wait_time))
+        except ConnectionException as e:
+            logger.warning("wait_for_schema_agreement failed: %s", e)
     return keyspace
 
 @asynccontextmanager

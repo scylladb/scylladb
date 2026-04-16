@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -59,6 +59,18 @@ struct shared_load_stats {
                 return make_ready_future<>();
             }).get();
         }
+    }
+
+    void set_tablet_sizes(locator::token_metadata_ptr tmptr, table_id table, uint64_t tablet_size) {
+        auto& tmap = tmptr->tablets().get_tablet_map(table);
+        tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
+            locator::range_based_tablet_id rb_tid {table, tmap.get_token_range(tid)};
+            for (auto& replica : tinfo.replicas) {
+                stats.tablet_stats[replica.host].tablet_sizes[table][rb_tid.range] = tablet_size;
+            }
+            return make_ready_future<>();
+        }).get();
+        set_size(table, tablet_size * tmap.tablet_count());
     }
 };
 

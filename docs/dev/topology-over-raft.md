@@ -700,6 +700,7 @@ CREATE TABLE system.topology (
     host_id uuid,
     datacenter text,
     ignore_msb int,
+    intended_storage_mode text,
     node_state text,
     num_tokens int,
     rack text,
@@ -741,6 +742,7 @@ Each node has a clustering row in the table where its `host_id` is the clusterin
 - `datacenter`         -  a name of the datacenter the node belongs to
 - `rack`               -  a name of the rack the node belongs to
 - `ignore_msb`         -  the value of the node's `murmur3_partitioner_ignore_msb_bits` parameter
+- `intended_storage_mode` - if set, it indicates the intended storage mode for tables under vnodes-to-tablets migration
 - `shard_count`        -  the node's `smp::count`
 - `release_version`    -  the node's `version::current()` (corresponding to a Cassandra version, used by drivers)
 - `node_state`         -  current state of the node (as described earlier)

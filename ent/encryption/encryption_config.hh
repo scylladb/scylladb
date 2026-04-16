@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -32,3 +32,5 @@ public:
 };
 
 }
+
+extern template struct utils::config_file::named_value<encryption::encryption_config::string_string_map>;

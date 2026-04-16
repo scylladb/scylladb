@@ -5,17 +5,23 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include <seastar/core/when_all.hh>
 #include "list_users_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
-#include "cql3/column_identifier.hh"
 #include "auth/common.hh"
 #include "db/system_keyspace.hh"
 #include "transport/messages/result_message.hh"
+
+shared_ptr<const cql3::metadata> cql3::statements::list_users_statement::get_result_metadata() const {
+    return ::make_shared<cql3::metadata>(
+        std::vector<lw_shared_ptr<cql3::column_specification>>{
+                cql3::make_column_spec(db::system_keyspace::NAME, "users", "name", utf8_type),
+                cql3::make_column_spec(db::system_keyspace::NAME, "users", "super", boolean_type)});
+}
 
 std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_users_statement::prepare(
                 data_dictionary::database db, cql_stats& stats) {
@@ -29,20 +35,7 @@ future<> cql3::statements::list_users_statement::check_access(query_processor& q
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::list_users_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
-    static const sstring virtual_table_name("users");
-
-    const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
-        return make_lw_shared<column_specification>(
-            db::system_keyspace::NAME,
-            virtual_table_name,
-            ::make_shared<column_identifier>(name, true),
-            ty);
-    };
-
-    auto metadata = ::make_shared<cql3::metadata>(
-        std::vector<lw_shared_ptr<column_specification>>{
-                make_column_spec("name", utf8_type),
-                make_column_spec("super", boolean_type)});
+    auto metadata = ::make_shared<cql3::metadata>(*get_result_metadata());
 
     auto make_results = [metadata = std::move(metadata)](const auth::service& as, std::unordered_set<sstring>&& roles) mutable {
         using cql_transport::messages::result_message;

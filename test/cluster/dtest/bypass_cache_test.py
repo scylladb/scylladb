@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2025-present ScyllaDB
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
 import logging
@@ -235,6 +235,65 @@ class TestBypassCache(Tester):
                 "select_partition_range_scan_no_bypass_cache": "not_changed",
             },
         )
+
+    def test_parallelized_aggregation_range_scan_no_bypass_cache(self):
+        """Verify that select_partition_range_scan_no_bypass_cache is incremented
+        for parallelized aggregation queries (e.g. SELECT count(*) FROM ...) that
+        don't use BYPASS CACHE, and that BYPASS CACHE actually bypasses the
+        cache when the query is parallelized.
+
+        Bug: parallelized_select_statement inherits from select_statement
+        directly (not primary_key_select_statement), so _range_scan and
+        _range_scan_no_bypass_cache are never set to true.  As a result,
+        neither select_partition_range_scan nor
+        select_partition_range_scan_no_bypass_cache is bumped for parallelized
+        queries.
+        """
+        session = self.prepare()
+        node = self.cluster.nodelist()[0]
+
+        # Sanity: a non-parallelized full scan without BYPASS CACHE bumps both
+        # select_partition_range_scan and select_partition_range_scan_no_bypass_cache.
+        errors = self.run_query_and_check_metrics(
+            node,
+            session,
+            query="SELECT * FROM cf",
+            num_runs=1,
+            metrics_validators={
+                "select_partition_range_scan": "increased_by_1",
+                "select_partition_range_scan_no_bypass_cache": "increased_by_1",
+                "select_parallelized": "not_changed",
+            },
+        )
+        assert not errors, "Non-parallelized full scan metric errors:\n" + "\n".join(errors)
+
+        # A parallelized aggregation (count(*)) without BYPASS CACHE must bump
+        # select_partition_range_scan_no_bypass_cache and read from cache.
+        errors = self.run_query_and_check_metrics(
+            node,
+            session,
+            query="SELECT count(*) FROM cf",
+            metrics_validators={
+                "select_partition_range_scan_no_bypass_cache": "increased_by_at_least_1",
+                "select_parallelized": "increased_by_at_least_1",
+                "scylla_cache_reads": self.gen_more_than(self.cache_thresh()),
+            },
+        )
+        assert not errors, "Parallelized aggregation scan metric errors:\n" + "\n".join(errors)
+
+        # A parallelized aggregation with BYPASS CACHE must NOT bump
+        # select_partition_range_scan_no_bypass_cache, and must not read from cache.
+        errors = self.run_query_and_check_metrics(
+            node,
+            session,
+            query="SELECT count(*) FROM cf BYPASS CACHE",
+            metrics_validators={
+                "select_partition_range_scan_no_bypass_cache": "not_changed",
+                "select_parallelized": "increased_by_at_least_1",
+                "scylla_cache_reads": self.gen_less_than(self.cache_thresh()),
+            },
+        )
+        assert not errors, "Parallelized aggregation with BYPASS CACHE metric errors:\n" + "\n".join(errors)
 
     @pytest.mark.parametrize("cache_index_pages", [True, False], ids=["cache_index_pages", "no_cache_index_pages"])
     def test_create_table_caching_disabled(self, cache_index_pages: bool):

@@ -5,14 +5,10 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 #include "gms/versioned_value.hh"
 #include "message/messaging_service.hh"
-
-#include <boost/algorithm/string/split.hpp>
-#include <boost/algorithm/string/classification.hpp>
-#include <charconv>
 
 namespace gms {
 
@@ -23,11 +19,6 @@ versioned_value versioned_value::network_version() {
     return versioned_value(format("{}", netw::messaging_service::current_version));
 }
 
-sstring versioned_value::make_full_token_string(const std::unordered_set<dht::token>& tokens) {
-    return fmt::to_string(fmt::join(tokens | std::views::transform([] (const dht::token& t) {
-        return t.to_sstring(); }), ";"));
-}
-
 sstring versioned_value::make_token_string(const std::unordered_set<dht::token>& tokens) {
     if (tokens.empty()) {
         return "";
@@ -35,16 +26,4 @@ sstring versioned_value::make_token_string(const std::unordered_set<dht::token>&
     return tokens.begin()->to_sstring();
 }
 
-std::unordered_set<dht::token> versioned_value::tokens_from_string(const sstring& s) {
-    if (s.size() == 0) {
-        return {}; // boost::split produces one element for empty string
-    }
-    std::vector<sstring> tokens;
-    boost::split(tokens, s, boost::is_any_of(";"));
-    std::unordered_set<dht::token> ret;
-    for (auto str : tokens) {
-        ret.emplace(dht::token::from_sstring(str));
-    }
-    return ret;
-}
-}
+} // namespace gms

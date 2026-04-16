@@ -1,8 +1,8 @@
 ## **SCYLLADB SOFTWARE LICENSE AGREEMENT**
 
-| Version: | 1.0 |
+| Version: | 1.1 |
 | :---- | :---- |
-| Last updated: | December 18, 2024 |
+| Last updated: | April 12, 2026 |
 
 **Your Acceptance**
 
@@ -12,20 +12,48 @@ The terms "**You**" or "**Licensee**" refer to any individual accessing or using
 
 **Grant of License**
 
-* **Software Definitions:** Software means the ScyllaDB software provided by Licensor, including the source code, object code, and any accompanying documentation or tools, or any part thereof, as made available under this Agreement.
-* **Grant of License:** Subject to the terms and conditions of this Agreement, Licensor grants You a limited, non-exclusive, revocable, non-sublicensable, non-transferable, royalty free license to Use the Software, in each case solely for the purposes of:
+* **Definitions:**
+  1. **Software:** Software means the ScyllaDB software provided by Licensor, including the source code, object code, and any accompanying documentation or tools, or any part thereof, as made available under this Agreement.
+  2. **Commercial Customer**: means any legal entity (including its Affiliates) that has entered into a transaction with Licensor, or an authorized reseller/distributor, for the provision of any ScyllaDB products or services. This includes, without limitation:  (a) Scope of Service: Any paid subscription, enterprise license, "BYOA" or Database-as-a-Service (DBaaS) offering, technical support, professional services, consulting, or training. (b) Scale and Volume: Any deployment regardless of size, capacity, or performance metrics (c) Payment Method: Any compensation model, including but not limited to, fixed-fee, consumption-based (On-Demand), committed spend, third-party marketplace credits (e.g., AWS, GCP, Azure), or promotional credits and discounts.
+* **Grant of License:** Subject to the terms and conditions of this Agreement, including the Eligibility and Exclusive Use Restrictions clause, Licensor grants You a limited, non-exclusive, revocable, non-sublicensable, non-transferable, royalty free license to Use the Software, in each case solely for the purposes of:
   1) Copying, distributing, evaluating (including performing benchmarking or comparative tests or evaluations , subject to the limitations below) and improving the Software and ScyllaDB; and
   2) create a modified version of the Software (each, a "**Licensed Work**"); provided however, that each such Licensed Work keeps all or substantially all of the functions and features of the Software, and/or using all or substantially all of the source code of the Software. You hereby agree that all the Licensed Work are, upon creation, considered Licensed Work of the Licensor, shall be the sole property of the Licensor and its assignees, and the Licensor and its assignees shall be the sole owner of all rights of any kind or nature, in connection with such Licensed Work. You hereby irrevocably and unconditionally assign to the Licensor all the Licensed Work and any part thereof.  This License applies separately for each version of the Licensed Work, which shall be considered "Software" for the purpose of this Agreement.
 
+* **Eligibility and Exclusive Use Restrictions**
 
-**License Limitations, Restrictions and Obligations:** The license grant above is subject to the following limitations, restrictions, and obligations. If Licensee’s Use of the Software does not comply with the above license grant or the terms of this section (including exceeding the Usage Limit set forth below), Licensee must: (i) refrain from any Use of the Software; and (ii) purchase a [commercial paid license](https://www.scylladb.com/scylladb-proprietary-software-license-agreement/) from the Licensor.
+i. 	Restricted to "Never Customers" Only. The license granted under this Agreement is strictly limited to Never Customers. For purposes of this Agreement, a "Never Customer" is an entity (including its Affiliates) that does not have, and has not had within the previous twelve (12) months, a paid commercial subscription, professional services agreement, or any other commercial relationship with Licensor. Satisfaction of the Never Customer criteria is a strict condition precedent to the effectiveness of this License. 
+
+ii. 	Total Prohibition for Existing Commercial Customers. If You (or any of Your Affiliates) are an existing Commercial Customer of Licensor within the last twelve (12) months, no license is deemed to have been offered or extended to You, and any download or installation of the Software by You is unauthorized. This prohibition applies to all deployments, including but not limited to:
+
+(a) existing commercial workloads;
+
+(b) any new use cases, new applications, or new workloads
+
+iii. **No "Hybrid" Usage**. Licensee is expressly prohibited from combining free tier usage under this Agreement with paid commercial units. 
+
+If You are a Commercial Customer, all use of the Software across Your entire organization (and any of your Affiliates) must be governed by a valid, paid commercial agreement. Use of the Software under this license by a Commercial Customer (which is not a "Never Customer") shall:
+
+(a) Void this license *ab initio*;
+
+(b) Be deemed a material breach of both this Agreement and any existing commercial terms; and
+
+(c) Entitle Licensor to invoice Licensee for such unauthorized usage at Licensor's standard list prices, retroactive to the date of first use.
+
+Notwithstanding anything to the contrary in the Eligibility or License Limitations sections above a Commercial Customer may use the Software exclusively for non-production purposes, including Continuous Integration (CI), automated testing, and quality assurance environments, provided that such use at all times remains compliant with the Usage Limit.
+
+iv. **Verification**. Licensor reserves the right to audit Licensee's environment and corporate identity to ensure compliance with these eligibility criteria.
+
+For the purposes of this Agreement an "**Affiliate**" means any entity that directly or indirectly controls, is controlled by, or is under common control with a party, where "control" means ownership of more than 50% of the voting stock or decision-making authority
+
+
+**License Limitations, Restrictions and Obligations:** The license grant above is subject to the following limitations, restrictions, and obligations. If Licensee’s Use of the Software does not comply with the above license grant or the terms of this section (including exceeding the Usage Limit set forth below), Licensee must: (i) refrain from any Use of the Software; and (ii) unless Licensee is a Never Customer, purchase a [commercial paid license](https://www.scylladb.com/scylladb-proprietary-software-license-agreement/) from the Licensor.
 
 * **Updates:** You shall be solely responsible for providing all equipment, systems, assets, access, and ancillary goods and services needed to access and Use the Software.  Licensor may modify or update the Software at any time, without notification, in its sole and absolute discretion.  After the effective date of each such update, Licensor shall bear no obligation to run, provide or support legacy versions of the Software.
 * **"Usage Limit":** Licensee's total overall available storage across all deployments and clusters of the Software and the Licensed Work under this License shall not exceed 10TB and/or an upper limit of 50 VCPUs (hyper threads).
 * **IP Markings:** Licensee must retain all copyright, trademark, and other proprietary notices contained in the Software. You will not modify, delete, alter, remove, or obscure any intellectual property, including without limitations licensing, copyright, trademark, or any other notices of Licensor in the Software.
 * **License Reproduction:** You must conspicuously display this Agreement on each copy of the Software. If You receive the Software from a third party, this Agreement still applies to Your Use of the Software. You will be responsible for any breach of this Agreement by any such third-party.
 * Distribution of any Licensed Works is permitted, provided that: (i) You must include in any Licensed Work prominent notices stating that You have modified the Software, (ii) You include a copy of this Agreement with the Licensed Work, and (iii) You clearly identify all modifications made in the Licensed Work and provides attribution to the Licensor as the original author(s) of the Software.
-* **Commercial Use Restrictions:** Licensee may not offer the Software as a software-as-a-service (SaaS) or commercial database-as-as-service (dBaaS) offering.  Licensee may not use the Software to compete with Licensor's existing or future products or services. If your Use of the Software does not comply with the requirements currently in effect as described in this License, you must purchase a commercial license from the Licensor, its affiliated entities, or you must refrain from using the Software and all Licensed Work. Furthermore, if You make any written claim of patent infringement relating to the Software, Your patent license for the Software granted under this Agreement terminates immediately.
+* **Commercial Use Restrictions:** Licensee may not offer the Software as a software-as-a-service (SaaS) or commercial database-as-as-service (dBaaS) offering.  Licensee may not use the Software to compete with Licensor's existing or future products or services. If your Use of the Software does not comply with the requirements currently in effect as described in this License, you must purchase a commercial license from the Licensor, its Affiliated entities, or you must refrain from using the Software and all Licensed Work. Furthermore, if You make any written claim of patent infringement relating to the Software, Your patent license for the Software granted under this Agreement terminates immediately.
 * Notwithstanding anything to the contrary, under the License granted hereunder, You shall not and shall not permit others to: (i) transfer the Software or any portions thereof to any other party except as expressly permitted herein; (ii) attempt to circumvent or overcome any technological protection measures incorporated into the Software; (iii) incorporate the Software into the structure, machinery or controls of any aircraft, other aerial device, military vehicle, hovercraft, waterborne craft or any medical equipment of any kind; or (iv) use the Software or any part thereof in any unlawful, harmful or illegal manner, or in a manner which infringes third parties’ rights in any way, including intellectual property rights.
 
 **Monitoring; Audit**
@@ -41,14 +69,14 @@ The terms "**You**" or "**Licensee**" refer to any individual accessing or using
 
 **Indemnity; Disclaimer; Limitation of Liability**
 
-* **Indemnity:** Licensee hereby agrees to indemnify, defend and hold harmless Licensor and its affiliates from any losses or damages incurred due to a third party claim arising out of: (i) Licensee’s breach of this Agreement; (ii) Licensee’s negligence, willful misconduct or violation of law, or (iii) Licensee’s products or services.
+* **Indemnity:** Licensee hereby agrees to indemnify, defend and hold harmless Licensor and its Affiliates from any losses or damages incurred due to a third party claim arising out of: (i) Licensee’s breach of this Agreement; (ii) Licensee’s negligence, willful misconduct or violation of law, or (iii) Licensee’s products or services.
 * DISCLAIMER OF WARRANTIES:  LICENSEE AGREES THAT LICENSOR HAS MADE NO EXPRESS WARRANTIES REGARDING THE SOFTWARE AND THAT THE SOFTWARE IS BEING PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. LICENSOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THE SOFTWARE, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION, ANY IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR PURPOSE; TITLE; MERCHANTABILITY;  OR NON-INFRINGEMENT OF THIRD PARTY RIGHTS. LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL OPERATE UNINTERRUPTED OR ERROR FREE, OR THAT ALL ERRORS WILL BE CORRECTED.  LICENSOR DOES NOT GUARANTEE ANY PARTICULAR RESULTS FROM THE USE OF THE SOFTWARE, AND DOES NOT WARRANT THAT THE SOFTWARE IS FIT FOR ANY PARTICULAR PURPOSE.
 * LIMITATION OF LIABILITY:  TO THE FULLEST EXTENT PERMISSIBLE UNDER APPLICABLE LAW, IN NO EVENT WILL LICENSOR AND/OR ITS AFFILIATES, EMPLOYEES, OFFICERS AND DIRECTORS BE LIABLE TO LICENSEE FOR (I) ANY LOSS OF USE OR DATA; INTERRUPTION OF BUSINESS; OR ANY INDIRECT; SPECIAL; INCIDENTAL; OR CONSEQUENTIAL DAMAGES OF ANY KIND (INCLUDING LOST PROFITS); AND (II) ANY DIRECT DAMAGES EXCEEDING THE TOTAL AMOUNT OF ONE THOUSAND US DOLLARS ($1,000).  THE FOREGOING PROVISIONS LIMITING THE LIABILITY OF LICENSOR SHALL APPLY REGARDLESS OF THE FORM OR CAUSE OF ACTION, WHETHER IN STRICT LIABILITY, CONTRACT OR TORT.
 
 **Proprietary Rights; No Other Rights**
 
 * **Ownership:** Licensor retains sole and exclusive ownership of all rights, interests and title in the Software and any scripts, processes, techniques, methodologies, inventions, know-how, concepts, formatting, arrangements, visual attributes, ideas, database rights, copyrights, patents, trade secrets, and other intellectual property related thereto, and all derivatives, enhancements, modifications and improvements thereof. Except for the limited license rights granted herein, Licensee has no rights in or to the Software and/ or Licensor’s trademarks, logo, or branding and You acknowledge that such Software, trademarks, logo, or branding is the sole property of Licensor.
-* **Feedback:** Licensee is not required to provide any suggestions, enhancement requests, recommendations or other feedback regarding the Software ("Feedback").  If, notwithstanding this policy, Licensee submits Feedback, Licensee understands and acknowledges that such Feedback is not submitted in confidence and Licensor assumes no obligation, expressed or implied, by considering it.  All right in any trademark or logo of Licensor or its affiliates and You shall make no claim of right to the Software or any part thereof to be supplied by Licensor hereunder and acknowledges that as between Licensor and You, such Software is the sole proprietary, title and interest in and to Licensor.such Feedback shall be assigned to, and shall become the sole and exclusive property of, Licensor upon its creation.
+* **Feedback:** Licensee is not required to provide any suggestions, enhancement requests, recommendations or other feedback regarding the Software ("Feedback").  If, notwithstanding this policy, Licensee submits Feedback, Licensee understands and acknowledges that such Feedback is not submitted in confidence and Licensor assumes no obligation, expressed or implied, by considering it.  All right in any trademark or logo of Licensor or its Affiliates and You shall make no claim of right to the Software or any part thereof to be supplied by Licensor hereunder and acknowledges that as between Licensor and You, such Software is the sole proprietary, title and interest in and to Licensor.such Feedback shall be assigned to, and shall become the sole and exclusive property of, Licensor upon its creation.
 * Except for the rights expressly granted to You under this Agreement, You are not granted any other licenses or rights in the Software or otherwise. This Agreement constitutes the entire agreement between You and the Licensor with respect to the subject matter hereof and supersedes all prior or contemporaneous communications, representations, or agreements, whether oral or written.
 * **Third-Party Software:** Customer acknowledges that the Software may contain open and closed source components (“OSS Components”) that are governed separately by certain licenses, in each case as further provided by Company upon request. Any applicable OSS Component license is solely between Licensee and the applicable licensor of the OSS Component and Licensee shall comply with the applicable OSS Component license.
 * If any provision of this Agreement is held to be invalid or unenforceable, such provision shall be struck and the remaining provisions shall remain in full force and effect.
@@ -56,7 +84,7 @@ The terms "**You**" or "**Licensee**" refer to any individual accessing or using
 **Miscellaneous**
 
 * **Miscellaneous:** This Agreement may be modified at any time by Licensor, and constitutes the entire agreement between the parties with respect to the subject matter hereof. Licensee may not assign or subcontract its rights or obligations under this Agreement.  This Agreement does not, and shall not be construed to create any relationship, partnership, joint venture, employer-employee, agency, or franchisor-franchisee relationship between the parties.
+* **Modifications**: Licensor reserves the right to modify this Agreement at any time. Changes will be effective upon posting to the Website or within the Software repository. Continued use of the Software after such changes constitutes acceptance.
 * **Governing Law & Jurisdiction:** This Agreement shall be governed and construed in accordance with the laws of Israel, without giving effect to their respective conflicts of laws provisions, and the competent courts situated in Tel Aviv, Israel, shall have sole and exclusive jurisdiction over the parties and any conflict and/or dispute arising out of, or in connection to, this Agreement
 
 \[*End of ScyllaDB Software License Agreement*\]
-

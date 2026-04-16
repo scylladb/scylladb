@@ -3,7 +3,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #include <chrono>
@@ -58,13 +58,17 @@ static logging::logger tlogger("alternator_ttl");
 
 namespace alternator {
 
-future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
+future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.update_time_to_live++;
     if (!_proxy.features().alternator_ttl) {
         co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Upgrade all nodes to a version that supports it.");
     }
 
     schema_ptr schema = get_table(_proxy, request);
+
+    maybe_audit(audit_info, audit::statement_category::DDL,
+                schema->ks_name(), schema->cf_name(), "UpdateTimeToLive", request);
+
     rjson::value* spec = rjson::find(request, "TimeToLiveSpecification");
     if (!spec || !spec->IsObject()) {
         co_return api_error::validation("UpdateTimeToLive missing mandatory TimeToLiveSpecification");
@@ -114,9 +118,13 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     co_return rjson::print(std::move(response));
 }
 
-future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
+future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.describe_time_to_live++;
     schema_ptr schema = get_table(_proxy, request);
+    
+    maybe_audit(audit_info, audit::statement_category::QUERY,
+                schema->ks_name(), schema->cf_name(), "DescribeTimeToLive", request);
+
     std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     rjson::value desc = rjson::empty_object();
     auto i = tags_map.find(TTL_TAG_KEY);

@@ -5,7 +5,7 @@
 #
 
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 import argparse
 import pyparsing as pp
@@ -47,7 +47,7 @@ def print_cw(f):
  * Copyright 2016-present ScyllaDB
  */
 
-// SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+// SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
  /*
   * This is an auto-generated code, do not modify directly.

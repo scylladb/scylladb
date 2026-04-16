@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 #pragma once
@@ -184,6 +184,125 @@ inline typed_value_ex<T>* value_ex() {
 
 sstring hyphenate(const std::string_view&);
 
+}
+
+template<typename T>
+utils::config_file::named_value<T>::the_value_type::the_value_type(T value)
+    : value(std::move(value)) {}
+
+template<typename T>
+std::unique_ptr<utils::config_file::any_value>
+utils::config_file::named_value<T>::the_value_type::clone() const {
+    return std::make_unique<the_value_type>(value());
+}
+
+template<typename T>
+void utils::config_file::named_value<T>::the_value_type::update_from(const any_value* source) {
+    auto typed_source = static_cast<const the_value_type*>(source);
+    value.set(typed_source->value());
+}
+
+template<typename T>
+utils::updateable_value_source<T>& utils::config_file::named_value<T>::the_value() {
+    any_value* av = _cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
+    return static_cast<the_value_type*>(av)->value;
+}
+
+template<typename T>
+const utils::updateable_value_source<T>& utils::config_file::named_value<T>::the_value() const {
+    return const_cast<named_value*>(this)->the_value();
+}
+
+template<typename T>
+const void* utils::config_file::named_value<T>::current_value() const {
+    return &the_value().get();
+}
+
+template<typename T>
+utils::config_file::named_value<T>::named_value(config_file* file, std::string_view name, std::string_view alias, liveness liveness_, value_status vs, const T& t, std::string_view desc,
+        std::initializer_list<T> allowed_values)
+    : config_src(file, name, alias, &config_type_for<T>(), desc)
+    , _value_status(vs)
+    , _liveness(liveness_)
+    , _allowed_values(std::move(allowed_values)) {
+    file->add(*this, std::make_unique<the_value_type>(std::move(t)));
+}
+
+template<typename T>
+utils::config_file::named_value<T>::named_value(config_file* file, std::string_view name, liveness liveness_, value_status vs, const T& t, std::string_view desc,
+        std::initializer_list<T> allowed_values)
+    : named_value(file, name, {}, liveness_, vs, t, desc, std::move(allowed_values)) {
+}
+
+template<typename T>
+utils::config_file::named_value<T>::named_value(config_file* file, std::string_view name, std::string_view alias, value_status vs, const T& t, std::string_view desc,
+        std::initializer_list<T> allowed_values)
+    : named_value(file, name, alias, liveness::MustRestart, vs, t, desc, allowed_values) {
+}
+
+template<typename T>
+utils::config_file::named_value<T>::named_value(config_file* file, std::string_view name, value_status vs, const T& t, std::string_view desc,
+        std::initializer_list<T> allowed_values)
+    : named_value(file, name, {}, liveness::MustRestart, vs, t, desc, allowed_values) {
+}
+
+template<typename T>
+utils::config_file::value_status utils::config_file::named_value<T>::status() const noexcept {
+    return _value_status;
+}
+
+template<typename T>
+utils::config_file::config_source utils::config_file::named_value<T>::source() const noexcept {
+    return _source;
+}
+
+template<typename T>
+bool utils::config_file::named_value<T>::is_set() const {
+    return _source > config_source::None;
+}
+
+template<typename T>
+utils::config_file::named_value<T>& utils::config_file::named_value<T>::operator()(const T& t, config_source src) {
+    if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
+        throw std::invalid_argument(fmt::format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
+    }
+    the_value().set(t);
+    if (src > config_source::None) {
+        _source = src;
+    }
+    return *this;
+}
+
+template<typename T>
+utils::config_file::named_value<T>& utils::config_file::named_value<T>::operator()(T&& t, config_source src) {
+    if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
+        throw std::invalid_argument(fmt::format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
+    }
+    the_value().set(std::move(t));
+    if (src > config_source::None) {
+        _source = src;
+    }
+    return *this;
+}
+
+template<typename T>
+void utils::config_file::named_value<T>::set(T&& t, config_source src) {
+    operator()(std::move(t), src);
+}
+
+template<typename T>
+const T& utils::config_file::named_value<T>::operator()() const {
+    return the_value().get();
+}
+
+template<typename T>
+utils::config_file::named_value<T>::operator utils::updateable_value<T>() const & {
+    return updateable_value<T>(the_value());
+}
+
+template<typename T>
+utils::observer<T> utils::config_file::named_value<T>::observe(std::function<void (const T&)> callback) const {
+    return the_value().observe(std::move(callback));
 }
 
 template<typename T>

@@ -3,16 +3,19 @@
  */
 
 /*
- * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
 
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/loop.hh>
 
 #include <fmt/ranges.h>
 #include "db/config.hh"
 #include "locator/tablets.hh"
+#include "replica/tablets.hh"
 #include "sstables/sstable_set_impl.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
@@ -286,6 +289,20 @@ static future<> guarantee_all_tablet_replicas_on_shard0(cql_test_env& env) {
     });
 }
 
+// Run in a seastar thread.
+static void mutate_tablet_map(cql_test_env& env,
+                              table_id table,
+                              seastar::noncopyable_function<future<>(locator::tablet_map&)> updater) {
+    seastar::abort_source as;
+    auto guard = env.get_raft_group0_client().start_operation(as).get();
+    auto& stm = env.get_shared_token_metadata().local();
+    stm.mutate_token_metadata([table, updater = std::move(updater)] (auto& tm) mutable -> future<> {
+        return tm.tablets().mutate_tablet_map_async(table, std::move(updater));
+    }).get();
+    save_tablet_metadata(env.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
+    env.get_storage_service().local().update_tablet_metadata({}).get();
+}
+
 SEASTAR_TEST_CASE(test_tablet_sstable_set_fast_forward_across_tablet_ranges) {
     // enable tablets, to get access to tablet_storage_group_manager
     cql_test_config cfg;
@@ -421,6 +438,102 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_fast_forward_across_tablet_ranges) {
             end_of_stream_check(reader);
         }
 
+    }, std::move(cfg));
+}
+
+// Test that tablet_sstable_set respects arbitrary tablet boundaries when selecting sstables
+// overlapping with a given token range.
+SEASTAR_TEST_CASE(test_tablet_sstable_set_preserves_arbitrary_boundaries) {
+    cql_test_config cfg;
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+
+    return do_with_cql_env_thread([&](cql_test_env& env) {
+        guarantee_all_tablet_replicas_on_shard0(env).get();
+
+        env.execute_cql("CREATE KEYSPACE test_tablet_sstable_set_arbitrary"
+                        " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1}"
+                        " AND TABLETS = {'enabled': true, 'initial': 5};").get();
+        env.execute_cql("CREATE TABLE test_tablet_sstable_set_arbitrary.test (pk int PRIMARY KEY) WITH TABLETS = {'pow2_count': false}").get();
+
+        auto& table = env.local_db().find_column_family("test_tablet_sstable_set_arbitrary", "test");
+        auto s = table.schema();
+        std::vector<dht::decorated_key> emitted_keys;
+
+        // One sstable per key, so that selection of sstables
+        // based on tablet ranges will differ after marge with
+        // sub-tablet granularity.
+        for (int i = 0; i < 32; ++i) {
+            env.execute_cql(fmt::format("INSERT INTO test_tablet_sstable_set_arbitrary.test (pk) VALUES ({})", i)).discard_result().get();
+            emitted_keys.push_back(dht::decorate_key(*s, partition_key::from_singular(*s, i)));
+            table.flush().get();
+        }
+
+        // So that sstable set is stable during checks at the end,
+        // and so that sstables don't get merged into larger ones with different boundaries making
+        // the test weak. The test relies on the fact that with uniform distribution of tokens,
+        // the selection of sstables will be different from using actual arbitrary boundaries.
+        // The test relies on the fact that shifting last token of tablet 2 (post merge) to a greater value
+        // than in the uniform distribution will select different sstables than without the boundary shifted.
+        table.disable_auto_compaction().get();
+
+        auto& sgm = column_family_test::get_storage_group_manager(table);
+        std::ranges::sort(emitted_keys, dht::decorated_key::less_comparator(s));
+
+        auto original_tmap = env.get_shared_token_metadata().local().get()->tablets().get_tablet_map(s->id()).clone();
+        auto last_tokens = original_tmap.get_sorted_tokens().get();
+        auto raw_last_tokens = last_tokens
+                | std::views::transform([] (dht::token t) { return dht::raw_token(t); })
+                | std::ranges::to<utils::chunked_vector<dht::raw_token>>();
+        BOOST_REQUIRE_EQUAL(last_tokens.size(), 5);
+
+        // Create non-uniform boundaries by merging tablets with one tablet being isolated (not merged).
+        // Merge [0,1] and [2,3], isolating the last tablet.
+        utils::chunked_vector<dht::raw_token> merged_last_tokens;
+        merged_last_tokens.push_back(raw_last_tokens[1]);
+        merged_last_tokens.push_back(raw_last_tokens[3]);
+        merged_last_tokens.push_back(raw_last_tokens[4]);
+
+        locator::tablet_map merged_tmap(std::move(merged_last_tokens), false);
+        merged_tmap.set_tablet(locator::tablet_id(0), original_tmap.get_tablet_info(locator::tablet_id(1)));
+        merged_tmap.set_tablet(locator::tablet_id(1), original_tmap.get_tablet_info(locator::tablet_id(3)));
+        merged_tmap.set_tablet(locator::tablet_id(2), original_tmap.get_tablet_info(locator::tablet_id(4)));
+
+        mutate_tablet_map(env, s->id(), [merged_tmap = std::move(merged_tmap)] (locator::tablet_map& tmap) mutable -> future<> {
+            tmap = std::move(merged_tmap);
+            return make_ready_future<>();
+        });
+
+        auto& tmap = table.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(s->id());
+        BOOST_REQUIRE(tmap.get_layout() == locator::tablet_layout::arbitrary);
+
+        sgm->split_all_storage_groups(tasks::task_info{}).get();
+
+        auto tablet_sstable_set = replica::make_tablet_sstable_set(s, *sgm.get(), tmap);
+
+        // Validate later that a copy works the same as the original.
+        auto tablet_sstable_set_copy = *tablet_sstable_set.get();
+
+        // Compare against a token-partitioned oracle for every [sorted_tokens[i], sorted_tokens[j]] range.
+        auto oracle_set = make_lw_shared<sstables::sstable_set>(std::make_unique<partitioned_sstable_set>(s, full_range));
+        for (const auto& sst : *tablet_sstable_set->all()) {
+            oracle_set->insert(sst);
+        }
+
+        auto to_set = [] (std::vector<sstables::shared_sstable> ssts) {
+            return std::set<sstables::shared_sstable>(ssts.begin(), ssts.end());
+        };
+
+        for (size_t i = 0; i < emitted_keys.size(); ++i) {
+            auto range = dht::partition_range::make({emitted_keys[i]}, {emitted_keys[i]});
+
+            auto expected = to_set(oracle_set->select(range));
+            auto selected = to_set(tablet_sstable_set->select(range));
+            auto selected_from_copy = to_set(tablet_sstable_set_copy.select(range));
+            BOOST_REQUIRE_MESSAGE(selected == expected,
+                                  fmt::format("select() mismatch for single-key range i={}", i));
+            BOOST_REQUIRE_MESSAGE(selected_from_copy == expected,
+                                  fmt::format("select() mismatch for single-key range i={}", i));
+        }
     }, std::move(cfg));
 }
 

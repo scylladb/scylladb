@@ -5,7 +5,7 @@
 #
 
 #
-# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
 import argparse
@@ -1708,12 +1708,14 @@ deps['test/boost/combined_tests'] += [
     'test/boost/sstable_compression_config_test.cc',
     'test/boost/sstable_directory_test.cc',
     'test/boost/sstable_set_test.cc',
+    'test/boost/sstable_tablet_streaming.cc',
     'test/boost/statement_restrictions_test.cc',
     'test/boost/storage_proxy_test.cc',
     'test/boost/tablets_test.cc',
     'test/boost/tracing_test.cc',
     'test/boost/user_function_test.cc',
     'test/boost/user_types_test.cc',
+    'test/boost/vector_index_test.cc',
     'test/boost/view_build_test.cc',
     'test/boost/view_complex_test.cc',
     'test/boost/view_schema_ckey_test.cc',
@@ -2148,7 +2150,7 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
-        '-DSeastar_SCHEDULING_GROUPS_COUNT=21',
+        '-DSeastar_SCHEDULING_GROUPS_COUNT=24',
         '-DSeastar_IO_URING=ON',
     ]
 
@@ -2231,16 +2233,20 @@ abseil_libs = ['absl/' + lib for lib in [
     'container/libabsl_raw_hash_set.a',
     'synchronization/libabsl_synchronization.a',
     'synchronization/libabsl_graphcycles_internal.a',
+    'synchronization/libabsl_kernel_timeout_internal.a',
     'debugging/libabsl_stacktrace.a',
     'debugging/libabsl_symbolize.a',
     'debugging/libabsl_debugging_internal.a',
     'debugging/libabsl_demangle_internal.a',
+    'debugging/libabsl_demangle_rust.a',
+    'debugging/libabsl_decode_rust_punycode.a',
+    'debugging/libabsl_utf8_for_code_point.a',
+    'debugging/libabsl_borrowed_fixup_buffer.a',
     'time/libabsl_time.a',
     'time/libabsl_time_zone.a',
     'numeric/libabsl_int128.a',
     'hash/libabsl_hash.a',
     'hash/libabsl_city.a',
-    'hash/libabsl_low_level_hash.a',
     'base/libabsl_malloc_internal.a',
     'base/libabsl_spinlock_wait.a',
     'base/libabsl_base.a',

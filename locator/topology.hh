@@ -5,7 +5,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #pragma once
@@ -343,6 +343,8 @@ public:
     const sstring& get_rack(host_id id) const {
         return get_location(id).rack;
     }
+
+    utils::UUID get_rack_uuid() const;
 
     auto get_local_dc_filter() const noexcept {
         return [ this, local_dc = get_datacenter() ] (auto ep) {

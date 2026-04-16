@@ -4,7 +4,7 @@
  */
 
 /*
- * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+ * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
 #include <boost/range/algorithm.hpp>
@@ -281,6 +281,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("cleanup_status", utf8_type)
             .with_column("supported_features", set_type_impl::get_instance(utf8_type, true))
             .with_column("request_id", timeuuid_type)
+            .with_column("intended_storage_mode", utf8_type)
             .with_column("ignore_nodes", set_type_impl::get_instance(uuid_type, true), column_kind::static_column)
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
             .with_column("new_keyspace_rf_change_ks_name", utf8_type, column_kind::static_column) // deprecated
@@ -323,6 +324,7 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("snapshot_tag", utf8_type)
             .with_column("snapshot_expiry", timestamp_type)
             .with_column("snapshot_skip_flush", boolean_type)
+            .with_column("finalize_migration_ks_name", utf8_type)
             .set_comment("Topology request tracking")
             .with_hash_version()
             .build();
@@ -3052,7 +3054,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         co_return ret;
     }
 
-    const bool tablet_balancing_not_supported = _db.features().strongly_consistent_tables || _db.features().logstor;
+    const bool tablet_balancing_not_supported = _db.features().strongly_consistent_tables;
 
     for (auto& row : *rs) {
         if (!row.has("host_id")) {
@@ -3169,6 +3171,11 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             }
         }
 
+        std::optional<service::intended_storage_mode> storage_mode;
+        if (row.has("intended_storage_mode")) {
+            storage_mode = service::intended_storage_mode_from_string(row.get_as<sstring>("intended_storage_mode"));
+        }
+
         std::unordered_map<raft::server_id, service::replica_state>* map = nullptr;
         if (nstate == service::node_state::normal) {
             map = &ret.normal_nodes;
@@ -3193,7 +3200,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
                 ring_slice, shard_count, ignore_msb, std::move(supported_features),
-                service::cleanup_status_from_string(cleanup_status), request_id});
+                service::cleanup_status_from_string(cleanup_status), request_id, storage_mode});
         }
     }
 
@@ -3505,6 +3512,9 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
         if (row.has("snapshot_expiry")) {
             entry.snapshot_expiry = row.get_as<db_clock::time_point>("snapshot_expiry");
         }
+    }
+    if (row.has("finalize_migration_ks_name")) {
+        entry.finalize_migration_ks_name = row.get_as<sstring>("finalize_migration_ks_name");
     }
 
     return entry;

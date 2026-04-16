@@ -108,7 +108,12 @@ def run_cassandra_cmd(pid, dir):
             # have it listen on 0.0.0.0 :-( This is insecure, but arguably
             # can be forgiven for test environments. The following JVM_OPTS
             # configures that:
-            'JVM_OPTS': '-Dcassandra.jmx.remote.port=7199',
+            'JVM_OPTS': '-Dcassandra.jmx.remote.port=7199'
+            # SAI vector indexes in Cassandra 5.0 reject custom index
+            # parameters (like similarity_function) unless this flag is
+            # set.  Our tests exercise those options for Cassandra SAI
+            # compatibility, so we need it enabled.
+                        ' -Dcassandra.sai.vector.allow_custom_parameters=true',
           }
     # By default, Cassandra's startup script runs "java". We can override this
     # choice with the JAVA_HOME environment variable based on the Java we

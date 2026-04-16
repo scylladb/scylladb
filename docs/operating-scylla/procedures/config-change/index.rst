@@ -10,6 +10,7 @@ ScyllaDB Configuration Procedures
    How to do a Rolling Restart <rolling-restart>
    Advanced Internode (RPC) Compression <advanced-internode-compression>
    Shared-dictionary compression for SSTables <sstable-dictionary-compression>
+   Migrate a Keyspace from Vnodes to Tablets <migrate-vnodes-to-tablets>
 
 Procedures to change ScyllaDB Configuration settings.
 
@@ -22,3 +23,5 @@ Procedures to change ScyllaDB Configuration settings.
 * :doc:`Advanced Internode (RPC) Compression </operating-scylla/procedures/config-change/advanced-internode-compression>`
 
 * :doc:`Shared-dictionary compression for SSTables </operating-scylla/procedures/config-change/sstable-dictionary-compression>`
+
+* :doc:`Migrate a Keyspace from Vnodes to Tablets </operating-scylla/procedures/config-change/migrate-vnodes-to-tablets>`
