@@ -26,6 +26,7 @@
 #include "db/config.hh"
 #include "schema/schema_builder.hh"
 #include "service/storage_proxy.hh"
+#include "service/storage_service.hh"
 #include "db/system_keyspace.hh"
 #include "tools/utils.hh"
 

@@ -19,6 +19,7 @@
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
 #include "tablets.hh"
+#include "locator/replication_strategy_type.hh"
 #include "data_dictionary/consistency_config_options.hh"
 
 // forward declaration since replica/database.hh includes this file
@@ -37,13 +38,6 @@ extern logging::logger rslogger;
 
 using inet_address = gms::inet_address;
 using token = dht::token;
-
-enum class replication_strategy_type {
-    simple,
-    local,
-    network_topology,
-    everywhere_topology,
-};
 
 using replication_strategy_config_option = std::variant<sstring, rack_list>;
 using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;

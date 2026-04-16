@@ -21,6 +21,8 @@
 #include "dht/token.hh"
 #include "replica/database.hh"
 #include "service/storage_proxy.hh"
+#include "service/storage_service.hh"
+#include "db/system_keyspace.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "schema/schema_fwd.hh"
