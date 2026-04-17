@@ -234,6 +234,9 @@ generate_scylla_version()
 
 option(Scylla_USE_PRECOMPILED_HEADER "Use precompiled header for Scylla" ON)
 add_library(scylla-precompiled-header STATIC exported_templates.cc)
+target_include_directories(scylla-precompiled-header PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${scylla_gen_build_dir}")
 target_link_libraries(scylla-precompiled-header PRIVATE
     absl::headers
     absl::btree

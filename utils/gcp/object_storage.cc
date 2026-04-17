@@ -335,7 +335,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
         } catch (...) {
             // just disregard the failure, we will retry below in the wrapped handler
         }
-        auto wrapped_handler = [this, handler = std::move(handler), &req, scope](const reply& rep, input_stream<char>& in) -> future<> {
+        auto wrapped_handler = [this, handler = std::move(handler), &req, scope](const reply& rep, seastar::input_stream<char>& in) -> future<> {
             auto _in = std::move(in);
             auto status_class = reply::classify_status(rep._status);
             /*

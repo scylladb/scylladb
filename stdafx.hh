@@ -400,4 +400,27 @@
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 
+// Scylla internal headers included by most translation units
+#include "bytes.hh"
+#include "db/timeout_clock.hh"
+#include "db_clock.hh"
+#include "dht/token.hh"
+#include "gc_clock.hh"
+#include "gms/inet_address.hh"
+#include "keys/keys.hh"
+#include "locator/host_id.hh"
+#include "locator/token_metadata_fwd.hh"
+#include "locator/types.hh"
+#include "mutation/mutation_fragment.hh"
+#include "mutation/mutation_partition.hh"
+#include "schema/schema.hh"
+#include "schema/schema_fwd.hh"
+#include "seastarx.hh"
+#include "types/types.hh"
+#include "utils/chunked_vector.hh"
+#include "utils/fragment_range.hh"
+#include "utils/managed_bytes.hh"
+#include "utils/tagged_integer.hh"
+#include "utils/UUID.hh"
+
 #endif
