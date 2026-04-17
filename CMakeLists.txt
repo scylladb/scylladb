@@ -242,6 +242,7 @@ target_link_libraries(scylla-precompiled-header PRIVATE
     absl::btree
     absl::hash
     absl::raw_hash_set
+    idl
     Seastar::seastar
     Snappy::snappy
     systemd
