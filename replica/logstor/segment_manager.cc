@@ -486,8 +486,6 @@ private:
     logstor_compaction_controller _shares_controller;
     utils::observer<float> _compaction_static_shares_observer;
 
-    seastar::semaphore _compaction_sem{1};
-
     struct group_compaction_state {
         shared_future<> completion{make_ready_future<>()};
         abort_source as;
@@ -619,8 +617,6 @@ future<> compaction_manager_impl::stop() {
         co_await entry.second->completion.get_future().handle_exception([] (std::exception_ptr) {});
     });
 
-    _compaction_sem.broken();
-
     co_await _auto_compaction_completion.get_future().handle_exception([] (std::exception_ptr) {});
 
     co_await _shares_controller.shutdown();
@@ -722,6 +718,224 @@ public:
     }
 };
 
+class owned_write_buffer;
+
+// Fixed-size pool of write_buffer's.
+// The size of the pool is determined at construction and cannot be changed.
+class write_buffer_pool {
+public:
+    struct release_entry {
+        write_buffer* buf;
+        std::optional<seastar::semaphore_units<>> pool_units;
+    };
+
+private:
+    std::vector<write_buffer> _pool;
+    std::vector<write_buffer*> _available;
+    std::vector<release_entry> _released;
+    size_t _released_head{0};
+    seastar::semaphore _available_sem{0};
+    seastar::condition_variable _released_cv;
+    bool _stopping{false};
+    future<> _release_fiber{make_ready_future<>()};
+
+public:
+
+    write_buffer_pool(size_t count, size_t buffer_size, segment_kind kind)
+        : _available_sem(count) {
+        _available.reserve(count);
+        _pool.reserve(count);
+        _released.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            _pool.emplace_back(buffer_size, kind);
+            _available.push_back(&_pool.back());
+        }
+    }
+
+
+    future<> start();
+    future<> stop();
+
+    std::optional<owned_write_buffer> try_allocate();
+    future<owned_write_buffer> allocate();
+    future<owned_write_buffer> allocate(abort_source& as);
+    future<std::vector<owned_write_buffer>> allocate_many(size_t count, abort_source& as);
+
+    void queue_release(write_buffer* wb, std::optional<seastar::semaphore_units<>> pool_units) noexcept;
+    void release(write_buffer* wb, std::optional<seastar::semaphore_units<>> pool_units) noexcept;
+
+private:
+    future<std::optional<release_entry>> wait_for_release();
+    future<> run_release_fiber();
+
+    size_t size() const noexcept { return _pool.size(); }
+    size_t available_buffer_count() const noexcept { return _available.size(); }
+    size_t used_buffer_count() const noexcept { return _pool.size() - _available.size(); }
+};
+
+class owned_write_buffer {
+    write_buffer* _buf = nullptr;
+    write_buffer_pool* _pool = nullptr;
+    std::optional<seastar::semaphore_units<>> _pool_units;
+
+    void release_buffer() noexcept {
+        if (!_buf) {
+            return;
+        }
+        auto* buf = std::exchange(_buf, nullptr);
+        auto* pool = std::exchange(_pool, nullptr);
+        auto units = std::move(_pool_units);
+        if (!pool) {
+            return;
+        }
+        if (buf->is_closed()) {
+            pool->release(buf, std::move(units));
+            return;
+        }
+
+        pool->queue_release(buf, std::move(units));
+    }
+
+public:
+    owned_write_buffer() = default;
+
+    owned_write_buffer(write_buffer* buf, write_buffer_pool* pool,
+            std::optional<seastar::semaphore_units<>> pool_units = std::nullopt)
+        : _buf(buf), _pool(pool), _pool_units(std::move(pool_units)) {}
+
+    ~owned_write_buffer() {
+        release_buffer();
+    }
+
+    owned_write_buffer(const owned_write_buffer&) = delete;
+    owned_write_buffer& operator=(const owned_write_buffer&) = delete;
+
+    owned_write_buffer(owned_write_buffer&& o) noexcept
+        : _buf(std::exchange(o._buf, nullptr)), _pool(std::exchange(o._pool, nullptr)), _pool_units(std::move(o._pool_units)) {}
+
+    owned_write_buffer& operator=(owned_write_buffer&& o) noexcept {
+        if (this != &o) {
+            release_buffer();
+            _buf = std::exchange(o._buf, nullptr);
+            _pool = std::exchange(o._pool, nullptr);
+            _pool_units = std::move(o._pool_units);
+        }
+        return *this;
+    }
+
+    void release() noexcept {
+        release_buffer();
+    }
+
+    write_buffer* get() const noexcept { return _buf; }
+
+    write_buffer& operator*() const noexcept { return *_buf; }
+    write_buffer* operator->() const noexcept { return _buf; }
+
+    explicit operator bool() const noexcept { return _buf != nullptr; }
+};
+
+future<> write_buffer_pool::start() {
+    _release_fiber = run_release_fiber();
+    co_return;
+}
+
+future<owned_write_buffer> write_buffer_pool::allocate(abort_source& as) {
+    auto units = co_await get_units(_available_sem, 1, as);
+    if (_available.empty()) {
+        throw std::runtime_error("No available write buffer after acquiring semaphore unit");
+    }
+    auto* wb = _available.back();
+    _available.pop_back();
+    co_return owned_write_buffer(wb, this, std::move(units));
+}
+
+future<std::vector<owned_write_buffer>> write_buffer_pool::allocate_many(size_t count, abort_source& as) {
+    if (count > _pool.size()) {
+        throw std::runtime_error(fmt::format("Cannot allocate {} write buffers from pool of size {}", count, _pool.size()));
+    }
+
+    auto units = co_await get_units(_available_sem, count, as);
+    if (_available.size() < count) {
+        throw std::runtime_error(fmt::format("Only {} write buffers available after acquiring {} semaphore units", _available.size(), count));
+    }
+
+    std::vector<owned_write_buffer> buffers;
+    buffers.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        auto* wb = _available.back();
+        _available.pop_back();
+        buffers.emplace_back(wb, this, units.split(1));
+    }
+    co_return buffers;
+}
+
+void write_buffer_pool::queue_release(write_buffer* wb, std::optional<seastar::semaphore_units<>> pool_units) noexcept {
+    if (_stopping) {
+        release(wb, std::move(pool_units));
+        return;
+    }
+
+    _released.push_back(release_entry{wb, std::move(pool_units)});
+    _released_cv.signal();
+}
+
+void write_buffer_pool::release(write_buffer* wb, std::optional<seastar::semaphore_units<>> pool_units) noexcept {
+    try {
+        wb->reset();
+        _available.push_back(wb);
+    } catch (...) {
+        logstor_logger.error("Failed to release write buffer: {}", std::current_exception());
+        if (pool_units) {
+            (void)pool_units->release();
+        }
+    }
+    pool_units.reset();
+}
+
+future<std::optional<write_buffer_pool::release_entry>> write_buffer_pool::wait_for_release() {
+    while (_released_head == _released.size()) {
+        if (_stopping) {
+            co_return std::nullopt;
+        }
+        co_await _released_cv.wait([this] {
+            return _stopping || _released_head != _released.size();
+        });
+    }
+
+    co_return std::move(_released[_released_head++]);
+}
+
+future<> write_buffer_pool::run_release_fiber() {
+    while (true) {
+        auto entry_result = co_await coroutine::as_future(wait_for_release());
+        if (entry_result.failed()) {
+            logstor_logger.error("Error while waiting for write buffer release: {}", entry_result.get_exception());
+            co_return;
+        }
+        auto entry = entry_result.get();
+        if (!entry) {
+            co_return;
+        }
+        auto close_result = co_await coroutine::as_future(entry->buf->close());
+        if (close_result.failed()) {
+            logstor_logger.error("Error while closing write buffer: {}", close_result.get_exception());
+            if (entry->pool_units) {
+                (void)entry->pool_units->release();
+            }
+            continue;
+        }
+        release(entry->buf, std::move(entry->pool_units));
+    }
+}
+
+future<> write_buffer_pool::stop() {
+    _stopping = true;
+    _released_cv.broadcast();
+    co_await std::move(_release_fiber).handle_exception([] (std::exception_ptr) {});
+    _available_sem.broken();
+}
+
 class segment_manager_impl {
 
     struct stats {
@@ -774,8 +988,9 @@ class segment_manager_impl {
     future<> _reserve_replenisher{make_ready_future<>()};
     seastar::condition_variable _segment_freed_cv;
 
-    std::vector<write_buffer> _compaction_buffer_pool;
-    std::vector<write_buffer*> _available_compaction_buffers;
+    static constexpr size_t max_compaction_parallelism = 8;
+
+    write_buffer_pool _compaction_buffer_pool;
 
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
@@ -1079,6 +1294,9 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _max_segments{(config.disk_size / config.file_size) * _segments_per_file, (config.disk_size / config.file_size) * _segments_per_file}
     , _segment_descs(static_cast<size_t>(_max_segments.actual))
     , _segment_pool(segment_pool_size, config.max_segments_per_compaction)
+    // Compaction concurrency is limited by buffer availability. Normal compaction
+    // uses one buffer; split compaction allocates two buffers.
+    , _compaction_buffer_pool(std::max(max_compaction_parallelism, 2ul), config.segment_size, segment_kind::full)
     {
 
     if (_segments_per_file == 0) {
@@ -1090,17 +1308,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     }
 
     _free_segments.reserve(static_cast<size_t>(_max_segments.actual));
-
-    // pre-allocate write buffers for compaction
-    // at most a single compaction/split running at a time
-    // and at most two buffers used at a time by split.
-    size_t compaction_buffer_count = 2;
-    _available_compaction_buffers.reserve(compaction_buffer_count);
-    _compaction_buffer_pool.reserve(compaction_buffer_count);
-    for (size_t i = 0; i < compaction_buffer_count; ++i) {
-        _compaction_buffer_pool.emplace_back(config.segment_size, segment_kind::full);
-        _available_compaction_buffers.push_back(&_compaction_buffer_pool.back());
-    }
 
     namespace sm = seastar::metrics;
 
@@ -1168,6 +1375,7 @@ future<> segment_manager_impl::start() {
         return replenish_reserve();
     });
 
+    co_await _compaction_buffer_pool.start();
     co_await _compaction_mgr.start();
 
     co_await switch_active_segment();
@@ -1199,6 +1407,8 @@ future<> segment_manager_impl::stop() {
     co_await std::move(_reserve_replenisher);
 
     co_await _compaction_mgr.stop();
+
+    co_await _compaction_buffer_pool.stop();
 
     co_await _file_mgr.stop();
 
@@ -1695,7 +1905,7 @@ future<std::vector<compaction_manager_impl::compaction_candidate>> compaction_ma
 // the buffer is flushed when the next record doesn't fit and on close().
 struct compaction_buffer {
     segment_manager_impl& sm;
-    write_buffer* buf = nullptr;
+    owned_write_buffer buf;
     logstor_group& cg;
     std::vector<future<>> pending_updates;
 
@@ -1705,28 +1915,15 @@ struct compaction_buffer {
         size_t records_skipped{0};
     } stats;
 
-    explicit compaction_buffer(segment_manager_impl& sm, logstor_group& cg)
-        : sm(sm), cg(cg)
-    {
-        if (sm._available_compaction_buffers.empty()) {
-            throw std::runtime_error("No available compaction buffers");
-        }
-        buf = sm._available_compaction_buffers.back();
-        sm._available_compaction_buffers.pop_back();
-    }
+    compaction_buffer(segment_manager_impl& sm, owned_write_buffer buf, logstor_group& cg)
+        : sm(sm)
+        , buf(std::move(buf))
+        , cg(cg)
+    {}
 
     compaction_buffer(compaction_buffer&& o) noexcept
-        : sm(o.sm), buf(std::exchange(o.buf, nullptr)), cg(o.cg)
+        : sm(o.sm), buf(std::move(o.buf)), cg(o.cg)
         , pending_updates(std::move(o.pending_updates)), stats(o.stats) {}
-
-    ~compaction_buffer() {
-        if (buf) {
-            (void)buf->close().then([sm = &this->sm, buf = this->buf] {
-                buf->reset();
-                sm->_available_compaction_buffers.push_back(buf);
-            });
-        }
-    }
 
     future<> flush() {
         if (buf->has_data()) {
@@ -1742,8 +1939,7 @@ struct compaction_buffer {
 
     future<> close() {
         co_await flush();
-        sm._available_compaction_buffers.push_back(buf);
-        buf = nullptr;
+        buf.release();
     }
 
     // Rewrite a single live record into this buffer, updating the index atomically.
@@ -1777,8 +1973,6 @@ struct compaction_buffer {
 };
 
 future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source& as) {
-    auto sem_units = co_await get_units(_compaction_sem, 1, as);
-
     auto candidate = select_segments_for_compaction(cg);
     if (!candidate) {
         co_return;
@@ -1787,7 +1981,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
 
     logstor_logger.trace("Starting compaction of segments {} in compaction group {}", segments, cg.table_id());
 
-    compaction_buffer cb(_sm, cg);
+    compaction_buffer cb(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg);
 
     auto& index = cg.logstor_index();
 
@@ -1842,8 +2036,6 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
 future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier, abort_source& as) {
     static constexpr size_t batch_size = 32;
 
-    auto sem_units = co_await get_units(_compaction_sem, 1, as);
-
     auto& src_segments = src.logstor_segments();
 
     // the src and target groups both share the table index
@@ -1892,7 +2084,11 @@ future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor
         // (one per target group). Both buffers write back into src; the next outer loop
         // iteration will fast-path the resulting single-group segments to the correct child group.
 
-        std::array<compaction_buffer, 2> bufs{compaction_buffer{_sm, src}, compaction_buffer{_sm, src}};
+        auto split_buffers = co_await _sm._compaction_buffer_pool.allocate_many(2, as);
+        std::array<compaction_buffer, 2> bufs{
+            compaction_buffer(_sm, std::move(split_buffers[0]), src),
+            compaction_buffer(_sm, std::move(split_buffers[1]), src),
+        };
 
         auto nonempty_segments = batch
                 | std::views::filter([this] (log_segment_id seg_id) {

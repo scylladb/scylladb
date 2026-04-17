@@ -204,6 +204,10 @@ future<> write_buffer::close() {
     }
 }
 
+bool write_buffer::is_closed() const noexcept {
+    return _write_gate.is_closed();
+}
+
 future<log_location_with_holder> write_buffer::write(log_record_writer writer, write_target target) {
     auto append_result = _raw.append(writer);
 

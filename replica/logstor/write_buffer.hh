@@ -229,6 +229,7 @@ public:
     write_buffer& operator=(write_buffer&&) noexcept = default;
 
     future<> close();
+    bool is_closed() const noexcept;
 
     const char* data() const noexcept { return _raw.data(); }
     size_t serialized_size() const noexcept { return _raw.serialized_size(); }
