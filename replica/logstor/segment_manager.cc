@@ -1413,6 +1413,7 @@ struct compaction_buffer {
     // to ensure all pending updates complete.
     future<> rewrite_record(primary_index& index, log_location read_location, log_record record,
                              size_t& records_rewritten, size_t& records_skipped) {
+        auto* index_ptr = &index;
         auto key = record.header.key;
         log_record_writer writer(std::move(record));
 
@@ -1421,10 +1422,10 @@ struct compaction_buffer {
         }
 
         auto write_and_update_index = buf->write(std::move(writer)).then_unpack(
-                [this, &index, key = std::move(key), read_location, &records_rewritten, &records_skipped]
+                [this, index_ptr, key = std::move(key), read_location, &records_rewritten, &records_skipped]
                 (log_location new_location, seastar::gate::holder op) {
 
-            if (index.update_record_location(key, read_location, new_location)) {
+            if (index_ptr->update_record_location(key, read_location, new_location)) {
                 sm.free_record(read_location);
                 records_rewritten++;
             } else {
