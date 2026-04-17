@@ -69,6 +69,13 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     }
 };
 
+} // namespace replica::logstor
+
+template<>
+size_t hist_key<replica::logstor::segment_descriptor>(const replica::logstor::segment_descriptor& desc);
+
+namespace replica::logstor {
+
 using segment_descriptor_hist = log_heap<segment_descriptor, segment_descriptor_hist_options>;
 
 struct segment_set {
