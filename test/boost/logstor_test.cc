@@ -31,6 +31,7 @@
 #include <seastar/core/simple-stream.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/tmpdir.hh"
+#include "utils/error_injection.hh"
 
 using namespace replica::logstor;
 
@@ -380,6 +381,22 @@ void write_and_flush_segment(logstor& ls, test_compaction_group_handle& cg, cons
     cg.flush_separator().get();
 }
 
+write_buffer_pool::config make_test_write_buffer_pool_config(size_t capacity, size_t max_cached, size_t preallocate = 0) {
+    return write_buffer_pool::config{
+        .capacity = capacity,
+        .buffer_size = 4 * 1024,
+        .kind = segment_kind::full,
+        .preallocate = preallocate,
+        .max_cached = max_cached,
+    };
+}
+
+// A pooled buffer has to be closed before it can go back to the pool, which happens when the
+// handle is destroyed - here, when this returns.
+void close_and_return(owned_write_buffer buf) {
+    buf->close().get();
+}
+
 }
 
 // Checks that sealing a full raw write buffer writes the expected header fields.
@@ -433,6 +450,256 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_accepts_record_at_max_record_
     wb.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
 
     BOOST_REQUIRE_EQUAL(wb.serialized_size(), ondisk::block_alignment);
+}
+
+// Checks that a buffer holding records that were never flushed can still be closed and reused
+// after aborting its writes. A pending write is resolved only by the flush and holds the buffer's
+// write gate until then, so close() alone never completes. The compaction buffer pool relies on
+// abort_writes() to reclaim a buffer left behind by a compaction that failed before flushing.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_abort_writes_reclaims_unflushed_buffer) {
+    auto schema = make_kv_schema();
+
+    write_buffer wb(32 * 1024, segment_kind::full);
+    auto written = wb.write(log_record_writer(make_log_record(schema, "pk0", "v0", api::timestamp_type(1))));
+    BOOST_REQUIRE(!written.available());
+
+    auto closed = wb.close();
+    seastar::thread::yield();
+    BOOST_REQUIRE(!closed.available());
+
+    wb.abort_writes(std::make_exception_ptr(std::runtime_error("buffer was not flushed"))).get();
+    BOOST_REQUIRE_THROW(written.get(), std::runtime_error);
+    closed.get();
+    BOOST_REQUIRE(wb.is_closed());
+
+    wb.reset();
+    BOOST_REQUIRE(!wb.is_closed());
+    BOOST_REQUIRE(!wb.has_data());
+}
+
+// Checks that a pool builds its buffers at the point of use and keeps only max_cached of them once
+// they are returned, so that a pool whose capacity is rarely reached does not hold the memory for it.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_pool_builds_buffers_on_demand) {
+    abort_source as;
+    write_buffer_pool pool(make_test_write_buffer_pool_config(4, 1));
+    auto stop_pool = seastar::defer([&pool] noexcept { pool.stop().get(); });
+
+    BOOST_REQUIRE_EQUAL(pool.allocated_buffer_count(), 0u);
+
+    auto b0 = pool.allocate(as).get();
+    auto b1 = pool.allocate(as).get();
+    BOOST_REQUIRE_EQUAL(pool.used_buffer_count(), 2u);
+    BOOST_REQUIRE_EQUAL(pool.allocated_buffer_count(), 2u);
+    BOOST_REQUIRE_EQUAL(pool.get_stats().buffers_created, 2u);
+    BOOST_REQUIRE_EQUAL(b0->get_buffer_size(), 4u * 1024);
+
+    close_and_return(std::move(b0));
+    close_and_return(std::move(b1));
+    BOOST_REQUIRE_EQUAL(pool.used_buffer_count(), 0u);
+    BOOST_REQUIRE_EQUAL(pool.allocated_buffer_count(), 1u);
+
+    // The kept buffer is handed out again, the one that was let go is built anew.
+    auto b2 = pool.allocate(as).get();
+    BOOST_REQUIRE_EQUAL(pool.get_stats().buffers_created, 2u);
+    auto b3 = pool.allocate(as).get();
+    BOOST_REQUIRE_EQUAL(pool.get_stats().buffers_created, 3u);
+
+    close_and_return(std::move(b2));
+    close_and_return(std::move(b3));
+}
+
+// Checks that a pool configured to build its buffers up front never builds one at the point of use,
+// which is what the compaction buffer pool relies on.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_pool_preallocates_its_buffers) {
+    abort_source as;
+    write_buffer_pool pool(make_test_write_buffer_pool_config(2, 2, 2));
+    auto stop_pool = seastar::defer([&pool] noexcept { pool.stop().get(); });
+
+    BOOST_REQUIRE_EQUAL(pool.allocated_buffer_count(), 2u);
+    BOOST_REQUIRE_EQUAL(pool.get_stats().buffers_created, 2u);
+
+    auto bufs = pool.allocate_many(2, as).get();
+    BOOST_REQUIRE_EQUAL(bufs.size(), 2u);
+    BOOST_REQUIRE(bufs[0].get() != bufs[1].get());
+    BOOST_REQUIRE_EQUAL(pool.used_buffer_count(), 2u);
+    BOOST_REQUIRE_EQUAL(pool.get_stats().buffers_created, 2u);
+
+    for (auto& buf : bufs) {
+        close_and_return(std::move(buf));
+    }
+    BOOST_REQUIRE_EQUAL(pool.used_buffer_count(), 0u);
+    BOOST_REQUIRE_EQUAL(pool.allocated_buffer_count(), 2u);
+}
+
+// Checks that the capacity bounds how many buffers are out at once, and that raising it lets a
+// waiting allocation through.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_pool_capacity_bounds_allocations) {
+    abort_source as;
+    write_buffer_pool pool(make_test_write_buffer_pool_config(1, 1));
+    auto stop_pool = seastar::defer([&pool] noexcept { pool.stop().get(); });
+
+    auto b0 = pool.allocate(as).get();
+    BOOST_REQUIRE_EQUAL(pool.used_buffer_count(), 1u);
+
+    auto waiting = pool.allocate(as);
+    seastar::thread::yield();
+    BOOST_REQUIRE(!waiting.available());
+    BOOST_REQUIRE_EQUAL(pool.get_stats().allocation_waits, 1u);
+
+    pool.set_capacity(2);
+    auto b1 = waiting.get();
+    BOOST_REQUIRE_EQUAL(pool.used_buffer_count(), 2u);
+
+    close_and_return(std::move(b0));
+    close_and_return(std::move(b1));
+}
+
+// Checks that lowering the capacity while buffers are out takes effect as they come back: the first
+// return covers the capacity that was taken away and its buffer is freed rather than kept.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_pool_capacity_shrinks_while_buffers_are_out) {
+    abort_source as;
+    write_buffer_pool pool(make_test_write_buffer_pool_config(2, 2));
+    auto stop_pool = seastar::defer([&pool] noexcept { pool.stop().get(); });
+
+    auto b0 = pool.allocate(as).get();
+    auto b1 = pool.allocate(as).get();
+
+    pool.set_capacity(1);
+    BOOST_REQUIRE_EQUAL(pool.capacity(), 1u);
+
+    close_and_return(std::move(b0));
+    BOOST_REQUIRE_EQUAL(pool.allocated_buffer_count(), 1u);
+
+    auto waiting = pool.allocate(as);
+    seastar::thread::yield();
+    BOOST_REQUIRE(!waiting.available());
+
+    close_and_return(std::move(b1));
+    auto b2 = waiting.get();
+    BOOST_REQUIRE_EQUAL(pool.used_buffer_count(), 1u);
+    BOOST_REQUIRE_EQUAL(pool.allocated_buffer_count(), 1u);
+
+    close_and_return(std::move(b2));
+}
+
+// Checks that a compaction that fails after rewriting records into its buffer returns the buffer to
+// the pool, so that later compactions - and shutdown, which waits for the pool to drain - are not
+// blocked by it.
+SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_the_pool) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_compaction_group_handle cg(schema, ls, ls.get_segment_manager().get_segment_size());
+    auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(cg).get());
+
+    auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
+    auto pk1_v0 = make_kv_mutation(schema, "pk1", "v1", api::timestamp_type(2));
+    auto pk0_v1 = make_kv_mutation(schema, "pk0", "v0-new", api::timestamp_type(3));
+
+    write_and_flush_segment(ls, cg, pk0_v0);
+    write_and_flush_segment(ls, cg, pk1_v0);
+    write_and_flush_segment(ls, cg, pk0_v1);
+
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 3u);
+
+    const auto pk0 = primary_index_key{pk0_v1.decorated_key()};
+    const auto pk1 = primary_index_key{pk1_v0.decorated_key()};
+
+    auto pk0_before = cg.logstor_index().get(pk0);
+    auto pk1_before = cg.logstor_index().get(pk1);
+    BOOST_REQUIRE(pk0_before);
+    BOOST_REQUIRE(pk1_before);
+
+    // The first compaction fails right after rewriting a record, leaving records in its buffer that
+    // will never be flushed.
+    utils::get_local_injector().enable("logstor_compaction_fail_after_rewrite", true /* one shot */);
+
+    setup_guard.reset();
+    ls.get_compaction_manager().submit(cg);
+    setup_guard = ls.get_compaction_manager().disable_compaction(cg).get();
+
+    // Nothing was flushed, so the group and the index are unchanged.
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 3u);
+    BOOST_REQUIRE(cg.logstor_index().get(pk0)->location == pk0_before->location);
+    BOOST_REQUIRE(cg.logstor_index().get(pk1)->location == pk1_before->location);
+
+    // The buffer of the failed compaction is back in the pool, so this one runs to completion.
+    setup_guard.reset();
+    ls.get_compaction_manager().submit(cg);
+    auto compaction_guard = ls.get_compaction_manager().disable_compaction(cg).get();
+
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 1u);
+
+    auto pk0_after = cg.logstor_index().get(pk0);
+    auto pk1_after = cg.logstor_index().get(pk1);
+    BOOST_REQUIRE(pk0_after);
+    BOOST_REQUIRE(pk1_after);
+    BOOST_REQUIRE(pk0_after->location != pk0_before->location);
+    BOOST_REQUIRE(pk1_after->location != pk1_before->location);
+
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get()).is_equal_to(pk1_v0);
+}
+
+// Checks that a compaction whose index updates fail returns its buffer to the pool. This failure
+// surfaces only after the output segment was written, so it lands after flush() handed the pending
+// updates to when_all_succeed() - which moves them out of the vector. That is the path where a
+// teardown still walking that vector would operate on moved-from futures.
+SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_failing_index_update_returns_its_buffer_to_the_pool) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_compaction_group_handle cg(schema, ls, ls.get_segment_manager().get_segment_size());
+    auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(cg).get());
+
+    auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
+    auto pk1_v0 = make_kv_mutation(schema, "pk1", "v1", api::timestamp_type(2));
+    auto pk0_v1 = make_kv_mutation(schema, "pk0", "v0-new", api::timestamp_type(3));
+
+    write_and_flush_segment(ls, cg, pk0_v0);
+    write_and_flush_segment(ls, cg, pk1_v0);
+    write_and_flush_segment(ls, cg, pk0_v1);
+
+    const auto pk0 = primary_index_key{pk0_v1.decorated_key()};
+    const auto pk1 = primary_index_key{pk1_v0.decorated_key()};
+
+    utils::get_local_injector().enable("logstor_compaction_fail_index_update", true /* one shot */);
+
+    setup_guard.reset();
+    ls.get_compaction_manager().submit(cg);
+    setup_guard = ls.get_compaction_manager().disable_compaction(cg).get();
+
+    // The records are readable whichever location the index kept for them.
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get()).is_equal_to(pk1_v0);
+
+    // The buffer of the failed compaction is back in the pool, so compaction still runs.
+    setup_guard.reset();
+    ls.get_compaction_manager().submit(cg);
+    auto compaction_guard = ls.get_compaction_manager().disable_compaction(cg).get();
+
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk0.dk, schema->full_slice()).get()).is_equal_to(pk0_v1);
+    assert_that(*ls.read(*schema, cg.logstor_index(), pk1.dk, schema->full_slice()).get()).is_equal_to(pk1_v0);
 }
 
 // Checks that primary_index accounting callbacks track live bytes across

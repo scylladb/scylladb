@@ -20,6 +20,8 @@
 #include <ranges>
 #include <optional>
 #include <vector>
+#include <functional>
+#include <utility>
 
 namespace replica {
 class table;
