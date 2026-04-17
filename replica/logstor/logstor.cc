@@ -103,14 +103,14 @@ future<> logstor::write(const mutation& m, compaction_group& cg, seastar::gate::
         .mut = canonical_mutation(m)
     };
 
-    return _write_buffer.write(std::move(record), &cg, std::move(cg_holder)).then_unpack([this, &index, ts, key = std::move(key)]
+    return _write_buffer.write(std::move(record), &cg, std::move(cg_holder)).then_unpack([this, index_ptr = &index, ts, key = std::move(key)]
             (log_location location, seastar::gate::holder op) {
         index_entry new_entry {
             .location = location,
             .timestamp = ts,
         };
 
-        auto [inserted, prev_entry] = index.insert(key, std::move(new_entry));
+        auto [inserted, prev_entry] = index_ptr->insert(key, std::move(new_entry));
 
         if (!inserted) {
             // A newer entry already exists; free the record we just wrote.
