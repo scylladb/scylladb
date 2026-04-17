@@ -1365,7 +1365,12 @@ struct compaction_buffer {
     write_buffer* buf = nullptr;
     compaction_group& cg;
     std::vector<future<>> pending_updates;
-    size_t flush_count{0};
+
+    struct stats {
+        size_t flush_count{0};
+        size_t records_rewritten{0};
+        size_t records_skipped{0};
+    } stats;
 
     explicit compaction_buffer(segment_manager_impl& sm, compaction_group& cg)
         : sm(sm), cg(cg)
@@ -1379,7 +1384,7 @@ struct compaction_buffer {
 
     compaction_buffer(compaction_buffer&& o) noexcept
         : sm(o.sm), buf(std::exchange(o.buf, nullptr)), cg(o.cg)
-        , pending_updates(std::move(o.pending_updates)), flush_count(o.flush_count) {}
+        , pending_updates(std::move(o.pending_updates)), stats(o.stats) {}
 
     ~compaction_buffer() {
         if (buf) {
@@ -1392,7 +1397,7 @@ struct compaction_buffer {
 
     future<> flush() {
         if (buf->has_data()) {
-            flush_count++;
+            stats.flush_count++;
             co_await sm.write_full_segment(*buf, cg, write_source::compaction);
             logstor_logger.trace("Compaction buffer flushed with {} bytes", buf->net_data_size());
         }
@@ -1411,8 +1416,7 @@ struct compaction_buffer {
     // Rewrite a single live record into this buffer, updating the index atomically.
     // Returns immediately after queuing the write; caller must co_await close()/flush()
     // to ensure all pending updates complete.
-    future<> rewrite_record(primary_index& index, log_location read_location, log_record record,
-                             size_t& records_rewritten, size_t& records_skipped) {
+    future<> rewrite_record(primary_index& index, log_location read_location, log_record record) {
         auto* index_ptr = &index;
         auto key = record.header.key;
         log_record_writer writer(std::move(record));
@@ -1422,16 +1426,16 @@ struct compaction_buffer {
         }
 
         auto write_and_update_index = buf->write(std::move(writer)).then_unpack(
-                [this, index_ptr, key = std::move(key), read_location, &records_rewritten, &records_skipped]
+                [this, index_ptr, key = std::move(key), read_location]
                 (log_location new_location, seastar::gate::holder op) {
 
             if (index_ptr->update_record_location(key, read_location, new_location)) {
                 sm.free_record(read_location);
-                records_rewritten++;
+                stats.records_rewritten++;
             } else {
                 // another write updated this key
                 sm.free_record(new_location);
-                records_skipped++;
+                stats.records_skipped++;
             }
         });
 
@@ -1444,28 +1448,25 @@ future<> compaction_manager_impl::compact_segments(compaction_group& cg, std::ve
 
     compaction_buffer cb(_sm, cg);
 
-    size_t records_rewritten = 0;
-    size_t records_skipped = 0;
-
     auto& index = cg.get_logstor_index();
 
     co_await _sm.for_each_record(segments,
-        [&index, &records_skipped] (log_location read_location, const log_record_header& record_header) -> want_data {
+        [&index, &cb] (log_location read_location, const log_record_header& record_header) -> want_data {
             if (!index.is_record_alive(record_header.key, read_location)) {
-                records_skipped++;
+                cb.stats.records_skipped++;
                 return want_data::no;
             }
             return want_data::yes;
         },
-        [&index, &records_rewritten, &records_skipped, &cb] (log_location read_location, log_record record) -> future<> {
-            co_await cb.rewrite_record(index, read_location, std::move(record), records_rewritten, records_skipped);
+        [&index, &cb] (log_location read_location, log_record record) -> future<> {
+            co_await cb.rewrite_record(index, read_location, std::move(record));
         }
     );
 
     co_await cb.close();
 
     logstor_logger.debug("Compaction complete: {} records rewritten, {} skipped from {} segments, flushed {} times",
-                       records_rewritten, records_skipped, segments.size(), cb.flush_count);
+                       cb.stats.records_rewritten, cb.stats.records_skipped, segments.size(), cb.stats.flush_count);
 
     // wait for read operations that use the old locations
     co_await index.await_pending_reads();
@@ -1482,13 +1483,13 @@ future<> compaction_manager_impl::compact_segments(compaction_group& cg, std::ve
         }
     }
 
-    size_t new_segments = segments.size() > cb.flush_count ? segments.size() - cb.flush_count : 0;
+    size_t new_segments = segments.size() > cb.stats.flush_count ? segments.size() - cb.stats.flush_count : 0;
     _stats.segments_compacted += segments.size();
     _stats.compaction_segments_freed += new_segments;
-    _stats.compaction_records_rewritten += records_rewritten;
-    _stats.compaction_records_skipped += records_skipped;
+    _stats.compaction_records_rewritten += cb.stats.records_rewritten;
+    _stats.compaction_records_skipped += cb.stats.records_skipped;
 
-    _controller.update(cb.flush_count, new_segments);
+    _controller.update(cb.stats.flush_count, new_segments);
 }
 
 void compaction_manager_impl::controller::update(size_t segment_write_count, size_t new_segments) {
@@ -1556,20 +1557,16 @@ future<> compaction_manager_impl::split_compaction(replica::table& t, compaction
 
         std::array<compaction_buffer, 2> bufs{compaction_buffer{_sm, src}, compaction_buffer{_sm, src}};
 
-        size_t records_rewritten = 0;
-        size_t records_skipped = 0;
-
         co_await _sm.for_each_record(batch,
-            [&index, &records_skipped] (log_location read_location, const log_record_header& record_header) -> want_data {
+            [&index] (log_location read_location, const log_record_header& record_header) -> want_data {
                 if (!index.is_record_alive(record_header.key, read_location)) {
-                    records_skipped++;
                     return want_data::no;
                 }
                 return want_data::yes;
             },
-            [&index, &records_rewritten, &records_skipped, &bufs, &classifier] (log_location read_location, log_record record) -> future<> {
+            [&index, &bufs, &classifier] (log_location read_location, log_record record) -> future<> {
                 auto& cb = bufs[classifier(record.header.key.dk.token())];
-                co_await cb.rewrite_record(index, read_location, std::move(record), records_rewritten, records_skipped);
+                co_await cb.rewrite_record(index, read_location, std::move(record));
             }
         );
 
@@ -1577,8 +1574,8 @@ future<> compaction_manager_impl::split_compaction(replica::table& t, compaction
             co_await cb.close();
         }
 
-        logstor_logger.debug("Split compaction: {} records rewritten, {} skipped from {} segments",
-                             records_rewritten, records_skipped, batch.size());
+        logstor_logger.debug("Split compaction: flushed [{}, {}] times from {} segments",
+                             bufs[0].stats.flush_count, bufs[1].stats.flush_count, batch.size());
 
         // All records are safely written to new segments in src.
         // Await pending reads before freeing the source segments.
