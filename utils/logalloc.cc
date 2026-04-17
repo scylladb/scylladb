@@ -438,7 +438,7 @@ private:
                 break;
             }
             _reclaim(free_memory_threshold - memory::free_memory());
-            co_await coroutine::maybe_yield();
+            co_await seastar::coroutine::maybe_yield();
         }
         llogger.debug("background_reclaimer::main_loop: exit");
     }

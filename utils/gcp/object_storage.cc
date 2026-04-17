@@ -352,7 +352,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                 auto content = co_await util::read_entire_stream_contiguous(_in);
                 auto error_msg = get_gcp_error_message(std::string_view(content));
                 gcp_storage.debug("Got unexpected response status: {}, content: {}", rep._status, content);
-                co_await coroutine::return_exception_ptr(std::make_exception_ptr(httpd::unexpected_status_error(rep._status)));
+                co_await seastar::coroutine::return_exception_ptr(std::make_exception_ptr(httpd::unexpected_status_error(rep._status)));
                 }
 
             std::exception_ptr eptr;
@@ -366,7 +366,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                 eptr = std::current_exception();
             }
             if (eptr) {
-                co_await coroutine::return_exception_ptr(std::move(eptr));
+                co_await seastar::coroutine::return_exception_ptr(std::move(eptr));
             }
         };
         object_storage_retry_strategy retry_strategy(10,10ms,10000ms, as);

@@ -136,7 +136,7 @@ public:
                 _map.erase(_map.begin());
             }
             if (++ret % evictions_per_yield == 0) {
-                co_await coroutine::maybe_yield();
+                co_await seastar::coroutine::maybe_yield();
             }
         }
         co_return ret;

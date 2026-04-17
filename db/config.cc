@@ -2094,7 +2094,7 @@ future<gms::inet_address> resolve(const config_file::named_value<sstring>& addre
         }
     }
 
-    co_return coroutine::exception(std::move(ex));
+    co_return seastar::coroutine::exception(std::move(ex));
 }
 
 static std::vector<seastar::metrics::relabel_config> get_relable_from_yaml(const YAML::Node& yaml, const std::string& name) {

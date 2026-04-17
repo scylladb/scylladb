@@ -84,7 +84,7 @@ future<std::optional<directory_entry>> directory_lister::get() {
         _gen.emplace(_opened.experimental_list_directory());
     }
     if (!_gen) {
-        co_return coroutine::exception(std::make_exception_ptr(seastar::broken_pipe_exception()));
+        co_return seastar::coroutine::exception(std::make_exception_ptr(seastar::broken_pipe_exception()));
     }
     std::exception_ptr ex;
     try {
@@ -114,7 +114,7 @@ future<std::optional<directory_entry>> directory_lister::get() {
     _gen.reset();
     if (ex) {
         co_await _opened.close();
-        co_return coroutine::exception(std::move(ex));
+        co_return seastar::coroutine::exception(std::move(ex));
     }
     co_return std::nullopt;
 }

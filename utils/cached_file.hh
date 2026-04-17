@@ -566,7 +566,7 @@ public:
             }
             if (need_preempt() && i != _cache.end()) {
                 auto key = i->idx;
-                co_await coroutine::maybe_yield();
+                co_await seastar::coroutine::maybe_yield();
                 i = _cache.lower_bound(key);
             }
         }

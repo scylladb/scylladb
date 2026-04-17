@@ -83,7 +83,7 @@ directories::directories(bool developer_mode)
 future<> directories::create_and_verify(directories::set dir_set, recursive recursive) {
     std::vector<file_lock> locks;
     locks.reserve(dir_set.get_paths().size());
-    co_await coroutine::parallel_for_each(dir_set.get_paths(), [this, &locks, recursive] (fs::path path) -> future<> {
+    co_await seastar::coroutine::parallel_for_each(dir_set.get_paths(), [this, &locks, recursive] (fs::path path) -> future<> {
         file_lock lock = co_await touch_and_lock(path);
         locks.emplace_back(std::move(lock));
         co_await disk_sanity(path, _developer_mode);
@@ -144,7 +144,7 @@ future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse,
             co_return;
         }
         auto lister = directory_lister(path, lister::dir_entry_types::full(), do_verify_subpath, lister::show_hidden::no);
-        co_await with_closeable(std::move(lister), coroutine::lambda([&] (auto& lister) -> future<> {
+        co_await with_closeable(std::move(lister), seastar::coroutine::lambda([&] (auto& lister) -> future<> {
             while (auto de = co_await lister.get()) {
                 co_await do_verify_owner_and_mode(path / de->name, recurse, level + 1, do_verify_subpath);
             }
@@ -168,7 +168,7 @@ future<> directories::verify_owner_and_mode(fs::path path, recursive recursive) 
 future<> directories::verify_owner_and_mode_of_data_dir(directories::set dir_set) {
     // verify data and index files in the first iteration and the other files in the second iteration.
     for (auto verify_data_and_index_files : { true, false }) {
-        co_await coroutine::parallel_for_each(dir_set.get_paths(), [verify_data_and_index_files] (const auto &path) {
+        co_await seastar::coroutine::parallel_for_each(dir_set.get_paths(), [verify_data_and_index_files] (const auto &path) {
             return do_verify_owner_and_mode(std::move(path), recursive::yes, 0, [verify_data_and_index_files] (const fs::path& dir, const directory_entry& de) {
                 auto path = dir / de.name;
                 component_type path_component_type;

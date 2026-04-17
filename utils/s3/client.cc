@@ -355,7 +355,7 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
                 should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
-            co_await coroutine::return_exception_ptr(std::make_exception_ptr(
+            co_await seastar::coroutine::return_exception_ptr(std::make_exception_ptr(
                 aws::aws_exception(aws_error(possible_error->get_error_type(), possible_error->get_error_message().c_str(), should_retry))));
         }
 
@@ -374,7 +374,7 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
             eptr = std::current_exception();
         }
         if (eptr) {
-            co_await coroutine::return_exception_ptr(std::make_exception_ptr(aws::aws_exception(aws_error::from_exception_ptr(eptr))));
+            co_await seastar::coroutine::return_exception_ptr(std::make_exception_ptr(aws::aws_exception(aws_error::from_exception_ptr(eptr))));
         }
     };
 }
@@ -555,7 +555,7 @@ future<> client::put_object_tagging(sstring object_name, tag_set tagging, seasta
         }
         co_await output.close();
         if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
+            co_await seastar::coroutine::return_exception_ptr(std::move(ex));
         }
     });
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::ok, as);
@@ -625,7 +625,7 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf, sea
         }
         co_await out.close();
         if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
+            co_await seastar::coroutine::return_exception_ptr(std::move(ex));
         }
     });
     co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
@@ -651,7 +651,7 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
         }
         co_await out.close();
         if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
+            co_await seastar::coroutine::return_exception_ptr(std::move(ex));
         }
     });
     co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
@@ -901,7 +901,7 @@ future<> dump_multipart_upload_parts(output_stream<char> out, const utils::chunk
     }
     co_await out.close();
     if (ex) {
-        co_await coroutine::return_exception_ptr(std::move(ex));
+        co_await seastar::coroutine::return_exception_ptr(std::move(ex));
     }
 }
 
@@ -917,7 +917,7 @@ future<> client::multipart_upload::start_upload() {
         auto body = co_await util::read_entire_stream_contiguous(in);
         _upload_id = parse_multipart_upload_id(body);
         if (_upload_id.empty()) {
-            co_await coroutine::return_exception(std::runtime_error("cannot initiate upload"));
+            co_await seastar::coroutine::return_exception(std::runtime_error("cannot initiate upload"));
         }
         s3l.trace("created uploads for {} -> id = {}", _object_name, _upload_id);
     }, http::reply::status_type::ok, _as);
@@ -952,7 +952,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         }
         co_await out.close();
         if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
+            co_await seastar::coroutine::return_exception_ptr(std::move(ex));
         }
         // note: At this point the buffers are sent, but the response is not yet
         // received. However, claim is released and next part may start uploading
@@ -1001,7 +1001,7 @@ future<> client::multipart_upload::finalize_upload() {
 
     unsigned parts_xml_len = prepare_multipart_upload_parts(_part_etags);
     if (parts_xml_len == 0) {
-        co_await coroutine::return_exception(std::runtime_error("Failed to parse ETag list. Aborting multipart upload."));
+        co_await seastar::coroutine::return_exception(std::runtime_error("Failed to parse ETag list. Aborting multipart upload."));
     }
 
     s3l.trace("POST upload completion {} parts (upload id {})", _part_etags.size(), _upload_id);
@@ -1017,15 +1017,15 @@ future<> client::multipart_upload::finalize_upload() {
         auto status_class = http::reply::classify_status(rep._status);
         std::optional<aws::aws_error> possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(payload));
         if (possible_error) {
-            co_await coroutine::return_exception(aws::aws_exception(std::move(possible_error.value())));
+            co_await seastar::coroutine::return_exception(aws::aws_exception(std::move(possible_error.value())));
         }
 
         if (status_class != http::reply::status_class::informational && status_class != http::reply::status_class::success) {
-            co_await coroutine::return_exception(aws::aws_exception(aws::aws_error::from_http_code(rep._status)));
+            co_await seastar::coroutine::return_exception(aws::aws_exception(aws::aws_error::from_http_code(rep._status)));
         }
 
         if (rep._status != http::reply::status_type::ok) {
-            co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
+            co_await seastar::coroutine::return_exception(httpd::unexpected_status_error(rep._status));
         }
         // If we reach this point it means the request succeeded. However, the body payload was already consumed, so no response handler was invoked. At
         // this point it is ok since we are not interested in parsing this particular response
@@ -1459,7 +1459,7 @@ auto client::download_source::request_body() -> future<external_body> {
     (void)_client->make_request(std::move(req), [this, &p] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         s3l.trace("GET {} got the body ({} {} bytes)", _object_name, rep._status, rep.content_length);
         if (rep._status != http::reply::status_type::partial_content && rep._status != http::reply::status_type::ok) {
-            co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
+            co_await seastar::coroutine::return_exception(httpd::unexpected_status_error(rep._status));
         }
 
         auto in = std::move(in_);
@@ -1549,7 +1549,7 @@ class client::do_upload_file : private multipart_upload {
         co_await output.close();
         co_await input.close();
         if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
+            co_await seastar::coroutine::return_exception_ptr(std::move(ex));
         }
     }
 
@@ -1824,7 +1824,7 @@ future<> client::close() {
         _creds_invalidation_timer.cancel();
         _creds_update_timer.cancel();
     }
-    co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
+    co_await seastar::coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
         co_await it.second.http.close();
     });
 
@@ -1935,7 +1935,7 @@ future<std::optional<directory_entry>> client::bucket_lister::get() {
     }
     co_await close();
     if (ex) {
-        co_return coroutine::exception(std::move(ex));
+        co_return seastar::coroutine::exception(std::move(ex));
     }
     co_return std::nullopt;
 }
