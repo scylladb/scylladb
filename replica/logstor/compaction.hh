@@ -13,6 +13,8 @@
 #include "utils/log_heap.hh"
 #include <seastar/coroutine/maybe_yield.hh>
 #include "mutation_writer/token_group_based_splitting_writer.hh"
+#include <functional>
+#include <utility>
 
 namespace replica {
 class table;
@@ -151,15 +153,82 @@ private:
     {}
 };
 
+class owned_write_buffer {
+    write_buffer* _buf = nullptr;
+    std::function<future<>(write_buffer*)> _release;
+
+    void background_release() noexcept {
+        if (!_buf) {
+            return;
+        }
+        auto* buf = std::exchange(_buf, nullptr);
+        if (!_release) {
+            return;
+        }
+        (void)futurize_invoke(_release, buf).handle_exception([] (std::exception_ptr ep) {
+            logstor_logger.error("Failed to release write buffer: {}", ep);
+        });
+    }
+
+public:
+    owned_write_buffer() = default;
+
+    owned_write_buffer(write_buffer* buf, std::function<future<>(write_buffer*)> release)
+        : _buf(buf), _release(std::move(release)) {}
+
+    ~owned_write_buffer() {
+        background_release();
+    }
+
+    owned_write_buffer(const owned_write_buffer&) = delete;
+    owned_write_buffer& operator=(const owned_write_buffer&) = delete;
+
+    owned_write_buffer(owned_write_buffer&& o) noexcept
+        : _buf(std::exchange(o._buf, nullptr)), _release(std::move(o._release)) {}
+
+    owned_write_buffer& operator=(owned_write_buffer&& o) noexcept {
+        if (this != &o) {
+            background_release();
+            _buf = std::exchange(o._buf, nullptr);
+            _release = std::move(o._release);
+        }
+        return *this;
+    }
+
+    future<> release() {
+        if (!_buf) {
+            co_return;
+        }
+        auto* buf = std::exchange(_buf, nullptr);
+        co_await _release(buf);
+    }
+
+    write_buffer* get() const noexcept {
+        return _buf;
+    }
+
+    write_buffer& operator*() const noexcept {
+        return *_buf;
+    }
+
+    write_buffer* operator->() const noexcept {
+        return _buf;
+    }
+
+    explicit operator bool() const noexcept {
+        return _buf != nullptr;
+    }
+};
+
 struct separator_buffer {
-    write_buffer* buf;
+    owned_write_buffer buf;
     utils::chunked_vector<future<>> pending_updates;
     utils::chunked_vector<segment_ref> held_segments;
     std::optional<segment_sequence> min_seq_num;
     bool flushed{false};
 
-    separator_buffer(write_buffer* wb)
-        : buf(wb)
+    separator_buffer(owned_write_buffer wb)
+        : buf(std::move(wb))
     {}
 
     ~separator_buffer() {

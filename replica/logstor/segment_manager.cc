@@ -35,6 +35,7 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/util/memory-data-source.hh>
 #include <seastar/core/condition-variable.hh>
+#include <string_view>
 #include "replica/logstor/write_buffer.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/serialized_action.hh"
@@ -552,6 +553,53 @@ public:
     }
 };
 
+// Fixed-size pool of write_buffer's.
+// The size of the pool is determined at construction and cannot be changed.
+class write_buffer_pool {
+    std::vector<write_buffer> _pool;
+    std::vector<write_buffer*> _available;
+
+public:
+
+    write_buffer_pool(size_t count, size_t buffer_size, segment_kind kind) {
+        _available.reserve(count);
+        _pool.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            _pool.emplace_back(buffer_size, kind);
+            _available.push_back(&_pool.back());
+        }
+    }
+
+    owned_write_buffer allocate(std::string_view buffer_name) {
+        if (_available.empty()) {
+            throw std::runtime_error(fmt::format("No available {}", buffer_name));
+        }
+        auto* wb = _available.back();
+        _available.pop_back();
+        return owned_write_buffer(wb, [this] (write_buffer* wb) -> future<> {
+            return release(wb);
+        });
+    }
+
+    future<> release(write_buffer* wb) {
+        co_await wb->close();
+        wb->reset();
+        _available.push_back(wb);
+    }
+
+    size_t size() const noexcept {
+        return _pool.size();
+    }
+
+    size_t available_buffer_count() const noexcept {
+        return _available.size();
+    }
+
+    size_t used_buffer_count() const noexcept {
+        return _pool.size() - _available.size();
+    }
+};
+
 class segment_manager_impl {
 
     struct stats {
@@ -597,11 +645,8 @@ class segment_manager_impl {
 
     static constexpr size_t separator_flush_max_concurrency = 4;
 
-    std::vector<write_buffer> _compaction_buffer_pool;
-    std::vector<write_buffer*> _available_compaction_buffers;
-
-    std::vector<write_buffer> _separator_buffer_pool;
-    std::vector<write_buffer*> _available_separator_buffers;
+    write_buffer_pool _compaction_buffer_pool;
+    write_buffer_pool _separator_buffer_pool;
 
     std::function<void()> _trigger_compaction_fn;
     std::function<void(segment_sequence)> _trigger_separator_flush_fn;
@@ -811,29 +856,13 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _max_segments((config.disk_size / config.file_size) * _segments_per_file)
     , _segment_pool(segment_pool_size, config.max_segments_per_compaction)
     , _segment_descs(_max_segments)
+    // at most a single compaction/split running at a time
+    // and at most two buffers used at a time by split.
+    , _compaction_buffer_pool(2, config.segment_size, segment_kind::full)
+     , _separator_buffer_pool(config.max_separator_memory / config.segment_size, config.segment_size, segment_kind::full)
     {
 
     _free_segments.reserve(_max_segments);
-
-    // pre-allocate write buffers for compaction
-    // at most a single compaction/split running at a time
-    // and at most two buffers used at a time by split.
-    size_t compaction_buffer_count = 2;
-    _available_compaction_buffers.reserve(compaction_buffer_count);
-    _compaction_buffer_pool.reserve(compaction_buffer_count);
-    for (size_t i = 0; i < compaction_buffer_count; ++i) {
-        _compaction_buffer_pool.emplace_back(config.segment_size, segment_kind::full);
-        _available_compaction_buffers.push_back(&_compaction_buffer_pool.back());
-    }
-
-    // pre-allocate write buffers for separator
-    size_t separator_buffer_count = _cfg.max_separator_memory / _cfg.segment_size;
-    _available_separator_buffers.reserve(separator_buffer_count);
-    _separator_buffer_pool.reserve(separator_buffer_count);
-    for (size_t i = 0; i < separator_buffer_count; ++i) {
-        _separator_buffer_pool.emplace_back(config.segment_size, segment_kind::full);
-        _available_separator_buffers.push_back(&_separator_buffer_pool.back());
-    }
 
     namespace sm = seastar::metrics;
 
@@ -888,7 +917,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of times the separator buffer has been flushed.")),
         sm::make_counter("separator_segments_freed", _compaction_mgr.get_stats().separator_segments_freed,
                        sm::description("Counts number of segments freed by the separator.")),
-        sm::make_gauge("separator_buffers_in_use", [this]() { return _separator_buffer_pool.size() - _available_separator_buffers.size(); },
+        sm::make_gauge("separator_buffers_in_use", [this]() { return _separator_buffer_pool.used_buffer_count(); },
                        sm::description("Current number of separator buffers in use.")),
         sm::make_gauge("separator_flow_control_delay", [this]() { return calculate_separator_delay().count(); },
                        sm::description("Current delay applied to writes to control separator debt in microseconds.")),
@@ -1362,7 +1391,7 @@ future<> compaction_manager_impl::do_compact(compaction_group& cg, abort_source&
 // the buffer is flushed when the next record doesn't fit and on close().
 struct compaction_buffer {
     segment_manager_impl& sm;
-    write_buffer* buf = nullptr;
+    owned_write_buffer buf;
     compaction_group& cg;
     std::vector<future<>> pending_updates;
 
@@ -1373,27 +1402,14 @@ struct compaction_buffer {
     } stats;
 
     explicit compaction_buffer(segment_manager_impl& sm, compaction_group& cg)
-        : sm(sm), cg(cg)
-    {
-        if (sm._available_compaction_buffers.empty()) {
-            throw std::runtime_error("No available compaction buffers");
-        }
-        buf = sm._available_compaction_buffers.back();
-        sm._available_compaction_buffers.pop_back();
-    }
+        : sm(sm)
+        , buf(sm._compaction_buffer_pool.allocate("compaction buffer"))
+        , cg(cg)
+    {}
 
     compaction_buffer(compaction_buffer&& o) noexcept
-        : sm(o.sm), buf(std::exchange(o.buf, nullptr)), cg(o.cg)
+        : sm(o.sm), buf(std::move(o.buf)), cg(o.cg)
         , pending_updates(std::move(o.pending_updates)), stats(o.stats) {}
-
-    ~compaction_buffer() {
-        if (buf) {
-            (void)buf->close().then([sm = &this->sm, buf = this->buf] {
-                buf->reset();
-                sm->_available_compaction_buffers.push_back(buf);
-            });
-        }
-    }
 
     future<> flush() {
         if (buf->has_data()) {
@@ -1409,8 +1425,7 @@ struct compaction_buffer {
 
     future<> close() {
         co_await flush();
-        sm._available_compaction_buffers.push_back(buf);
-        buf = nullptr;
+        co_await buf.release();
     }
 
     // Rewrite a single live record into this buffer, updating the index atomically.
@@ -1594,13 +1609,7 @@ future<> compaction_manager_impl::split_compaction(replica::table& t, compaction
 }
 
 separator_buffer compaction_manager_impl::allocate_separator_buffer() {
-    if (_sm._available_separator_buffers.empty()) {
-        throw std::runtime_error("No available separator buffers");
-    }
-    write_buffer* wb = _sm._available_separator_buffers.back();
-    _sm._available_separator_buffers.pop_back();
-
-    return separator_buffer(wb);
+    return separator_buffer(_sm._separator_buffer_pool.allocate("separator buffer"));
 }
 
 future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref seg_ref, segment_sequence segment_seq_num) {
@@ -1672,11 +1681,7 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer buf, c
         _stats.separator_buffer_flushed++;
     }
     co_await when_all_succeed(buf.pending_updates.begin(), buf.pending_updates.end());
-    co_await buf.buf->close();
-
-    auto wb = std::move(buf.buf);
-    wb->reset();
-    _sm._available_separator_buffers.push_back(std::move(wb));
+    co_await buf.buf.release();
 
     // wait for read operations that use the old locations before freeing the old segments
     co_await cg.get_logstor_index().await_pending_reads();
@@ -1688,7 +1693,7 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer buf, c
 std::chrono::microseconds segment_manager_impl::calculate_separator_delay() const {
     auto soft_limit = _separator_buffer_pool.size() / 2;
     auto hard_limit = _separator_buffer_pool.size();
-    auto used_buffers = _separator_buffer_pool.size() - _available_separator_buffers.size();
+    auto used_buffers = _separator_buffer_pool.used_buffer_count();
     if (used_buffers < soft_limit) {
         return std::chrono::microseconds(0);
     }
