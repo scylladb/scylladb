@@ -421,6 +421,7 @@
 #include "locator/types.hh"
 #include "mutation/mutation_fragment.hh"
 #include "mutation/mutation_partition.hh"
+#include "replica/database.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "schema/schema_fwd.hh"

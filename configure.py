@@ -2769,6 +2769,25 @@ def write_build_file(f,
             f.write('build {}: rust_source {}\n'.format(cc, src))
             obj = cc.replace('.cc', '.o')
             compiles[obj] = cc
+        # Sources shared between scylla (compiled with PCH) and small tests
+        # (with custom deps and partial link sets) must not use the PCH,
+        # because -fpch-instantiate-templates injects symbol references that
+        # the small test link sets cannot satisfy.
+        small_test_srcs = set()
+        for test_binary, test_deps in deps.items():
+            if not test_binary.startswith('test/'):
+                continue
+            # Only exclude PCH for tests with truly small/partial link sets.
+            # Tests that include scylla_core or similar large dep sets link
+            # against enough objects to satisfy PCH-injected symbol refs.
+            if len(test_deps) > 50:
+                continue
+            for src in test_deps:
+                if src.endswith('.cc'):
+                    small_test_srcs.add(src)
+        for src in small_test_srcs:
+            obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
+            compiles_with_pch.discard(obj)
         for obj in compiles:
             src = compiles[obj]
             seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'

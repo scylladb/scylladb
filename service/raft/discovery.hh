@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #pragma once
+#include <unordered_set>
 #include "service/raft/group0_fwd.hh"
 
 namespace service {

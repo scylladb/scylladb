@@ -11,6 +11,8 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/net/socket_defs.hh>
+#include <seastar/net/api.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>

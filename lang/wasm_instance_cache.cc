@@ -284,14 +284,3 @@ future<> instance_cache::stop() {
 }
 
 }
-
-namespace std {
-
-template <>
-struct equal_to<seastar::scheduling_group> {
-    bool operator()(seastar::scheduling_group& sg1, seastar::scheduling_group& sg2) const noexcept {
-        return sg1 == sg2;
-    }
-};
-
-}

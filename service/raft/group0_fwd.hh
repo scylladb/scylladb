@@ -9,6 +9,10 @@
 #pragma once
 
 #include <iosfwd>
+#include <variant>
+#include <vector>
+#include <seastar/core/timer.hh>
+#include <seastar/core/lowres_clock.hh>
 #include "raft/raft_fwd.hh"
 #include "gms/inet_address.hh"
 

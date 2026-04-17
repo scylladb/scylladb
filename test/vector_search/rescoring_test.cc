@@ -14,6 +14,7 @@
 #include "vector_search/vector_store_client.hh"
 #include "vs_mock_server.hh"
 #include "test/lib/cql_test_env.hh"
+#include "transport/messages/result_message.hh"
 #include "utils/rjson.hh"
 #include <boost/test/tools/old/interface.hpp>
 #include <seastar/core/seastar.hh>

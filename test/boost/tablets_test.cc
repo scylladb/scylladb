@@ -18,6 +18,7 @@
 #include "test/lib/random_utils.hh"
 #include "service/topology_mutation.hh"
 #include "service/storage_service.hh"
+#include "gms/gossiper.hh"
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>

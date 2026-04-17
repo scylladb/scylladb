@@ -9,6 +9,7 @@
 
 #include "mutation/mutation.hh"
 #include "service/storage_proxy.hh"
+#include "cql3/selection/selection.hh"
 
 BOOST_AUTO_TEST_SUITE(per_partition_rate_limit_test)
 

@@ -11,6 +11,7 @@
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
+#include "transport/messages/result_message.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"

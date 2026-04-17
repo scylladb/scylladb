@@ -18,6 +18,8 @@
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "transport/messages/result_message.hh"
+#include "cql3/result_set.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "schema/schema_builder.hh"
