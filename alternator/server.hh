@@ -56,6 +56,7 @@ class server : public peering_sharded_service<server> {
     // timeouts separately. We can create this object only once.
     updateable_timeout_config _timeout_config;
     client_options_cache_type _connection_options_keys_and_values;
+    std::optional<utils::observer<uint32_t>> _listen_socket_backlog_observer;
 
     alternator_callbacks_map _callbacks;
 
@@ -104,7 +105,7 @@ public:
             std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
             std::optional<tls::credentials_builder> creds,
             utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
-            semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
+            semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests, utils::updateable_value<uint32_t> listen_socket_backlog);
     future<> stop();
     // get_client_data() is called (on each shard separately) when the virtual
     // table "system.clients" is read. It is expected to generate a list of

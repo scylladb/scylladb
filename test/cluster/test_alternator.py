@@ -26,6 +26,7 @@ from cassandra.auth import PlainTextAuthProvider
 import threading
 import random
 import re
+import subprocess
 
 from test.cluster.util import get_replication
 from test.pylib.manager_client import ManagerClient
@@ -63,6 +64,15 @@ def full_query(table, ConsistentRead=True, **kwargs):
             ConsistentRead=ConsistentRead, **kwargs)
         items.extend(response['Items'])
     return items
+
+def get_listen_backlog(ip: str, port: int) -> int:
+    """Get the TCP listen backlog (Send-Q) for a LISTEN socket via ss."""
+    result = subprocess.check_output(['ss', '-tlnH', f'src {ip}:{port}'], text=True)
+    for line in result.strip().split('\n'):
+        cols = line.split()
+        if len(cols) >= 4:
+            return int(cols[2])  # Send-Q = listen backlog for LISTEN sockets
+    raise RuntimeError(f"No LISTEN socket found on {ip}:{port}")
 
 # FIXME: boto3 is NOT async. So all tests that use it are not really async.
 # We could use the aioboto3 library to write a really asynchronous test, or
@@ -1393,3 +1403,45 @@ async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
 
     stop_event.set()
     t.join()
+
+@pytest.mark.asyncio
+async def test_alternator_listen_socket_backlog(manager: ManagerClient):
+    """Verify that alternator_listen_socket_backlog correctly sets the OS
+       socket backlog, and that live-updating it takes effect.
+       This also serves as a sanity check that reasonable backlog values
+       (e.g. 1111, 2048) are successfully settable and accepted by the
+       kernel without being silently clamped or rejected."""
+    initial_backlog = 1111
+    https_port = 8043
+    config = {
+        **alternator_config,
+        'alternator_listen_socket_backlog': initial_backlog,
+        'alternator_https_port': https_port,
+        'alternator_encryption_options': {
+            'certificate': 'conf/scylla.crt',
+            'keyfile': 'conf/scylla.key',
+        },
+    }
+    servers = await manager.servers_add(1, config=config)
+    server = servers[0]
+    port = alternator_config['alternator_port']
+
+    # Verify the initial backlog value was applied to both HTTP and HTTPS
+    backlog = get_listen_backlog(server.ip_addr, port)
+    assert backlog == initial_backlog, \
+        f"Expected initial backlog {initial_backlog}, got {backlog}"
+    https_backlog = get_listen_backlog(server.ip_addr, https_port)
+    assert https_backlog == initial_backlog, \
+        f"Expected initial HTTPS backlog {initial_backlog}, got {https_backlog}"
+
+    # Live-update the backlog and verify it takes effect on both ports
+    updated_backlog = 2048
+    await manager.server_update_config(
+        server.server_id, 'alternator_listen_socket_backlog', updated_backlog)
+
+    async def backlog_updated():
+        if (get_listen_backlog(server.ip_addr, port) == updated_backlog and
+                get_listen_backlog(server.ip_addr, https_port) == updated_backlog):
+            return True
+        return None
+    await wait_for(backlog_updated, deadline=time.time() + 5, period=0.1)

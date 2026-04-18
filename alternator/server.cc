@@ -928,7 +928,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
         std::optional<tls::credentials_builder> creds,
         utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
-        semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+        semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests, utils::updateable_value<uint32_t> listen_socket_backlog) {
     _memory_limiter = memory_limiter;
     _enforce_authorization = std::move(enforce_authorization);
     _warn_authorization = std::move(warn_authorization);
@@ -938,18 +938,26 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
                 " must be specified in order to init an alternator HTTP server instance"));
     }
-    return seastar::async([this, addr, port, https_port, port_proxy_protocol, https_port_proxy_protocol, creds] {
+    return seastar::async([this, addr, port, https_port, port_proxy_protocol, https_port_proxy_protocol, creds, listen_socket_backlog = std::move(listen_socket_backlog)] {
         _executor.start().get();
 
+        _listen_socket_backlog_observer.emplace(listen_socket_backlog.observe([this] (const uint32_t& backlog_val) {
+            for (auto& server : _enabled_servers) {
+                server.get().set_listen_backlog(static_cast<int>(std::min(backlog_val, uint32_t(INT_MAX))));
+            }
+        }));
+        listen_options socket_listen_opts {
+            .reuse_address = true,
+            .listen_backlog = static_cast<int>(std::min(listen_socket_backlog(), uint32_t(INT_MAX))),
+        };
         if (port || port_proxy_protocol) {
             set_routes(_http_server._routes);
             _http_server.set_content_streaming(true);
             if (port) {
-                _http_server.listen(socket_address{addr, *port}).get();
+                _http_server.listen(socket_address{addr, *port}, socket_listen_opts).get();
             }
             if (port_proxy_protocol) {
-                listen_options lo;
-                lo.reuse_address = true;
+                listen_options lo = socket_listen_opts;
                 lo.proxy_protocol = true;
                 _http_server.listen(socket_address{addr, *port_proxy_protocol}, lo).get();
             }
@@ -976,11 +984,10 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 _credentials = creds->build_server_credentials();
             }
             if (https_port) {
-                _https_server.listen(socket_address{addr, *https_port}, _credentials).get();
+                _https_server.listen(socket_address{addr, *https_port}, socket_listen_opts, _credentials).get();
             }
             if (https_port_proxy_protocol) {
-                listen_options lo;
-                lo.reuse_address = true;
+                listen_options lo = socket_listen_opts;
                 lo.proxy_protocol = true;
                 _https_server.listen(socket_address{addr, *https_port_proxy_protocol}, lo, _credentials).get();
             }

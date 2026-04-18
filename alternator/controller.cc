@@ -156,7 +156,8 @@ future<> controller::start_server() {
                     _config.alternator_warn_authorization,
                     _config.alternator_max_users_query_size_in_trace_output,
                     &_memory_limiter.local().get_semaphore(),
-                    _config.max_concurrent_requests_per_shard);
+                    _config.max_concurrent_requests_per_shard,
+                    _config.alternator_listen_socket_backlog);
         }).handle_exception([this, addr, alternator_port, alternator_https_port, alternator_port_proxy_protocol, alternator_https_port_proxy_protocol] (std::exception_ptr ep) {
             logger.error("Failed to set up Alternator HTTP server on {} port {}, TLS port {}, proxy-protocol port {}, TLS proxy-protocol port {}: {}",
                     addr,

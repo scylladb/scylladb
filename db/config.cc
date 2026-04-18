@@ -1548,6 +1548,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "\t1-9: Compression levels (1 = fastest, 9 = best compression)")
     , alternator_response_compression_threshold_in_bytes(this, "alternator_response_compression_threshold_in_bytes", liveness::LiveUpdate, value_status::Used, uint64_t(4096),
             "When the compression is enabled, this value indicates the minimum size of data to compress. Smaller responses will not be compressed.")
+    , alternator_listen_socket_backlog(this, "alternator_listen_socket_backlog", liveness::LiveUpdate, value_status::Used, 1024, "The max. queue length of pending connections for socket listening to Alternator requests.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , sanitizer_report_backtrace(this, "sanitizer_report_backtrace", value_status::Used, false,
             "In debug mode, report log-structured allocator sanitizer violations with a backtrace. Slow.")

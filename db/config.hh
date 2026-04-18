@@ -507,6 +507,7 @@ public:
     named_value<uint32_t> alternator_describe_table_info_cache_validity_in_seconds;
     named_value<int> alternator_response_gzip_compression_level;
     named_value<uint32_t> alternator_response_compression_threshold_in_bytes;
+    named_value<uint32_t> alternator_listen_socket_backlog;
 
     named_value<bool> abort_on_ebadf;
 
