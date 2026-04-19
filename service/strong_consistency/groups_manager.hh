@@ -131,6 +131,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // change to be applied, so that rpc_impl::on_configuration_change can
         // abort the wait early and let the fiber re-evaluate the config.
         abort_source* config_change_waiting = nullptr;
+
+        // update() can be called repeatedly while the tablet remains in the
+        // same migration stage. Remember the stage for which we already queued
+        // a migration action on server_control_op so we don't enqueue the same
+        // stage action multiple times. Reset when the tablet leaves the stage.
+        std::optional<locator::tablet_transition_stage> migration_action_stage = std::nullopt;
     };
 
     netw::messaging_service& _ms;
