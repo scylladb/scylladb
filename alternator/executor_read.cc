@@ -1234,6 +1234,7 @@ static future<executor::request_return_type> query_vector(
         parsed::expression_cache& parsed_expr_cache) {
     schema_ptr base_schema = get_table(proxy, request);
     get_stats_from_schema(proxy, *base_schema)->api_operations.query++;
+    stats.vector_search.query++;
     tracing::add_alternator_table_name(trace_state, base_schema->cf_name());
 
     // If vector search is requested, IndexName must be given and must
@@ -1406,6 +1407,7 @@ static future<executor::request_return_type> query_vector(
         co_return api_error::validation(error_msg);
     }
     const std::vector<vector_search::primary_key>& pkeys = pkeys_result.value();
+    stats.vector_search.query_items_from_vs += pkeys.size();
 
     // For SELECT=COUNT with no filter: skip fetching from the base table and
     // just return the count of candidates returned by the vector store.
@@ -1446,7 +1448,9 @@ static future<executor::request_return_type> query_vector(
             rjson::push_back(items_json, std::move(item));
         }
         rjson::value response = rjson::empty_object();
-        rjson::add(response, "Count", rjson::value(static_cast<int>(items_json.Size())));
+        auto count = static_cast<int>(items_json.Size());
+        rjson::add(response, "Count", rjson::value(count));
+        stats.vector_search.query_returned_items += count;
         rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
         rjson::add(response, "Items", std::move(items_json));
         co_return rjson::print(std::move(response));
@@ -1474,6 +1478,7 @@ static future<executor::request_return_type> query_vector(
     // Query each primary key individually, in the order returned by the
     // vector store, to preserve vector-distance ordering in the response.
     // FIXME: do this more efficiently with a batched read that preserves ordering.
+    stats.vector_search.query_items_from_base_table += pkeys.size();
     for (const auto& pkey : pkeys) {
         std::vector<query::clustering_range> bounds{
                 base_schema->clustering_key_size() > 0
@@ -1548,7 +1553,9 @@ static future<executor::request_return_type> query_vector(
     if (select == select_type::count) {
         rjson::add(response, "Count", rjson::value(matched_count));
     } else {
-        rjson::add(response, "Count", rjson::value(static_cast<int>(items_json.Size())));
+        auto count = static_cast<int>(items_json.Size());
+        rjson::add(response, "Count", rjson::value(count));
+        stats.vector_search.query_returned_items += count;
         rjson::add(response, "Items", std::move(items_json));
     }
     rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));

@@ -81,6 +81,27 @@ public:
         batch_histogram batch_get_item_histogram;
         batch_histogram batch_write_item_histogram;
     } api_operations;
+    // Metrics for vector search operations
+    struct {
+        // Number of Query requests with VectorSearch. Note that these
+        // requests are also counted in api_operations.query.
+        uint64_t query = 0;
+        // Total number of items actually returned by vector search queries.
+        // Similar to "Count" in the results, except that when SELECT="COUNT"
+        // no items are really returned, so this metric isn't incremented.
+        uint64_t query_returned_items = 0;
+        // Total number of nearest neighbors found by the vector store
+        // (some of them may be post-filtered or re-scored and not returned).
+        uint64_t query_items_from_vs = 0;
+        // Total number of items read from the base table by vector search
+        // queries. Some vector search queries (e.g., those with
+        // SELECT="COUNT" or SELECT="ALL_PROJECTED_ATTRIBUTES") may not
+        // need to read items from the base table (what they get from the
+        // vector store is enough), so this metric isn't incremented.
+        uint64_t query_items_from_base_table = 0;
+    } vector_search;
+
+
     // Operation size metrics
     struct {
         // Item size statistics collected per table and aggregated per node.

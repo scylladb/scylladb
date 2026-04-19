@@ -326,3 +326,15 @@ The response always includes two count fields:
 > **Note:** `QueryFilter` (the legacy non-expression filter API) is **not**
 > supported for vector search queries and will be rejected with a
 > `ValidationException`. Use `FilterExpression` instead.
+
+## Metrics
+
+ScyllaDB exposes the following metrics (under the `alternator` group) for
+monitoring vector search activity:
+
+| Metric | Description |
+|--------|-------------|
+| `vector_search_query` | Number of `Query` operations that included a `VectorSearch` parameter. These are also counted in the general `operation{op="Query"}` metric. |
+| `vector_search_query_returned_items` | Total number of items returned across all vector search queries. Not incremented for `Select=COUNT` queries, since no items are actually returned in that case. |
+| `vector_search_query_items_from_vs` | Total number of nearest-neighbor candidates returned by the vector store. Some candidates may be filtered out by a `FilterExpression` and not appear in the final response. |
+| `vector_search_query_items_from_base_table` | Total number of items read from the base table by vector search queries. Queries using `Select=ALL_PROJECTED_ATTRIBUTES` without a filter, or `Select=COUNT` without a filter, bypass the base-table read entirely and do not increment this counter. |
