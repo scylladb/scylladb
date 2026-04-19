@@ -504,6 +504,14 @@ void groups_manager::maybe_update_group_configuration(raft_group_state& state, g
         .shard = this_shard_id(),
     };
 
+    const auto current_stage = trinfo ? std::optional(trinfo->stage) : std::nullopt;
+    if (state.migration_action_stage != current_stage) {
+        state.migration_action_stage.reset();
+    } else {
+        // action is already running for this stage.
+        return;
+    }
+
     if (!trinfo) {
         return;
     }
@@ -522,6 +530,8 @@ void groups_manager::maybe_update_group_configuration(raft_group_state& state, g
     if (to_add.empty() && to_del.empty()) {
         return;
     }
+
+    state.migration_action_stage = trinfo->stage;
 
     logger.debug("maybe_update_group_configuration(): "
         "starting config change fiber for raft group {} tablet {}: to_add={}, to_del={}",
@@ -631,9 +641,10 @@ void groups_manager::maybe_update_group_configuration(raft_group_state& state, g
 
             co_await retry.retry();
         }
-    }).handle_exception([id, tablet] (std::exception_ptr ep) {
+    }).handle_exception([&state, id, tablet] (std::exception_ptr ep) {
         logger.warn("maybe_update_group_configuration(): action failed for group {} tablet {}: {}",
             id, tablet, ep);
+        state.migration_action_stage.reset();
     });
 }
 
