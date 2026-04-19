@@ -406,7 +406,11 @@ commitlog_total_space_in_mb: -1
 # In short, `ms` needs more CPU during sstable writes,
 # but should behave better during reads,
 # although it might behave worse for very long clustering keys.
+#
+# `ms` sstable format works even better with `column_index_size_in_kb` set to 1,
+# so keep those two settings in sync (either both set, or both unset).
 sstable_format: ms
+column_index_size_in_kb: 1
 
 # Auto-scaling of the promoted index prevents running out of memory
 # when the promoted index grows too large (due to partitions with many rows
