@@ -16,6 +16,7 @@
 #include "index_target.hh"
 
 #include "schema/schema_fwd.hh"
+#include "locator/token_metadata_fwd.hh"
 
 #include <seastar/core/shared_ptr.hh>
 
