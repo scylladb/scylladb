@@ -2170,6 +2170,7 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
         '-DSeastar_SCHEDULING_GROUPS_COUNT=24',
         '-DSeastar_IO_URING=ON',
+        '-DSeastar_OPENSSL=OFF',
     ]
 
     if compiler_cache:

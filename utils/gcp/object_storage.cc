@@ -794,7 +794,13 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
     auto buf_size = buffer_size();
     assert(buf_size <= _position);
     auto read_pos = _position - buf_size;
-    co_await seek(read_pos + n);
+    auto new_pos = read_pos + n;
+    co_await seek(new_pos);
+    // seek() clamps position to _size, so if the requested
+    // position exceeds _size we are skipping past EOF.
+    if (new_pos > _size) {
+        throw std::runtime_error("premature end of stream");
+    }
     // And get the next buffer
     co_return co_await get();
 }

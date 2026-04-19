@@ -232,8 +232,26 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_skip_read, local_gcs_wrapper, *check_
                 auto rem = file_size - pos;
                 auto skip = tests::random::get_int(std::min(rem, size_t(100)), rem);
                 auto read = std::min(rem - skip, size_t(tests::random::get_int(31, 2048)));
-                co_await is1.skip(skip);
-                co_await is2.skip(skip);
+
+                // Both streams may throw "premature end of stream" when
+                // skipping past EOF. Verify they agree and exit the loop.
+                auto is_premature_eof = [] (seastar::future<>&& f) {
+                    try {
+                        f.get();
+                        return false;
+                    } catch (const std::runtime_error& e) {
+                        if (std::string_view(e.what()).find("premature end of stream") != std::string_view::npos) {
+                            return true;
+                        }
+                        throw;
+                    }
+                };
+                bool is1_eof = co_await is1.skip(skip).then_wrapped(is_premature_eof);
+                bool is2_eof = co_await is2.skip(skip).then_wrapped(is_premature_eof);
+                BOOST_REQUIRE_EQUAL(is1_eof, is2_eof);
+                if (is1_eof) {
+                    break;
+                }
 
                 auto b1 = co_await is1.read_exactly(read);
                 auto b2 = co_await is2.read_exactly(read);
