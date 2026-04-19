@@ -608,6 +608,10 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
             rjson::value projection = rjson::empty_object();
             rjson::add(projection, "ProjectionType", "KEYS_ONLY");
             rjson::add(entry, "Projection", std::move(projection));
+            auto sf_it = opts.find("similarity_function");
+            if (sf_it != opts.end()) {
+                rjson::add(entry, "SimilarityFunction", rjson::from_string(sf_it->second));
+            }
             // Report IndexStatus and Backfilling based on the vector store's
             // reported state: SERVING -> ACTIVE, BOOTSTRAPPING -> CREATING+Backfilling,
             // anything else (INITIALIZING, unreachable, etc.) -> CREATING.
@@ -1389,6 +1393,20 @@ static future<> wait_for_schema_agreement_after_ddl(service::migration_manager& 
     }
 }
 
+// Parses an optional SimilarityFunction field from a VectorIndexes or
+// VectorIndexUpdates entry. Returns the value or the default "COSINE" if
+// the field is absent. The "source" parameter is used in error messages.
+static std::string get_similarity_function(const rjson::value& vector_index, std::string_view source) {
+    std::string sf = get_string_attribute(vector_index, "SimilarityFunction", "COSINE");
+    static constexpr std::array<std::string_view, 3> valid_sf = {"EUCLIDEAN", "COSINE", "DOT_PRODUCT"};
+    if (!std::ranges::contains(valid_sf, std::string_view(sf))) {
+        throw api_error::validation(fmt::format(
+            "{} SimilarityFunction '{}' is not valid. Valid values are: EUCLIDEAN, COSINE, DOT_PRODUCT.",
+            source, sf));
+    }
+    return sf;
+}
+
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
             const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     throwing_assert(this_shard_id() == 0);
@@ -1609,6 +1627,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 }
             }
             int dimensions = get_dimensions(*vector_attribute_v, "VectorIndexes");
+            std::string similarity_function = get_similarity_function(v, "VectorIndexes");
             // The optional Projection parameter is only supported with
             // ProjectionType=KEYS_ONLY. Other values are not yet supported.
             const rjson::value* projection_v = rjson::find(v, "Projection");
@@ -1627,6 +1646,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
             index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
             index_options["dimensions"] = std::to_string(dimensions);
+            index_options["similarity_function"] = similarity_function;
             builder.with_index(index_metadata{sstring(index_name), index_options,
                     index_metadata_kind::custom, index_metadata::is_local_index(false)});
         }
@@ -2026,6 +2046,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                             "VectorIndexUpdates AttributeName '{}' is already the target of an existing vector index.", attribute_name));
                     }
                     int dimensions = get_dimensions(*vector_attribute_v, "VectorIndexUpdates");
+                    std::string similarity_function = get_similarity_function(it->value, "VectorIndexUpdates");
                     // The optional Projection parameter is only supported with
                     // ProjectionType=KEYS_ONLY. Other values are not yet supported.
                     const rjson::value* projection_v = rjson::find(it->value, "Projection");
@@ -2046,6 +2067,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
                     index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
                     index_options["dimensions"] = std::to_string(dimensions);
+                    index_options["similarity_function"] = similarity_function;
                     builder.with_index(index_metadata{index_name, index_options,
                             index_metadata_kind::custom, index_metadata::is_local_index(false)});
                 } else if (op == "Delete") {

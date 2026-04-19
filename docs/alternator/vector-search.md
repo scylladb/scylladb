@@ -51,6 +51,7 @@ It is a list of vector index definitions, each specifying:
 | `IndexName` | String | Unique name for this vector index. Follows the same naming rules as table names: 3–192 characters, matching the regex `[a-zA-Z0-9._-]+`. |
 | `VectorAttribute` | Structure | Describes the attribute to index (see below). |
 | `Projection` | Structure | Optional. Specifies which attributes are projected into the vector index (see below). |
+| `SimilarityFunction` | String | Optional. The distance metric used for nearest-neighbor search. See below. |
 
 **VectorAttribute fields:**
 
@@ -58,6 +59,14 @@ It is a list of vector index definitions, each specifying:
 |-------|------|-------------|
 | `AttributeName` | String | The item attribute that holds the vector. It must not be a key column. |
 | `Dimensions` | Integer | The fixed size of the vector (number of elements). |
+
+**SimilarityFunction values:**
+
+| Value | Description |
+|-------|-------------|
+| `COSINE` | Cosine similarity (angular distance). **Default when `SimilarityFunction` is omitted.** |
+| `EUCLIDEAN` | Euclidean (L2) distance. |
+| `DOT_PRODUCT` | Inner product (dot product). Useful when vectors are normalized. |
 
 **Projection fields:**
 
@@ -115,7 +124,8 @@ Each element of the list is an object with exactly one of the following keys:
   "Create": {
     "IndexName": "my-vector-index",
     "VectorAttribute": {"AttributeName": "embedding", "Dimensions": 1536},
-    "Projection": {"ProjectionType": "KEYS_ONLY"}
+    "Projection": {"ProjectionType": "KEYS_ONLY"},
+    "SimilarityFunction": "COSINE"
   }
 }
 ```
@@ -124,6 +134,9 @@ The `Projection` field in the `Create` action is optional and accepts the same
 values as the `Projection` field in `CreateTable`'s `VectorIndexes` (see above).
 Currently only `ProjectionType=KEYS_ONLY` is supported; it is also the default
 when `Projection` is omitted.
+
+The `SimilarityFunction` field is also optional and accepts the same values as
+in `CreateTable`'s `VectorIndexes` (see above). Defaults to `COSINE` when omitted.
 
 **Delete:**
 ```json
@@ -147,6 +160,9 @@ objects each containing `IndexName`, `VectorAttribute`
 (`AttributeName` + `Dimensions`), and `Projection` (`ProjectionType`).
 Currently `Projection` always contains `{"ProjectionType": "KEYS_ONLY"}`
 because that is the only supported projection type.
+If a `SimilarityFunction` was specified at index creation, it is returned
+at the index level (alongside `IndexName`, `VectorAttribute`, and `Projection`).
+When `SimilarityFunction` was not specified, `COSINE` is returned as the default.
 
 Each vector index entry also includes status fields that mirror the standard
 behavior of `GlobalSecondaryIndexes` in DynamoDB:

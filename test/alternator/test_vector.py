@@ -60,6 +60,7 @@ def vs(new_dynamodb_session, dynamodb):
                 'IndexName': {'shape': 'String'},
                 'VectorAttribute': {'shape': 'VectorAttribute'},
                 'Projection': {'shape': 'Projection'},
+                'SimilarityFunction': {'shape': 'String'},
                 # The following two fields are only returned in DescribeTable's
                 # output, not accepted in CreateTable's input.
                 'IndexStatus': {'shape': 'String'},
@@ -93,6 +94,7 @@ def vs(new_dynamodb_session, dynamodb):
                 'IndexName': {'shape': 'String'},
                 'VectorAttribute': {'shape': 'VectorAttribute'},
                 'Projection': {'shape': 'Projection'},
+                'SimilarityFunction': {'shape': 'String'},
             },
             'required': ['IndexName', 'VectorAttribute'],
         },
@@ -2158,6 +2160,122 @@ def test_query_vectorsearch_queryvector_bad_number_string(table_vs, needs_vector
                     VectorSearch={'QueryVector': {'L': [{'N': '1'}, {'N': bad_num}, {'N': '0'}]}},
                     Limit=1,
                 )
+
+# Test that when creating a vector index via UpdateTable, an optional
+# SimilarityFunction can be specified. The valid values are EUCLIDEAN,
+# COSINE, DOT_PRODUCT, and an invalid value should be rejected.
+# DescribeTable should return the SimilarityFunction that was set.
+def test_updatetable_vectorindex_similarity_function(vs):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        # A bad SimilarityFunction should be rejected:
+        with pytest.raises(ClientError, match='ValidationException.*SimilarityFunction'):
+            table.update(VectorIndexUpdates=[{'Create':
+                {'IndexName': 'ind',
+                 'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                 'SimilarityFunction': 'BAD_FUNCTION'}}])
+        # Each of the valid SimilarityFunction values should be accepted and
+        # returned by DescribeTable. We use a different attribute name for
+        # each to avoid conflicts.
+        for sf in ['EUCLIDEAN', 'COSINE', 'DOT_PRODUCT']:
+            table.update(VectorIndexUpdates=[{'Create':
+                {'IndexName': f'ind_{sf}',
+                 'VectorAttribute': {'AttributeName': f'v_{sf}', 'Dimensions': 3},
+                 'SimilarityFunction': sf}}])
+            desc = table.meta.client.describe_table(TableName=table.name)
+            indexes = {vi['IndexName']: vi for vi in desc['Table']['VectorIndexes']}
+            assert f'ind_{sf}' in indexes
+            assert indexes[f'ind_{sf}']['SimilarityFunction'] == sf
+        # Without an explicit SimilarityFunction, a default ("COSINE") is
+        # used and DescribeTable should return it:
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'ind_default',
+             'VectorAttribute': {'AttributeName': 'v_default', 'Dimensions': 3}}}])
+        desc = table.meta.client.describe_table(TableName=table.name)
+        indexes = {vi['IndexName']: vi for vi in desc['Table']['VectorIndexes']}
+        assert 'ind_default' in indexes
+        assert indexes['ind_default']['SimilarityFunction'] == 'COSINE'
+
+# Same as test_updatetable_vectorindex_similarity_function() above, but
+# for CreateTable instead of UpdateTable.
+def test_createtable_vectorindex_similarity_function(vs):
+    # A bad SimilarityFunction should be rejected:
+    with pytest.raises(ClientError, match='ValidationException.*SimilarityFunction'):
+        with new_test_table(vs,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+                VectorIndexes=[{'IndexName': 'ind',
+                                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                                'SimilarityFunction': 'BAD_FUNCTION'}]) as table:
+            pass
+    # Each of the valid SimilarityFunction values should be accepted and
+    # returned by DescribeTable.
+    for sf in ['EUCLIDEAN', 'COSINE', 'DOT_PRODUCT']:
+        with new_test_table(vs,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+                VectorIndexes=[{'IndexName': 'ind',
+                                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                                'SimilarityFunction': sf}]) as table:
+            desc = table.meta.client.describe_table(TableName=table.name)
+            indexes = {vi['IndexName']: vi for vi in desc['Table']['VectorIndexes']}
+            assert indexes['ind']['SimilarityFunction'] == sf
+    # Without an explicit SimilarityFunction, COSINE is the default and
+    # DescribeTable should return it:
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{'IndexName': 'ind',
+                            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}]) as table:
+        desc = table.meta.client.describe_table(TableName=table.name)
+        indexes = {vi['IndexName']: vi for vi in desc['Table']['VectorIndexes']}
+        assert indexes['ind']['SimilarityFunction'] == 'COSINE'
+
+# Test that the different SimilarityFunction values (EUCLIDEAN, COSINE,
+# DOT_PRODUCT) chosen during CreateTable actually work as expected in
+# subsequent vector-search queries, returning different result orders for
+# the same query vector.
+def test_createtable_query_similarity_function(vs, needs_vector_store):
+    # Choose 3 items whose nearest-neighbor under query [1, 0, 0] differs
+    # depending on the similarity function:
+    #
+    #   p_small = [0.5, 0, 0]   - perfect direction, small magnitude
+    #   p_big   = [2, 0.01, 0]  - large magnitude, nearly perfect direction
+    #   p_close = [1, 0.3, 0]   - moderate magnitude, clearly off direction
+    #
+    # Under COSINE  (angle only, higher=closer):  p_small is nearest (cosine=1.0)
+    # Under DOT_PRODUCT (inner product, higher=closer): p_big is nearest (dot=2)
+    # Under EUCLIDEAN (L2 distance, lower=closer): p_close is nearest (dist=0.3)
+    p_small = random_string()
+    p_big   = random_string()
+    p_close = random_string()
+    for sf, expected_p in [('COSINE', p_small),
+                            ('DOT_PRODUCT', p_big),
+                            ('EUCLIDEAN', p_close)]:
+        with new_test_table(vs,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+            table.put_item(Item={'p': p_small, 'v': [Decimal("0.5"), Decimal("0"),    Decimal("0")]})
+            table.put_item(Item={'p': p_big,   'v': [Decimal("2"),   Decimal("0.01"), Decimal("0")]})
+            table.put_item(Item={'p': p_close, 'v': [Decimal("1"),   Decimal("0.3"),  Decimal("0")]})
+            table.update(VectorIndexUpdates=[{'Create': {
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                'SimilarityFunction': sf,
+            }}])
+            wait_for_vector_index_active(table, 'vind')
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [Decimal("1"), Decimal("0"), Decimal("0")]},
+                Limit=1,
+                Select='ALL_PROJECTED_ATTRIBUTES',
+            )
+            assert len(result['Items']) == 1, \
+                f'Expected 1 result for SimilarityFunction={sf}'
+            assert result['Items'][0]['p'] == expected_p, \
+                f'For SimilarityFunction={sf}, expected nearest item {expected_p}, ' \
+                f'got {result["Items"][0]["p"]}'
 
 ##############################################################################
 # CONTINUE HERE - MAKE A DECISION! PRE-FILTERING:
