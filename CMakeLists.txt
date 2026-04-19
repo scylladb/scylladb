@@ -114,6 +114,7 @@ else()
     set(Seastar_IO_URING ON CACHE BOOL "" FORCE)
     set(Seastar_SCHEDULING_GROUPS_COUNT 24 CACHE STRING "" FORCE)
     set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
+    set(Seastar_OPENSSL OFF CACHE BOOL "" FORCE)
     # Match configure.py's build_seastar_shared_libs: Debug and Dev
     # build Seastar as a shared library, others build it static.
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "Dev")

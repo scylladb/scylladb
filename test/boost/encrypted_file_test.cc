@@ -578,9 +578,10 @@ static future<> test_random_data_source(std::vector<size_t> sizes) {
             auto v1 = std::string_view(read_buff.get(), size_to_compare);
             auto v2 = std::string_view(unified_buff.get() + pos, size_to_compare);
             BOOST_REQUIRE_EQUAL(v1, v2);
+            pos += size_to_compare;
             auto skip = unified_buff.size() - pos > 4113 ? 4097 : (unified_buff.size() - pos)/2;
             co_await encrypted_source.skip(skip);
-            pos += size_to_compare + skip;
+            pos += skip;
         }
         co_await encrypted_source.close();
     } catch (...) {
