@@ -249,11 +249,11 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # If all tests passed, remove the log file to save space and avoid confusion with logs from failed runs.
     # We check this at the end of the session to ensure that we have the complete log available for any failed tests.
 
-    if not is_xdist_worker: # If this is not an xdist worker there is no separate xdist main process and no pytest_main.log file
-        if session.testsfailed == 0 and not session.config.getoption("--save-log-on-success"):
-            # Use missing_ok=True because the log file is only created on first write,
-            # so it may never have been written if nothing was logged.
-            pathlib.Path(_pytest_config.stash[PYTEST_LOG_FILE]).unlink(missing_ok=True)
+    if session.testsfailed == 0 and not session.config.getoption("--save-log-on-success"):
+        # Use missing_ok=True because the log file is only created on first write,
+        # so it may never have been written if nothing was logged.
+        pathlib.Path(_pytest_config.stash[PYTEST_LOG_FILE]).unlink(missing_ok=True)
+
 
     # Check if this is an xdist worker - workers should not clean up (only the main process should)
     # Check if test.py has already prepared the environment, so it should clean up
