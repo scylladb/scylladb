@@ -77,6 +77,7 @@ async def test_staging_backlog_processed_after_restart(manager: ManagerClient):
         # Restart node0
         await manager.server_stop_gracefully(servers[0].server_id)
         await manager.server_start(servers[0].server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         # Assert that node0 has no data for base table and MV
         hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
@@ -84,6 +85,7 @@ async def test_staging_backlog_processed_after_restart(manager: ManagerClient):
         await assert_row_count_on_host(cql, hosts[0], ks, "tab", 0)
         await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
         await manager.server_start(servers[1].server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         # Repair the base table
         s0_log = await manager.server_open_log(servers[0].server_id)
@@ -98,11 +100,13 @@ async def test_staging_backlog_processed_after_restart(manager: ManagerClient):
         await assert_row_count_on_host(cql, hosts[0], ks, "tab", 1000)
         await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
         await manager.server_start(servers[1].server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         # Restart node0 with staging backlog
         s0_mark = await s0_log.mark()
         await manager.server_stop_gracefully(servers[0].server_id)
         await manager.server_start(servers[0].server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         await s0_log.wait_for(f"Processed {ks}.tab", from_mark=s0_mark, timeout=60)
         hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
