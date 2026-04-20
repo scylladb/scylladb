@@ -1356,7 +1356,7 @@ future<> server_impl::applier_fiber() {
             co_await std::visit(make_visitor(
             [this] (std::vector<log_entry_ptr>& batch) -> future<> {
                 if (batch.empty()) {
-                    logger.trace("[{}] applier fiber: received empty batch", _id);
+                    logger.trace("[{}] applier fiber[std::vector<log_entry_ptr>]: received empty batch", _id);
                     co_return;
                 }
 
@@ -1385,10 +1385,10 @@ future<> server_impl::applier_fiber() {
                     try {
                         co_await _state_machine->apply(std::move(commands));
                     } catch (abort_requested_exception& e) {
-                        logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _id, e);
+                        logger.info("[{}] applier fiber[std::vector<log_entry_ptr>]: stopped because state machine was aborted: {}", _id, e);
                         throw stop_apply_fiber{};
                     } catch (...) {
-                        logger.debug("[{}] applier fiber failed to apply commands: {}", _id, std::current_exception());
+                        logger.debug("[{}] applier fiber[std::vector<log_entry_ptr>]: failed to apply commands: {}", _id, std::current_exception());
                         std::throw_with_nested(raft::state_machine_error{});
                     }
                     _stats.applied_entries += size;
@@ -1418,25 +1418,25 @@ future<> server_impl::applier_fiber() {
                     snp.term = last_term;
                     snp.idx = _applied_idx;
                     snp.config = _fsm->log_last_conf_for(_applied_idx);
-                    logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
+                    logger.trace("[{}] applier fiber[std::vector<log_entry_ptr>]: taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
                     try {
                         snp.id = co_await _state_machine->take_snapshot();
                     } catch (abort_requested_exception& e) {
-                        logger.info("[{}] applier fiber: stopped because "
+                        logger.info("[{}] applier fiber[std::vector<log_entry_ptr>]: stopped because "
                                 "state machine was aborted during take_snapshot: {}", _id, e);
                         throw stop_apply_fiber{};
                     } catch (...) {
-                        logger.debug("[{}] applier fiber failed to take snapshot term={}, idx={}: {}", _id, snp.term, snp.idx, std::current_exception());
+                        logger.debug("[{}] applier fiber[std::vector<log_entry_ptr>]: failed to take snapshot term={}, idx={}: {}", _id, snp.term, snp.idx, std::current_exception());
                         std::throw_with_nested(raft::state_machine_error{});
                     }
-                    logger.trace("[{}] applier fiber: took snapshot term={}, idx={}, id={}", _id, snp.term, snp.idx, snp.id);
+                    logger.trace("[{}] applier fiber[std::vector<log_entry_ptr>]: took snapshot term={}, idx={}, id={}", _id, snp.term, snp.idx, snp.id);
                     // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
                     // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
                     // a later snapshot from the queue.
                     auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
                     auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
                     if (!_fsm->apply_snapshot(snp, max_trailing, max_trailing_bytes, true)) {
-                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
+                        logger.trace("[{}] applier fiber[std::vector<log_entry_ptr>]: while taking snapshot term={} idx={} id={},"
                                 " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
                     }
                     _stats.snapshots_taken++;
@@ -1445,18 +1445,18 @@ future<> server_impl::applier_fiber() {
             [this] (snapshot_descriptor& snp) -> future<> {
                 SCYLLA_ASSERT(snp.idx >= _applied_idx);
                 // Apply snapshot it to the state machine
-                logger.trace("[{}] apply_fiber applying snapshot {}", _id, snp.id);
+                logger.trace("[{}] apply_fiber[snapshot_descriptor]: applying snapshot {}", _id, snp.id);
                 try {
                     co_await _state_machine->load_snapshot(snp.id);
                 } catch (abort_requested_exception& e) {
-                    logger.info("[{}] apply_fiber: stopped because state "
+                    logger.info("[{}] apply_fiber[snapshot_descriptor]: stopped because state "
                             "machine was aborted during load_snapshot: {}", _id, e);
                     throw stop_apply_fiber{};
                 } catch (...) {
-                    logger.debug("[{}] applier fiber failed to load snapshot {}: {}", _id, snp.id, std::current_exception());
+                    logger.debug("[{}] apply_fiber[snapshot_descriptor]: failed to load snapshot {}: {}", _id, snp.id, std::current_exception());
                     std::throw_with_nested(raft::state_machine_error{});
                 }
-                logger.trace("[{}] apply_fiber applied snapshot {}", _id, snp.id);
+                logger.trace("[{}] apply_fiber[snapshot_descriptor]: applied snapshot {}", _id, snp.id);
                 drop_waiters(snp.idx);
                 _applied_idx = snp.idx;
                 _applied_index_changed.broadcast();
@@ -1477,21 +1477,21 @@ future<> server_impl::applier_fiber() {
                 snp.term = *applied_term;
                 snp.idx = _applied_idx;
                 snp.config = _fsm->log_last_conf_for(_applied_idx);
-                logger.trace("[{}] taking snapshot at term={}, idx={} due to request", _id, snp.term, snp.idx);
+                logger.trace("[{}] applier_fiber[trigger_snapshot_msg]: taking snapshot at term={}, idx={} due to request", _id, snp.term, snp.idx);
                 try {
                     snp.id = co_await _state_machine->take_snapshot();
                 } catch (abort_requested_exception& e) {
-                    logger.info("[{}] applier fiber: stopped because state "
+                    logger.info("[{}] applier fiber[trigger_snapshot_msg]: stopped because state "
                             "machine was aborted during take_snapshot: {}", _id, e);
                     throw stop_apply_fiber{};
                 } catch (...) {
-                    logger.debug("[{}] applier fiber failed to take snapshot at term={}, idx={}: {}", _id, snp.term, snp.idx, std::current_exception());
+                    logger.debug("[{}] applier fiber[trigger_snapshot_msg]: failed to take snapshot at term={}, idx={}: {}", _id, snp.term, snp.idx, std::current_exception());
                     std::throw_with_nested(raft::state_machine_error{});
                 }
-                logger.trace("[{}] applier fiber: took snapshot term={}, idx={}, id={}", _id, snp.term, snp.idx, snp.id);
+                logger.trace("[{}] applier fiber[trigger_snapshot_msg]: took snapshot term={}, idx={}, id={}", _id, snp.term, snp.idx, snp.id);
 
                 if (!_fsm->apply_snapshot(snp, 0, 0, true)) {
-                    logger.trace("[{}] while taking snapshot term={} idx={} id={} due to request,"
+                    logger.trace("[{}] applier fiber[trigger_snapshot_msg]: while taking snapshot term={} idx={} id={} due to request,"
                            " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
                 }
                 _stats.snapshots_taken++;
