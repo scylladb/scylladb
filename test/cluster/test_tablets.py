@@ -385,15 +385,19 @@ async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager:
     await manager.servers_add(2, config=config, auto_rack_dc="dc1")
     await manager.servers_add(2, config=config, auto_rack_dc="dc2")
 
+    cql = manager.get_cql()
+    servers = await manager.running_servers()
+    host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+
     async def check_rf(ks: str, expected_dc1_rf: int, expected_dc2_rf: int):
-        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
+        await read_barrier(manager.api, servers[0].ip_addr)
+        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'", host=host)
         repl = parse_replication_options(res[0].replication)
         logger.info(f"repl = {repl}")
         assert get_replica_count(repl['dc1']) == expected_dc1_rf if expected_dc1_rf > 0 else 'dc1' not in repl
         assert get_replica_count(repl['dc2']) == expected_dc2_rf if expected_dc2_rf > 0 else 'dc2' not in repl
         return repl
 
-    cql = manager.get_cql()
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
