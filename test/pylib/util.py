@@ -425,7 +425,12 @@ def execute_with_tracing(cql : Session, statement : str | Statement, log : bool 
     cql_execute_extra_kwargs['trace'] = True
     query_result = cql.execute(statement, *cql_execute_extra_args, **cql_execute_extra_kwargs)
 
-    tracing = query_result.get_all_query_traces(max_wait_sec_per=900)
+    # Tracing events are written to system_traces.events with CL=ANY, so they are
+    # only guaranteed to be present on the local node of the query coordinator.
+    # Reading them back with the driver default (CL=LOCAL_ONE) may hit a replica
+    # that has not yet received all events, causing intermittent failures.
+    # Using CL=ALL ensures events from all replicas are merged.
+    tracing = query_result.response_future.get_all_query_traces(max_wait_per=900, query_cl=ConsistencyLevel.ALL)
 
     ret = []
     page_traces = []
