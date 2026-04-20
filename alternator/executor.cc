@@ -2341,6 +2341,23 @@ void validate_value(const rjson::value& v, const char* caller) {
             // DynamoDB uses a SerializationException in this case, not ValidationException.
             throw api_error::serialization(format("{}: number value must be encoded as string '{}'", caller, v));
         }
+    } else if (type == float32vector_type_name) {
+        // Alternator-only optimized vector type (more optimized than a list-
+        // of-number). The value must be an array of numbers (floating-point
+        // JSON numbers, not strings as in the "N" type). Each element must
+        // fit in a 32-bit float.
+        if (!it->value.IsArray()) {
+            throw api_error::validation(format("{}: improperly formatted vector '{}'", caller, v));
+        }
+        for (const rjson::value& element : it->value.GetArray()) {
+            if (!element.IsNumber()) {
+                throw api_error::validation(format("{}: vector elements must be numbers, got '{}'", caller, element));
+            }
+            if (!std::isfinite(static_cast<float>(element.GetDouble()))) {
+                throw api_error::validation(format("{}: vector element '{}' cannot be represented as a 32-bit float",
+                    caller, element.GetDouble()));
+            }
+        }
     } else if (type != "L" && type != "M" && type != "BOOL" && type != "NULL") {
         // TODO: can do more sanity checks on the content of the above types.
         throw api_error::validation(fmt::format("{}: unknown type {} for value {}", caller, type, v));
@@ -2523,16 +2540,26 @@ static void validate_value_if_vector_index_attribute(
     // value is a DynamoDB typed value: an object with one member whose key
     // is the type tag. validate_value() already checked the overall shape.
     std::string_view value_type = rjson::to_string_view(value.MemberBegin()->name);
-    if (value_type != "L") {
+    if (value_type != "L" && value_type != float32vector_type_name) {
         throw api_error::validation(fmt::format(
-            "Vector index attribute '{}' must be a list of {} numbers, got type {}",
+            "Vector index attribute '{}' must be a list or vector of {} numbers, got type {}",
             attr_name, dimensions, value_type));
     }
     const rjson::value& list = value.MemberBegin()->value;
     if (!list.IsArray() || (int)list.Size() != dimensions) {
         throw api_error::validation(fmt::format(
-            "Vector index attribute '{}' must be a list of exactly {} numbers, got {} elements",
+            "Vector index attribute '{}' must be a list or vector of exactly {} numbers, got {} elements",
             attr_name, dimensions, list.IsArray() ? (int)list.Size() : -1));
+    }
+    // In the "L" case the components of the vector can be any legal "N"-type
+    // numbers (DynamoDB decimals) - so if this vector value is to be indexed
+    // we need to verify that these numbers fit in 32-bit float.
+    // In the "FLOAT32VECTOR" case we don't need to do this check here:
+    // "FLOAT32VECTOR" components are always (regardless of indexing) required
+    // to fit in 32-bit floats, so validate_value() already verified that they
+    // do.
+    if (value_type == float32vector_type_name) {
+        return;
     }
     for (const rjson::value& elem : list.GetArray()) {
         if (!elem.IsObject() || elem.MemberCount() != 1 ||

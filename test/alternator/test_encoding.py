@@ -29,6 +29,8 @@
 # - All other DynamoDB types (NULL, L, M, SS, NS, BS) are stored as type byte
 #   4 (NOT_SUPPORTED_YET) followed by the JSON encoding of the full typed
 #   DynamoDB value (e.g., {"NULL":true} or {"L":[...]}).
+# - There is also the byte 5 (FLOAT32VECTOR). This encoding is not checked
+#   in this file, it is checked in test_vector.py::test_vector_encoding.
 #
 # The order of entries in the alternator_type enum is critical: the numeric
 # value of each type is written to disk, so it must not change.

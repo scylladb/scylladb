@@ -1221,6 +1221,78 @@ calculate_bounds_condition_expression(schema_ptr schema,
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
+// Parses a vector value (of type "FLOAT32VECTOR" or "L"-of-"N") into an
+// std::vector<float>. Throws api_error::validation if the value is invalid
+// or the vector's length doesn't match the required dimensions.
+static std::vector<float> parse_vector(const rjson::value& value, int dimensions, std::string_view source) {
+    std::vector<float> out;
+    if (!value.IsObject() || value.MemberCount() != 1) {
+        throw api_error::validation(format("{} must be a value with type 'FLOAT32VECTOR' or 'L'", source));
+    }
+    const rjson::value* v = rjson::find(value, float32vector_type_name);
+    if (v) {
+        // "FLOAT32VECTOR" type: array of JSON floating-point numbers.
+        if (!v->IsArray()) {
+            throw api_error::validation(
+                format("{} FLOAT32VECTOR must be a list of numbers", source));
+        }
+        const auto& arr = v->GetArray();
+        if ((int)arr.Size() != dimensions) {
+            throw api_error::validation(
+                format("{} length {} does not match index Dimensions {}",
+                    source, arr.Size(), dimensions));
+        }
+        out.reserve(arr.Size());
+        for (const rjson::value& elem : arr) {
+            if (!elem.IsNumber()) {
+                throw api_error::validation(
+                    format("{} must contain only numbers", source));
+            }
+            float f = static_cast<float>(elem.GetDouble());
+            if (!std::isfinite(f)) {
+                throw api_error::validation(
+                    format("{} element '{}' cannot be represented as a 32-bit float",
+                        source, elem.GetDouble()));
+            }
+            out.push_back(f);
+        }
+    } else {
+        // "L" type: list of "N" numbers.
+        const rjson::value* qv_list = rjson::find(value, "L");
+        if (!qv_list || !qv_list->IsArray()) {
+            throw api_error::validation(
+                format("{} must be a list of numbers", source));
+        }
+        const auto& arr = qv_list->GetArray();
+        if ((int)arr.Size() != dimensions) {
+            throw api_error::validation(
+                format("{} length {} does not match index Dimensions {}",
+                    source, arr.Size(), dimensions));
+        }
+        out.reserve(arr.Size());
+        for (const rjson::value& elem : arr) {
+            if (!elem.IsObject()) {
+                throw api_error::validation(
+                    format("{} must contain only numbers", source));
+            }
+            const rjson::value* n_val = rjson::find(elem, "N");
+            if (!n_val || !n_val->IsString()) {
+                throw api_error::validation(
+                    format("{} must contain only numbers", source));
+            }
+            std::string_view num_str = rjson::to_string_view(*n_val);
+            float f;
+            auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), f);
+            if (ec != std::errc{} || ptr != num_str.data() + num_str.size() || !std::isfinite(f)) {
+                throw api_error::validation(
+                    format("{} element '{}' is not a valid number", source, num_str));
+            }
+            out.push_back(f);
+        }
+    }
+    return out;
+}
+
 static future<executor::request_return_type> query_vector(
         service::storage_proxy& proxy,
         vector_search::vector_store_client& vsc,
@@ -1277,49 +1349,18 @@ static future<executor::request_return_type> query_vector(
         co_return api_error::validation(
             "VectorSearch requires a VectorSearch parameter");
     }
+    // QueryVector should be a DynamoDB value of type "L" (a list of "N"
+    // numbers) or the Alternator-specific "FLOAT32VECTOR" type (an array of
+    // JSON floats). The number of elements must be exactly the "dimensions"
+    // defined for this vector index. We'll now validate all these assumptions
+    // and parse all the numbers in the vector into an std::vector<float>
+    // query_vec - the type that ann() wants.
     const rjson::value* query_vector = rjson::find(*vector_search, "QueryVector");
-    if (!query_vector || !query_vector->IsObject()) {
+    if (!query_vector) {
         co_return api_error::validation(
             "VectorSearch requires a QueryVector parameter");
     }
-    // QueryVector should be is a DynamoDB value, which must be of type "L"
-    // (a list), containing only elements of type "N" (numbers). The number
-    // of these elements must be exactly the "dimensions" defined for this
-    // vector index. We'll now validate all these assumptions and parse
-    // all the numbers in the vector into an std::vector<float> query_vec -
-    // the type that ann() wants.
-    const rjson::value* qv_list = rjson::find(*query_vector, "L");
-    if (!qv_list || !qv_list->IsArray()) {
-        co_return api_error::validation(
-            "VectorSearch QueryVector must be a list of numbers");
-    }
-    const auto& arr = qv_list->GetArray();
-    if ((int)arr.Size() != dimensions) {
-        co_return api_error::validation(
-            format("VectorSearch QueryVector length {} does not match index Dimensions {}",
-                arr.Size(), dimensions));
-    }
-    std::vector<float> query_vec;
-    query_vec.reserve(arr.Size());
-    for (const rjson::value& elem : arr) {
-        if (!elem.IsObject()) {
-            co_return api_error::validation(
-                "VectorSearch QueryVector must contain only numbers");
-        }
-        const rjson::value* n_val = rjson::find(elem, "N");
-        if (!n_val || !n_val->IsString()) {
-            co_return api_error::validation(
-                "VectorSearch QueryVector must contain only numbers");
-        }
-        std::string_view num_str = rjson::to_string_view(*n_val);
-        float f;
-        auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), f);
-        if (ec != std::errc{} || ptr != num_str.data() + num_str.size() || !std::isfinite(f)) {
-            co_return api_error::validation(
-                format("VectorSearch QueryVector element '{}' is not a valid number", num_str));
-        }
-        query_vec.push_back(f);
-    }
+    std::vector<float> query_vec = parse_vector(*query_vector, dimensions, "VectorSearch QueryVector");
 
     // Limit is mandatory for vector search: it defines k, the number of
     // nearest neighbors to return.

@@ -9,6 +9,8 @@
 
 import pytest
 import time
+import json
+import struct
 import decimal
 from decimal import Decimal
 from contextlib import contextmanager
@@ -17,8 +19,8 @@ from functools import cache
 from botocore.exceptions import ClientError
 import boto3.dynamodb.types
 
-from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, client_no_transform, is_aws
 from test.pylib.skip_types import skip_env
+from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, client_no_transform, is_aws, manual_request
 
 # Monkey-patch the boto3 library to stop doing its own error-checking on
 # numbers. This works around a bug https://github.com/boto/boto3/issues/2500
@@ -113,6 +115,19 @@ def vs(new_dynamodb_session, dynamodb):
             },
             'required': ['QueryVector'],
         },
+        # For VectorSearch.ReturnSimilarity response:
+        'SimilarityScore': {'type': 'double'},
+        'SimilaritiesList': {
+            'type': 'list',
+            'member': {'shape': 'SimilarityScore'},
+        },
+        # For the 'FLOAT32VECTOR' (optimized vector) type: a list of raw JSON
+        # numbers.
+        'Float32VectorElement': {'type': 'double'},
+        'Float32VectorAttributeValue': {
+            'type': 'list',
+            'member': {'shape': 'Float32VectorElement'},
+        },
     }
     # Register the new shapes:
     service_model = client.meta.service_model
@@ -155,7 +170,44 @@ def vs(new_dynamodb_session, dynamodb):
     output_shape._cache.pop('members', None)
     shape_resolver._shape_cache.pop('TableDescription', None)
 
+    # Add FLOAT32VECTOR (the new optimized vector type) to the AttributeValue
+    # shape, so that boto3 will accept and pass through the FLOAT32VECTOR type
+    # in requests and responses. FLOAT32VECTOR holds a list of floating-point
+    # numbers.
+    attribute_value_shape = shape_resolver.get_shape_by_name('AttributeValue')
+    attribute_value_shape._shape_model['members']['FLOAT32VECTOR'] = {'shape': 'Float32VectorAttributeValue'}
+    attribute_value_shape._cache.pop('members', None)
+    shape_resolver._shape_cache.pop('AttributeValue', None)
+
+    # Monkey-patch boto3 resource's TypeSerializer so that values of type
+    # "Vector" (a class defined below) are serialized into the JSON request as
+    # {"FLOAT32VECTOR": [1.0, ...]} (JSON numbers) instead of the standard
+    # list encoding {"L": [{"N": "1.0"}, ...]}. This allows the high-level
+    # resource interface (table.put_item etc.) to send Vector attributes
+    # without needing client_no_transform.
+    _orig_serialize = boto3.dynamodb.types.TypeSerializer.serialize
+    def _serialize_with_vector(self, value):
+        if isinstance(value, Vector):
+            return {'FLOAT32VECTOR': list(value)}
+        return _orig_serialize(self, value)
+    boto3.dynamodb.types.TypeSerializer.serialize = _serialize_with_vector
+    boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector = lambda self, value: Vector(value)
+
     yield resource
+
+    # Restore the original serialize method and remove the deserializer patch.
+    boto3.dynamodb.types.TypeSerializer.serialize = _orig_serialize
+    del boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector
+
+# Use the Vector(list) type for test values that are meant to be stored as
+# optimized vectors (array of floats instead of JSON list of numbers).
+# The serialization monkey-patching in the vs fixture will cause this list
+# to be serialized and sent to Alternator as
+# {'FLOAT32VECTOR': [1.0, 2.0, ...]}} instead of the standard list-of-numbers
+# {'L': [{'N': '1.0'}, ...]}.
+class Vector(list):
+    pass
+
 
 # A simple test for the vector type. In vector search, a vector is simply
 # an array of known size that contains only numbers. In the DynamoDB API,
@@ -2276,6 +2328,282 @@ def test_createtable_query_similarity_function(vs, needs_vector_store):
             assert result['Items'][0]['p'] == expected_p, \
                 f'For SimilarityFunction={sf}, expected nearest item {expected_p}, ' \
                 f'got {result["Items"][0]["p"]}'
+
+# Tests for the optimized vector type, "FLOAT32VECTOR". This is a new type not
+# supported by DynamoDB. It knows all elements are numbers and only guarantees
+# 32-bit floating point precision, so allows Scylla to store the vector much
+# more efficiently, using 32-bit floats instead of textual JSON representation.
+
+# Check that we can write and then read back a "FLOAT32VECTOR" top-level
+# attribute. We use manual_request() to bypass boto3's serializer entirely,
+# because boto3 does not know the "FLOAT32VECTOR" type and would reject it
+# before sending. Scylla shouldn't reject this value - in the worst case it
+# could store the attribute as a JSON string
+# {"FLOAT32VECTOR": [1.0, 2.0, 3.0]} - but ideally it should understand the
+# "FLOAT32VECTOR" type and store it as a native array of floats.
+#
+# Writing tests with "manual_request" is ugly. So in the next tests we will
+# check the same thing with progressively more convenient ways to write the
+# test.
+def test_put_and_get_toplevel_v_manual_request(test_table_s):
+    p = random_string()
+    v = [1.0, 2.0, 3.0]
+    manual_request(test_table_s, 'PutItem', json.dumps({
+        'TableName': test_table_s.name,
+        'Item': {'p': {'S': p}, 'v': {'FLOAT32VECTOR': v}},
+    }))
+    result = manual_request(test_table_s, 'GetItem', json.dumps({
+        'TableName': test_table_s.name,
+        'Key': {'p': {'S': p}},
+        'ConsistentRead': True,
+    }))
+    assert 'Item' in result
+    assert result['Item']['p'] == {'S': p}
+    assert result['Item']['v'] == {'FLOAT32VECTOR': v}
+
+# Same as test_put_and_get_toplevel_v_manual_request, but using the vs
+# fixture (which patches the 'FLOAT32VECTOR' shape into boto3's
+# AttributeValue) and client_no_transform, so boto3 can serialize and
+# deserialize the 'FLOAT32VECTOR' type.
+#
+# Writing tests with "client_no_transform" is still a bit ugly, so the
+# next test will do the same thing again even more conveniently.
+def test_put_and_get_toplevel_v_client_no_transform(test_table_s, vs):
+    p = random_string()
+    v = [1.0, 2.0, 3.0]
+    with client_no_transform(vs.meta.client) as client:
+        client.put_item(
+            TableName=test_table_s.name,
+            Item={'p': {'S': p}, 'v': {'FLOAT32VECTOR': v}},
+        )
+        result = client.get_item(
+            TableName=test_table_s.name,
+            Key={'p': {'S': p}},
+            ConsistentRead=True,
+        )
+    assert 'Item' in result
+    assert result['Item']['p'] == {'S': p}
+    assert result['Item']['v'] == {'FLOAT32VECTOR': v}
+
+# Finally is the same test again, using the new Vector(...) instead of
+# ugly hacks like manual_request and client_no_transform. This finally
+# looks like a good enough API to give to users, and is the approach
+# we'll use below for the rest of the tests for the optimized vector type.
+# Note: we must use a table from the vs fixture (here table_vs) and not an
+# ordinary table (like test_table_s), because the FLOAT32VECTOR type is only
+# patched into the AttributeValue shape of the vs client. An ordinary table's
+# client would fail when botocore encounters the unknown FLOAT32VECTOR member.
+def test_put_and_get_toplevel_v(table_vs):
+    p = random_string()
+    v = Vector([1.0, 2.0, 3.0])
+    table_vs.put_item(Item={'p': p, 'v': v})
+    result = table_vs.get_item(Key={'p': p}, ConsistentRead=True)
+    assert 'Item' in result
+    assert result['Item']['p'] == p
+    assert result['Item']['v'] == v
+
+# Test that on a table with vector index enabled, we can't insert a vector
+# with a floating-point value that doesn't fit in 32 bits.
+def test_vector_float32_range(table_vs):
+    p = random_string()
+    # 1e100 and -1e100 are finite doubles but become infinite as 32-bit float
+    with pytest.raises(ClientError, match='ValidationException.*32-bit'):
+        table_vs.put_item(Item={'p': p, 'v': Vector([1.0, 1e100, 3.0])})
+    with pytest.raises(ClientError, match='ValidationException.*32-bit'):
+        table_vs.put_item(Item={'p': p, 'v': Vector([1.0, -1e100, 3.0])})
+
+# Actually, the limitation that vector components must be finite (like all
+# numbers in JSON) when saved as 32-bit floats doesn't require a vector
+# index to be enabled. It should be enforced for any FLOAT32VECTOR attribute,
+# even if it's not indexed.
+def test_vector_float32_range_no_index(test_table_s, vs):
+    p = random_string()
+    # test_table_s has no vector index on it - but we should still reject
+    # a "FLOAT32VECTOR" attribute value whose elements overflow 32-bit float.
+    with pytest.raises(ClientError, match='ValidationException.*32-bit'):
+        vs.meta.client.put_item(TableName=test_table_s.name,
+            Item={'p': p, 'v': Vector([1.0, 1e100, 3.0])})
+    with pytest.raises(ClientError, match='ValidationException.*32-bit'):
+        vs.meta.client.put_item(TableName=test_table_s.name,
+            Item={'p': p, 'v': Vector([1.0, -1e100, 3.0])})
+
+# A floating-point numbers with more significant digits than a 32-bit float
+# allows is allowed, but silently truncated to 32-bit precision. It is *not*
+# rejected. Check that we can read it back with some loss of precision,
+# below the 32-bit float epsilon.
+def test_vector_float32_precision(table_vs):
+    p = random_string()
+    # FLT_EPSILON is the difference between 1.0 and the next representable
+    # 32-bit float greater than 1.0. Any value between 1 and 1+FLT_EPSILON
+    # will be indistinguishable from 1.0 when truncated to 32-bit float
+    # precision.
+    FLT_EPSILON = 1.1920928955078125e-7
+    # x = 1.0 + FLT_EPSILON/2 is distinguishable from 1.0 in Python's
+    # double-precision (64-bit) floating-point, but indistinguishable from
+    # 1.0 when Alternator will save it as 32-bit and read it back.
+    x = 1.0 + FLT_EPSILON / 2
+    table_vs.put_item(Item={'p': p, 'v': Vector([1.0, x, 3.0])})
+    result = table_vs.get_item(Key={'p': p}, ConsistentRead=True)
+    v = result['Item']['v']
+    assert isinstance(v, Vector)
+    # The middle value should be truncated to 32-bit float precision, so it
+    # should be equal to 1.0 within the 32-bit float epsilon (but not equal
+    # to the original value which had more precision).
+    assert abs(v[1] - 1.0) < FLT_EPSILON
+
+# Continue the test above (test_vector_float32_precision) to confirm that
+# the vector components are really truncated to 32-bit precision and not
+# wastefully stored with higher precision.
+# Importantly, this test proves that the vector value is stored in an
+# *optimized* way, and validates its main benefit over the unoptimized
+# list-of-numbers approach.
+def test_vector_float32_optimized(table_vs):
+    p = random_string()
+    FLT_EPSILON = 1.1920928955078125e-7
+    x = 1.0 + FLT_EPSILON / 2
+    table_vs.put_item(Item={'p': p, 'v': Vector([1.0, x, 3.0])})
+    result = table_vs.get_item(Key={'p': p}, ConsistentRead=True)
+    v = result['Item']['v']
+    # The middle value should be truncated to exactly 1.0.
+    assert v[1] == 1.0
+
+# Test more directly (using CQL) that the vector is stored in the underlying
+# table in an optimized way - and also exactly how it is encoded. It's
+# important that we don't unintentionally change this encoding, because the
+# vector store needs to know how to read it.
+# This test is similar to the tests in test_encoding.py.
+def test_vector_encoding(table_vs, cql):
+    p = random_string()
+    # We pick example values that have an accurate representation in
+    # 32-bit float, so we know exactly what we expect to be stored.
+    table_vs.put_item(Item={'p': p, 'v': Vector([1.0, 2.5, -3.25])})
+    ks = 'alternator_' + table_vs.name
+    cf = table_vs.name
+    rows = list(cql.execute(
+        f'SELECT ":attrs" FROM "{ks}"."{cf}" WHERE p = \'{p}\''))
+    assert len(rows) == 1
+    attrs = rows[0][0]
+    assert 'v' in attrs
+    # The 'v' attribute should be encoded by a single byte 5
+    # (alternator_type::FLOAT32VECTOR) followed directly by the 3 float32
+    # values 1.0, 2.5, -3.25 in big-endian binary. No explicit length field.
+    ALTERNATOR_TYPE_FLOAT32VECTOR = 5
+    v = attrs['v']
+    assert isinstance(v, bytes)
+    assert v[0] == ALTERNATOR_TYPE_FLOAT32VECTOR
+    N = 3
+    assert len(v) == 1 + N * 4
+    # We can check that the values are correct by unpacking them as big-endian
+    # float32 values.
+    values = struct.unpack('>' + 'f' * N, v[1:])
+    assert values == (1.0, 2.5, -3.25)
+
+# Test that we can use a "vector" attribute as a non top-level attribute.
+# It might be stored unoptimized as a JSON value ({"FLOAT32VECTOR": [...]}) but it
+# should still work and be retrievable and searchable.
+def test_put_and_get_nested_vector_value(table_vs):
+    p = random_string()
+    # Store a Vector nested inside a map attribute, not as a top-level attribute.
+    item = {'p': p, 'nested': {'v': Vector([1.0, 2.0, 3.0])}}
+    table_vs.put_item(Item=item)
+    result = table_vs.get_item(Key={'p': p}, ConsistentRead=True)
+    assert 'Item' in result
+    # Because the vector elements are whole numbers, we expect them to be
+    # returned without loss of precision, whether or not they were stored
+    # in an optimized way or not (which we don't want to assert in this
+    # test). So we can check that the returned item is exactly equal to the
+    # original item we put, including the nested Vector.
+    assert result['Item'] == item
+
+# When an attribute does not yet have a vector index on it, it is possible
+# to write to it vectors of any length (even the zero length). But when
+# the attribute does have an vector index, writes with the wrong length are
+# rejected.
+def test_vector_float32vector_any_length_without_index(test_table_s, vs):
+    p = random_string()
+    for length in [0, 1, 3, 42]:
+        # Without a vector index, FLOAT32VECTOR vectors of any length
+        # (including empty) are allowed:
+        vs.meta.client.put_item(TableName=test_table_s.name,
+            Item={'p': p, 'v': Vector([1.0 for i in range(length)])})
+
+def test_vector_float32vector_wrong_length_with_index(table_vs):
+    p = random_string()
+    # table_vs has a vector index on 'v' with Dimensions=3, so only length-3
+    # FLOAT32VECTOR vectors are accepted. Other lengths should be rejected.
+    for bad_length in [0, 1, 2, 4, 42]:
+        with pytest.raises(ClientError, match='ValidationException.*exactly 3'):
+            table_vs.put_item(Item={'p': p, 'v': Vector([1.0 for i in range(bad_length)])})
+
+# Test a vector-search Query when some of the vector attributes are written
+# using the optimized "FLOAT32VECTOR" type. The optimized vector type is
+# recommended, but not mandatory - users can also use a list of numbers
+# ("L" of "N"), so to confirm this, this test writes one vector with an
+# optimized type and one with an unoptimized type, and checks that both are
+# visible in the vector search results.
+def test_query_vector_float32vector_and_lon(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p_v = random_string()  # written with the optimized FLOAT32VECTOR type
+        p_l = random_string()  # written with the standard L-of-N type
+        table.put_item(Item={'p': p_v, 'v': Vector([1.0, 0.0, 0.0])})
+        table.put_item(Item={'p': p_l, 'v': [Decimal("1"), Decimal("0"), Decimal("0")]})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        # wait_for_vector_index_active() ensures the prefill scan is complete,
+        # so both items are guaranteed to be indexed.
+        wait_for_vector_index_active(table, 'vind')
+
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [Decimal("1"), Decimal("0"), Decimal("0")]},
+            Limit=2,
+        )
+        assert {item['p'] for item in result.get('Items', [])} == {p_v, p_l}
+
+        # QueryVector can also be given as a "FLOAT32VECTOR" type if we want,
+        # instead of a list of numbers. Verify that this really works:
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1, 0, 0])},
+            Limit=2,
+        )
+        assert {item['p'] for item in result.get('Items', [])} == {p_v, p_l}
+
+# In test_query_vector_float32vector_and_lon we verified that "FLOAT32VECTOR"
+# and "L"-of-"N" vectors are both indexed for the prefill case (the items were
+# written before the index was created). For completeness, we should also
+# check that they are also read correctly when written after the index is
+# created - i.e. when noticed with CDC.
+def test_query_vector_float32vector_and_lon_cdc(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{'IndexName': 'vind',
+                            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}]) as table:
+        # Wait until the vector store is ready (prefill of the empty table
+        # has completed), to ensure our writes are picked up via CDC, not
+        # prefill.
+        wait_for_vector_index_active(table, 'vind')
+        p_v = random_string()  # written with the optimized FLOAT32VECTOR type
+        p_l = random_string()  # written with the standard L-of-N type
+        table.put_item(Item={'p': p_v, 'v': Vector([1.0, 0.0, 0.0])})
+        table.put_item(Item={'p': p_l, 'v': [Decimal("1"), Decimal("0"), Decimal("0")]})
+        # Retry the query until both items appear in the vector search results.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [Decimal("1"), Decimal("0"), Decimal("0")]},
+                Limit=2,
+            )
+            if {item['p'] for item in result.get('Items', [])} == {p_v, p_l}:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for V-type and L-type items to appear via CDC')
+            time.sleep(0.1)
 
 ##############################################################################
 # CONTINUE HERE - MAKE A DECISION! PRE-FILTERING:
