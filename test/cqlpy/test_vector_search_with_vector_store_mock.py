@@ -34,7 +34,7 @@ class Request:
 @dataclass
 class Response:
     status: int = 200
-    body: str = '{"primary_keys":{"pk1":[],"pk2":[],"ck1":[],"ck2":[]},"distances":[]}'
+    body: str = '{"primary_keys":{"pk1":[],"pk2":[],"ck1":[],"ck2":[]},"similarity_scores":[]}'
 
 
 class VectorStoreMock:
@@ -131,7 +131,7 @@ def test_vector_search_ann_with_partition_key_in_restriction(cql, test_keyspace,
         cql.execute(
             f"INSERT INTO {table} (pk1, pk2, ck1, ck2, embedding) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3])")
         vector_store_mock.set_next_ann_response(200, json.dumps({"primary_keys": {
-                                                "pk1": [5], "pk2": [7], "ck1": [9], "ck2": [2]}, "distances": [0.1]}))
+                                                "pk1": [5], "pk2": [7], "ck1": [9], "ck2": [2]}, "similarity_scores": [0.1]}))
 
         result = cql.execute(
             f"SELECT pk1, pk2, ck1, ck2 FROM {table} WHERE pk1 IN (5, 6) ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2")

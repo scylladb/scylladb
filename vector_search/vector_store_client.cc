@@ -152,18 +152,22 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         return std::unexpected{service_reply_format_error{}};
     }
 
-    if (!json.HasMember("distances")) {
-        vslogger.error("Vector Store returned invalid JSON: missing 'distances'");
+    if (!json.HasMember("similarity_scores")) {
+        vslogger.error("Vector Store returned invalid JSON: missing 'similarity_scores'");
         return std::unexpected{service_reply_format_error{}};
     }
-    auto const& distances_json = json["distances"];
-    if (!distances_json.IsArray()) {
-        vslogger.error("Vector Store returned invalid JSON: 'distances' is not an array");
+    auto const& similarity_json = json["similarity_scores"];
+    if (!similarity_json.IsArray()) {
+        vslogger.error("Vector Store returned invalid JSON: 'similarity_scores' is not an array");
         return std::unexpected{service_reply_format_error{}};
     }
-    auto const& distances_arr = json["distances"].GetArray();
+    auto const& similarity_arr = json["similarity_scores"].GetArray();
 
-    auto size = distances_arr.Size();
+    // We assume that the similarity_arr, and all the key arrays in keys_json
+    // have the same length, which is the number of nearest neighbors returned
+    // by the vector store.
+    auto size = similarity_arr.Size();
+
     auto keys = primary_keys{};
     for (auto idx = 0U; idx < size; ++idx) {
         auto pk = pk_from_json(keys_json, idx, schema);
@@ -174,7 +178,23 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         if (!ck) {
             return std::unexpected{ck.error()};
         }
-        keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck});
+        auto const& sim_val = similarity_arr[idx];
+        if (sim_val.IsNumber()) {
+            keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, sim_val.GetFloat()});
+        } else if (sim_val.IsNull()) {
+            // JSON does not support infinite values, and serde_json serializes
+            // both +inf and -inf as null. This can only happen with the
+            // DOT_PRODUCT similarity function when the dot product overflows
+            // float32 (very high magnitude vectors). Since we can't distinguish
+            // +inf from -inf here, we use +inf as a conservative approximation
+            // (the item will be ranked highly, which is appropriate for a very
+            // large positive dot product; the -inf case is very unlikely in
+            // practice).
+            keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck, std::numeric_limits<float>::infinity()});
+        } else {
+            vslogger.error("Vector Store returned invalid JSON: 'similarity_scores[{}]'={} is not a number", idx, rjson::print(sim_val));
+            return std::unexpected{service_reply_format_error{}};
+        }
     }
     return std::move(keys);
 }

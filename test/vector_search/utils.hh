@@ -121,7 +121,7 @@ constexpr auto CORRECT_RESPONSE_FOR_TEST_TABLE = R"({
         "ck1": [9, 1],
         "ck2": [2, 3]
     },
-    "distances": [0.1, 0.2]
+    "similarity_scores": [0.1, 0.2]
 })";
 
 inline auto create_test_table(cql_test_env& env, const seastar::sstring& ks, const seastar::sstring& cf) -> future<schema_ptr> {

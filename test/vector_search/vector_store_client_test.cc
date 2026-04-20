@@ -373,7 +373,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 BOOST_CHECK_EQUAL(err->message, "idx2 not found");
 
                 // missing primary_keys in the reply - service should return format error
-                server->next_ann_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
+                server->next_ann_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"similarity_scores":[0.1,0.2]})"});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!server->ann_requests().empty());
                 BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2})");
@@ -381,32 +381,32 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
-                // missing distances in the reply - service should return format error
-                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances1":[0.1,0.2]})"});
+                // missing similarity_scores in the reply - service should return format error
+                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"similarity_scores1":[0.1,0.2]})"});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // missing pk1 key in the reply - service should return format error
-                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk11":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
+                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk11":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"similarity_scores":[0.1,0.2]})"});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // missing ck1 key in the reply - service should return format error
-                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck11":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
+                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck11":[9,1],"ck2":[2,3]},"similarity_scores":[0.1,0.2]})"});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // wrong size of pk2 key in the reply - service should return format error
-                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
+                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7],"ck1":[9,1],"ck2":[2,3]},"similarity_scores":[0.1,0.2]})"});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // wrong size of ck2 key in the reply - service should return format error
-                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2]},"distances":[0.1,0.2]})"});
+                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2]},"similarity_scores":[0.1,0.2]})"});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
@@ -441,13 +441,51 @@ SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_request) {
                 vs.start_background_tasks();
 
                 // correct reply - service should return keys
-                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5],"pk2":[7],"ck1":[9],"ck2":[2]},"distances":[0.1]})"});
+                server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5],"pk2":[7],"ck1":[9],"ck2":[2]},"similarity_scores":[0.1]})"});
                 auto filter = rjson::parse(R"({"restrictions":[{"type":"==","lhs":"pk1","rhs":5}],"allow_filtering":false})");
                 auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, filter, as.reset());
                 BOOST_REQUIRE(keys);
                 BOOST_REQUIRE_EQUAL(keys->size(), 1);
                 BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).partition.key().explode()), "[05, 07]");
                 BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).clustering.explode()), "[09, 02]");
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
+}
+
+SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_cql) {
+    // Similar to `vector_store_client_test_filtering_ann_request`,
+    // but uses CQL query to verify that the WHERE clause expression (this time with IN operator) is handled correctly.
+    using namespace test::vector_search;
+    auto server = co_await make_vs_mock_server();
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    co_await do_with_cql_env(
+            [&server](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                // Create the vector index and insert test data
+                co_await env.execute_cql("CREATE CUSTOM INDEX embedding_idx ON ks.idx (embedding) USING 'vector_index'");
+                co_await env.execute_cql("INSERT INTO ks.idx (pk1, pk2, ck1, ck2, embedding) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3])");
+
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"good.authority.here", "127.0.0.1"}});
+                vs.start_background_tasks();
+
+                // Mock response - service should return keys matching the WHERE filter
+                server->next_ann_response({http::reply::status_type::ok, R"({"primary_keys":{"pk1":[5],"pk2":[7],"ck1":[9],"ck2":[2]},"similarity_scores":[0.1]})"});
+
+                // Execute CQL query with WHERE clause filter
+                auto msg = co_await env.execute_cql("SELECT pk1, pk2, ck1, ck2 FROM ks.idx WHERE pk1 IN (5, 6) ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 2");
+
+                // Process results - expect 1 row with values [5, 7, 9, 2]
+                assert_that(msg).is_rows().with_rows({{
+                    {byte_type->decompose(int8_t(5))},
+                    {byte_type->decompose(int8_t(7))},
+                    {byte_type->decompose(int8_t(9))},
+                    {byte_type->decompose(int8_t(2))},
+                }});
             },
             cfg)
             .finally([&server] {
