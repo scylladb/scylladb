@@ -409,6 +409,62 @@ Invariants:
    on behalf of previous transitions can still run in the cluster, but they can have no side effects. This is ensured
    by the proper use of the topology guard mechanism (see the "Topology guards" section).
 
+## Strongly-consistent tablets
+
+For tablets belonging to a strongly-consistent table, the migration also updates the tablet's raft group membership so that it stays compatible with the replica set used by the current migration stage.
+
+State transition diagram for strongly-consistent tablet migration stages:
+
+```mermaid
+stateDiagram-v2
+    state if_state <<choice>>
+    [*] --> start_migration
+    start_migration --> sc_add_nonvoter
+    sc_add_nonvoter --> sc_snapshot_transfer
+    sc_snapshot_transfer --> sc_become_voter
+    sc_become_voter --> use_new
+    use_new --> cleanup
+    cleanup --> end_migration
+    end_migration --> [*]
+    start_migration --> sc_cleanup_target: error
+    sc_add_nonvoter --> sc_cleanup_target: error
+    sc_snapshot_transfer --> sc_cleanup_target: error
+    sc_become_voter --> if_state: error
+    if_state --> use_new: more new replicas
+    if_state --> sc_cleanup_target: more old replicas
+    sc_cleanup_target --> cleanup_target
+    cleanup_target --> revert_migration
+    revert_migration --> [*]
+```
+
+For strongly-consistent tables, the following additional preconditions hold:
+
+1. start_migration
+
+    Precondition: transition info in group0 is filled with information about migration.
+
+2. sc_add_nonvoter
+
+    Precondition: All old and new replicas see the transition info from step 1 via local token metadata and effective replication maps.
+
+3. sc_snapshot_transfer
+
+    Precondition: the pending replica is a non-voter member of the tablet's raft group.
+
+4. sc_become_voter
+
+    Precondition: the pending replica has executed a raft read barrier.
+
+5. use_new
+
+    Precondition: the pending replica is a voter member of the tablet's raft group, and the leaving replica is not a member of the group.
+
+6. cleanup
+
+    Precondition: No request will reach tablet replica which does not belong to the new replica set.
+
+7. end_migration
+
 # Tablet resize
 
 Each table has its resize metadata stored in group0.
