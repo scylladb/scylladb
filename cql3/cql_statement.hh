@@ -13,6 +13,7 @@
 #include "timeout_config.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "audit/audit.hh"
+#include <seastar/core/shared_ptr.hh>
 
 namespace service {
 
@@ -44,7 +45,7 @@ class query_options;
 // A vector of CQL warnings generated during execution of a statement.
 using cql_warnings_vec = std::vector<sstring>;
 
-class cql_statement {
+class cql_statement : public seastar::enable_shared_from_this<cql_statement> {
     timeout_config_selector _timeout_config_selector;
     audit::audit_info_ptr _audit_info;
 public:

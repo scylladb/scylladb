@@ -237,11 +237,16 @@ modification_statement::build_partition_keys(const query_options& options, const
 }
 
 struct modification_statement_executor {
-    static auto get() { return &modification_statement::do_execute; }
+    static future<::shared_ptr<cql_transport::messages::result_message>>
+    execute(seastar::shared_ptr<const modification_statement> stmt, query_processor& qp, service::query_state& qs, const query_options& options) {
+        return stmt->do_execute(qp, qs, options).finally([stmt = std::move(stmt)] { });
+    }
+
+    static auto get() { return &modification_statement_executor::execute; }
 };
 static thread_local inheriting_concrete_execution_stage<
         future<::shared_ptr<cql_transport::messages::result_message>>,
-        const modification_statement*,
+        seastar::shared_ptr<const modification_statement>,
         query_processor&,
         service::query_state&,
         const query_options&> modify_stage{"cql3_modification", modification_statement_executor::get()};
@@ -255,7 +260,8 @@ modification_statement::execute(query_processor& qp, service::query_state& qs, c
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const {
     cql3::util::validate_timestamp(qp.db().get_config(), options, attrs);
-    return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
+    auto stmt = ::static_pointer_cast<const modification_statement>(shared_from_this());
+    return modify_stage(std::move(stmt), seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
@@ -375,7 +381,6 @@ process_forced_rebounce(unsigned shard, query_processor& qp, const query_options
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
-
     auto cl_for_learn = options.get_consistency();
     utils::result_with_exception_ptr<db::consistency_level> cl_for_paxos = options.check_serial_consistency();
     if (!cl_for_paxos) [[unlikely]] {
