@@ -89,6 +89,7 @@ namespace utils::internal {
 
 #if defined(OPTIMIZED_EXCEPTION_HANDLING_AVAILABLE)
 void* try_catch_dynamic(std::exception_ptr& eptr, const std::type_info* catch_type) noexcept;
+void* try_catch_exact(std::exception_ptr& eptr, const std::type_info* catch_type) noexcept;
 
 using default_nested_exception_type = std::runtime_error;
 
@@ -139,7 +140,16 @@ inline T* try_catch(std::exception_ptr& eptr) noexcept {
             "T must not be a reference");
 
 #if defined(USE_OPTIMIZED_EXCEPTION_HANDLING)
-    void* opt_ptr = utils::internal::try_catch_dynamic(eptr, &typeid(std::remove_const_t<T>));
+    using raw_t = std::remove_const_t<T>;
+    void* opt_ptr;
+    // For final types no derived class can exist, so catch(T&) can only
+    // match the exact type. Use a direct typeid comparison and skip the
+    // __do_catch inheritance hierarchy walk.
+    if constexpr (std::is_final_v<raw_t>) {
+        opt_ptr = utils::internal::try_catch_exact(eptr, &typeid(raw_t));
+    } else {
+        opt_ptr = utils::internal::try_catch_dynamic(eptr, &typeid(raw_t));
+    }
     return reinterpret_cast<T*>(opt_ptr);
 #else
     try {

@@ -92,4 +92,16 @@ void* utils::internal::try_catch_dynamic(std::exception_ptr& eptr, const std::ty
     return nullptr;
 }
 
+void* utils::internal::try_catch_exact(std::exception_ptr& eptr, const std::type_info* catch_type) noexcept {
+    void* raw_ptr = reinterpret_cast<void*&>(eptr);
+    const std::type_info* ex_type = utils::abi::get_cxa_exception(raw_ptr)->exceptionType;
+    // For final types no derived class exists, so a catch(T&) can only match
+    // the exact type. Skip the __do_catch inheritance hierarchy walk and just
+    // compare type_info directly.
+    if (*ex_type == *catch_type) {
+        return raw_ptr;
+    }
+    return nullptr;
+}
+
 #endif // __GLIBCXX__
