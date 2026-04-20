@@ -378,20 +378,20 @@ The response always includes two count fields:
 > supported for vector search queries and will be rejected with a
 > `ValidationException`. Use `FilterExpression` instead.
 
-**ReturnSimilarity field:**
+**ReturnScores field:**
 
 By default, a vector search `Query` response contains only the matched items
 (or a count) — it does not include how similar each result is to the query
 vector. To also receive similarity scores, set the optional
-`ReturnSimilarity` field inside the `VectorSearch` parameter:
+`ReturnScores` field inside the `VectorSearch` parameter:
 
 | Value | Behavior |
-|-------|---------|
+|-------|----------|
 | `NONE` | Default. No similarity scores are returned. |
-| `SIMILARITY` | Each response includes a `Similarities` array parallel to `Items`, with one floating-point score per item. |
+| `SIMILARITY` | Each response includes a `Scores` array parallel to `Items`, with one floating-point score per item. |
 
-The `Similarities` array is always the same length as `Items` and in the same
-order: `Similarities[i]` is the similarity score for `Items[i]`.
+The `Scores` array is always the same length as `Items` and in the same
+order: `Scores[i]` is the similarity score for `Items[i]`.
 
 **What the similarity score means:**
 
@@ -407,7 +407,7 @@ depends on the similarity function:
 | `EUCLIDEAN` | 0.0 to 1.0 | Euclidean distance _d_ in `[0, inf)` is mapped to `1 / (1 + d)`. similarity 1.0 means identical vectors, 0.0 means infinitely far apart. |
 | `DOT_PRODUCT` | Unbounded | Uses the same distance definition and mapping as `COSINE`. For L2-normalized vectors the result is identical to `COSINE` and stays in [0, 1]. For unnormalized vectors the value may exceed 1 or be negative. |
 
-`ReturnSimilarity=SIMILARITY` is not allowed with `Select=COUNT`,
+`ReturnScores=SIMILARITY` is not allowed with `Select=COUNT`,
 since `COUNT` returns no `Items` array.
 
 Example:
@@ -415,9 +415,9 @@ Example:
 response = table.query(
     IndexName='embedding-index',
     Limit=5,
-    VectorSearch={'QueryVector': {'FLOAT32VECTOR': [0.1, -0.3, 0.7, ...]}, 'ReturnSimilarity': 'SIMILARITY'},
+    VectorSearch={'QueryVector': {'FLOAT32VECTOR': [0.1, -0.3, 0.7, ...]}, 'ReturnScores': 'SIMILARITY'},
 )
-for item, score in zip(response['Items'], response['Similarities']):
+for item, score in zip(response['Items'], response['Scores']):
     print(f"  {item['id']}  similarity={score:.4f}")
 ```
 

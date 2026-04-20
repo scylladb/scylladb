@@ -112,14 +112,15 @@ def vs(new_dynamodb_session, dynamodb):
             'type': 'structure',
             'members': {
                 'QueryVector': {'shape': 'AttributeValue'},
+                'ReturnScores': {'shape': 'String'},
             },
             'required': ['QueryVector'],
         },
-        # For VectorSearch.ReturnSimilarity response:
-        'SimilarityScore': {'type': 'double'},
-        'SimilaritiesList': {
+        # For VectorSearch.ReturnScores response:
+        'Score': {'type': 'double'},
+        'ScoresList': {
             'type': 'list',
-            'member': {'shape': 'SimilarityScore'},
+            'member': {'shape': 'Score'},
         },
         # For the 'FLOAT32VECTOR' (optimized vector) type: a list of raw JSON
         # numbers.
@@ -160,6 +161,11 @@ def vs(new_dynamodb_session, dynamodb):
         'shape': 'VectorSearch'
     }
     input_shape._cache.pop('members', None)
+
+    # Add Scores list to Query output
+    query_output_shape = query_op.output_shape
+    query_output_shape._shape_model['members']['Scores'] = {'shape': 'ScoresList'}
+    query_output_shape._cache.pop('members', None)
 
     # Add a VectorIndexes field to "TableDescription", the shape returned
     # by DescribeTable and also CreateTable
@@ -2604,6 +2610,204 @@ def test_query_vector_float32vector_and_lon_cdc(vs, needs_vector_store):
             if time.monotonic() > deadline:
                 pytest.fail('Timed out waiting for V-type and L-type items to appear via CDC')
             time.sleep(0.1)
+
+# Test that VectorSearch.ReturnScores rejects unknown values and the
+# SIMILARITY+COUNT combination. No vector store needed.
+def test_query_vectorsearch_return_similarity_bad(table_vs):
+    # Unknown value is rejected:
+    with pytest.raises(ClientError, match='ValidationException.*ReturnScores'):
+        table_vs.query(IndexName='vind',
+            VectorSearch={'QueryVector': [1, 2, 3], 'ReturnScores': 'GARBAGE'}, Limit=1)
+    # SIMILARITY with Select=COUNT is rejected:
+    with pytest.raises(ClientError, match='ValidationException.*COUNT'):
+        table_vs.query(IndexName='vind',
+            VectorSearch={'QueryVector': [1, 2, 3], 'ReturnScores': 'SIMILARITY'}, Limit=1,
+            Select='COUNT')
+
+# Test for VectorSearch.ReturnScores - if set to NONE (the default),
+# a "Scores" field is missing in the response, but with SIMILARITY,
+# a "Scores" field is present and contains the similarity values for
+# each returned item. We verify the length matches Items, the scores are in
+# descending order, and exact scores match expected COSINE similarity values
+# for known vectors.
+def test_query_vectorsearch_return_similarity(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        # Insert 4 items at known COSINE similarity to query vector [1, 0, 0]:
+        #   p1 at [1, 0, 0]   cos=1.0    -> similarity 1.0 (identical)
+        #   p2 at [1, 0.1, 0] cos~=0.995 -> similarity ~ 0.9975
+        #   p3 at [0, 1, 0]   cos=0.0    -> similarity 0.5 (orthogonal)
+        #   p4 at [-1, 0, 0]  cos=-1.0   -> similarity 0.0 (opposite)
+        p1, p2, p3, p4 = random_string(), random_string(), random_string(), random_string()
+        table.put_item(Item={'p': p1, 'v': Vector([1.0,  0.0,  0.0])})
+        table.put_item(Item={'p': p2, 'v': Vector([1.0,  0.1,  0.0])})
+        table.put_item(Item={'p': p3, 'v': Vector([0.0,  1.0,  0.0])})
+        table.put_item(Item={'p': p4, 'v': Vector([-1.0, 0.0,  0.0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'SimilarityFunction': 'COSINE'}}])
+        wait_for_vector_index_active(table, 'vind')
+        # Without ReturnScores (or with NONE), no Scores in response.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0])},
+            Limit=4)
+        assert 'Scores' not in result
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0]), 'ReturnScores': 'NONE'},
+            Limit=4)
+        assert 'Scores' not in result
+        # With SIMILARITY, Scores is present, same length as Items, and
+        # in descending order (nearest neighbor has the highest score).
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0]), 'ReturnScores': 'SIMILARITY'},
+            Limit=4)
+        assert [item['p'] for item in result['Items']] == [p1, p2, p3, p4]
+        assert 'Scores' in result
+        sims = result['Scores']
+        assert len(sims) == 4
+        # Scores must be in descending order.
+        assert sims == sorted(sims, reverse=True)
+        # Map item key to its position in the result list.
+        pos = {item['p']: i for i, item in enumerate(result['Items'])}
+        # Known similarity values for three easy cases:
+        assert sims[pos[p1]] == pytest.approx(1.0, abs=1e-5)
+        assert sims[pos[p3]] == pytest.approx(0.5, abs=1e-5)
+        assert sims[pos[p4]] == pytest.approx(0.0, abs=1e-5)
+        # Use FilterExpression to only leave p1 and p3 in the results, and
+        # verify their similarity values are still correct and in the right
+        # order.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0]), 'ReturnScores': 'SIMILARITY'},
+            Limit=4,
+            FilterExpression='p = :p1 OR p = :p3',
+            ExpressionAttributeValues={':p1': p1, ':p3': p3},
+        )
+        assert [item['p'] for item in result['Items']] == [p1, p3]
+        assert result['ScannedCount'] == 4
+        assert result['Count'] == 2
+        sims = result['Scores']
+        assert len(sims) == 2
+        assert sims[0] == pytest.approx(1.0, abs=1e-5)
+        assert sims[1] == pytest.approx(0.5, abs=1e-5)
+
+# Another ReturnScores=SIMILARITY test, for a different similarity
+# function (EUCLIDEAN).
+def test_query_vectorsearch_return_similarity2(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': Vector([2.0, 0.0, 0.0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'SimilarityFunction': 'EUCLIDEAN'}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0]), 'ReturnScores': 'SIMILARITY'},
+            Limit=1)
+        assert len(result['Items']) == 1 and result['Items'][0]['p'] == p
+        # The EUCLIDEAN similarity is defined as 1/(1+d) where d is the L2
+        # distance. The L2 distance between our query vector and single item
+        # is 1.0, so similarity is 1/(1+1) = 0.5.
+        assert result['Scores'] == [pytest.approx(0.5, abs=1e-5)]
+
+# The DOT_PRODUCT similarity function is not bounded if vectors are not
+# normalized (have an arbitrary magnitude, not 1.0). It is possible that the
+# similarity value returned with ReturnScores=SIMILARITY could be beyond
+# the range of 32-bit float even for valid float32 vectors. In this case, the
+# implementation should not cause an error or drop this item - it should
+# return the item correctly with a very high (even if not mathematically
+# accurate) similarity score.
+def test_query_vectorsearch_return_similarity_dot_product_overflow(vs, needs_vector_store):
+    # Two float32 vectors with very large - but valid - magnitude BIG,
+    # have a dot product of BIG^2, which overflows float32 to +infinity.
+    BIG = 1e38 # Valid 32-bit number, but close to the maximum
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': Vector([BIG, 0.0, 0.0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'SimilarityFunction': 'DOT_PRODUCT'}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([BIG, 0.0, 0.0]),
+                          'ReturnScores': 'SIMILARITY'},
+            Limit=1,
+            Select='ALL_ATTRIBUTES')
+        assert len(result['Items']) == 1 and result['Items'][0]['p'] == p
+        assert 'Scores' in result
+        # The dot product BIG * BIG overflows float32 to infinity.
+        # Since JSON can't represent infinity and must return some number,
+        # we don't really care what it returns, as long as it's very large.
+        # Let's just verify it's larger than BIG itself.
+        assert result['Scores'][0] >= BIG
+
+# Test that DOT_PRODUCT similarity correctly orders three items:
+# one very highly similar (large positive dot product overflowing 32 bits),
+# one mildly similar (small positive), and one very highly dissimilar
+# (large negative overflowing 32 bits).
+# The vector store should return them in descending score order.
+# We also check the Scores themselves: the highly similar item should have
+# a score much larger than 1, the mildly similar item around 1, and the
+# highly dissimilar item should have a large negative score.
+#
+# This test reproduces a bug in the vector store: When the similarity score
+# overflows the 32-bit calculation, it returns the same value "null" for both
+# +infinity and -infinity. Alternator currently assumes it's +infinity
+# (because only the results with the *highest* scores are returned from the
+# query), but in test like this one when we inspect all the items and their
+# scores, we can catch this discrepancy - the -inf result also gets
+# incorrectly returned as +inf. This test is marked xfail until the bug is
+# fixed.
+@pytest.mark.xfail(reason='vector store returns same "null" similarity for both +inf and -inf')
+def test_query_vectorsearch_return_similarity_dot_product_overflow2(vs, needs_vector_store):
+    BIG = 1e38  # Near FLT_MAX; dot product BIG * BIG overflows float32
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p_high = random_string()
+        p_mid  = random_string()
+        p_low  = random_string()
+        table.put_item(Item={'p': p_high, 'v': Vector([BIG,  0.0, 0.0])})
+        table.put_item(Item={'p': p_mid,  'v': Vector([0.0,  0.0, 0.0])})
+        table.put_item(Item={'p': p_low,  'v': Vector([-BIG, 0.0, 0.0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'SimilarityFunction': 'DOT_PRODUCT'}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([BIG, 0.0, 0.0]),
+                          'ReturnScores': 'SIMILARITY'},
+            Limit=3,
+            Select='ALL_ATTRIBUTES')
+        items = result['Items']
+        scores = result['Scores']
+        assert len(items) == 3
+        assert len(scores) == 3
+        # Results must be in descending score order (highest dot product first).
+        assert [item['p'] for item in items] == [p_high, p_mid, p_low]
+        # The highly similar item's score should be large and positive
+        assert scores[0] > BIG
+        # The mildly similar item's dot product is 0, the "similarity"
+        # converts it to 0.5 (since similarity is defined as (dot+1)/2
+        # to map from [-1,1] to [0,1] if vectors are normalized).
+        assert scores[1] == pytest.approx(0.5, abs=1e-5)
+        # The highly dissimilar item's score should be large and negative.
+        assert scores[2] < -BIG
 
 ##############################################################################
 # CONTINUE HERE - MAKE A DECISION! PRE-FILTERING:
