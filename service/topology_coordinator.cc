@@ -1675,11 +1675,57 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     }
 
     std::unordered_map<sstring, std::set<sstring>> get_racks_for_auto_rf_change() {
+        const auto& auto_rf_keyspaces = get_auto_rf_keyspaces();
+
+        // For each DC, determine which racks have non-auto-RF tablet data.
+        // nullopt means all racks in the DC are eligible (numeric RF was found).
+        std::unordered_map<sstring, std::optional<std::set<sstring>>> dc_racks_with_tablets;
+        for (const auto& [ks_name, ks] : _db.get_keyspaces()) {
+            if (std::ranges::any_of(auto_rf_keyspaces, [&] (const auto& e) { return e.first == ks_name; })) {
+                continue;
+            }
+            auto ks_md = ks->metadata();
+            if (!ks_md->uses_tablets()) {
+                continue;
+            }
+            for (const auto& [dc, rf] : ks_md->strategy_options()) {
+                auto it = dc_racks_with_tablets.find(dc);
+                if (it != dc_racks_with_tablets.end() && !it->second.has_value()) {
+                    // Already marked as "all racks eligible" for this DC.
+                    continue;
+                }
+                auto rf_data = locator::replication_factor_data(rf);
+                if (rf_data.is_numeric()) {
+                    if (rf_data.count() == 0) {
+                        // RF 0 places no replicas in this DC, so this keyspace cannot make
+                        // any rack there eligible. This is also the form used to drain a DC,
+                        // and treating it as "all racks eligible" would expand the auto-RF
+                        // keyspaces into the very DC the operator is emptying.
+                        continue;
+                    }
+                    dc_racks_with_tablets[dc] = std::nullopt; // all racks eligible
+                } else {
+                    auto& entry = dc_racks_with_tablets.try_emplace(dc, std::set<sstring>{}).first->second;
+                    for (const auto& rack : rf_data.get_rack_list()) {
+                        entry->insert(rack);
+                    }
+                }
+            }
+        }
+
+        auto rack_eligible = [&] (const sstring& dc, const sstring& rack) {
+            auto it = dc_racks_with_tablets.find(dc);
+            return it != dc_racks_with_tablets.end() && (!it->second.has_value() || it->second->contains(rack));
+        };
+
         const auto& dead_nodes = get_dead_nodes();
         const auto& excluded = _topo_sm._topology.excluded_tablet_nodes;
         std::unordered_map<sstring, std::unordered_map<sstring, bool>> live_rack_by_dc;
         for (const auto& [id, rs] : _topo_sm._topology.normal_nodes) {
             if (!rs.ring || rs.ring->tokens.empty() || excluded.contains(id)) {
+                continue;
+            }
+            if (!rack_eligible(rs.datacenter, rs.rack)) {
                 continue;
             }
             if (dead_nodes.contains(locator::host_id(id.uuid()))) {
