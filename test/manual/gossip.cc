@@ -16,6 +16,7 @@
 #include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "gms/feature_service.hh"
+#include "message/advanced_rpc_compressor.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"

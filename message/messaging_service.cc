@@ -19,6 +19,7 @@
 #include <seastar/coroutine/all.hh>
 
 #include "message/messaging_service.hh"
+#include "message/advanced_rpc_compressor.hh"
 #include <seastar/core/sharded.hh>
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"

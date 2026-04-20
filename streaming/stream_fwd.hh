@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "utils/UUID.hh"
+#include "service/session_id.hh"
 
 namespace streaming {
 
@@ -21,9 +21,3 @@ class stream_state;
 using plan_id = utils::tagged_uuid<struct plan_id_tag>;
 
 } // namespace streaming
-
-namespace service {
-
-using session_id = utils::tagged_uuid<struct session_id_tag>;
-
-}

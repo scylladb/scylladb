@@ -19,11 +19,11 @@
 #include "schema/schema_fwd.hh"
 #include "streaming/stream_fwd.hh"
 #include "locator/host_id.hh"
-#include "service/session.hh"
+#include "service/session_id.hh"
 #include "service/maintenance_mode.hh"
 #include "gms/gossip_address_map.hh"
+#include "gms/generation-number.hh"
 #include "tasks/types.hh"
-#include "message/advanced_rpc_compressor.hh"
 #include "utils/chunked_vector.hh"
 
 #include <list>
@@ -119,6 +119,8 @@ namespace qos {
 }
 
 namespace netw {
+
+class walltime_compressor_tracker;
 
 /* All verb handler identifiers */
 enum class messaging_verb : int32_t {

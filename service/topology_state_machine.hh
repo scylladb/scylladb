@@ -19,7 +19,7 @@
 #include "dht/token.hh"
 #include "raft/raft_fwd.hh"
 #include "utils/UUID.hh"
-#include "service/session.hh"
+#include "service/session_id.hh"
 #include "mutation/canonical_mutation.hh"
 #include "replica/database_fwd.hh"
 #include "locator/host_id.hh"

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "utils/UUID.hh"
+#include "service/session_id.hh"
 
 #include <seastar/core/gate.hh>
 #include <seastar/core/shared_future.hh>
@@ -18,12 +18,6 @@
 #include <unordered_set>
 
 namespace service {
-
-using session_id = utils::tagged_uuid<struct session_id_tag>;
-
-// We want it be different than default-constructed session_id to catch mistakes.
-constexpr session_id default_session_id = session_id(
-    utils::UUID(0x81e7fc5a8d4411ee, 0x8577325096b39f47)); // timeuuid 2023-11-27 16:46:27.182089.0 UTC
 
 /// Session is used to track execution of work related to some greater task, identified by session_id.
 /// Work can enter the session using enter(), and is considered to be part of the session

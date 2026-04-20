@@ -44,7 +44,7 @@
 #include "tracing/trace_state.hh"
 #include "utils/updateable_value.hh"
 #include "dht/decorated_key.hh"
-#include "service/session.hh"
+#include "service/session_id.hh"
 #include "sstables/trie/bti_index.hh"
 #include "sstables/file_size_stats.hh"
 

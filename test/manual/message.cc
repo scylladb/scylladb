@@ -18,6 +18,7 @@
 #include <seastar/util/closeable.hh>
 #include "db/config.hh"
 #include "gms/feature_service.hh"
+#include "message/advanced_rpc_compressor.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"

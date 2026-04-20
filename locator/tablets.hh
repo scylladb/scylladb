@@ -12,7 +12,7 @@
 #include "locator/token_metadata_fwd.hh"
 #include "utils/small_vector.hh"
 #include "locator/host_id.hh"
-#include "service/session.hh"
+#include "service/session_id.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token-sharding.hh"
 #include "dht/ring_position.hh"
