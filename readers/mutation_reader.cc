@@ -10,6 +10,7 @@
 
 #include "readers/mutation_reader.hh"
 #include "mutation/mutation_rebuilder.hh"
+#include "schema/schema.hh"
 #include "schema_upgrader.hh"
 
 logging::logger mrlog("mutation_reader");
@@ -77,7 +78,22 @@ future<bool> mutation_reader::impl::fill_buffer_from(Source& source) {
 template future<bool> mutation_reader::impl::fill_buffer_from<mutation_reader>(mutation_reader&);
 
 void mutation_reader::do_upgrade_schema(const schema_ptr& s) {
-    *this = transform(std::move(*this), schema_upgrader_v2(s));
+    // With raft-based schema management, schema versions are timeuuid (v1) with
+    // monotonically increasing timestamps. This allows us to detect if we're
+    // asked to "downgrade" data from a newer schema to an older one. A downgrade
+    // can cause silent data loss in converting_mutation_partition_applier when
+    // column types are not value-compatible in the downgrade direction
+    // (e.g. varint->int).
+    //
+    // This can happen when a read is in flight with an old schema (from a stale
+    // prepared statement) while an ALTER TABLE has already committed a new schema
+    // to the memtable. We pass the is_downgrade flag to the upgrader so that
+    // accept_cell can throw instead of silently dropping incompatible cells.
+    const auto target_ver = s->version().uuid();
+    const auto current_ver = schema()->version().uuid();
+    const bool is_downgrade = target_ver.is_timestamp() && current_ver.is_timestamp()
+            && target_ver.timestamp() < current_ver.timestamp();
+    *this = transform(std::move(*this), schema_upgrader_v2(s, is_downgrade));
 }
 
 void mutation_reader::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {

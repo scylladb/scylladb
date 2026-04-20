@@ -63,6 +63,7 @@ public:
 class schema_upgrader_v2 {
     schema_ptr _prev;
     schema_ptr _new;
+    bool _is_downgrade;
     std::optional<reader_permit> _permit;
 private:
     row transform(row&& r, column_kind kind) {
@@ -71,14 +72,16 @@ private:
             const column_definition& col = _prev->column_at(kind, id);
             const column_definition* new_col = _new->get_column_definition(col.name());
             if (new_col) {
-                converting_mutation_partition_applier::append_cell(new_row, kind, *new_col, col, std::move(cell));
+                converting_mutation_partition_applier::append_cell(new_row, kind, *new_col, col, std::move(cell),
+                    _is_downgrade);
             }
         });
         return new_row;
     }
 public:
-    schema_upgrader_v2(schema_ptr s)
+    schema_upgrader_v2(schema_ptr s, bool is_downgrade = false)
         : _new(std::move(s))
+        , _is_downgrade(is_downgrade)
     { }
     schema_ptr operator()(schema_ptr old) {
         _prev = std::move(old);

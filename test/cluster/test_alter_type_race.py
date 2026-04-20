@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="fix not yet applied")
 @pytest.mark.skip_mode(
     mode="release", reason="error injections are not supported in release mode"
 )

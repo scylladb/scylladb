@@ -793,6 +793,9 @@ private:
                     } else if constexpr (std::is_same_v<Ex, replica::critical_disk_utilization_exception>) {
                         msg = e.what();
                         return error::FAILURE;
+                    } else if constexpr (std::is_same_v<Ex, replica::incompatible_schema_downgrade_exception>) {
+                        msg = e.what();
+                        return error::FAILURE;
                     }
                 }, exception->reason);
             }
@@ -4828,15 +4831,23 @@ protected:
     size_t _failed = 0;
 
     virtual void on_failure(exceptions::coordinator_exception_container&& ex) = 0;
+    virtual void on_failure(std::exception_ptr&& ex) = 0;
     virtual void on_timeout() = 0;
     virtual size_t response_count() const = 0;
-    void fail_request(exceptions::coordinator_exception_container&& ex) {
+    template <typename TException>
+    void fail_request(TException&& ex) {
         _request_failed = true;
+        _timeout.cancel();
         // The exception container was created on the same shard,
         // so it should be cheap to clone and not throw
-        _done_promise.set_value(ex.clone());
-        _timeout.cancel();
-        on_failure(std::move(ex));
+        if constexpr (std::is_constructible_v<exceptions::coordinator_exception_container, TException>) {
+            auto container = exceptions::coordinator_exception_container(std::forward<TException>(ex));
+            _done_promise.set_value(container.clone());
+            on_failure(std::move(container));
+        } else {
+            _done_promise.set_exception(ex);
+            on_failure(std::move(ex));
+        }
     }
 public:
     abstract_read_resolver(schema_ptr schema, db::consistency_level cl, size_t target_count, storage_proxy::clock_type::time_point timeout)
@@ -4876,6 +4887,17 @@ public:
             // do not report aborts, they are triggered by shutdown or timeouts
         } else if (try_catch<gate_closed_exception>(eptr)) {
             // do not report gate_closed errors, they are triggered by shutdown (See #8995)
+        } else if (try_catch<replica::incompatible_schema_downgrade_exception>(eptr)) {
+            // A schema downgrade means this replica has data in a newer schema
+            // than the coordinator's query schema. Silently dropping incompatible
+            // cells would cause data loss. Propagate the exception directly so
+            // the CQL layer can trigger prepared statement re-preparation.
+            slogger.warn("Incompatible schema downgrade when reading from {}.{} via {}: {}",
+                         _schema->ks_name(), _schema->cf_name(), ep, eptr);
+            if (!_request_failed) {
+                fail_request(std::move(eptr));
+            }
+            return;
         } else if (auto ex = try_catch<rpc::remote_verb_error>(eptr)) {
             // Log remote read error with lower severity.
             // If it is really severe it we be handled on the host that sent
@@ -4921,14 +4943,25 @@ private:
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _block_for, _data_result));
     }
-    void on_failure(exceptions::coordinator_exception_container&& ex) override {
+    template <typename TException>
+    void do_on_failure(TException&& ex) {
         if (!_cl_reported) {
-            _cl_promise.set_value(std::move(ex));
+            if constexpr (utils::ExceptionContainer<TException>) {
+                _cl_promise.set_value(std::move(ex));
+            } else {
+                _cl_promise.set_exception(std::move(ex));
+            }
         }
         // we will not need them any more
         _data_result = foreign_ptr<lw_shared_ptr<query::result>>();
         _digest_results.clear();
         _on_disconnect = {};
+    }
+    void on_failure(exceptions::coordinator_exception_container&& ex) override {
+        do_on_failure(std::move(ex));
+    }
+    void on_failure(std::exception_ptr&& ex) override {
+        do_on_failure(std::move(ex));
     }
 public:
     digest_read_resolver(shared_ptr<storage_proxy> proxy,
@@ -5131,9 +5164,15 @@ private:
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0));
     }
-    void on_failure(exceptions::coordinator_exception_container&& ex) override {
+    void do_on_failure() {
         // we will not need them any more
         _data_results.clear();
+    }
+    void on_failure(exceptions::coordinator_exception_container&& ex) override {
+        do_on_failure();
+    }
+    void on_failure(std::exception_ptr&& ex) override {
+        do_on_failure();
     }
 
     virtual size_t response_count() const override {

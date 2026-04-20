@@ -73,6 +73,8 @@
 #include "utils/result.hh"
 #include "utils/reusable_buffer.hh"
 #include "utils/histogram_metrics_helper.hh"
+#include "replica/exceptions.hh"
+#include "utils/exceptions.hh"
 #include "utils/error_injection.hh"
 
 template<typename T = void>
@@ -1668,6 +1670,10 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     }
 
     tracing::trace(trace_state, "Processing a statement");
+    // Save a copy of the prepared statement ID before cache_key is moved.
+    // Needed to construct prepared_query_not_found_exception if a schema
+    // version downgrade is detected during the read.
+    auto saved_id = bytes(id);
     return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
         if (msg->as_bounce()) {
@@ -1678,6 +1684,16 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
             return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, std::move(metadata_id), skip_metadata)));
         }
+    }).handle_exception([saved_id = std::move(saved_id)] (std::exception_ptr eptr) {
+        if (try_catch<replica::incompatible_schema_downgrade_exception>(eptr)) {
+            // A read detected that the memtable schema is newer than the schema
+            // used by the prepared statement. Return UNPREPARED to the client so
+            // the driver re-prepares with the latest schema and retries.
+            clogger.debug("Incompatible schema downgrade detected during read, triggering re-prepare: {}", eptr);
+            return make_exception_future<cql_server::process_fn_return_type>(
+                exceptions::prepared_query_not_found_exception(saved_id));
+        }
+        return make_exception_future<cql_server::process_fn_return_type>(std::move(eptr));
     });
 }
 
