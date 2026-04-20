@@ -9,6 +9,7 @@ import os
 import pathlib
 import psutil
 import pytest
+import shutil
 import time
 import uuid
 from cassandra.cluster import ConsistencyLevel
@@ -43,6 +44,17 @@ class random_content_file:
         os.unlink(self.filename)
 
 
+async def validate_data_existence(cql, successful_hosts: list[Host], failed_hosts: list[Host], cf: str, pk: int) -> None:
+    """Validate data existence on specific hosts using MUTATION_FRAGMENTS to ensure truly local reads."""
+    stmt = SimpleStatement(f"SELECT * from MUTATION_FRAGMENTS({cf}) where pk = {pk};", consistency_level=ConsistencyLevel.ONE)
+    for host in successful_hosts:
+        res = await cql.run_async(stmt, host=host)
+        assert res, f"Data not found on {host}"
+    for host in failed_hosts:
+        res = await cql.run_async(stmt, host=host)
+        assert not res, f"Data found on {host} but it shouldn't be there"
+
+
 # Since we create 100M volumes, we need to reduce the commitlog segment size
 # otherwise we hit out of space.
 global_cmdline = ["--disk-space-monitor-normal-polling-interval-in-seconds", "1",
@@ -54,15 +66,6 @@ global_cmdline = ["--disk-space-monitor-normal-polling-interval-in-seconds", "1"
 
 @pytest.mark.asyncio
 async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Callable) -> None:
-    async def validate_data_existence(cql, successful_hosts: list[Host], failed_hosts: list[Host], cf: str, pk: int) -> None:
-        stmt = SimpleStatement(f"SELECT * from MUTATION_FRAGMENTS({cf}) where pk = {pk};", consistency_level=ConsistencyLevel.ONE)
-        for host in successful_hosts:
-            res = await cql.run_async(stmt, host=host)
-            assert res, f"Data not found on {host}"
-        for host in failed_hosts:
-            res = await cql.run_async(stmt, host=host)
-            assert not res, f"Data found on {host} but it shouldn't be there"
-
     async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=global_cmdline) as servers:
         cql, hosts = await manager.get_ready_cql(servers)
 
@@ -653,3 +656,144 @@ async def test_sstables_incrementally_released_during_streaming(manager: Manager
                     await manager.api.message_injection(servers[1].ip_addr, "tablet_stream_files_end_wait")
 
                     await decomm_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_load_and_stream_rejected_on_critical_disk(manager: ManagerClient, volumes_factory: Callable) -> None:
+    """
+    Test that load-and-stream (nodetool refresh --load-and-stream) is blocked
+    by out-of-space protection when the target node reaches critical disk utilization
+    during streaming, and that partial SSTables are cleaned up.
+
+    Scenario:
+      - Create a 3-node cluster with limited disk space.
+      - Create and populate a test table, flush and take a snapshot on servers[1].
+      - Stop servers[0], wipe its sstables, restart — so it has no local data.
+      - Copy snapshot sstables from servers[1] to servers[0]'s upload directory.
+      - Start load_new_sstables with load_and_stream=True on servers[0].
+      - Wait for streaming to begin consuming mutation fragments (SSTable is being written).
+      - Push servers[0] above the critical disk utilization level with a filler file.
+      - Release the streaming pause — the next mutation fragment will be rejected.
+      - Expect the operation to fail because servers[0] rejects incoming streamed
+        mutation fragments due to critical disk utilization.
+      - Verify that servers[0] still has no data after the rejected stream.
+    """
+    cmdline = [*global_cmdline,
+               "--logger-log-level", "table=debug",
+               "--logger-log-level", "sstable=debug",
+               "--logger-log-level", "debug_error_injection=debug"]
+    async with space_limited_servers(manager, volumes_factory, ["100M"]*3, cmdline=cmdline) as servers:
+        cql, hosts = await manager.get_ready_cql(servers)
+
+        workdir_target = await manager.server_get_workdir(servers[0].server_id)
+        workdir_source = await manager.server_get_workdir(servers[1].server_id)
+        log = await manager.server_open_log(servers[0].server_id)
+        mark = await log.mark()
+
+        async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+            for server in servers:
+                await manager.api.disable_autocompaction(server.ip_addr, ks)
+
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+                table = cf.split('.')[-1]
+
+                logger.info("Write data and flush on the source node")
+                # Use enough data (~100KB) to exceed the queue reader buffer (8KB),
+                # ensuring the producer will still be reading when the consumer resumes.
+                await asyncio.gather(*[cql.run_async(query) for query in write_generator(cf, 100)])
+                await manager.api.flush_keyspace(servers[1].ip_addr, ks)
+
+                logger.info("Take a snapshot on the source node to produce sstable files")
+                snap_tag = f"snap_{uuid.uuid4()}"
+                await manager.api.take_snapshot(servers[1].ip_addr, ks, snap_tag)
+
+                def get_table_data_dir(workdir):
+                    """Return the on-disk table data directory (includes UUID suffix)."""
+                    ks_dir = os.path.join(workdir, 'data', ks)
+                    return os.path.join(ks_dir, os.listdir(ks_dir)[0])
+
+                logger.info("Locate snapshot sstable files on the source node")
+                source_data_dir = get_table_data_dir(workdir_source)
+                snapshots_dir = os.path.join(source_data_dir, 'snapshots', snap_tag)
+                exclude_list = ['manifest.json', 'schema.cql']
+                snapshot_files = [f for f in os.listdir(snapshots_dir) if f not in exclude_list]
+                assert snapshot_files, "Snapshot should contain sstable files"
+
+                logger.info("Wipe sstables on servers[0] so it has no local data")
+                await manager.server_stop_gracefully(servers[0].server_id)
+                await manager.server_wipe_sstables(servers[0].server_id, ks, table)
+                await manager.server_start(servers[0].server_id)
+                cql, hosts = await manager.get_ready_cql(servers)
+                await manager.api.disable_autocompaction(servers[0].ip_addr, ks)
+
+                logger.info("Verify servers[0] has no data after wipe")
+                await asyncio.gather(*[validate_data_existence(cql, [], [hosts[0]], cf, pk) for pk in range(100)])
+
+                logger.info("Copy snapshot sstables to the target node's upload directory")
+                target_data_dir = get_table_data_dir(workdir_target)
+                upload_dir = os.path.join(target_data_dir, 'upload')
+                os.makedirs(upload_dir, exist_ok=True)
+                for fname in snapshot_files:
+                    shutil.copy2(os.path.join(snapshots_dir, fname), os.path.join(upload_dir, fname))
+
+                # Record the data directory contents before streaming to detect orphan SSTables later.
+                def list_sstable_files():
+                    return set(f for f in os.listdir(target_data_dir) if f != 'upload')
+
+                sstable_files_before = list_sstable_files()
+                logger.info(f"Files in target data directory before streaming: {sstable_files_before}")
+
+                # Pause inside write_components after the SSTable writer has been created and files exist on disk,
+                # but before mutation fragments are consumed. Its needed to reliably push the node into critical
+                # disk utilization level.
+                #
+                # Pausing earlier (e.g. before writer creation) would not work because there are no files on disk
+                # to fill up, while pausing later (e.g. after consuming fragments) would be too late to reliably
+                # reach critical disk utilization level.
+                # Scope the injection to the test's keyspace/table so unrelated sstable
+                # writes (e.g. system tables) don't trip the pause. The injection is not
+                # one-shot because unrelated writes would otherwise consume it first;
+                # it is disabled after the test table's writer has been released.
+                await manager.api.enable_injection(servers[0].ip_addr, "write_components_writer_created",
+                                                   one_shot=False, parameters={"ks_name": ks, "cf_name": table})
+
+                logger.info("Execute load-and-stream (nodetool refresh --load-and-stream) on the target node")
+                load_and_stream_task = asyncio.create_task(
+                    manager.api.load_new_sstables(servers[0].ip_addr, ks, table, load_and_stream=True, scope="all"))
+
+                mark, _ = await log.wait_for("write_components_writer_created: waiting for message", from_mark=mark)
+
+                logger.info("Verify partial SSTable files were created on disk")
+                sstable_files_during = list_sstable_files()
+                partial_files = sstable_files_during - sstable_files_before
+                assert partial_files, "Expected partial SSTable files to exist while writer is paused"
+                logger.info(f"Partial SSTable files: {partial_files}")
+
+                logger.info("Create a big file on the target node to reach critical disk utilization level")
+                disk_info = psutil.disk_usage(workdir_target)
+                filler_size = int(disk_info.total * 0.85) - disk_info.used
+                with random_content_file(workdir_target, filler_size):
+                    mark, _ = await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
+                    for _ in range(2):
+                        mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
+
+                    logger.info("Release the paused writer — fragments will be consumed and rejected")
+                    await manager.api.message_injection(servers[0].ip_addr, "write_components_writer_created")
+                    await manager.api.disable_injection(servers[0].ip_addr, "write_components_writer_created")
+
+                    with pytest.raises(Exception, match="Failed to load new sstables"):
+                        await load_and_stream_task
+
+                    mark, _ = await log.wait_for(
+                        "stream_session.*Failed to handle STREAM_MUTATION_FRAGMENTS.*"
+                        "Critical disk utilization: rejected streamed mutation fragment",
+                        from_mark=mark)
+
+                    logger.info("Verify servers[0] still has no data after rejected load-and-stream")
+                    await asyncio.gather(*[validate_data_existence(cql, [], [hosts[0]], cf, pk) for pk in range(100)])
+
+                    logger.info("Verify partial SSTable files were cleaned up")
+                    sstable_files_after = list_sstable_files()
+                    assert sstable_files_after == sstable_files_before, \
+                        f"Orphan SSTable files found after failed stream: {sstable_files_after - sstable_files_before}"

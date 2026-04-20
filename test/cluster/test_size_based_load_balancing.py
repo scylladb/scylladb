@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 GB = 1024 * 1024 * 1024
 
 @pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_balance_empty_tablets(manager: ManagerClient):
 
     # This test checks that size-based load balancing migrates empty tablets of a newly created
@@ -25,7 +26,12 @@ async def test_balance_empty_tablets(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
 
-    cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        # The test overrides disk capacity but the disk usage remains real leading the disk_space_monitor
+        # to announce 100% disk utilization and active OoS prevention mechanisms.
+        'error_injections_at_startup': ['suppress_disk_space_threshold_checks'],
+    }
 
     cfg_small = cfg | { 'data_file_capacity': 50 * GB }
     cfg_large = cfg | { 'data_file_capacity': 100 * GB }

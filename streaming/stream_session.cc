@@ -27,6 +27,7 @@
 #include "sstables/sstable_set.hh"
 #include "db/view/view_update_checks.hh"
 #include "replica/database.hh"
+#include "replica/exceptions.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "consumer.hh"
 #include "readers/generating.hh"
@@ -147,9 +148,9 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                 })));
             }
 
-            auto get_next_mutation_fragment = [guard = std::move(guard), &as, &sm = container(), source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
+            auto get_next_mutation_fragment = [guard = std::move(guard), &as, &sm = container(), &db = _db, source, plan_id, from, s, cmd_status, offstrategy_update, permit] () mutable {
                 guard.check();
-                return source().then([&sm, &guard, &as, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+                return source().then([&sm, &db, &guard, &as, plan_id, from, s, cmd_status, offstrategy_update, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
                     if (opt) {
                         auto cmd = std::get<1>(*opt);
                         if (cmd) {
@@ -183,10 +184,13 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                                 co_await sleep_abortable(std::chrono::milliseconds(5), as_);
                             }
                             sslog.info("stream_mutation_fragments: released");
-                        }).then([mf = std::move(mf)] () mutable {
+                        }).then([mf = std::move(mf), &db] () mutable {
                             if (utils::get_local_injector().is_enabled("stream_mutation_fragments_rx_error")) {
                                 sslog.info("stream_mutation_fragments_rx_error: throw");
                                 throw std::runtime_error("stream_mutation_fragments_rx_error");
+                            }
+                            if (db.local().is_in_critical_disk_utilization_mode()) {
+                                throw replica::critical_disk_utilization_exception("rejected streamed mutation fragment");
                             }
                             return mutation_fragment_opt(std::move(mf));
                         });
