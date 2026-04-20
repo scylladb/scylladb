@@ -548,7 +548,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
-            db.set_querier_cache_entry_ttl(2s);
+            db.set_querier_cache_entry_ttl(60s);
         }).get();
 
         const auto ks = create_vnodes_keyspace(env);
@@ -605,7 +605,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
-            db.set_querier_cache_entry_ttl(2s);
+            db.set_querier_cache_entry_ttl(60s);
         }).get();
 
         const auto ks = create_vnodes_keyspace(env);
@@ -667,7 +667,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
-            db.set_querier_cache_entry_ttl(2s);
+            db.set_querier_cache_entry_ttl(60s);
         }).get();
 
         const auto ks = create_vnodes_keyspace(env);
