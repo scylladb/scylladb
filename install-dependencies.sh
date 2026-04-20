@@ -72,6 +72,7 @@ debian_base_packages=(
 )
 
 fedora_packages=(
+    go
     clang
     clang-tools-extra
     compiler-rt
