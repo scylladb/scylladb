@@ -40,7 +40,7 @@ namespace gms {
 class dictionary_service {
     db::system_keyspace& _sys_ks;
     locator::host_id _our_host_id;
-    utils::updateable_value<enum_option<netw::dict_training_loop::when>> _rpc_dict_training_when;
+    utils::updateable_value<enum_option<netw::dict_training_when>> _rpc_dict_training_when;
     service::raft_group0_client& _raft_group0_client;
     abort_source& _as;
     netw::dict_training_loop _training_fiber;
@@ -48,7 +48,7 @@ class dictionary_service {
 
     bool _is_leader = false;
     utils::observer<bool> _leadership_observer;
-    utils::observer<enum_option<netw::dict_training_loop::when>> _when_observer;
+    utils::observer<enum_option<netw::dict_training_when>> _when_observer;
     std::optional<std::any> _feature_observer;
 
     void maybe_toggle_dict_training();
@@ -61,7 +61,7 @@ public:
         locator::host_id our_host_id = Uninitialized();
         utils::updateable_value<uint32_t> rpc_dict_training_min_time_seconds = Uninitialized();
         utils::updateable_value<uint64_t> rpc_dict_training_min_bytes = Uninitialized();
-        utils::updateable_value<enum_option<netw::dict_training_loop::when>> rpc_dict_training_when = Uninitialized();
+        utils::updateable_value<enum_option<netw::dict_training_when>> rpc_dict_training_when = Uninitialized();
     };
     // Note: the training fiber will start as soon as the relevant cluster feature is enabled. 
     dictionary_service(

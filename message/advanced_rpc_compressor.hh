@@ -11,9 +11,10 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <utility>
+
+#include "rpc_compression_types.hh"
 #include "utils/refcounted.hh"
 #include "utils/updateable_value.hh"
-#include "utils/enum_option.hh"
 #include "shared_dict.hh"
 
 namespace netw {
@@ -27,103 +28,6 @@ class stream_decompressor;
 class dict_sampler;
 using dict_ptr = lw_shared_ptr<foreign_ptr<lw_shared_ptr<shared_dict>>>;
 class control_protocol_frame;
-
-// An enum wrapper, describing supported RPC compression algorithms.
-// Always contains a valid value —- the constructors won't allow
-// an invalid/unknown enum variant to be constructed.
-struct compression_algorithm {
-    using underlying = uint8_t;
-    enum class type : underlying {
-        RAW,
-        LZ4,
-        ZSTD,
-        COUNT,
-    } _value;
-    // Construct from an integer.
-    // Used to deserialize the algorithm from the first byte of the frame.
-    constexpr compression_algorithm(underlying x) {
-        if (x < std::to_underlying(type::RAW) || x >= std::to_underlying(type::COUNT)) {
-            throw std::runtime_error(fmt::format("Invalid value {} for enum compression_algorithm", static_cast<int>(x)));
-        }
-        _value = static_cast<type>(x);
-    }
-    // Construct from `type`. Makes sure that `type` has a valid value.
-    constexpr compression_algorithm(type x) : compression_algorithm(std::to_underlying(x)) {}
-
-    // These names are used in multiple places:
-    // RPC negotiation, in metric labels, and config.
-    static constexpr std::string_view names[] = {
-        "raw",
-        "lz4",
-        "zstd",
-    };
-    static_assert(std::size(names) == static_cast<int>(compression_algorithm::type::COUNT));
-
-    // Implements enum_option.
-    static auto map() {
-        std::unordered_map<std::string, type> ret;
-        for (size_t i = 0; i < std::size(names); ++i) {
-            ret.insert(std::make_pair<std::string, type>(std::string(names[i]), compression_algorithm(i).get()));
-        }
-        return ret;
-    }
-
-    constexpr std::string_view name() const noexcept { return names[idx()]; }
-    constexpr underlying idx() const noexcept { return std::to_underlying(_value); }
-    constexpr type get() const noexcept { return _value; }
-    constexpr static size_t count() { return static_cast<size_t>(type::COUNT); };
-    bool operator<=>(const compression_algorithm &) const = default;
-};
-
-
-// Represents a set of compression algorithms.
-// Backed by a bitset.
-// Used for convenience during algorithm negotiations.
-class compression_algorithm_set {
-    uint8_t _bitset;
-    static_assert(std::numeric_limits<decltype(_bitset)>::digits > compression_algorithm::count());
-    constexpr compression_algorithm_set(uint8_t v) noexcept : _bitset(v) {}
-public:
-    // Returns a set containing the given algorithm and all algorithms weaker (smaller in the enum order)
-    // than it.
-    constexpr static compression_algorithm_set this_or_lighter(compression_algorithm algo) noexcept {
-        auto x = 1 << (algo.idx());
-        return {x + (x - 1)};
-    }
-    // Returns the strongest (greatest in the enum order) algorithm in the set.
-    constexpr compression_algorithm heaviest() const {
-        return {std::bit_width(_bitset) - 1};
-    }
-    // The usual set operations.
-    constexpr static compression_algorithm_set singleton(compression_algorithm algo) noexcept {
-        return {1 << algo.idx()};
-    }
-    constexpr compression_algorithm_set intersection(compression_algorithm_set o) const noexcept {
-        return {_bitset & o._bitset};
-    }
-    constexpr compression_algorithm_set difference(compression_algorithm_set o) const noexcept {
-        return {_bitset &~ o._bitset};
-    }
-    constexpr compression_algorithm_set sum(compression_algorithm_set o) const noexcept {
-        return {_bitset | o._bitset};
-    }
-    constexpr bool contains(compression_algorithm algo) const noexcept {
-        return _bitset & (1 << algo.idx());
-    }
-    constexpr bool operator==(const compression_algorithm_set&) const = default;
-    // Returns the contained bitset. Used for serialization.
-    constexpr uint8_t value() const noexcept {
-        return _bitset;
-    }
-    // Reconstructs the set from the output of `value()`. Used for deserialization.
-    constexpr static compression_algorithm_set from_value(uint8_t bitset) {
-        compression_algorithm_set x = bitset;
-        x.heaviest(); // This is a validation check. It will throw if the bitset contains some illegal/unknown bits.
-        return x;
-    }
-};
-
-using algo_config = std::vector<enum_option<compression_algorithm>>;
 
 // See docs/dev/advanced_rpc_compression.md,
 // section `Negotiation` for more information about the protocol.
@@ -248,7 +152,7 @@ struct per_algorithm_stats {
 // prevent a misuse of the API (dangling references).
 class advanced_rpc_compressor::tracker : public utils::refcounted {
 public:
-    using algo_config = algo_config;
+    using algo_config = netw::algo_config;
     struct config {
         utils::updateable_value<uint32_t> zstd_min_msg_size{0};
         utils::updateable_value<uint32_t> zstd_max_msg_size{std::numeric_limits<uint32_t>::max()};

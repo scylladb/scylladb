@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "rpc_compression_types.hh"
 #include "utils/reservoir_sampling.hh"
 #include "utils/updateable_value.hh"
 #include <seastar/core/future.hh>
@@ -88,28 +89,7 @@ class dict_training_loop {
     seastar::semaphore _pause{0};
     seastar::abort_source _pause_as;
 public:
-    struct when {
-        enum class type {
-            NEVER,
-            WHEN_LEADER,
-            ALWAYS,
-            COUNT,
-        };
-        static constexpr std::string_view names[] = {
-            "never",
-            "when_leader",
-            "always",
-        };
-        static_assert(std::size(names) == static_cast<size_t>(type::COUNT));
-        // Implements enum_option.
-        static std::unordered_map<std::string, type> map() {
-            std::unordered_map<std::string, type> ret;
-            for (size_t i = 0; i < std::size(names); ++i) {
-                ret.insert({std::string(names[i]), type(i)});
-            }
-            return ret;
-        }
-    };
+    using when = netw::dict_training_when;
     void pause();
     void unpause();
     void cancel() noexcept;

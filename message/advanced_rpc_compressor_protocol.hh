@@ -9,7 +9,7 @@
 #pragma once
 
 #include "shared_dict.hh"
-#include "advanced_rpc_compressor.hh"
+#include "rpc_compression_types.hh"
 
 namespace netw {
 

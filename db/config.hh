@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <unordered_map>
 
 #include <seastar/core/sstring.hh>
@@ -23,8 +24,7 @@
 #include "gms/inet_address.hh"
 #include "db/hints/host_filter.hh"
 #include "utils/error_injection.hh"
-#include "message/dict_trainer.hh"
-#include "message/advanced_rpc_compressor.hh"
+#include "message/rpc_compression_types.hh"
 #include "db/consistency_level_type.hh"
 #include "db/tri_mode_restriction.hh"
 #include "sstables/compressor.hh"
@@ -325,9 +325,9 @@ public:
     named_value<uint32_t> internode_compression_zstd_min_message_size;
     named_value<uint32_t> internode_compression_zstd_max_message_size;
     named_value<bool> internode_compression_checksumming;
-    named_value<netw::advanced_rpc_compressor::tracker::algo_config> internode_compression_algorithms;
+    named_value<netw::algo_config> internode_compression_algorithms;
     named_value<bool> internode_compression_enable_advanced;
-    named_value<enum_option<netw::dict_training_loop::when>> rpc_dict_training_when;
+    named_value<enum_option<netw::dict_training_when>> rpc_dict_training_when;
     named_value<uint32_t> rpc_dict_training_min_time_seconds;
     named_value<uint64_t> rpc_dict_training_min_bytes;
     named_value<bool> inter_dc_tcp_nodelay;
@@ -739,8 +739,8 @@ extern template struct utils::config_file::named_value<enum_option<db::experimen
 extern template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
-extern template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
-extern template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
+extern template struct utils::config_file::named_value<enum_option<netw::dict_training_when>>;
+extern template struct utils::config_file::named_value<netw::algo_config>;
 extern template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;
 extern template struct utils::config_file::named_value<std::vector<enum_option<db::replication_strategy_restriction_t>>>;
 extern template struct utils::config_file::named_value<std::vector<enum_option<db::consistency_level_restriction_t>>>;

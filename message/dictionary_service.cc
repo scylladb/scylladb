@@ -54,11 +54,11 @@ dictionary_service::dictionary_service(
 void dictionary_service::maybe_toggle_dict_training() {
     auto when = _rpc_dict_training_when();
     netw::dict_trainer_logger.debug("dictionary_service::maybe_toggle_dict_training(), called, _is_leader={}, when={}", _is_leader, when);
-    if (when == netw::dict_training_loop::when::type::NEVER) {
+    if (when == netw::dict_training_when::type::NEVER) {
         _training_fiber.pause();
-    } else if (when == netw::dict_training_loop::when::type::ALWAYS) {
+    } else if (when == netw::dict_training_when::type::ALWAYS) {
         _training_fiber.unpause();
-    } else if (when == netw::dict_training_loop::when::type::WHEN_LEADER) {
+    } else if (when == netw::dict_training_when::type::WHEN_LEADER) {
         _is_leader ? _training_fiber.unpause() : _training_fiber.pause();
     }
 };

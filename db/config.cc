@@ -330,14 +330,14 @@ const config_type& config_type_for<std::vector<db::config::error_injection_at_st
 }
 
 template <>
-const config_type& config_type_for<enum_option<netw::dict_training_loop::when>>() {
+const config_type& config_type_for<enum_option<netw::dict_training_when>>() {
     static config_type ct(
-        "dictionary training conditions", printable_to_json<enum_option<netw::dict_training_loop::when>>);
+        "dictionary training conditions", printable_to_json<enum_option<netw::dict_training_when>>);
     return ct;
 }
 
 template <>
-const config_type& config_type_for<netw::advanced_rpc_compressor::tracker::algo_config>() {
+const config_type& config_type_for<netw::algo_config>() {
     static config_type ct(
         "advanced rpc compressor config", printable_vector_to_json<enum_option<netw::compression_algorithm>>);
     return ct;
@@ -530,9 +530,9 @@ struct convert<db::config::error_injection_at_startup> {
 
 
 template <>
-class convert<enum_option<netw::dict_training_loop::when>> {
+class convert<enum_option<netw::dict_training_when>> {
 public:
-    static bool decode(const Node& node, enum_option<netw::dict_training_loop::when>& rhs) {
+    static bool decode(const Node& node, enum_option<netw::dict_training_when>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1110,7 +1110,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Specifies RPC compression algorithms supported by this node. ")
     , internode_compression_enable_advanced(this, "internode_compression_enable_advanced", liveness::MustRestart, value_status::Used, false,
         "Enables the new implementation of RPC compression. If disabled, Scylla will fall back to the old implementation.")
-    , rpc_dict_training_when(this, "rpc_dict_training_when", liveness::LiveUpdate, value_status::Used, netw::dict_training_loop::when::type::NEVER,
+    , rpc_dict_training_when(this, "rpc_dict_training_when", liveness::LiveUpdate, value_status::Used, netw::dict_training_when::type::NEVER,
         "Specifies when RPC compression dictionary training is performed by this node.\n"
         "* `never` disables it unconditionally.\n"
         "* `when_leader` enables it only whenever the node is the Raft leader.\n"
@@ -2025,8 +2025,8 @@ template struct utils::config_file::named_value<enum_option<db::experimental_fea
 template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
-template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
-template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
+template struct utils::config_file::named_value<enum_option<netw::dict_training_when>>;
+template struct utils::config_file::named_value<netw::algo_config>;
 template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;
 template struct utils::config_file::named_value<std::vector<enum_option<db::replication_strategy_restriction_t>>>;
 template struct utils::config_file::named_value<std::vector<enum_option<db::consistency_level_restriction_t>>>;
