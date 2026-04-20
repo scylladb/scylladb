@@ -14,6 +14,7 @@
 
 #include "utils/disk_space_monitor.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 
 using namespace std::chrono_literals;
@@ -31,8 +32,9 @@ disk_space_monitor::disk_space_monitor(abort_source& as, std::filesystem::path d
     , _data_dir(std::move(data_dir))
     , _cfg(std::move(cfg))
     , _threshold_subscription(listen([this](const disk_space_monitor& dsm) -> future<> {
+        const bool dsm_disabled = utils::get_local_injector().is_enabled("suppress_disk_space_threshold_checks");
         const float current_disk_utilization = dsm.disk_utilization();
-        if (current_disk_utilization < 0.0f) {
+        if (current_disk_utilization < 0.0f || dsm_disabled) {
             co_return;
         }
 

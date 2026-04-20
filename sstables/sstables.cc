@@ -2244,6 +2244,14 @@ future<> sstable::write_components(
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats] () mutable {
         auto close_mr = deferred_close(mr);
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats);
+        utils::get_local_injector().inject("write_components_writer_created", [&schema] (auto& handler) -> future<> {
+            if (schema->ks_name() != handler.get("ks_name") || schema->cf_name() != handler.get("cf_name")) {
+                co_return;
+            }
+            sstlog.info("write_components_writer_created: waiting for message");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds(30));
+            sstlog.info("write_components_writer_created: message received");
+        }).get();
         mr.consume_in_thread(std::move(wr));
     }).finally([this] {
         assert_large_data_handler_is_running();
