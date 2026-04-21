@@ -1655,10 +1655,14 @@ public:
         co_return std::move(plan);
     }
 
+    // Returns the schema and tablet-aware replication strategy for a given table.
+    // Returns {nullptr, nullptr} if the table has been dropped concurrently (race between
+    // the token metadata snapshot and the live schema).
     std::tuple<schema_ptr, const tablet_aware_replication_strategy*> get_schema_and_rs(table_id table) {
         auto t = _db.get_tables_metadata().get_table_if_exists(table);
         if (!t) {
-            on_internal_error(lblogger, format("Table {} does not exist", table));
+            lblogger.debug("Table {} no longer exists, skipping", table);
+            return {nullptr, nullptr};
         }
 
         auto s = t->schema();
@@ -1673,6 +1677,8 @@ public:
         return {s, rs};
     }
 
+    // Returns the tablet-aware replication strategy for a given table, or nullptr
+    // if the table has been dropped concurrently.
     const tablet_aware_replication_strategy* get_rs(table_id id) {
         auto [s, rs] = get_schema_and_rs(id);
         return rs;
@@ -1870,7 +1876,9 @@ public:
         for (const auto& [table, tables] : _tm->tablets().all_table_groups()) {
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             auto [s, rs] = get_schema_and_rs(table);
-
+            if (s == nullptr || rs == nullptr) {
+                continue;
+            }
             auto tablet_options = combine_tablet_options(
                     tables | std::views::transform([&] (table_id table) { return _db.get_tables_metadata().get_table_if_exists(table); })
                            | std::views::filter([] (auto t) { return t != nullptr; })
@@ -2699,6 +2707,10 @@ public:
         std::unordered_map<sstring, int> rack_load;
 
         auto rs = get_rs(tablet.table);
+        if (rs == nullptr) {
+            // Table was dropped concurrently. Skip this tablet.
+            return skip_info{};
+        }
 
         auto get_viable_targets = [&] () {
             std::unordered_set<host_id> viable_targets;
