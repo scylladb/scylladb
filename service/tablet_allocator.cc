@@ -2117,10 +2117,14 @@ public:
         co_return std::move(plan);
     }
 
+    // Returns the schema and tablet-aware replication strategy for a given table.
+    // Returns {nullptr, nullptr} if the table has been dropped concurrently (race between
+    // the token metadata snapshot and the live schema).
     std::tuple<schema_ptr, const tablet_aware_replication_strategy*> get_schema_and_rs(table_id table) {
         auto t = _db.get_tables_metadata().get_table_if_exists(table);
         if (!t) {
-            on_internal_error(lblogger, format("Table {} does not exist", table));
+            lblogger.debug("Table {} no longer exists, skipping", table);
+            return {nullptr, nullptr};
         }
 
         auto s = t->schema();
@@ -2135,6 +2139,8 @@ public:
         return {s, rs};
     }
 
+    // Returns the tablet-aware replication strategy for a given table, or nullptr
+    // if the table has been dropped concurrently.
     const tablet_aware_replication_strategy* get_rs(table_id id) {
         auto [s, rs] = get_schema_and_rs(id);
         return rs;
@@ -2158,6 +2164,7 @@ public:
         sstring target_tablet_count_reason; // Winning rule for target_tablet_count value.
         std::optional<uint64_t> avg_tablet_size; // nullopt when stats not yet available.
         bool pow2_count; // Whether tablet count for the table should be a power of two.
+        bool tablet_merges_allowed; // Whether merges are allowed for the table.
 
         // Final tablet count.
         // It's target_tablet_count aligned to power of 2 if pow2_count == true.
@@ -2312,6 +2319,17 @@ public:
             table_plan.current_tablet_count = tablet_count;
             table_plan.pow2_count = tablet_options.pow2_count.value_or(
                     _db.features().arbitrary_tablet_boundaries ? db::tablet_options::default_pow2_count : true);
+            table_plan.tablet_merges_allowed = !s->tablet_merges_forbidden();
+            if (!table_plan.tablet_merges_allowed) {
+                // Block merge decisions for Alternator tablet tables whose
+                // stream configuration forbids merges. Tablet merges produce
+                // 2 parents per child which is incompatible with the DynamoDB
+                // Streams API. If a merge is already in progress on the tmap,
+                // suppressing new_resize_decision here causes the existing
+                // revocation logic in tables_being_resized to cancel the merge.
+                lblogger.debug("Table {} ({}.{}): suppressing new merge decision because tablet merges are forbidden",
+                            table, s->ks_name(), s->cf_name());
+            }
 
             rs_by_table[table] = rs;
 
@@ -2419,6 +2437,9 @@ public:
             }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             auto [s, rs] = get_schema_and_rs(table);
+            if (s == nullptr || rs == nullptr) {
+                continue;
+            }
             auto tablet_options = combine_tablet_options(
                     tables | std::views::transform([&] (table_id table) { return _db.get_tables_metadata().get_table_if_exists(table); })
                            | std::views::filter([] (auto t) { return t != nullptr; })
@@ -2551,7 +2572,7 @@ public:
             } else if (table_plan.target_tablet_count_aligned < table_plan.current_tablet_count) {
                 // Needed to avoid oscillations, because we reduce the count by a factor of 2.
                 // FIXME: Once we have a way to split individual tablets, we can achieve exactly the desired tablet count.
-                if (div_ceil(table_plan.current_tablet_count, 2) >= table_plan.target_tablet_count_aligned) {
+                if (table_plan.tablet_merges_allowed && div_ceil(table_plan.current_tablet_count, 2) >= table_plan.target_tablet_count_aligned) {
                     auto& tmap = _tm->tablets().get_tablet_map(table);
                     auto cur_decision = tmap.resize_decision();
                     if (cur_decision.is_merge()) {
@@ -2600,21 +2621,6 @@ public:
 
             resize_decision new_resize_decision;
             new_resize_decision.way = table_plan.resize_decision;
-
-            // Block merge decisions for Alternator tablet tables whose
-            // stream configuration forbids merges. Tablet merges produce
-            // 2 parents per child which is incompatible with the DynamoDB
-            // Streams API. If a merge is already in progress on the tmap,
-            // suppressing new_resize_decision here causes the existing
-            // revocation logic in tables_being_resized to cancel the merge.
-            if (new_resize_decision.is_merge()) {
-                auto [s, rs] = get_schema_and_rs(table);
-                if (s->tablet_merges_forbidden()) {
-                    lblogger.debug("Table {} ({}.{}): suppressing new merge decision because tablet merges are forbidden",
-                                   table, s->ks_name(), s->cf_name());
-                    new_resize_decision = {};
-                }
-            }
 
             table_size_desc size_desc {
                 .avg_tablet_size = *table_plan.avg_tablet_size,
@@ -3287,6 +3293,10 @@ public:
         std::unordered_map<sstring, int> rack_load;
 
         auto rs = get_rs(tablet.table);
+        if (rs == nullptr) {
+            // Table was dropped concurrently. Skip this tablet.
+            return skip_info{};
+        }
 
         auto get_viable_targets = [&] () {
             std::unordered_set<host_id> viable_targets;
