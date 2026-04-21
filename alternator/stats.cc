@@ -108,6 +108,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     seastar::metrics::description("number of total operations via Alternator API"), labels)(basic_level).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("reads_before_write", stats.reads_before_write,
                     seastar::metrics::description("number of performed read-before-write operations"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("lsi_reads_from_base_table", stats.lsi_reads_from_base_table,
+                    seastar::metrics::description("number of base-table row reads triggered by LSI queries needing non-projected attributes"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("write_using_lwt", stats.write_using_lwt,
                     seastar::metrics::description("number of writes that used LWT"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("shard_bounce_for_lwt", stats.shard_bounce_for_lwt,
