@@ -18,9 +18,15 @@ namespace cql3::statements::strong_consistency {
 
 using result_message = cql_transport::messages::result_message;
 
-static void validate_consistency_level(const db::consistency_level& cl) {
-    if (cl != db::consistency_level::QUORUM && cl != db::consistency_level::LOCAL_QUORUM &&
-        cl != db::consistency_level::ONE && cl != db::consistency_level::LOCAL_ONE) {
+static service::strong_consistency::read_type parse_consistency_level(const db::consistency_level& cl) {
+    switch (cl) {
+    case db::consistency_level::QUORUM:
+    case db::consistency_level::LOCAL_QUORUM:
+        return service::strong_consistency::read_type::linearizable;
+    case db::consistency_level::ONE:
+    case db::consistency_level::LOCAL_ONE:
+        return service::strong_consistency::read_type::non_linearizable;
+    default:
         throw exceptions::invalid_request_exception("Strongly consistent reads must use QUORUM/LOCAL_QUORUM or ONE/LOCAL_ONE consistency level");
     }
 }
@@ -29,7 +35,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
         service::query_state& state, 
         const query_options& options) const
 {
-    validate_consistency_level(options.get_consistency());
+    auto read_type = parse_consistency_level(options.get_consistency());
 
     const auto key_ranges = _restrictions->get_partition_key_ranges(options);
     if (key_ranges.size() != 1 || !query::is_single_partition(key_ranges[0])) {
@@ -52,7 +58,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
     const auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
     auto query_result = co_await coordinator.get().query(_query_schema, *read_command,
-        key_ranges, state.get_trace_state(), timeout, state.get_client_state().get_abort_source());
+        key_ranges, read_type, state.get_trace_state(), timeout, state.get_client_state().get_abort_source());
 
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&query_result)) {

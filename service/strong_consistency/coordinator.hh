@@ -24,6 +24,20 @@ namespace service::strong_consistency {
 
 class groups_manager;
 
+// Classifies a strongly consistent read based on the CQL consistency level.
+//
+// linearizable: the read is forwarded to the raft leader, where read_barrier()
+//   is performed locally. This we we read the most up-to-date aplied data.
+//   Currently mapped from CL=QUORUM (the default).
+//
+// non_linearizable: the read is performed on the local replica without
+//   a read_barrier. Because of this, the read may return slightly stale data,
+//   so reads from different nodes may not be linearizable. Currently mapped from CL=ONE.
+enum class read_type {
+    linearizable,
+    non_linearizable,
+};
+
 struct need_redirect {
     locator::tablet_replica target;
     noncopyable_function<void(locator::host_id)> on_node_resolved;
@@ -81,6 +95,7 @@ public:
     future<query_result_type> query(schema_ptr schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
+        read_type rtype,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as);

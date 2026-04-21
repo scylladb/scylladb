@@ -390,6 +390,7 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
 auto coordinator::query(schema_ptr schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
+        read_type rtype,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as
