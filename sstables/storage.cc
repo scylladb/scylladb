@@ -847,6 +847,10 @@ future<> object_storage_base::change_state(const sstable& sst, sstable_state sta
 }
 
 future<> object_storage_base::wipe(const sstable& sst, sync_dir) noexcept {
+    // FIXME: unlike filesystem_storage::wipe, this implementation does not
+    // catch exceptions from delete_object / sstables_registry calls and may
+    // return an exceptional future, breaking the contract documented on
+    // storage::wipe.
     auto& sstables_registry = sst.manager().sstables_registry();
 
     co_await sstables_registry.update_entry_status(owner(), sst.generation(), status_removing);
