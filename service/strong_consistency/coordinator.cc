@@ -404,11 +404,34 @@ auto coordinator::query(schema_ptr schema,
     auto mark_read_latency = defer([this, &lc] { _stats.read.mark(lc.stop().latency()); });
 
     try {
-        auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token(), aoe.abort_source(), false);
+        auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token(), aoe.abort_source(), rtype == read_type::linearizable);
         if (auto* redirect = get_if<need_redirect>(&op_result)) {
             co_return std::move(*redirect);
         }
         auto& op = get<operation_ctx>(op_result);
+
+        if (rtype == read_type::linearizable) {
+            // For linearizable reads we may need to forward to the raft leader.
+            while (true) {
+                auto disposition = op.raft_server.begin_read(aoe.abort_source());
+                if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
+                    const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
+                    const auto* target = find_replica(op.tablet_info, leader_host_id);
+                    if (!target) {
+                        on_internal_error(logger,
+                            ::format("query(): table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
+                                schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.tablet_info.replicas));
+                    }
+                    co_return need_redirect{*target};
+                }
+                if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+                    co_await std::move(wait_for_leader->future);
+                    continue;
+                }
+                break;
+            }
+        }
+        // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
 
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
             utils::wait_for_message(5min));
@@ -428,16 +451,17 @@ auto coordinator::query(schema_ptr schema,
         //     method was triggered.
         // * seastar::abort_requested_exception: Can be thrown by create_operation_ctx.
         // * timed_out_error: Can be thrown by the abort_on_expiry.
+        // * seastar::condition_variable_timed_out: Can be thrown by begin_read's wait_for_leader.
         //
         // We handle them collectively here.
         if (try_catch<raft::request_aborted>(ex) || try_catch<seastar::abort_requested_exception>(ex)
-                || try_catch<timed_out_error>(ex)) {
+                || try_catch<timed_out_error>(ex) || try_catch<seastar::condition_variable_timed_out>(ex)) {
             logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_timeout;
             co_return coroutine::return_exception(read_timeout(schema->ks_name(), schema->cf_name()));
         } else {
-            logger.trace("mutate(): unknown exception {}, table {}.{}, read cmd {}",
+            logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_other;
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
