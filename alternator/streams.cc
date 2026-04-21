@@ -234,7 +234,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 
     auto ret = rjson::empty_object();
     auto streams = rjson::empty_array();
-    std::optional<std::string> last;
+    std::optional<stream_arn> last;
 
     for (;limit > 0 && i != e; ++i) {
         auto s = i->schema();
@@ -247,11 +247,11 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
             rjson::value new_entry = rjson::empty_object();
 
             auto arn = stream_arn{ i->schema(), cdc::get_base_table(db.real_database(), *i->schema()) };
-            last = std::string(arn.unparsed());
             rjson::add(new_entry, "StreamArn", arn);
             rjson::add(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::add(new_entry, "TableName", rjson::from_string(cdc::base_name(s->cf_name())));
             rjson::push_back(streams, std::move(new_entry));
+            last = std::move(arn);
             --limit;
         }
     }
@@ -263,7 +263,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     // If we exhausted all tables naturally (limit > 0), there are no more
     // streams, so we must not emit a cookie.
     if (last && limit == 0) {
-        rjson::add(ret, "LastEvaluatedStreamArn", rjson::from_string(*last));
+        rjson::add(ret, "LastEvaluatedStreamArn", *last);
     }
     return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
 }
