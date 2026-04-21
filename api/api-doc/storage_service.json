@@ -3295,6 +3295,84 @@
          }]
       },
       {
+          "path":"/storage_service/tablets/backup",
+          "operations":[
+              {
+                  "method":"POST",
+                  "summary":"Starts copying SSTables from a specified keyspace across all nodes to a designated bucket in object storage",
+                  "type":"string",
+                  "nickname":"start_global_backup",
+                  "produces":[
+                      "application/json"
+                  ],
+                  "parameters":[
+                      {
+                         "name":"keyspace",
+                         "description":"Keyspace(s) in snapshot to backup. Multiple keyspaces can be provided using a comma-separated list. If omitted, snapshot all keyspaces.",
+                         "required":false,
+                         "allowMultiple":false,
+                         "type":"string",
+                         "paramType":"query"
+                      },
+                      {
+                         "name":"table",
+                         "description":"Table(s) in snapshot to backup. Multiple tables (in a single keyspace) can be provided using a comma-separated list. If omitted, snapshot all tables in the given keyspace(s).",
+                         "required":false,
+                         "allowMultiple":false,
+                         "type":"string",
+                         "paramType":"query"
+                      },
+                      {
+                          "name":"snapshot",
+                          "description":"Name of a snapshot to copy sstables from. If not existing, a new snapshot will be made",
+                          "required":true,
+                          "allowMultiple":false,
+                          "type":"string",
+                          "paramType":"query"
+                      },
+                      {
+                          "name":"move_files",
+                          "description":"Move component files instead of copying them",
+                          "required":false,
+                          "allowMultiple":false,
+                          "type":"boolean",
+                          "paramType":"query"
+                      },
+                      {
+                         "name":"backup_location",
+                         "description":"JSON array of backup location objects. Each object must contain: 'datacenter' (string), 'endpoint' (string), 'bucket' (string), and 'prefix' (string).",
+                         "required":true,
+                         "allowMultiple":false,
+                         "type":"array",
+                         "paramType":"body",
+                         "items": {
+                            "description":"A backup location entry describing where to place SSTables",
+                            "properties":{
+                                "datacenter":{
+                                   "type":"string",
+                                   "description":"The datacenter name"
+                                },
+                                "endpoint":{
+                                   "type":"string",
+                                   "description":"The object store endpoint name/URL"
+                                },
+                                "bucket":{
+                                   "type":"string",
+                                   "description":"The object store bucket name"
+                                },
+                                "prefix":{
+                                   "type":"string",
+                                   "description":"The object store bucket prefix"
+                                }
+                            }
+                         }
+                      }
+                  ]
+              }
+          ]
+      },
+
+      {
          "path":"/storage_service/quiesce_topology",
          "operations":[
             {
