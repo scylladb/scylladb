@@ -43,6 +43,7 @@
 #include "utils/error_injection.hh"
 #include "utils/base64.hh"
 #include "vector_search/vector_store_client.hh"
+#include "view_info.hh"
 #include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -273,8 +274,6 @@ static select_type parse_select(const rjson::value& request, table_or_view_type 
         return select_type::count;
     }
     if (select == "ALL_ATTRIBUTES") {
-        // FIXME: when we support projections (#5036), if this is a GSI and
-        // not all attributes are projected to it, we should throw.
         return select_type::regular;
     }
     if (select == "ALL_PROJECTED_ATTRIBUTES") {
@@ -285,6 +284,20 @@ static select_type parse_select(const rjson::value& request, table_or_view_type 
     }
     throw api_error::validation(fmt::format("Unknown Select value '{}'. Allowed choices: ALL_ATTRIBUTES, SPECIFIC_ATTRIBUTES, ALL_PROJECTED_ATTRIBUTES, COUNT",
         select));
+}
+
+// For a GSI with KEYS_ONLY projection, when SPECIFIC_ATTRIBUTES is requested
+// (via AttributesToGet or ProjectionExpression), validate that all the
+// requested attributes are key columns (i.e., are projected into the GSI).
+static void validate_gsi_keys_only_attrs(const schema& s, const attrs_to_get& specific_attrs) {
+    for (const auto& [attr, _] : specific_attrs) {
+        const column_definition* cdef = s.get_column_definition(to_bytes(attr));
+        if (!cdef || (!cdef->is_partition_key() && !cdef->is_clustering_key())) {
+            throw api_error::validation(
+                fmt::format("Attribute '{}' is not projected into the index. "
+                       "Use Select=ALL_PROJECTED_ATTRIBUTES or restrict the query to projected attributes.", attr));
+        }
+    }
 }
 
 // "filter" represents a condition that can be applied to individual items
@@ -311,6 +324,7 @@ public:
     enum class request_type { SCAN, QUERY };
     // Note that a filter does not store pointers to the query used to
     // construct it.
+    filter() = default;  // constructs an empty (pass-all) filter
     filter(parsed::expression_cache& parsed_expression_cache, const rjson::value& request, request_type rt,
             std::unordered_set<std::string>& used_attribute_names,
             std::unordered_set<std::string>& used_attribute_values);
@@ -424,6 +438,28 @@ void filter::for_filters_on(const noncopyable_function<void(std::string_view)>& 
             }
         }, *_imp);
     }
+}
+
+// For an index (GSI or LSI) with non-ALL projection, validate that all
+// attributes used by the filter are key columns projected into the index.
+// DynamoDB rejects filtering on non-projected attributes even for LSI
+// and Select=ALL_ATTRIBUTES, where filtering could have been allowed because
+// the entire items are read (from the base table) anyway.
+// FIXME: this implementation is for ProjectionType=KEYS_ONLY only; When we
+// implement ProjectionType=INCLUDE, we will need to implement a check for
+// it as well.
+static void validate_only_projected_attrs_in_filter(const schema& s, std::string_view index_name, const filter& f) {
+    if (!projection_is_keys_only(s)) {
+        return;
+    }
+    f.for_filters_on([&] (std::string_view attr) {
+        const column_definition* cdef = s.get_column_definition(to_bytes(attr));
+        if (!cdef || (!cdef->is_partition_key() && !cdef->is_clustering_key())) {
+            throw api_error::validation(
+                fmt::format("Secondary index {} does not project one or more filter attributes: {}",
+                       index_name, attr));
+        }
+    });
 }
 
 class describe_items_visitor {
@@ -622,6 +658,233 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
 // point for when to switch from a rapidjson array to a chunked_vector.
 static constexpr int max_items_for_rapidjson_array = 256;
 
+// do_query_lsi_with_base_fetch() handles the case of a Query or Scan on an
+// LSI with KEYS_ONLY projection when the user requested ALL_ATTRIBUTES or
+// SPECIFIC_ATTRIBUTES which includes non-projected attributes. Because the
+// LSI view does not contain the ":attrs" column, querying it directly would
+// only return key columns. The correct approach is:
+//   1. Query the LSI view to get results in LSI sort-key order.
+//   2. Apply the filter to each LSI result row (a filter may only use
+//      projected attributes).
+//   3. For each remaining row, extract the base-table primary key (p, c),
+//      and do a point read on the base table to retrieve all attributes.
+// This preserves the LSI sort order while returning full item data.
+// FIXME: step 3 currently reads the base table one row at a time, which is
+// inefficient.
+static future<executor::request_return_type> do_query_lsi_with_base_fetch(
+        service::storage_proxy& proxy,
+        schema_ptr lsi_schema,
+        schema_ptr base_schema,
+        const rjson::value* exclusive_start_key,
+        dht::partition_range_vector partition_ranges,
+        std::vector<query::clustering_range> ck_bounds,
+        std::optional<attrs_to_get> attrs_to_get,
+        uint32_t limit,
+        db::consistency_level cl,
+        filter filter,
+        query::partition_slice::option_set custom_opts,
+        service::client_state& client_state,
+        alternator::stats& stats,
+        tracing::trace_state_ptr trace_state,
+        service_permit permit,
+        bool enforce_authorization,
+        bool warn_authorization) {
+    lw_shared_ptr<const service::pager::paging_state> old_paging_state = nullptr;
+
+    tracing::trace(trace_state, "Performing a database query on an LSI, and reading full items from the base table");
+
+    auto query_schema = lsi_schema;
+    const bool reversed = custom_opts.contains<query::partition_slice::option::reversed>();
+    if (reversed) {
+        query_schema = lsi_schema->get_reversed();
+        std::reverse(ck_bounds.begin(), ck_bounds.end());
+        for (auto& bound : ck_bounds) {
+            bound = query::reverse(bound);
+        }
+    }
+
+    if (exclusive_start_key) {
+        partition_key pk = pk_from_json(*exclusive_start_key, lsi_schema);
+        auto pos = position_in_partition::for_partition_start();
+        if (lsi_schema->clustering_key_size() > 0) {
+            pos = pos_from_json(*exclusive_start_key, lsi_schema);
+        }
+        old_paging_state = make_lw_shared<service::pager::paging_state>(pk, pos, query::max_partitions, query_id::create_null_id(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0, std::nullopt);
+    }
+
+    co_await verify_permission(enforce_authorization, warn_authorization, client_state, lsi_schema, auth::permission::SELECT, stats);
+    co_await verify_permission(enforce_authorization, warn_authorization, client_state, base_schema, auth::permission::SELECT, stats);
+
+    // Step 1: Query the LSI to get key-only rows in LSI sort order.
+    // The LSI is KEYS_ONLY so it has no ":attrs" column, but it does have
+    // all DynamoDB key columns: the base partition key (p), the LSI sort key (b),
+    // and the base clustering key (c). We need p and c to look up the base table.
+    auto lsi_regular_columns =
+            lsi_schema->regular_columns() | std::views::transform(&column_definition::id)
+            | std::ranges::to<query::column_id_vector>();
+    auto lsi_static_columns =
+            lsi_schema->static_columns() | std::views::transform(&column_definition::id)
+            | std::ranges::to<query::column_id_vector>();
+    auto lsi_selection = cql3::selection::selection::wildcard(lsi_schema);
+    query::partition_slice::option_set opts = lsi_selection->get_query_options();
+    opts.add(custom_opts);
+    auto lsi_partition_slice = query::partition_slice(ck_bounds, std::move(lsi_static_columns), std::move(lsi_regular_columns), opts);
+    auto lsi_command = ::make_lw_shared<query::read_command>(query_schema->id(), query_schema->version(), lsi_partition_slice, proxy.get_max_result_size(lsi_partition_slice),
+        query::tombstone_limit(proxy.get_tombstone_limit()));
+
+    auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, permit);
+    lsi_command->slice.options.set<query::partition_slice::option::allow_short_read>();
+    auto query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
+    query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(old_paging_state));
+    auto p = service::pager::query_pagers::pager(proxy, query_schema, lsi_selection, *query_state_ptr, *query_options, lsi_command, std::move(partition_ranges), nullptr);
+
+    // Fetch up to limit rows from the LSI (no filter applied at this stage).
+    std::unique_ptr<cql3::result_set> lsi_rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
+    if (!p->is_exhausted()) {
+        // No plan to record: this pager was pointed at the LSI to read here,
+        // rather than by a CQL plan a resumed page could pick differently.
+        lsi_rs->get_metadata().set_paging_state(p->state(std::nullopt));
+    }
+    auto paging_state = lsi_rs->get_metadata().paging_state();
+
+    // Extract key-only items from LSI result set.
+    // We don't apply attrs_to_get here - we need all key columns
+    // (p, b, c) to reconstruct the base table primary key. We also don't
+    // apply the filter here, but in the loop below, before reading each
+    // item from the base table.
+    std::optional<alternator::attrs_to_get> no_attrs;
+    alternator::filter empty_filter;  // default-constructed, passes all items
+    describe_items_visitor lsi_visitor(lsi_selection->get_columns(), no_attrs, empty_filter);
+    co_await lsi_rs->visit_gently(lsi_visitor);
+    auto lsi_items = std::move(lsi_visitor).get_items();
+
+    // Step 2: For each LSI row, do a point read on the base table.
+    auto base_selection = cql3::selection::selection::wildcard(base_schema);
+    auto base_regular_columns = base_schema->regular_columns()
+            | std::views::transform(&column_definition::id)
+            | std::ranges::to<query::column_id_vector>();
+
+    auto timeout = executor::default_timeout();
+    auto shared_attrs_to_get = ::make_shared<const std::optional<alternator::attrs_to_get>>(std::move(attrs_to_get));
+
+    utils::chunked_vector<rjson::value> items;
+    int matched_count = 0;
+    int scanned_count = 0;
+    // The LSI page read above was limited to the usual page size, but since
+    // it holds only keys, it may hold many more rows than the page size
+    // allows for full items. So we stop reading from the base table when
+    // the items we read reach the page size, and return a LastEvaluatedKey
+    // pointing to the last LSI row we used.
+    // But the size of the items alone isn't a good enough limit: Each base
+    // read is a separate request, done one after another, and all of them
+    // share the timeout of this one Query or Scan request. When items are
+    // small, a page of up to a megabyte of keys could need tens of
+    // thousands of base reads. The request could then time out, and the
+    // client's retry would time out the same way, so it would never make
+    // progress. Returning a shorter page with a LastEvaluatedKey avoids
+    // this. So we count each base read as at least min_base_read_bytes
+    // toward the page size, even if the item is smaller or wasn't found.
+    // We chose 4 KB because DynamoDB also charges a read of a small item as
+    // a read of 4 KB (one "read capacity unit"). With the default page size
+    // of 1 MB, a page then does at most 256 base reads, which should take
+    // much less time than the request's timeout.
+    constexpr uint64_t min_base_read_bytes = 4096;
+    const uint64_t page_size = proxy.get_max_result_size(lsi_partition_slice).get_page_size();
+    uint64_t read_bytes = 0;
+    const rjson::value* last_used_lsi_item = nullptr;
+
+    for (auto& lsi_item : lsi_items) {
+        ++scanned_count;
+        // Apply filter on the LSI item before reading from the base table.
+        // DynamoDB forbids FilterExpression from referencing non-projected
+        // attributes on a KEYS_ONLY LSI, so all filter attributes are
+        // guaranteed to be present in the LSI item. Filtering here avoids
+        // unnecessary base table reads for items that won't pass the filter.
+        // Filtering here is also necessary for correctness - it allows the
+        // filter to use columns that the user might have asked not to be
+        // included in the final output item (Select=SPECIFIC_ATTRIBUTES).
+        if (filter && !filter.check(lsi_item)) {
+            co_await coroutine::maybe_yield();
+            continue;
+        }
+        // Extract base table primary key from the LSI item JSON.
+        // The LSI item has columns p (base partition key), b (LSI sort key),
+        // and c (base clustering key). pk_from_json / ck_from_json use the
+        // base schema to extract only p and c.
+        partition_key base_pk = pk_from_json(lsi_item, base_schema);
+        clustering_key base_ck = ck_from_json(lsi_item, base_schema);
+        std::vector<query::clustering_range> base_ck_bounds_single{
+            query::clustering_range::make_singular(base_ck)
+        };
+        auto base_partition_slice = query::partition_slice(std::move(base_ck_bounds_single), {},
+                base_regular_columns, base_selection->get_query_options());
+        auto base_command = ::make_lw_shared<query::read_command>(
+                base_schema->id(), base_schema->version(), base_partition_slice,
+                proxy.get_max_result_size(base_partition_slice),
+                query::tombstone_limit(proxy.get_tombstone_limit()));
+        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+                co_await proxy.query_result(base_schema, base_command,
+                        {dht::partition_range(dht::decorate_key(*base_schema, base_pk))},
+                        cl,
+                        service::storage_proxy::coordinator_query_options(
+                                timeout, permit, client_state, trace_state));
+        if (!rqr) {
+            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+        }
+        auto qr = std::move(rqr).assume_value();
+        ++stats.lsi_reads_from_base_table;
+        ++get_stats_from_schema(proxy, *base_schema)->lsi_reads_from_base_table;
+        uint64_t item_bytes = 0;
+        auto opt_item = describe_single_item(base_schema, base_partition_slice,
+                *base_selection, *qr.query_result, *shared_attrs_to_get, &item_bytes);
+        if (opt_item) {
+            ++matched_count;
+            items.push_back(std::move(*opt_item));
+        }
+        read_bytes += std::max(item_bytes, min_base_read_bytes);
+        if (read_bytes >= page_size && scanned_count < int(lsi_items.size())) {
+            last_used_lsi_item = &lsi_item;
+            break;
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    if (filter) {
+        stats.cql_stats.filtered_rows_read_total += scanned_count;
+        stats.cql_stats.filtered_rows_matched_total += matched_count;
+    }
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "Count", rjson::value(matched_count));
+    rjson::add(response, "ScannedCount", rjson::value(scanned_count));
+    if (last_used_lsi_item) {
+        rjson::value last_evaluated_key = rjson::empty_object();
+        for (const column_definition& cdef : lsi_schema->primary_key_columns()) {
+            rjson::add_with_string_name(last_evaluated_key, cdef.name_as_text(),
+                    rjson::copy((*last_used_lsi_item)[cdef.name_as_text()]));
+        }
+        rjson::add(response, "LastEvaluatedKey", std::move(last_evaluated_key));
+    } else if (paging_state) {
+        rjson::add(response, "LastEvaluatedKey", encode_paging_state(*lsi_schema, *paging_state));
+    }
+    stats.returned_items += items.size();
+    stats.returned_items_histogram.add(items.size());
+    auto per_table_stats = get_stats_from_schema(proxy, *lsi_schema);
+    per_table_stats->returned_items += items.size();
+    per_table_stats->returned_items_histogram.add(items.size());
+    if (items.size() >= max_items_for_rapidjson_array) {
+        co_return make_streamed_with_extra_array(std::move(response), "Items", std::move(items));
+    }
+    rjson::value items_json = rjson::empty_array();
+    for (auto& item : items) {
+        rjson::push_back(items_json, std::move(item));
+    }
+    rjson::add(response, "Items", std::move(items_json));
+    if (is_big(response)) {
+        co_return make_streamed(std::move(response));
+    }
+    co_return rjson::print(std::move(response));
+}
+
 static future<executor::request_return_type> do_query(service::storage_proxy& proxy,
         schema_ptr table_schema,
         const rjson::value* exclusive_start_key,
@@ -804,10 +1067,28 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     }
 
     select_type select = parse_select(request, table_type);
+    // For GSI with KEYS_ONLY projection, Select=ALL_ATTRIBUTES is not allowed
+    // because a GSI will not do a base-table lookup. For LSI, ALL_ATTRIBUTES
+    // is allowed even with KEYS_ONLY - Scylla will retrieve the full item
+    // from the base table.
+    if (select == select_type::regular &&
+            !request.HasMember("AttributesToGet") &&
+            !request.HasMember("ProjectionExpression") &&
+            table_type == table_or_view_type::gsi &&
+            projection_is_keys_only(*schema)) {
+        return make_ready_future<request_return_type>(api_error::validation(
+            "Select=ALL_ATTRIBUTES is not supported on a GSI with ProjectionType=KEYS_ONLY. Use Select=ALL_PROJECTED_ATTRIBUTES, or request only key attributes with ProjectionExpression or AttributesToGet."));
+    }
 
     std::unordered_set<std::string> used_attribute_names;
     std::unordered_set<std::string> used_attribute_values;
     auto attrs_to_get = calculate_attrs_to_get(request, *_parsed_expression_cache, used_attribute_names, select);
+
+    // For GSI with KEYS_ONLY, validate that specific requested attributes
+    // are key columns (projected into the index).
+    if (attrs_to_get && table_type == table_or_view_type::gsi && projection_is_keys_only(*schema)) {
+        validate_gsi_keys_only_attrs(*schema, *attrs_to_get);
+    }
 
     dht::partition_range_vector partition_ranges;
     if (segment) {
@@ -833,14 +1114,44 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     // optimized the filtering by modifying partition_ranges and/or
     // ck_bounds. We haven't done this optimization yet.
 
+    if (table_type == table_or_view_type::gsi || table_type == table_or_view_type::lsi) {
+        validate_only_projected_attrs_in_filter(*schema, rjson::to_string_view(*rjson::find(request, "IndexName")), filter);
+    }
+
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "Scan");
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Scan");
 
-    return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filter), query::partition_slice::option_set(), client_state, _stats, trace_state, std::move(permit), _enforce_authorization, _warn_authorization).then(
-            [this, per_table_stats, start_time] (request_return_type result) {
+    // For an LSI with KEYS_ONLY projection, scanning the LSI view directly
+    // would only return key columns (no ":attrs"). When the user requests
+    // ALL_ATTRIBUTES or SPECIFIC_ATTRIBUTES for non-projected (non-key)
+    // attributes, we must do a per-item point read on the base table.
+    // However, if Select=SPECIFIC_ATTRIBUTES and all requested attributes are
+    // key columns already present in the LSI view, we can read the LSI
+    // directly without touching the base table (the efficient path).
+    schema_ptr lsi_base_schema; // set if we need to read from the base table
+    if (table_type == table_or_view_type::lsi &&
+            select != select_type::projection &&
+            select != select_type::count &&
+            projection_is_keys_only(*schema)) {
+        bool all_attrs_in_lsi_view = select == select_type::regular && attrs_to_get &&
+                std::ranges::all_of(*attrs_to_get, [&schema](const auto& attr) {
+                    return schema->get_column_definition(to_bytes(attr.first)) != nullptr;
+                });
+        if (!all_attrs_in_lsi_view) {
+            lsi_base_schema = _proxy.data_dictionary().find_schema(schema->view_info()->base_id());
+        }
+    }
+
+    auto f = lsi_base_schema
+        ? do_query_lsi_with_base_fetch(_proxy, schema, lsi_base_schema, exclusive_start_key,
+                std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+                std::move(filter), query::partition_slice::option_set(), client_state, _stats, trace_state, std::move(permit),
+                _enforce_authorization, _warn_authorization)
+        : do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+                std::move(filter), query::partition_slice::option_set(), client_state, _stats, trace_state, std::move(permit), _enforce_authorization, _warn_authorization);
+    return f.then([this, per_table_stats, start_time] (request_return_type result) {
         auto duration = std::chrono::steady_clock::now() - start_time;
         _stats.api_operations.scan_latency.mark(duration);
         per_table_stats->api_operations.scan_latency.mark(duration);
@@ -1967,16 +2278,67 @@ future<executor::request_return_type> executor::query(client_state& client_state
         }
     }
 
+    if (table_type == table_or_view_type::gsi || table_type == table_or_view_type::lsi) {
+        validate_only_projected_attrs_in_filter(*schema, rjson::to_string_view(*rjson::find(request, "IndexName")), filter);
+    }
+
     select_type select = parse_select(request, table_type);
+    // For GSI with KEYS_ONLY projection, Select=ALL_ATTRIBUTES is not allowed
+    // because a GSI cannot do a base-table lookup. For LSI, Select=ALL_ATTRIBUTES
+    // is allowed even with KEYS_ONLY because an LSI shares the same partition
+    // as the base table, so Scylla can retrieve the full item.
+    if (select == select_type::regular &&
+            !request.HasMember("AttributesToGet") &&
+            !request.HasMember("ProjectionExpression") &&
+            table_type == table_or_view_type::gsi &&
+            projection_is_keys_only(*schema)) {
+        return make_ready_future<request_return_type>(api_error::validation(
+            "Select=ALL_ATTRIBUTES is not supported on a GSI with ProjectionType=KEYS_ONLY. Use Select=ALL_PROJECTED_ATTRIBUTES, or request only key attributes with ProjectionExpression or AttributesToGet."));
+    }
 
     auto attrs_to_get = calculate_attrs_to_get(request, *_parsed_expression_cache, used_attribute_names, select);
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "Query");
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Query");
+
+    // For GSI with KEYS_ONLY, validate that specific requested attributes
+    // are key columns (projected into the index).
+    if (attrs_to_get && table_type == table_or_view_type::gsi && projection_is_keys_only(*schema)) {
+        validate_gsi_keys_only_attrs(*schema, *attrs_to_get);
+    }
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
-    return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filter), opts, client_state, _stats, std::move(trace_state), std::move(permit), _enforce_authorization, _warn_authorization).then(
-            [this, per_table_stats, start_time] (request_return_type result) {
+
+    // For an LSI with KEYS_ONLY projection, querying the LSI view directly
+    // would only return key columns (no ":attrs"). When the user requests
+    // ALL_ATTRIBUTES or SPECIFIC_ATTRIBUTES for non-projected (non-key)
+    // attributes, we must do a per-item point read on the base table.
+    // However, if Select=SPECIFIC_ATTRIBUTES and all requested attributes are
+    // key columns already present in the LSI view, we can read the LSI
+    // directly without touching the base table (the efficient path).
+    schema_ptr lsi_base_schema; // set if we need to read from the base table
+    if (table_type == table_or_view_type::lsi &&
+            select != select_type::projection &&
+            select != select_type::count &&
+            projection_is_keys_only(*schema)) {
+        // Check if all requested attributes are real columns in the LSI view
+        // (i.e., key columns). If so, we can skip the base-table fetch.
+        bool all_attrs_in_lsi_view = select == select_type::regular && attrs_to_get &&
+                std::ranges::all_of(*attrs_to_get, [&schema](const auto& attr) {
+                    return schema->get_column_definition(to_bytes(attr.first)) != nullptr;
+                });
+        if (!all_attrs_in_lsi_view) {
+            lsi_base_schema = _proxy.data_dictionary().find_schema(schema->view_info()->base_id());
+        }
+    }
+
+    auto f = lsi_base_schema
+        ? do_query_lsi_with_base_fetch(_proxy, schema, lsi_base_schema, exclusive_start_key,
+                std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+                std::move(filter), opts, client_state, _stats, std::move(trace_state), std::move(permit),
+                _enforce_authorization, _warn_authorization)
+        : do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+                std::move(filter), opts, client_state, _stats, std::move(trace_state), std::move(permit), _enforce_authorization, _warn_authorization);
+    return f.then([this, per_table_stats, start_time] (request_return_type result) {
         auto duration = std::chrono::steady_clock::now() - start_time;
         _stats.api_operations.query_latency.mark(duration);
         per_table_stats->api_operations.query_latency.mark(duration);

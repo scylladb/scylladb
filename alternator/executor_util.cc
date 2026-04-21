@@ -708,4 +708,8 @@ api_error create_api_error_from_coordinators_exception(const exceptions::coordin
         }
     });
 }
+
+bool projection_is_keys_only(const schema& s) {
+    return s.get_column_definition(bytes(executor::ATTRS_COLUMN_NAME)) == nullptr;
+}
 } // namespace alternator
