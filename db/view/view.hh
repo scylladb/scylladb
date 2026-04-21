@@ -231,6 +231,9 @@ public:
     }
     view_update_builder(view_update_builder&& other) noexcept = default;
 
+    // One builder instance processes at most one base partition, but it may
+    // need multiple build_some() calls to emit all of that partition's view
+    // updates.
 
     // build_some() works on batches of 100 (max_rows_for_view_updates)
     // updated rows, but can_skip_view_updates() can decide that some of
@@ -255,6 +258,7 @@ private:
     future<stop_iteration> stop() const;
 };
 
+// The readers provided for the view_update_builder should span the same single partition.
 view_update_builder make_view_update_builder(
         data_dictionary::database db,
         const replica::table& base_table,
