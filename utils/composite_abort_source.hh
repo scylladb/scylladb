@@ -9,27 +9,42 @@
 #pragma once
 
 #include <seastar/core/abort_source.hh>
-#include "utils/assert.hh"
-#include "utils/small_vector.hh"
-#include "seastarx.hh"
+
+using namespace seastar;
 
 namespace utils {
-// A facility to combine several abort_source-s and expose them as a single abort_source.
-// The combined abort_source is aborted whenever any of the added abort_sources is aborted.
-// Typical use case: there are several sources of abort signal (e.g. timeout and node shutdown)
-// and we what some routine to be aborted on any of them.
-class composite_abort_source {
-    abort_source _as;
-    utils::small_vector<abort_source::subscription, 2> _subscriptions;
-public:
-    void add(abort_source& as) {
-        as.check();
-        auto sub = as.subscribe([this]() noexcept { _as.request_abort(); });
-        SCYLLA_ASSERT(sub);
-        _subscriptions.push_back(std::move(*sub));
+
+/// Subscribe dependent_as to base_as and return the corresponding subscription.
+///
+/// If the passed base_as has already been triggered, it will immediately
+/// trigger dependent_as.
+[[nodiscard]]
+inline optimized_optional<abort_source::subscription> chain_abort_source(
+        abort_source& dependent_as,
+        abort_source& base_as)
+{
+    if (base_as.abort_requested()) {
+        dependent_as.request_abort_ex(base_as.abort_requested_exception_ptr());
     }
-    abort_source& abort_source() noexcept {
-        return _as;
-    }
-};
+
+    return base_as.subscribe([&dependent_as] (const std::optional<std::exception_ptr>& eptr) noexcept {
+        dependent_as.request_abort_ex(eptr.value_or(dependent_as.get_default_exception()));
+    });
+}
+
+/// Subscribe dependent_as to base_as and return the corresponding subscription.
+/// If the passed base_as is a nullptr, return a null optional.
+///
+/// If the passed base_as has already been triggered, it will immediately
+/// trigger dependent_as.
+[[nodiscard]]
+inline optimized_optional<abort_source::subscription> chain_abort_source(
+        abort_source& dependent_as,
+        abort_source* base_as)
+{
+    return base_as == nullptr
+            ? optimized_optional<abort_source::subscription>()
+            : chain_abort_source(dependent_as, *base_as);
+}
+
 }
