@@ -49,6 +49,13 @@ manifest_json::node_info::node_info(const node_info& e) {
     rack = e.rack;
 }
 
+manifest_json::node_info::node_info(const db::snapshot_node_entry& e) {
+    register_params();
+    host_id = e.node.to_sstring();
+    datacenter = e.datacenter;
+    rack = e.rack;
+}
+
 manifest_json::node_info& manifest_json::node_info::operator=(const node_info& e) {
     if (this != &e) {
         host_id = e.host_id;
@@ -151,6 +158,7 @@ manifest_json::sstable_info::sstable_info(const sstable_info& e) {
     last_token = e.last_token;
     tablet_id = e.tablet_id;
     repaired_at = e.repaired_at;
+    node = e.node;
 }
 
 manifest_json::sstable_info::sstable_info(sstable_info&& e) {
@@ -163,6 +171,20 @@ manifest_json::sstable_info::sstable_info(sstable_info&& e) {
     last_token = e.last_token;
     tablet_id = e.tablet_id;
     repaired_at = e.repaired_at;
+    node = std::move(e.node);
+}
+
+manifest_json::sstable_info::sstable_info(const db::snapshot_sstable_entry& e) {
+    register_params();
+    id = e.sstable_id.to_sstring();
+    toc_name = e.toc_name;
+    data_size = e.data_size;
+    index_size = e.index_size;
+    first_token = dht::token::to_int64(e.first_token);
+    last_token = dht::token::to_int64(e.last_token);
+    tablet_id = e.tablet_id;
+    repaired_at = e.repaired_at;
+    node = e.node.to_sstring();
 }
 
 manifest_json::sstable_info& manifest_json::sstable_info::operator=(sstable_info&& e) {
@@ -174,6 +196,7 @@ manifest_json::sstable_info& manifest_json::sstable_info::operator=(sstable_info
     last_token = e.last_token;
     tablet_id = e.tablet_id;
     repaired_at = e.repaired_at;
+    node = std::move(e.node);
     return *this;
 }
 
@@ -186,6 +209,7 @@ void manifest_json::sstable_info::register_params() {
     add(&last_token, "last_token");
     add(&tablet_id, "tablet_id");
     add(&repaired_at, "repaired_at");
+    add(&node, "node");
 }
 
 manifest_json::tablet_info::tablet_info() {
@@ -239,6 +263,7 @@ manifest_json::manifest_json(manifest_json&& e) {
     table = std::move(e.table);
     sstables = std::move(e.sstables);
     tablets = std::move(e.tablets);
+    nodes = std::move(e.nodes);
 }
 
 manifest_json& manifest_json::operator=(manifest_json&& e) {
@@ -249,6 +274,7 @@ manifest_json& manifest_json::operator=(manifest_json&& e) {
         table = std::move(e.table);
         sstables = std::move(e.sstables);
         tablets = std::move(e.tablets);
+        nodes = std::move(e.nodes);
     }
     return *this;
 }

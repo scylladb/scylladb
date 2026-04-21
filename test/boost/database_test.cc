@@ -783,7 +783,13 @@ SEASTAR_THREAD_TEST_CASE(test_auto_snapshot_ttl) {
     size_t num_keys = 100;
     do_with_some_data_in_thread({table_name}, [&] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
-        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
+        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy())
+            , std::ref(e.qp())
+            , std::ref(e.get_messaging_service())
+            , std::ref(e.get_task_manager())
+            , std::ref(e.get_sstorage_manager())
+            , db::snapshot_ctl::config{}
+        ).get();
         auto stop_sc = deferred_stop(sc);
         e.local_db().plug_snapshot_ctl(sc.local());
         auto unplug_sc = deferred_action([&] () noexcept {
@@ -1000,7 +1006,13 @@ SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
 SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
     return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
-        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
+        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy())
+            , std::ref(e.qp())
+            , std::ref(e.get_messaging_service())
+            , std::ref(e.get_task_manager())
+            , std::ref(e.get_sstorage_manager())
+            , db::snapshot_ctl::config{}
+        ).get();
         auto stop_sc = deferred_stop(sc);
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
@@ -1048,7 +1060,13 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
 SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
     return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
-        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
+        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy())
+            , std::ref(e.qp())
+            , std::ref(e.get_messaging_service())
+            , std::ref(e.get_task_manager())
+            , std::ref(e.get_sstorage_manager())
+            , db::snapshot_ctl::config{}
+        ).get();
         auto stop_sc = deferred_stop(sc);
 
         auto& cf = e.local_db().find_column_family("ks", "cf");
@@ -1086,7 +1104,13 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details_exception_handling) {
 #endif
     return do_with_some_data_in_thread({"cf"}, [] (cql_test_env& e) {
         sharded<db::snapshot_ctl> sc;
-        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy()), std::ref(e.get_task_manager()), std::ref(e.get_sstorage_manager()), db::snapshot_ctl::config{}).get();
+        sc.start(std::ref(e.db()), std::ref(e.get_storage_proxy())
+            , std::ref(e.qp())
+            , std::ref(e.get_messaging_service())
+            , std::ref(e.get_task_manager())
+            , std::ref(e.get_sstorage_manager())
+            , db::snapshot_ctl::config{}
+        ).get();
         auto stop_sc = deferred_stop(sc);
 
         auto& cf = e.local_db().find_column_family("ks", "cf");

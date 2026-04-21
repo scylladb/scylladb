@@ -142,4 +142,12 @@ struct snapshot_entries {
     std::vector<snapshot_tablet_entry> tablets;
 };
 
+struct snapshot_dc_location {
+    std::string endpoint;
+    std::string bucket;
+    std::string prefix;
+
+    constexpr bool operator==(const snapshot_dc_location& o) const noexcept = default;
+};
+
 } // namespace db
