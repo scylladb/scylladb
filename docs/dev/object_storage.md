@@ -271,7 +271,7 @@ The json structure is as follows:
 }
 
 The `manifest` member contains the following attributes:
-- `version` - respresenting the version of the manifest itself. It is incremented when members are added or removed from the manifest.
+- `version` - representing the version of the manifest itself. It is incremented when members are added or removed from the manifest.
 - `scope` - the scope of metadata stored in this manifest file.  The following scopes are supported:
     - `node` - the manifest describes all SSTables owned by this node in this snapshot.
 

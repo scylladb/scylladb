@@ -614,7 +614,7 @@ void stream_id_range::prepare_for_iterating()
 // the function returns `stream_id_range` that will allow iteration over children Streams shards for the Streams shard `parent`
 // a child Streams shard is defined as a Streams shard that touches token range that was previously covered by `parent` Streams shard
 // Streams shard contains a token, that represents end of the token range for that Streams shard (inclusive)
-// begginning of the token range is defined by previous Streams shard's token + 1
+// beginning of the token range is defined by previous Streams shard's token + 1
 // NOTE: With vnodes, ranges of Streams' shards wrap, while with tablets the biggest allowed token number is always a range end.
 // NOTE: both streams generation are guaranteed to cover whole range and be non-empty
 // NOTE: it's possible to get more than one stream shard with the same token value (thus some of those stream shards will be empty) -

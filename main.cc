@@ -942,7 +942,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", "bgre", 50).get();
 
-            // Maintenance supergroup -- the collection of background low-prio activites
+            // Maintenance supergroup -- the collection of background low-prio activities
             auto maintenance_supergroup = create_scheduling_supergroup(200).get();
             auto bandwidth_updater = io_throughput_updater("maintenance supergroup", maintenance_supergroup,
                     cfg->maintenance_io_throughput_mb_per_sec.is_set() ? cfg->maintenance_io_throughput_mb_per_sec : cfg->stream_io_throughput_mb_per_sec);

@@ -1354,7 +1354,7 @@ static future<executor::request_return_type> query_vector(
     std::unordered_set<std::string> used_attribute_values;
     // Parse the Select parameter and determine which attributes to return.
     // For a vector index, the default Select is ALL_ATTRIBUTES (full items).
-    // ALL_PROJECTED_ATTRIBUTES is significantly more efficent because it
+    // ALL_PROJECTED_ATTRIBUTES is significantly more efficient because it
     // returns what the vector store returned without looking up additional
     // base-table data. Currently only the primary key attributes are projected
     // but in the future we'll implement projecting additional attributes into

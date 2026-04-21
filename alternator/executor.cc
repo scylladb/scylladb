@@ -1892,7 +1892,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 }
                 if (vector_index_updates->Size() > 1) {
                     // VectorIndexUpdates mirrors GlobalSecondaryIndexUpdates.
-                    // Since DynamoDB artifically limits the latter to just a
+                    // Since DynamoDB artificially limits the latter to just a
                     // single operation (one Create or one Delete), we also
                     // place the same artificial limit on VectorIndexUpdates,
                     // and throw the same LimitExceeded error if the client

@@ -1625,7 +1625,7 @@ struct process_change_visitor {
         if (_enable_updating_state) {
             if (_request_options.alternator && _alternator_schema_has_no_clustering_key && _clustering_row_states.empty()) {
                 // Alternator's table can be with or without clustering key. If the clustering key exists,
-                // delete request will be `clustered_row_delete` and will be hanlded there.
+                // delete request will be `clustered_row_delete` and will be handled there.
                 // If the clustering key doesn't exist, delete request will be `partition_delete` and will be handled here.
                 // The no-clustering-key case is slightly tricky, because insert of such item is handled by `clustered_row_cells`
                 // and has some value as clustering_key (the value currently seems to be empty bytes object).
@@ -1933,7 +1933,7 @@ public:
         if (_options.alternator && !_alternator_clustering_keys_to_ignore.empty()) {
             // we filter mutations for Alternator's changes here.
             // We do it per mutation object (user might submit a batch of those in one go
-            // and some might be splitted because of different timestamps),
+            // and some might be split because of different timestamps),
             // ignore key set is cleared afterwards.
             // If single mutation object contains two separate changes to the same row
             // and at least one of them is ignored, all of them will be ignored.

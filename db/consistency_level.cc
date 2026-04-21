@@ -277,7 +277,7 @@ filter_for_query(consistency_level cl,
 
     host_id_vector_replica_set selected_endpoints;
 
-    // Pre-select endpoints based on client preference. If the endpoints
+    // Preselect endpoints based on client preference. If the endpoints
     // selected this way aren't enough to satisfy CL requirements select the
     // remaining ones according to the load-balancing strategy as before.
     if (!preferred_endpoints.empty()) {
