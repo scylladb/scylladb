@@ -343,102 +343,102 @@ to_predicates(
                             auto cdef = col.col;
                             auto type = &cdef->type->without_reversed();
                             if (oper.op == oper_t::IS_NOT) {
-                              return to_vector(predicate{
-                                  .solve_for = nullptr,
-                                  .filter = oper,
-                                  .on = on_column{col.col},
-                                  .is_not_null_single_column = is_null_constant(oper.rhs),
-                                  .op = oper.op,
-                              });
+                                return to_vector(predicate{
+                                    .solve_for = nullptr,
+                                    .filter = oper,
+                                    .on = on_column{col.col},
+                                    .is_not_null_single_column = is_null_constant(oper.rhs),
+                                    .op = oper.op,
+                                });
                             }
                             if (is_compare(oper.op)) {
-                              auto solve = [oper] (const query_options& options) {
-                                managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
-                                if (!val) {
-                                    return empty_value_set; // All NULL comparisons fail; no column values match.
-                                }
-                                return oper.op == oper_t::EQ ? value_set(value_list{*val})
-                                        : to_range(oper.op, std::move(*val));
-                              };
-                              return to_vector(predicate{
-                                  .solve_for = std::move(solve),
-                                  .filter = oper,
-                                  .on = on_column{col.col},
-                                  .is_singleton = (oper.op == oper_t::EQ),
-                                  .equality = (oper.op == oper_t::EQ),
-                                  .is_slice = expr::is_slice(oper.op),
-                                  .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
-                                  .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
-                                  .order = oper.order,
-                                  .op = oper.op,
-                              });
+                                auto solve = [oper] (const query_options& options) {
+                                    managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
+                                    if (!val) {
+                                        return empty_value_set; // All NULL comparisons fail; no column values match.
+                                    }
+                                    return oper.op == oper_t::EQ ? value_set(value_list{*val})
+                                    : to_range(oper.op, std::move(*val));
+                                };
+                                return to_vector(predicate{
+                                    .solve_for = std::move(solve),
+                                    .filter = oper,
+                                    .on = on_column{col.col},
+                                    .is_singleton = (oper.op == oper_t::EQ),
+                                    .equality = (oper.op == oper_t::EQ),
+                                    .is_slice = expr::is_slice(oper.op),
+                                    .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
+                                    .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
+                                    .order = oper.order,
+                                    .op = oper.op,
+                                });
                             } else if (oper.op == oper_t::IN) {
-                              auto solve = [oper, type, cdef] (const query_options& options) {
-                                return get_IN_values(oper.rhs, options, type->as_less_comparator(), cdef->name_as_text());
-                              };
-                              return to_vector(predicate{
-                                  .solve_for = std::move(solve),
-                                  .filter = oper,
-                                  .on = on_column{col.col},
-                                  .is_singleton = false,
-                                  .is_in = true,
-                                  .order = oper.order,
-                                  .op = oper.op,
-                              });
+                                auto solve = [oper, type, cdef] (const query_options& options) {
+                                    return get_IN_values(oper.rhs, options, type->as_less_comparator(), cdef->name_as_text());
+                                };
+                                return to_vector(predicate{
+                                    .solve_for = std::move(solve),
+                                    .filter = oper,
+                                    .on = on_column{col.col},
+                                    .is_singleton = false,
+                                    .is_in = true,
+                                    .order = oper.order,
+                                    .op = oper.op,
+                                });
                             } else if (oper.op == oper_t::CONTAINS || oper.op == oper_t::CONTAINS_KEY) {
-                              auto solve = [oper] (const query_options& options) {
-                                managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
-                                if (!val) {
-                                    return empty_value_set; // All NULL comparisons fail; no column values match.
-                                }
-                                return value_set(value_list{*val});
-                              };
-                              return to_vector(predicate{
-                                  .solve_for = std::move(solve),
-                                  .filter = oper,
-                                  .on = on_column{col.col},
-                                  .is_singleton = false,
-                                  .order = oper.order,
-                                  .op = oper.op,
-                              });
+                                auto solve = [oper] (const query_options& options) {
+                                    managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
+                                    if (!val) {
+                                        return empty_value_set; // All NULL comparisons fail; no column values match.
+                                    }
+                                    return value_set(value_list{*val});
+                                };
+                                return to_vector(predicate{
+                                    .solve_for = std::move(solve),
+                                    .filter = oper,
+                                    .on = on_column{col.col},
+                                    .is_singleton = false,
+                                    .order = oper.order,
+                                    .op = oper.op,
+                                });
                             }
                             return cannot_solve_on_column(oper, col.col);
                         },
                         [&] (const subscript& s) -> std::vector<predicate> {
                             const column_value& col = get_subscripted_column(s);
 
-                          if (oper.op == oper_t::EQ) {
-                            auto solve = [s, oper] (const query_options& options) {
-                                managed_bytes_opt sval = evaluate(s.sub, options).to_managed_bytes_opt();
-                                if (!sval) {
-                                    return empty_value_set; // NULL can't be a map key
-                                }
+                            if (oper.op == oper_t::EQ) {
+                                auto solve = [s, oper] (const query_options& options) {
+                                    managed_bytes_opt sval = evaluate(s.sub, options).to_managed_bytes_opt();
+                                    if (!sval) {
+                                        return empty_value_set; // NULL can't be a map key
+                                    }
 
-                                managed_bytes_opt rval = evaluate(oper.rhs, options).to_managed_bytes_opt();
-                                if (!rval) {
-                                    return empty_value_set; // All NULL comparisons fail; no column values match.
-                                }
-                                managed_bytes_opt elements[] = {sval, rval};
-                                managed_bytes val = tuple_type_impl::build_value_fragmented(elements);
-                                return value_set(value_list{val});
-                            };
-                            return to_vector(predicate{
-                                .solve_for = std::move(solve),
-                                .filter = oper,
-                                .on = on_column{col.col},
-                                .is_singleton = true,
-                                .equality = true,
-                                .order = oper.order,
-                                .op = oper.op,
-                                .is_subscript = true,
-                            });
-                          }
-                          return cannot_solve_on_column(oper, col.col);
+                                    managed_bytes_opt rval = evaluate(oper.rhs, options).to_managed_bytes_opt();
+                                    if (!rval) {
+                                        return empty_value_set; // All NULL comparisons fail; no column values match.
+                                    }
+                                    managed_bytes_opt elements[] = {sval, rval};
+                                    managed_bytes val = tuple_type_impl::build_value_fragmented(elements);
+                                    return value_set(value_list{val});
+                                };
+                                return to_vector(predicate{
+                                    .solve_for = std::move(solve),
+                                    .filter = oper,
+                                    .on = on_column{col.col},
+                                    .is_singleton = true,
+                                    .equality = true,
+                                    .order = oper.order,
+                                    .op = oper.op,
+                                    .is_subscript = true,
+                                });
+                            }
+                            return cannot_solve_on_column(oper, col.col);
                         },
                         [&] (const tuple_constructor& tuple) -> std::vector<predicate> {
                             auto columns = tuple.elements
-                                    | std::views::transform([] (const expression& e) { return as<column_value>(e).col; })
-                                    | std::ranges::to<std::vector>();
+                            | std::views::transform([] (const expression& e) { return as<column_value>(e).col; })
+                            | std::ranges::to<std::vector>();
                             for (unsigned i = 0; i < columns.size(); ++i) {
                                 if (!columns[i]->is_clustering_key() || columns[i]->position() != i) {
                                     on_internal_error(rlogger, "to_predicates: multi-column relation not on a clustering key prefix");
@@ -481,42 +481,42 @@ to_predicates(
                             if (!(oper.op == oper_t::EQ || is_slice(oper.op))) {
                                 return cannot_solve(oper);
                             }
-                          auto solve = [oper] (const query_options& options) -> value_set {
-                            auto val = evaluate(oper.rhs, options).to_managed_bytes_opt();
-                            if (!val) {
-                                return empty_value_set; // All NULL comparisons fail; no token values match.
-                            }
-                            if (oper.op == oper_t::EQ) {
-                                return value_list{*val};
-                            } else if (oper.op == oper_t::GT) {
-                                return interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), exclusive));
-                            } else if (oper.op == oper_t::GTE) {
-                                return interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), inclusive));
-                            }
-                            static const managed_bytes MININT = managed_bytes(serialized(std::numeric_limits<int64_t>::min())),
-                                    MAXINT = managed_bytes(serialized(std::numeric_limits<int64_t>::max()));
-                            // Undocumented feature: when the user types `token(...) < MININT`, we interpret
-                            // that as MAXINT for some reason.
-                            const auto adjusted_val = (*val == MININT) ? MAXINT : *val;
-                            if (oper.op == oper_t::LT) {
-                                return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), exclusive));
-                            } else if (oper.op == oper_t::LTE) {
-                                return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), inclusive));
-                            }
-                            throw std::logic_error(format("get_token_interval unexpected operator {}", oper.op));
-                          };
-                          return to_vector(predicate{
-                            .solve_for = std::move(solve),
-                            .filter = oper,
-                            .on = on_partition_key_token{table_schema_opt},
-                            .is_singleton = (oper.op == oper_t::EQ),
-                            .equality = (oper.op == oper_t::EQ),
-                            .is_slice = expr::is_slice(oper.op),
-                            .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
-                            .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
-                            .order = oper.order,
-                            .op = oper.op,
-                          });
+                            auto solve = [oper] (const query_options& options) -> value_set {
+                                auto val = evaluate(oper.rhs, options).to_managed_bytes_opt();
+                                if (!val) {
+                                    return empty_value_set; // All NULL comparisons fail; no token values match.
+                                }
+                                if (oper.op == oper_t::EQ) {
+                                    return value_list{*val};
+                                } else if (oper.op == oper_t::GT) {
+                                    return interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), exclusive));
+                                } else if (oper.op == oper_t::GTE) {
+                                    return interval<managed_bytes>::make_starting_with(interval_bound(std::move(*val), inclusive));
+                                }
+                                static const managed_bytes MININT = managed_bytes(serialized(std::numeric_limits<int64_t>::min())),
+                                MAXINT = managed_bytes(serialized(std::numeric_limits<int64_t>::max()));
+                                // Undocumented feature: when the user types `token(...) < MININT`, we interpret
+                                // that as MAXINT for some reason.
+                                const auto adjusted_val = (*val == MININT) ? MAXINT : *val;
+                                if (oper.op == oper_t::LT) {
+                                    return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), exclusive));
+                                } else if (oper.op == oper_t::LTE) {
+                                    return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), inclusive));
+                                }
+                                throw std::logic_error(format("get_token_interval unexpected operator {}", oper.op));
+                            };
+                            return to_vector(predicate{
+                                .solve_for = std::move(solve),
+                                .filter = oper,
+                                .on = on_partition_key_token{table_schema_opt},
+                                .is_singleton = (oper.op == oper_t::EQ),
+                                .equality = (oper.op == oper_t::EQ),
+                                .is_slice = expr::is_slice(oper.op),
+                                .is_upper_bound = (oper.op == oper_t::LT || oper.op == oper_t::LTE),
+                                .is_lower_bound = (oper.op == oper_t::GT || oper.op == oper_t::GTE),
+                                .order = oper.order,
+                                .op = oper.op,
+                            });
                         },
                         [&] (const binary_operator&) -> std::vector<predicate> {
                             return cannot_solve(oper);
@@ -555,7 +555,7 @@ to_predicates(
                             return cannot_solve(oper);
                         },
                     }, oper.lhs);
-            },
+                },
             [] (const column_value& cv) -> std::vector<predicate> {
                 return cannot_solve(cv);
             },
@@ -806,26 +806,26 @@ bool is_empty_restriction(const expression& e) {
 static
 std::function<bytes_opt (const query_options&)>
 build_value_for_fn(const column_definition& cdef, const expression& e, const schema& s) {
-  auto ac = to_predicate_on_column(e, &cdef, &s);
-  return [ac] (const query_options& options) -> bytes_opt {
-    value_set possible_vals = solve(ac, options);
-    return std::visit(overloaded_functor {
-        [&](const value_list& val_list) -> bytes_opt {
-            if (val_list.empty()) {
-                return std::nullopt;
-            }
+    auto ac = to_predicate_on_column(e, &cdef, &s);
+    return [ac] (const query_options& options) -> bytes_opt {
+        value_set possible_vals = solve(ac, options);
+        return std::visit(overloaded_functor {
+            [&](const value_list& val_list) -> bytes_opt {
+                if (val_list.empty()) {
+                    return std::nullopt;
+                }
 
-            if (val_list.size() != 1) {
-                on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", ac.filter));
-            }
+                if (val_list.size() != 1) {
+                    on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", ac.filter));
+                }
 
-            return to_bytes(val_list.front());
-        },
-        [&](const interval<managed_bytes>&) -> bytes_opt {
-            on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", ac.filter));
-        }
-    }, possible_vals);
-  };
+                return to_bytes(val_list.front());
+            },
+            [&](const interval<managed_bytes>&) -> bytes_opt {
+                on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", ac.filter));
+            }
+        }, possible_vals);
+    };
 }
 
 bool contains_multi_column_restriction(const expression& e) {
@@ -1337,11 +1337,11 @@ statement_restrictions::ck_restrictions_need_filtering() const {
     }
 
     return has_partition_key_unrestricted_components()
-    || clustering_key_restrictions_need_filtering()
-    // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
-    // A single token restriction can have multiple matching partition key values.
-    // Because of this we can't create a clustering prefix with more than token restriction.
-    || (_uses_secondary_indexing && has_token_restrictions());
+            || clustering_key_restrictions_need_filtering()
+            // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
+            // A single token restriction can have multiple matching partition key values.
+            // Because of this we can't create a clustering prefix with more than token restriction.
+            || (_uses_secondary_indexing && has_token_restrictions());
 }
 
 bool
@@ -1705,28 +1705,28 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
 get_partition_key_ranges_fn_t
 statement_restrictions::build_partition_key_ranges_fn() const {
     return std::visit(overloaded_functor{
-     [&] (const no_partition_range_restrictions&) -> get_partition_key_ranges_fn_t {
-      return [] (const query_options& options) -> dht::partition_range_vector{
-        return {dht::partition_range::make_open_ended_both_sides()};
-      };
-     },
-     [&] (const token_range_restrictions& r) -> get_partition_key_ranges_fn_t {
-      return [&] (const query_options& options) -> dht::partition_range_vector {
-        return partition_ranges_from_token(r.token_restrictions, options, *_schema);
-      };
-     },
-     [&] (const single_column_partition_range_restrictions& r) -> get_partition_key_ranges_fn_t {
-        if (_partition_range_is_simple) {
-            return [&] (const query_options& options) {
-                // Special case to avoid extra allocations required for a Cartesian product.
-                return partition_ranges_from_EQs(r.per_column_restrictions, options, *_schema);
+        [&] (const no_partition_range_restrictions&) -> get_partition_key_ranges_fn_t {
+            return [] (const query_options& options) -> dht::partition_range_vector{
+                return {dht::partition_range::make_open_ended_both_sides()};
             };
-        } else {
-            return [&] (const query_options& options) {
-                return partition_ranges_from_singles(r.per_column_restrictions, options, *_schema);
+        },
+        [&] (const token_range_restrictions& r) -> get_partition_key_ranges_fn_t {
+            return [&] (const query_options& options) -> dht::partition_range_vector {
+                return partition_ranges_from_token(r.token_restrictions, options, *_schema);
             };
-        }
-      }}, _partition_range_restrictions);
+        },
+        [&] (const single_column_partition_range_restrictions& r) -> get_partition_key_ranges_fn_t {
+            if (_partition_range_is_simple) {
+                return [&] (const query_options& options) {
+                    // Special case to avoid extra allocations required for a Cartesian product.
+                    return partition_ranges_from_EQs(r.per_column_restrictions, options, *_schema);
+                };
+            } else {
+                return [&] (const query_options& options) {
+                    return partition_ranges_from_singles(r.per_column_restrictions, options, *_schema);
+                };
+            }
+        }}, _partition_range_restrictions);
 }
 
 namespace {
@@ -1970,28 +1970,28 @@ build_get_multi_column_clustering_bounds_fn(
             }
         });
     }
-  return [schema, range_builders, all_natural, all_reverse] (const query_options& options) -> std::vector<query::clustering_range> {
-    multi_column_range_accumulator acc;
-    for (auto& builder : range_builders) {
-        builder(acc, options);
-    }
-    auto bounds = std::move(acc.ranges);
+    return [schema, range_builders, all_natural, all_reverse] (const query_options& options) -> std::vector<query::clustering_range> {
+        multi_column_range_accumulator acc;
+        for (auto& builder : range_builders) {
+            builder(acc, options);
+        }
+        auto bounds = std::move(acc.ranges);
 
-    if (!all_natural && !all_reverse) {
-        std::vector<query::clustering_range> bounds_in_clustering_order;
-        for (const auto& b : bounds) {
-            const auto eqv = get_equivalent_ranges(b, *schema);
-            bounds_in_clustering_order.insert(bounds_in_clustering_order.end(), eqv.cbegin(), eqv.cend());
+        if (!all_natural && !all_reverse) {
+            std::vector<query::clustering_range> bounds_in_clustering_order;
+            for (const auto& b : bounds) {
+                const auto eqv = get_equivalent_ranges(b, *schema);
+                bounds_in_clustering_order.insert(bounds_in_clustering_order.end(), eqv.cbegin(), eqv.cend());
+            }
+            return bounds_in_clustering_order;
         }
-        return bounds_in_clustering_order;
-    }
-    if (all_reverse) {
-        for (auto& crange : bounds) {
-            crange = query::clustering_range(crange.end(), crange.start());
+        if (all_reverse) {
+            for (auto& crange : bounds) {
+                crange = query::clustering_range(crange.end(), crange.start());
+            }
         }
-    }
-    return bounds;
-  };
+        return bounds;
+    };
 }
 
 /// Reverses the range if the type is reversed.  Why don't we have interval::reverse()??
@@ -2288,17 +2288,17 @@ build_range_from_raw_bounds_fn(
     std::vector<std::function<query::clustering_range (const query_options&)>> range_builders;
     for (const auto& e : exprs | std::views::transform(&predicate::filter)) {
         if (auto b = find_clustering_order(e)) {
-          range_builders.emplace_back([bb = *b, &schema] (const query_options& options) {
-            auto* b = &bb;
-            cql3::raw_value tup_val = expr::evaluate(b->rhs, options);
-            if (tup_val.is_null()) {
-                on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", *b));
-            }
+            range_builders.emplace_back([bb = *b, &schema] (const query_options& options) {
+                auto* b = &bb;
+                cql3::raw_value tup_val = expr::evaluate(b->rhs, options);
+                if (tup_val.is_null()) {
+                    on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", *b));
+                }
 
-            const auto r = to_range(
+                const auto r = to_range(
                     b->op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val, *type_of(b->rhs))));
-            return r;
-          });
+                return r;
+            });
         }
     }
     return [range_builders] (const query_options& options) -> std::vector<query::clustering_range> {
@@ -2322,9 +2322,9 @@ build_range_from_raw_bounds_fn(
 get_clustering_bounds_fn_t
 statement_restrictions::build_get_clustering_bounds_fn() const {
     if (_clustering_prefix_restrictions.empty()) {
-      return [&] (const query_options& options) -> std::vector<query::clustering_range> {
-        return {query::clustering_range::make_open_ended_both_sides()};
-      };
+        return [&] (const query_options& options) -> std::vector<query::clustering_range> {
+            return {query::clustering_range::make_open_ended_both_sides()};
+        };
     }
     if (_clustering_prefix_restrictions[0].is_multi_column) {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
@@ -2342,14 +2342,14 @@ statement_restrictions::build_get_clustering_bounds_fn() const {
                 }
             }
         }
-      return build_get_multi_column_clustering_bounds_fn(_schema, _clustering_prefix_restrictions,
-                all_natural, all_reverse);
-    } else {
-      return [&] (const query_options& options) -> std::vector<query::clustering_range> {
-        return get_single_column_clustering_bounds(options, *_schema, _clustering_prefix_restrictions);
-      };
+        return build_get_multi_column_clustering_bounds_fn(_schema, _clustering_prefix_restrictions,
+            all_natural, all_reverse);
+        } else {
+            return [&] (const query_options& options) -> std::vector<query::clustering_range> {
+                return get_single_column_clustering_bounds(options, *_schema, _clustering_prefix_restrictions);
+            };
+        }
     }
-}
 
 std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
     return _get_clustering_bounds_fn(options);
@@ -2475,11 +2475,11 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
     _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
     auto *single_column_partition_key_restrictions = std::get_if<single_column_partition_range_restrictions>(&_partition_range_restrictions);
     if (single_column_partition_key_restrictions) {
-      for (const auto& e : single_column_partition_key_restrictions->per_column_restrictions) {
-        const auto col = require_on_single_column(e);
-        const auto pos = _schema->position(*col) + 1;
-        (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
-      }
+        for (const auto& e : single_column_partition_key_restrictions->per_column_restrictions) {
+            const auto col = require_on_single_column(e);
+            const auto pos = _schema->position(*col) + 1;
+            (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
+        }
     }
 
     if (std::ranges::any_of(*_idx_tbl_ck_prefix | std::views::drop(1) | std::views::transform(&predicate::filter), is_empty_restriction)) {
@@ -2621,10 +2621,10 @@ statement_restrictions::build_get_global_index_clustering_ranges_fn() const {
         return {};
     }
 
-  return [&] (const query_options& options) {
-    // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
-    return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
-  };
+    return [&] (const query_options& options) {
+        // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
+        return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
+    };
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_clustering_ranges(
@@ -2643,14 +2643,14 @@ statement_restrictions::build_get_global_index_token_clustering_ranges_fn() cons
     // In old indexes the token column was of type blob.
     // This causes problems with sorting and must be handled separately.
     if (token_column.type != long_type) {
-      return [&] (const query_options& options) {
-        return get_index_v1_token_range_clustering_bounds(options, token_column, _idx_tbl_ck_prefix->at(0));
-      };
+        return [&] (const query_options& options) {
+            return get_index_v1_token_range_clustering_bounds(options, token_column, _idx_tbl_ck_prefix->at(0));
+        };
     }
 
-  return [&] (const query_options& options) {
-    return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
-  };
+    return [&] (const query_options& options) {
+        return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
+    };
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_global_index_token_clustering_ranges(
@@ -2664,10 +2664,10 @@ statement_restrictions::build_get_local_index_clustering_ranges_fn() const {
         return {};
     }
 
-  return [&] (const query_options& options) {
-    // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
-    return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
-  };
+    return [&] (const query_options& options) {
+        // Multi column restrictions are not added to _idx_tbl_ck_prefix, they are handled later by filtering.
+        return get_single_column_clustering_bounds(options, *_view_schema, *_idx_tbl_ck_prefix);
+    };
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_local_index_clustering_ranges(
