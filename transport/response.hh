@@ -37,6 +37,7 @@ class response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
     uint8_t           _flags = 0; // a bitwise OR mask of zero or more cql_frame_flags values
+    bool              _pre_compressed = false; // body is already compressed, skip compression in write_message
     bytes_ostream _body;
 public:
     template<typename T>
@@ -63,6 +64,12 @@ public:
 
     void set_frame_flag(cql_frame_flags flag) noexcept {
         _flags |= flag;
+    }
+
+    // Mark the response body as already compressed; write_message will
+    // skip compression even if the connection has compression enabled.
+    void mark_as_pre_compressed() noexcept {
+        _pre_compressed = true;
     }
 
     void serialize(const event::schema_change& event, uint8_t version);

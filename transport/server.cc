@@ -969,13 +969,17 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
     }
 }
 
-cql_protocol_extension_enum_set cql_server::connection::supported_cql_protocol_extensions() const {
+cql_protocol_extension_enum_set cql_server::supported_cql_protocol_extensions() const {
     auto exts = cql_protocol_extension_enum_set::full();
-    const bool strongly_consistent_tables = _server._query_processor.local().db().get_config().check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES);
+    const bool strongly_consistent_tables = _query_processor.local().db().get_config().check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES);
     if (!strongly_consistent_tables) {
         exts.remove(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL);
     }
     return exts;
+}
+
+cql_protocol_extension_enum_set cql_server::connection::supported_cql_protocol_extensions() const {
+    return _server.supported_cql_protocol_extensions();
 }
 
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
@@ -2136,24 +2140,60 @@ void cql_server::build_supported_body()
     tmp.write_string_multimap(std::move(opts));
     _supported_body = std::move(tmp).extract_body();
     _supported_body.linearize();
+
+    // Pre-compress with lz4 using the CQL lz4 frame format:
+    // 4-byte big-endian uncompressed length prefix + compressed data
+    auto in = _supported_body.view();
+    size_t max_compressed = LZ4_COMPRESSBOUND(in.size()) + 4;
+    bytes compressed(bytes::initialized_later(), max_compressed);
+    auto* out = reinterpret_cast<char*>(compressed.begin());
+    out[0] = (in.size() >> 24) & 0xFF;
+    out[1] = (in.size() >> 16) & 0xFF;
+    out[2] = (in.size() >> 8) & 0xFF;
+    out[3] = in.size() & 0xFF;
+    auto ret = LZ4_compress_default(reinterpret_cast<const char*>(in.data()), out + 4, in.size(), max_compressed - 4);
+    if (ret == 0) {
+        throw std::runtime_error("Failed to lz4-compress SUPPORTED response body");
+    }
+    compressed.resize(ret + 4);
+    _supported_body_lz4 = std::move(compressed);
+}
+
+// Uses the pre-serialized (and, if the connection negotiated lz4, pre-compressed)
+// SUPPORTED body directly. This is the path taken by OPTIONS heartbeats, which
+// almost never have tracing enabled.
+std::unique_ptr<cql_server::response> cql_server::connection::make_supported_from_cache(int16_t stream) const
+{
+    const bool use_lz4 = _compression == cql_compression::lz4;
+    uint8_t flags = use_lz4 ? static_cast<uint8_t>(cql_frame_flags::compression) : uint8_t(0);
+    bytes_ostream body;
+    body.write(use_lz4 ? bytes_view(_server._supported_body_lz4) : _server._supported_body.view());
+    auto response = std::make_unique<cql_server::response>(
+        stream, cql_binary_opcode::SUPPORTED, flags,
+        std::move(body));
+    if (use_lz4) {
+        response->mark_as_pre_compressed();
+    }
+    return response;
+}
+
+// Tracing embeds the session ID in the frame header via the tr_state-taking
+// response constructor, so the pre-compressed cached body can't be reused here
+// (it was compressed without that header); the body is appended uncompressed
+// and normal compression, if any, applies when the frame is written out.
+std::unique_ptr<cql_server::response> cql_server::connection::make_supported_with_tracing(int16_t stream, const tracing::trace_state_ptr& tr_state) const
+{
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
+    response->append_body(_server._supported_body.view());
+    return response;
 }
 
 std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const
 {
-    // Fast path: OPTIONS heartbeats almost never have tracing enabled.
-    // Use the pre-serialized body directly.
     if (!tracing::should_return_id_in_response(tr_state)) [[likely]] {
-        bytes_ostream body;
-        body.write(_server._supported_body.view());
-        return std::make_unique<cql_server::response>(
-            stream, cql_binary_opcode::SUPPORTED, uint8_t(0),
-            std::move(body));
+        return make_supported_from_cache(stream);
     }
-    // Slow path: tracing embeds the session ID in the frame header,
-    // so we can't use the pre-compressed body; normal compression applies.
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
-    response->append_body(_server._supported_body.view());
-    return response;
+    return make_supported_with_tracing(stream, tr_state);
 }
 
 class cql_server::fmt_visitor : public messages::result_message::visitor_base {
@@ -2297,7 +2337,7 @@ void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_serv
 }
 
 future<> cql_server::response::write_message(output_stream<char>& out, uint8_t version, cql_compression compression, seastar::deleter del) {
-    if (compression != cql_compression::none) {
+    if (compression != cql_compression::none && !_pre_compressed) {
         compress(compression);
     }
     utils::result_with_exception_ptr<temporary_buffer<char>> frame = make_frame(version, _body.size());
