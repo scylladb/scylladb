@@ -52,6 +52,7 @@ set(idl_headers
   raft_storage.idl.hh
   group0.idl.hh
   hinted_handoff.idl.hh
+  snapshot_backup.idl.hh
   sstables.idl.hh
   sstables_loader.idl.hh
   storage_proxy.idl.hh
