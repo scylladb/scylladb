@@ -22,6 +22,8 @@ namespace locator {
 
 namespace db {
     struct snapshot_tablet_entry;
+    struct snapshot_sstable_entry;
+    struct snapshot_node_entry;
 }
 
 namespace db::snapshot {
@@ -48,6 +50,7 @@ struct manifest_json : public json::json_base {
 
         node_info();
         node_info(const node_info& e);
+        node_info(const db::snapshot_node_entry& e);
         node_info& operator=(const node_info& e);
     private:
         void register_params();
@@ -88,10 +91,12 @@ struct manifest_json : public json::json_base {
         json::json_element<int64_t> last_token;
         json::json_element<uint64_t> tablet_id;
         json::json_element<int64_t> repaired_at;
+        json::json_element<sstring> node;
 
         sstable_info();
         sstable_info(const sstables::sstable_snapshot_metadata& e);
         sstable_info(const sstable_info& e);
+        sstable_info(const db::snapshot_sstable_entry& e);
         sstable_info(sstable_info&& e);
         sstable_info& operator=(sstable_info&& e);
     private:

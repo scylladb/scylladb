@@ -21,24 +21,41 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db/snapshot-ctl.hh"
 #include "db/snapshot/backup_task.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "db/schema_tables.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "index/secondary_index_manager.hh"
 #include "replica/database.hh"
 #include "replica/global_table_ptr.hh"
 #include "replica/schema_describe_helper.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/object_storage_client.hh"
 #include "service/storage_proxy.hh"
+#include "idl/snapshot_backup.dist.hh"
 
 using namespace std::chrono_literals;
 
 logging::logger snap_log("snapshots");
 
+template <>
+struct fmt::formatter<db::snapshot_dc_location> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const db::snapshot_dc_location& e, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), 
+            "{{ {}, {}, {} }}",
+            e.endpoint, e.bucket, e.prefix
+        );
+    }
+};
+
 namespace db {
 
-snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>& sp, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg)
+snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::storage_proxy>& sp, sharded<cql3::query_processor>& qp, netw::messaging_service& ms, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg)
     : _config(std::move(cfg))
     , _db(db)
     , _sp(sp)
+    , _qp(qp)
+    , _ms(ms)
     , _ops("snapshot_ctl")
     , _task_manager_module(make_shared<snapshot::task_manager_module>(tm))
     , _storage_manager(sstm)
@@ -48,9 +65,11 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::stor
     if (this_shard_id() == 0) {
         _delete_expired_snapshots = delete_expired_snapshots();
     }
+    ser::snapshot_backup_rpc_verbs::register_backup_snapshot_sstables(&_ms, std::bind_front(&snapshot_ctl::backup_sstables, this));
 }
 
 future<> snapshot_ctl::stop() {
+    co_await ser::snapshot_backup_rpc_verbs::unregister_backup_snapshot_sstables(&_ms);
     co_await disable_all_operations();
     co_await _task_manager_module->stop();
 }
@@ -87,6 +106,14 @@ future<> snapshot_ctl::run_snapshot_modify_operation(noncopyable_function<future
     return with_gate(_ops, [f = std::move(f), this] () mutable {
         return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
             return with_lock(snap._lock.for_write(), std::move(f));
+        });
+    });
+}
+
+future<> snapshot_ctl::run_snapshot_gate_operation(noncopyable_function<future<>()>&& f) {
+    return with_gate(_ops, [f = std::move(f), this] () mutable {
+        return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
+            return f();
         });
     });
 }
@@ -307,6 +334,58 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
     auto task = co_await _task_manager_module->make_and_start_task<::db::snapshot::backup_task_impl>(
         {}, *this, _storage_manager.container(), std::move(endpoint), std::move(bucket), std::move(prefix), keyspace, dir, global_table->schema()->id(), move_files);
     co_return task->id();
+}
+
+future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files) {
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [&](auto& local) {
+            return local.start_global_backup(locations, ks_names, tables, tag, move_files);
+        });
+    }
+
+    if (tag.empty()) {
+        throw std::invalid_argument("You must supply a snapshot name.");
+    }
+    if (ks_names.size() != 1 && !tables.empty()) {
+        throw std::invalid_argument("Cannot name tables when doing multiple keyspaces snapshot backup");
+    }
+    if (ks_names.empty()) {
+        std::ranges::copy(_db.local().get_keyspaces() | std::views::keys, std::back_inserter(ks_names));
+    }
+
+    std::unordered_multimap<sstring, sstring> ks_tables;
+
+    if (tables.empty()) {
+        for (auto& ks_name : ks_names) {
+            auto& ks = _db.local().find_keyspace(ks_name);
+            for (auto& cf_name : ks.metadata()->cf_meta_data() | std::views::keys) {
+                ks_tables.emplace(ks_name, cf_name);
+            }
+        }
+    } else {
+        auto ks_name = ks_names[0];
+        for (auto& cf_name : tables) {
+            ks_tables.emplace(ks_name, cf_name);
+        }
+    }
+
+    co_await coroutine::switch_to(_config.backup_sched_group);
+    snap_log.info("Backup sstables from {}(cluster snapshot {}) to {}", ks_tables, tag, locations);
+
+    co_return co_await snapshot::start_global_backup(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module), tag, std::move(ks_tables), std::move(locations), move_files);
+}
+
+future<>
+snapshot_ctl::backup_sstables(table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) {
+    // backup_task_impl assumes we create and run it on shard 0
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [&](auto& local) {
+            return local.backup_sstables(table_id, tag, endpoint, bucket, prefix, first_token, last_token, sstable_ids, use_move);
+        });
+    }
+
+    co_await coroutine::switch_to(_config.backup_sched_group);
+    co_await snapshot::backup_sstables(*this, table_id, std::move(tag), std::move(endpoint), std::move(bucket), std::move(prefix), first_token, last_token, std::move(sstable_ids), use_move);
 }
 
 future<int64_t> snapshot_ctl::true_snapshots_size(sstring ks, sstring cf) {
