@@ -8,7 +8,7 @@
 
 #include "client.hh"
 #include "utils.hh"
-#include "utils/composite_abort_source.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/exceptions.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/rjson.hh"
