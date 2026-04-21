@@ -1734,6 +1734,59 @@ class CQLAuditTester(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
+    async def _test_empty_keyspace_ddl(self, helper_class):
+        """Verify CREATE/DROP FUNCTION and CREATE/DROP AGGREGATE are audited
+        with ks="" regardless of whether the target keyspace exists.
+
+        Both existing-keyspace and nonexistent-keyspace variants are tested.
+        DROP ... IF EXISTS succeeds even for non-existent keyspaces.
+        """
+        with helper_class() as helper:
+            audit_settings = helper.update_audit_settings({
+                **self.audit_default_settings,
+                "audit_categories": "DDL",
+                "audit_keyspaces": "ks",
+                "enable_user_defined_functions": True,
+            })
+            session = await self.prepare(helper=helper, audit_settings=audit_settings)
+
+            # Existing keyspace — all statements succeed, run in the order shown.
+            self.execute_and_validate_new_audit_entry(
+                session,
+                "CREATE OR REPLACE FUNCTION ks.audit_probe(s int, v int) "
+                "CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return s + v'",
+                category="DDL", ks="")
+            self.execute_and_validate_new_audit_entry(
+                session,
+                "CREATE OR REPLACE AGGREGATE ks.audit_agg(int) "
+                "SFUNC audit_probe STYPE int",
+                category="DDL", ks="")
+            self.execute_and_validate_new_audit_entry(
+                session, "DROP AGGREGATE IF EXISTS ks.audit_agg",
+                category="DDL", ks="")
+            self.execute_and_validate_new_audit_entry(
+                session, "DROP FUNCTION IF EXISTS ks.audit_probe",
+                category="DDL", ks="")
+
+            # Non-existent keyspace — CREATE fails, DROP IF EXISTS succeeds.
+            error_cases = [
+                ("CREATE OR REPLACE FUNCTION non_existing_keyspace.audit_probe(s int, v int) "
+                 "CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return s + v'", True),
+                ("DROP FUNCTION IF EXISTS non_existing_keyspace.audit_probe", False),
+                ("CREATE OR REPLACE AGGREGATE non_existing_keyspace.audit_agg(int) "
+                 "SFUNC audit_probe STYPE int", True),
+                ("DROP AGGREGATE IF EXISTS non_existing_keyspace.audit_agg", False),
+            ]
+            for stmt, error in error_cases:
+                expected = [AuditEntry(category="DDL", cl="ONE", error=error,
+                                       ks="", statement=stmt, table="",
+                                       user="anonymous")]
+                with self.assert_entries_were_added(session, expected):
+                    try:
+                        session.execute(stmt)
+                    except Exception:
+                        assert error, f"Expected statement to fail: {stmt!r}"
+
     class AuditConfigChanger:
         class ExpectedResult(enum.Enum):
             SUCCESS = 1
@@ -2416,6 +2469,7 @@ async def test_audit_table_noauth(manager: ManagerClient):
     await t._test_prepare(AuditBackendTable)
     await t._test_batch(AuditBackendTable)
     await t._test_batch_native_protocol(AuditBackendTable)
+    await t._test_empty_keyspace_ddl(AuditBackendTable)
 
 
 # AuditBackendTable, auth (cassandra), rf=1
@@ -2508,6 +2562,7 @@ async def test_audit_syslog_noauth(manager: ManagerClient):
     await t._test_prepare(Syslog)
     await t._test_batch(Syslog)
     await t._test_batch_native_protocol(Syslog)
+    await t._test_empty_keyspace_ddl(Syslog)
 
 
 # AuditBackendSyslog, auth, rf=1
@@ -2537,6 +2592,7 @@ async def test_audit_composite_noauth(manager: ManagerClient):
     await t._test_prepare(Composite)
     await t._test_batch(Composite)
     await t._test_batch_native_protocol(Composite)
+    await t._test_empty_keyspace_ddl(Composite)
 
 
 # AuditBackendComposite, auth, rf=1
