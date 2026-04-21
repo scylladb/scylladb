@@ -1388,7 +1388,7 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
     bool do_advance_existings = false;
     bool is_partition_tombstone_applied_on_all_views = false;
     if (_update && _update->is_partition_start()) {
-        _key = std::move(std::move(_update)->as_partition_start().key().key());
+        _key = _update->as_partition_start().key().key();
         _update_partition_tombstone = _update->as_partition_start().partition_tombstone();
         do_advance_updates = true;
 
