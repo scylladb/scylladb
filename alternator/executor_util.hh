@@ -302,4 +302,8 @@ body_writer make_streamed(rjson::value&&);
 
 /// Convert an exception from the coordinator_exception_container to an api_error with proper error message.
 api_error create_api_error_from_coordinators_exception(const exceptions::coordinator_exception_container &exc);
+
+/// Returns true if the given GSI or LSI view schema has KEYS_ONLY projection.
+/// Such views do not contain the executor::ATTRS_COLUMN_NAME column.
+bool projection_is_keys_only(const schema& s);
 } // namespace alternator
