@@ -8,6 +8,9 @@ populates this table with information about each SSTable extracted from the snap
 manifests. Worker nodes then read from this table to determine which SSTables need to
 be downloaded from object storage and restored locally.
 
+Entries are also created when generating cluster wide snapshots to provide metadata
+on snapshot contents.
+
 Rows are inserted with a TTL so that stale restore metadata is automatically cleaned up.
 
 ## Schema
@@ -24,6 +27,10 @@ CREATE TABLE system_distributed.snapshot_sstables (
     last_token bigint,
     toc_name text,
     prefix text,
+    node uuid,
+    tablet bigint,
+    state int,
+    repaired_at bigint
     PRIMARY KEY ((snapshot_name, "keyspace", "table", datacenter, rack), first_token, sstable_id)
 )
 ~~~
@@ -42,6 +49,11 @@ Column descriptions:
 | `last_token` | bigint | Last token in the token range covered by this SSTable |
 | `toc_name` | text | TOC filename of the SSTable (e.g. `me-3gdq_0bki_2cvk01yl83nj0tp5gh-big-TOC.txt`) |
 | `prefix` | text | Prefix path in object storage where the SSTable was backed up |
+| `node` | uuid | Owning node if sstable is the result of a snapshot and in local state |
+| `tablet` | bigint | Tablet the sstable belonged to when snapshot |
+| `state` | int | State of the sstable, whether it is local only, both or remote |
+| `repaired_at` | bigint | When sstable was repaired. Only valid for snapshot sstables |
+
 
 ## APIs
 
