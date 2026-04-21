@@ -460,7 +460,7 @@ future<> server_impl::wait_for_state_change(seastar::abort_source* as) {
     }
 
     try {
-        return as ? _state_change_promise->get_shared_future(*as) : _state_change_promise->get_shared_future();
+        co_await (as ? _state_change_promise->get_shared_future(*as) : _state_change_promise->get_shared_future());
     } catch (abort_requested_exception&) {
         throw request_aborted(fmt::format(
             "Aborted while waiting for state change on server: {}, latest applied entry: {}, current state: {}", _id, _applied_idx, _fsm->current_state()));
