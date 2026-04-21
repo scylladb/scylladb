@@ -222,6 +222,14 @@ public:
     };
     using begin_mutate_result = std::variant<timestamp_with_term, raft::not_a_leader, need_wait_for_leader>;
     begin_mutate_result begin_mutate(abort_source&);
+
+    // Possible results:
+    //   ok - this node is the leader, proceed with read_barrier() locally
+    //   raft::not_a_leader - this node is not a leader, redirect to the leader
+    //   need_wait_for_leader - the leader is unknown, the caller needs to wait and retry
+    struct ok {};
+    using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader>;
+    begin_read_result begin_read(abort_source&);
 };
 
 }
