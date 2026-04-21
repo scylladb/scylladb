@@ -187,8 +187,14 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 
     auto ret = rjson::empty_object();
     auto streams = rjson::empty_array();
+<<<<<<< HEAD
 
     std::optional<stream_arn> last;
+||||||| parent of cc39b54173 (alternator: use `stream_arn` instead of `std::string` in list_streams)
+    std::optional<std::string> last;
+=======
+    std::optional<stream_arn> last;
+>>>>>>> cc39b54173 (alternator: use `stream_arn` instead of `std::string` in list_streams)
 
     for (;limit > 0 && i != e; ++i) {
         auto s = i->schema();
@@ -201,20 +207,50 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
         if (cdc::is_log_for_some_table(db.real_database(), ks_name, cf_name)) {
             rjson::value new_entry = rjson::empty_object();
 
+<<<<<<< HEAD
             last = i->schema()->id();
             rjson::add(new_entry, "StreamArn", *last);
+||||||| parent of cc39b54173 (alternator: use `stream_arn` instead of `std::string` in list_streams)
+            auto arn = stream_arn{ i->schema(), cdc::get_base_table(db.real_database(), *i->schema()) };
+            last = std::string(arn.unparsed());
+            rjson::add(new_entry, "StreamArn", arn);
+=======
+            auto arn = stream_arn{ i->schema(), cdc::get_base_table(db.real_database(), *i->schema()) };
+            rjson::add(new_entry, "StreamArn", arn);
+>>>>>>> cc39b54173 (alternator: use `stream_arn` instead of `std::string` in list_streams)
             rjson::add(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::add(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
             rjson::push_back(streams, std::move(new_entry));
+<<<<<<< HEAD
 
+||||||| parent of cc39b54173 (alternator: use `stream_arn` instead of `std::string` in list_streams)
+=======
+            last = std::move(arn);
+>>>>>>> cc39b54173 (alternator: use `stream_arn` instead of `std::string` in list_streams)
             --limit;
         }
     }
 
     rjson::add(ret, "Streams", std::move(streams));
 
+<<<<<<< HEAD
     if (last) {
         rjson::add(ret, "LastEvaluatedStreamArn", *last);
+||||||| parent of cc39b54173 (alternator: use `stream_arn` instead of `std::string` in list_streams)
+    // Only emit LastEvaluatedStreamArn when we stopped because we hit the
+    // limit (limit == 0), meaning there may be more streams to list.
+    // If we exhausted all tables naturally (limit > 0), there are no more
+    // streams, so we must not emit a cookie.
+    if (last && limit == 0) {
+        rjson::add(ret, "LastEvaluatedStreamArn", rjson::from_string(*last));
+=======
+    // Only emit LastEvaluatedStreamArn when we stopped because we hit the
+    // limit (limit == 0), meaning there may be more streams to list.
+    // If we exhausted all tables naturally (limit > 0), there are no more
+    // streams, so we must not emit a cookie.
+    if (last && limit == 0) {
+        rjson::add(ret, "LastEvaluatedStreamArn", *last);
+>>>>>>> cc39b54173 (alternator: use `stream_arn` instead of `std::string` in list_streams)
     }
 
     return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
