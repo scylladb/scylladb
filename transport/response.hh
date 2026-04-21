@@ -82,6 +82,7 @@ public:
     void write_consistency(db::consistency_level c);
     void write_string_map(std::map<sstring, sstring> string_map);
     void write_string_multimap(std::multimap<sstring, sstring> string_map);
+    void append_body(bytes_view body);
     void write_string_bytes_map(const std::unordered_map<sstring, bytes>& map);
     void write_value(bytes_opt value);
     void write_value(std::optional<managed_bytes_view> value);
