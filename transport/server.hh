@@ -236,6 +236,7 @@ private:
 private:
     client_options_cache_type _connection_options_keys_and_values;
     bytes_ostream _supported_body; // cached serialized body for SUPPORTED responses
+    bytes _supported_body_lz4; // cached lz4-compressed body for SUPPORTED responses
     transport_stats _stats;
     auth::service& _auth_service;
     qos::service_level_controller& _sl_controller;
