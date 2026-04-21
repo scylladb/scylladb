@@ -9,27 +9,22 @@
 #pragma once
 
 #include <seastar/core/abort_source.hh>
-#include "utils/assert.hh"
-#include "utils/small_vector.hh"
-#include "seastarx.hh"
+
+using namespace seastar;
 
 namespace utils {
-// A facility to combine several abort_source-s and expose them as a single abort_source.
-// The combined abort_source is aborted whenever any of the added abort_sources is aborted.
-// Typical use case: there are several sources of abort signal (e.g. timeout and node shutdown)
-// and we what some routine to be aborted on any of them.
-class composite_abort_source {
-    abort_source _as;
-    utils::small_vector<abort_source::subscription, 2> _subscriptions;
-public:
-    void add(abort_source& as) {
-        as.check();
-        auto sub = as.subscribe([this]() noexcept { _as.request_abort(); });
-        SCYLLA_ASSERT(sub);
-        _subscriptions.push_back(std::move(*sub));
+
+// Subscribe target to source and return the corresponding subscription.
+//
+// If the passed source has already been triggered, it will immediately trigger target.
+inline auto chain_abort_source(abort_source& target, abort_source& source) {
+    if (source.abort_requested()) {
+        target.request_abort_ex(source.abort_requested_exception_ptr());
     }
-    abort_source& abort_source() noexcept {
-        return _as;
-    }
-};
+
+    return source.subscribe([&target] (const std::optional<std::exception_ptr>& eptr) noexcept {
+        target.request_abort_ex(eptr.value_or(target.get_default_exception()));
+    });
+}
+
 }

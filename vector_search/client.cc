@@ -90,14 +90,14 @@ public:
 
 private:
     future<connected_socket> connect(std::chrono::milliseconds timeout, abort_source* as) {
+        abort_source operation_as;
+
         abort_on_expiry timeout_as(seastar::lowres_clock::now() + timeout);
-        utils::composite_abort_source composite_as;
-        composite_as.add(timeout_as.abort_source());
-        if (as) {
-            composite_as.add(*as);
-        }
+        [[maybe_unused]] const auto timeout_sub = utils::chain_abort_source(operation_as, timeout_as.abort_source());
+        [[maybe_unused]] const auto as_sub = as ? utils::chain_abort_source(operation_as, *as) : std::nullopt;
+
         auto f = co_await coroutine::as_future(
-                connect_with_as(socket_address(_endpoint.ip, _endpoint.port), _creds, _endpoint.host, composite_as.abort_source()));
+                connect_with_as(socket_address(_endpoint.ip, _endpoint.port), _creds, _endpoint.host, operation_as));
         if (f.failed()) {
             auto err = f.get_exception();
             // When the connection abort was triggered by our own deadline rethrow as timed_out_error.
