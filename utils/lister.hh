@@ -188,25 +188,22 @@ class directory_lister final : public abstract_lister::impl {
 public:
     directory_lister(fs::path dir,
             lister::dir_entry_types type = lister::dir_entry_types::full(),
-            lister::filter_type filter = [] (const fs::path& parent_dir, const directory_entry& entry) { return true; },
+            lister::filter_type filter = {},
             lister::show_hidden do_show_hidden = lister::show_hidden::yes) noexcept
-        : _dir(std::move(dir))
-        , _type(type)
-        , _filter(std::move(filter))
-        , _do_show_hidden(do_show_hidden)
-    { }
+        : directory_lister({}, std::move(dir), type, std::move(filter), do_show_hidden)
+    {}
 
     directory_lister(file opened_directory, fs::path dir,
             lister::dir_entry_types type = lister::dir_entry_types::full(),
-            lister::filter_type filter = [] (const fs::path& parent_dir, const directory_entry& entry) { return true; },
+            lister::filter_type filter = {},
             lister::show_hidden do_show_hidden = lister::show_hidden::yes) noexcept
         : _dir(std::move(dir))
         , _type(type)
-        , _filter(std::move(filter))
+        , _filter(filter ? std::move(filter) : [](const fs::path& parent_dir, const directory_entry& entry) { return true; })
         , _do_show_hidden(do_show_hidden)
         , _opened(std::move(opened_directory))
-        , _gen(_opened.experimental_list_directory())
-    { }
+        , _gen(_opened ? std::make_optional(_opened.experimental_list_directory()) : std::nullopt)
+    {}
 
     directory_lister(directory_lister&&) noexcept = default;
 
