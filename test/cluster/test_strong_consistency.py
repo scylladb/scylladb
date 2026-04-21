@@ -162,12 +162,12 @@ async def test_basic_write_read(manager: ManagerClient):
             leader_metrics_query = await manager.metrics.query(leader_host.address)
             leader_metrics = {
                 'scylla_strong_consistency_coordinator_write_latency_count': leader_metrics_query.get('scylla_strong_consistency_coordinator_write_latency_count') or 0,
-                'scylla_strong_consistency_coordinator_read_latency_count':  leader_metrics_query.get('scylla_strong_consistency_coordinator_read_latency_count') or 0,
+                'scylla_strong_consistency_coordinator_read_latency_count':  leader_metrics_query.get('scylla_strong_consistency_coordinator_read_latency_count', {'read_type': 'linearizable'}) or 0,
             }
             non_leader_metrics_query = await manager.metrics.query(non_leader_replica_host.address)
             non_leader_metrics = {
                 'scylla_strong_consistency_coordinator_write_node_bounces': non_leader_metrics_query.get('scylla_strong_consistency_coordinator_write_node_bounces') or 0,
-                'scylla_strong_consistency_coordinator_read_latency_count': non_leader_metrics_query.get('scylla_strong_consistency_coordinator_read_latency_count') or 0,
+                'scylla_strong_consistency_coordinator_read_latency_count': non_leader_metrics_query.get('scylla_strong_consistency_coordinator_read_latency_count', {'read_type': 'linearizable'}) or 0,
             }
             non_replica_metrics_query = await manager.metrics.query(non_replica_host.address)
             non_replica_metrics = {
@@ -216,7 +216,7 @@ async def test_basic_write_read(manager: ManagerClient):
         insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
         bound_insert_stmt = BoundStatement(insert_stmt)
         select_stmt = cql.prepare(f"SELECT * FROM {ks}.test WHERE pk = ?")
-        bound_select_stmt = BoundStatement(select_stmt, consistency_level=ConsistencyLevel.ONE)
+        bound_select_stmt = BoundStatement(select_stmt, consistency_level=ConsistencyLevel.QUORUM)
         bound_select_stmt.bind([10])
 
         logger.info(f"Run prepared INSERT statement on leader {leader_host}")

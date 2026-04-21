@@ -52,6 +52,7 @@ struct read_timeout : public exceptions::read_timeout_exception {
 void stats::register_stats() {
     namespace sm = seastar::metrics;
     sm::label reason_label("reason");
+    sm::label read_type_label("read_type");
 
     _metrics.add_group("strong_consistency_coordinator", {
         sm::make_summary("write_latency_summary", sm::description("Strong consistency write latency summary"),
@@ -85,11 +86,22 @@ void stats::register_stats() {
             .set_skip_when_empty(),
 
         sm::make_summary("read_latency_summary", sm::description("Strong consistency read latency summary"),
-            [this] { return to_metrics_summary(read.summary()); }).set_skip_when_empty(),
+            [this] { return to_metrics_summary(linearizable_read.summary()); })(read_type_label("linearizable"))
+            .set_skip_when_empty(),
 
         sm::make_histogram("read_latency", sm::description("Strong consistency read latency histogram"),
-            {}, [this] { return to_metrics_histogram(read.histogram()); })
-            .aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            {}, [this] { return to_metrics_histogram(linearizable_read.histogram()); })
+            .aggregate({seastar::metrics::shard_label})(read_type_label("linearizable"))
+            .set_skip_when_empty(),
+
+        sm::make_summary("read_latency_summary", sm::description("Strong consistency read latency summary"),
+            [this] { return to_metrics_summary(non_linearizable_read.summary()); })(read_type_label("non_linearizable"))
+            .set_skip_when_empty(),
+
+        sm::make_histogram("read_latency", sm::description("Strong consistency read latency histogram"),
+            {}, [this] { return to_metrics_histogram(non_linearizable_read.histogram()); })
+            .aggregate({seastar::metrics::shard_label})(read_type_label("non_linearizable"))
+            .set_skip_when_empty(),
 
         sm::make_counter("read_errors", read_errors_timeout,
             sm::description("number of strong consistency read requests that failed"),
@@ -401,7 +413,9 @@ auto coordinator::query(schema_ptr schema,
 
     utils::latency_counter lc;
     lc.start();
-    auto mark_read_latency = defer([this, &lc] { _stats.read.mark(lc.stop().latency()); });
+    auto& read_stats = (rtype == read_type::linearizable)
+        ? _stats.linearizable_read : _stats.non_linearizable_read;
+    auto mark_read_latency = defer([&read_stats, &lc] () mutable { read_stats.mark(lc.stop().latency()); });
 
     try {
         auto op_result = co_await create_operation_ctx(*schema, ranges[0].start()->value().token(), aoe.abort_source(), rtype == read_type::linearizable);

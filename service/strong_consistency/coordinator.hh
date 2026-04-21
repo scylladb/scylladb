@@ -53,7 +53,8 @@ struct stats {
     uint64_t write_node_bounces = 0;
     uint64_t write_shard_bounces = 0;
 
-    utils::timed_rate_moving_average_summary_and_histogram read;
+    utils::timed_rate_moving_average_summary_and_histogram linearizable_read;
+    utils::timed_rate_moving_average_summary_and_histogram non_linearizable_read;
     uint64_t read_errors_timeout = 0;
     uint64_t read_errors_other = 0;
     uint64_t read_node_bounces = 0;
