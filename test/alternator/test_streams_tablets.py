@@ -33,17 +33,20 @@ def get_base_table(cql, table_id):
 
 # validate that streams tables are synchronized with tablets count - all new cdc shards have been created
 def assert_number_of_streams_is_equal_to_number_of_tablets(rest_api, cql, ks, table_name, cdc_log_table_name):
-    # we'll try twice here, as in my tests occasionally i've got into a situation, where this function
-    # failed, it seems streams were not yet fully updated (debug build).
-    for x in range(0, 2):
+    # Retry with exponential backoff, as on slow builds (e.g. debug aarch64)
+    # the background CDC stream regeneration may take a while to catch up.
+    sleep = 0.1
+    for x in range(0, 7):
+        # Don't sleep on the first try - we might be already in sync.
+        if x > 0:
+            time.sleep(sleep)
+            sleep *= 2
         tablet_count = get_tablet_count_for_base_table_of_table(rest_api, cql, ks, cdc_log_table_name)
         ts = cql.execute(f"SELECT toUnixTimestamp(timestamp) AS ts FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='{table_name}' ORDER BY timestamp DESC LIMIT 1").one().ts
         CdcStreamState_CURRENT = 0 # from test.cluster.test_cdc_with_tablets.CdcStreamState.CURRENT
         count = cql.execute(f"SELECT count(*) FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='{table_name}' AND timestamp = {ts} AND stream_state = {CdcStreamState_CURRENT} limit 1").one().count
         if count == tablet_count:
             break
-        # on debug occasionally we need more time
-        time.sleep(0.1)
     assert count == tablet_count
 
 # return tablet count for given cdc_log table (table that holds cdc data for given user table)
