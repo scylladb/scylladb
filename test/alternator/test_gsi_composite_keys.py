@@ -382,7 +382,6 @@ def test_gsi_composite_describe_4h4r(test_table_gsi_4h4r):
 
 
 # Test that projection=KEYS_ONLY works for a GSI with composite keys.
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_composite_describe_projection_keys_only(dynamodb):
     with new_composite_gsi_table(
         dynamodb,
