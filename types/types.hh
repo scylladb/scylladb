@@ -1055,3 +1055,14 @@ template <> struct fmt::formatter<data_value> {
 };
 
 using data_value_list = std::initializer_list<data_value_or_unset>;
+using query_data_values = std::span<const data_value_or_unset>;
+using query_data_vector = std::vector<data_value_or_unset>;
+
+class query_data_params : public query_data_values {
+public:
+    using query_data_values::query_data_values;
+    query_data_params(const data_value_list& params)
+        : query_data_values(params)
+    {}
+};
+
