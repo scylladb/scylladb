@@ -6879,4 +6879,61 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_options_min_and_max_tablet_count) {
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_dropped_table) {
+    // Verifies that balance_tablets() gracefully handles a table that exists
+    // in the token metadata snapshot but has been dropped from the live schema.
+    // This simulates the race where a DROP TABLE is applied between yield
+    // points during load balancer planning.
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        auto host1 = topo.add_node(node_state::normal, shard_count);
+        auto host2 = topo.add_node(node_state::normal, shard_count);
+        auto host3 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info{tablet_replica_set{tablet_replica{host1, 0}}});
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info{tablet_replica_set{tablet_replica{host1, 1}}});
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info{tablet_replica_set{tablet_replica{host2, 0}}});
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info{tablet_replica_set{tablet_replica{host2, 1}}});
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_default_tablet_sizes(stm.get());
+
+        // Capture the token metadata snapshot while the table still exists.
+        auto stale_tm = stm.get();
+
+        // Drop the table from the live schema. The stale snapshot still has
+        // the table's tablet map, simulating the race condition.
+        e.execute_cql(fmt::format("DROP TABLE \"{}\".\"{}\"", ks_name, table1.to_sstring())).get();
+
+        // balance_tablets should handle the stale table gracefully without
+        // throwing or aborting.
+        auto& talloc = e.get_tablet_allocator().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto plan = talloc.balance_tablets(stale_tm, &topology, &sys_ks,
+                                           load_stats.get(), {}).get();
+
+        // No migrations should reference the dropped table.
+        for (auto& mig : plan.migrations()) {
+            BOOST_REQUIRE_NE(mig.tablet.table, table1);
+        }
+    }).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
