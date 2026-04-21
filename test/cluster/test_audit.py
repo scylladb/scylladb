@@ -51,8 +51,6 @@ logger = logging.getLogger(__name__)
 # Stable socket path for syslog backends, shared across tests to enable server reuse.
 syslog_socket_path = tempfile.mktemp(prefix="/tmp/scylla-audit-", suffix=".socket")
 
-# Keys that require server restart (not live-updatable).
-NON_LIVE_AUDIT_KEYS = {"audit", "audit_unix_socket_path"}
 # Keys that can be updated via SIGHUP (live-updatable).
 LIVE_AUDIT_KEYS = {"audit_categories", "audit_keyspaces", "audit_tables", "audit_rules"}
 # Auth config applied when user/password are requested.
@@ -71,6 +69,7 @@ class AuditTester:
 
     def __init__(self, manager: ManagerClient):
         self.manager = manager
+        self._prev_config_keys: set[str] = set()
 
     def _build_server_config(self, target_config: dict[str, str],
                              enable_compact_storage: bool,
@@ -88,13 +87,21 @@ class AuditTester:
                                     user: str | None) -> bool:
         """Decide whether a running server must be restarted.
 
-        A restart is needed when non-live audit keys or auth config changed.
+        A restart is needed when any config key outside live-updatable
+        audit config changed, or when auth config changed.
         """
-        # Non-live audit keys changed or need to be removed.
-        restart = any(
-            str(current.get(k, "")) != str(target_config.get(k, ""))
-            for k in NON_LIVE_AUDIT_KEYS if k in target_config
-        ) or any(k in current for k in NON_LIVE_AUDIT_KEYS & absent_keys)
+        # Any config key that isn't live-updatable audit config must match; otherwise restart.
+        restart = False
+        for k, v in target_config.items():
+            if k in LIVE_AUDIT_KEYS:
+                continue
+            if str(current.get(k, "")) != str(v):
+                restart = True
+                break
+
+        # A previously set key outside live-updatable audit config must be removed when absent.
+        if not restart:
+            restart = any(k in current for k in absent_keys - LIVE_AUDIT_KEYS)
 
         # Auth config changes also require a restart.
         has_auth = any(k in current for k in AUTH_CONFIG)
@@ -217,7 +224,7 @@ class AuditTester:
             List of server IP addresses.
         """
         target_config = helper.update_audit_settings(audit_settings)
-        absent_keys = (NON_LIVE_AUDIT_KEYS | LIVE_AUDIT_KEYS) - target_config.keys()
+        absent_keys = self._prev_config_keys - target_config.keys()
         auth_provider = PlainTextAuthProvider(username=user, password=password or "") if user else None
         expected_servers = len(property_file) if property_file else rf
 
@@ -236,6 +243,8 @@ class AuditTester:
             server_ips = await self._start_fresh_servers(
                 target_config, enable_compact_storage, rf, user, auth_provider,
                 property_file=property_file, cmdline=cmdline)
+
+        self._prev_config_keys = set(target_config.keys())
 
         cql = self.manager.get_cql()
         cql.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
