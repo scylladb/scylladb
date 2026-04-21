@@ -340,6 +340,8 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
     , _stats_key(stats_key)
     , _used_by_maintenance_socket(used_by_maintenance_socket)
 {
+    build_supported_body();
+
     namespace sm = seastar::metrics;
 
     if (used_by_maintenance_socket) {
@@ -971,9 +973,9 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
     }
 }
 
-cql_protocol_extension_enum_set cql_server::connection::supported_cql_protocol_extensions() const {
+cql_protocol_extension_enum_set cql_server::supported_cql_protocol_extensions() const {
     auto exts = cql_protocol_extension_enum_set::full();
-    const bool strongly_consistent_tables = _server._query_processor.local().db().get_config().check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES);
+    const bool strongly_consistent_tables = _query_processor.local().db().get_config().check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES);
     if (!strongly_consistent_tables) {
         exts.remove(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL);
     }
@@ -1472,7 +1474,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     co_await _client_state.set_client_options(_server._connection_options_keys_and_values, options);
 
     cql_protocol_extension_enum_set cql_proto_exts;
-    for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
+    for (cql_protocol_extension ext : _server._supported_protocol_extensions) {
         if (options.contains(protocol_extension_name(ext))) {
             cql_proto_exts.set(ext);
         }
@@ -2263,8 +2265,10 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_auth_challeng
     return response;
 }
 
-std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const
+// Cache the serialized SUPPORTED body; all values are constant per-shard.
+void cql_server::build_supported_body()
 {
+    _supported_protocol_extensions = supported_cql_protocol_extensions();
     std::multimap<sstring, sstring> opts;
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
     opts.insert({"COMPRESSION", "lz4"});
@@ -2273,21 +2277,25 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     // e.g. CQL driver configuration.
     opts.insert({"CLIENT_OPTIONS", ""});
     // Let drivers identify the connected node without an extra system.local query.
-    opts.insert({"SCYLLA_HOST_ID", _server._gossiper.my_host_id().to_sstring()});
-    if (_server._config.allow_shard_aware_drivers) {
+    const auto host_id = _gossiper.my_host_id();
+    if (!host_id) {
+        on_internal_error(clogger, "building SUPPORTED body before the host id is set");
+    }
+    opts.insert({"SCYLLA_HOST_ID", host_id.to_sstring()});
+    if (_config.allow_shard_aware_drivers) {
         opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", this_smp_shard_count())});
         opts.insert({"SCYLLA_SHARDING_ALGORITHM", dht::cpu_sharding_algorithm_name()});
-        if (_server._config.shard_aware_transport_port) {
-            opts.insert({"SCYLLA_SHARD_AWARE_PORT", format("{:d}", *_server._config.shard_aware_transport_port)});
+        if (_config.shard_aware_transport_port) {
+            opts.insert({"SCYLLA_SHARD_AWARE_PORT", format("{:d}", *_config.shard_aware_transport_port)});
         }
-        if (_server._config.shard_aware_transport_port_ssl) {
-            opts.insert({"SCYLLA_SHARD_AWARE_PORT_SSL", format("{:d}", *_server._config.shard_aware_transport_port_ssl)});
+        if (_config.shard_aware_transport_port_ssl) {
+            opts.insert({"SCYLLA_SHARD_AWARE_PORT_SSL", format("{:d}", *_config.shard_aware_transport_port_ssl)});
         }
-        opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _server._config.sharding_ignore_msb)});
-        opts.insert({"SCYLLA_PARTITIONER", _server._config.partitioner_name});
+        opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _config.sharding_ignore_msb)});
+        opts.insert({"SCYLLA_PARTITIONER", _config.partitioner_name});
     }
-    for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
+    for (cql_protocol_extension ext : _supported_protocol_extensions) {
         const sstring ext_key_name = protocol_extension_name(ext);
         std::vector<sstring> params = additional_options_for_proto_ext(ext);
         if (params.empty()) {
@@ -2298,8 +2306,17 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
             }
         }
     }
+    // Serialize into a temporary response and keep the body as bytes_ostream
+    cql_server::response tmp(0, cql_binary_opcode::SUPPORTED, tracing::trace_state_ptr());
+    tmp.write_string_multimap(std::move(opts));
+    _supported_body = std::move(tmp).extract_body();
+    _supported_body.linearize(); // single fragment: per-request copies allocate once
+}
+
+std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const
+{
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
-    response->write_string_multimap(std::move(opts));
+    response->append_body(_server._supported_body);
     return response;
 }
 
@@ -2667,6 +2684,11 @@ void cql_server::response::write_string_multimap(std::multimap<sstring, sstring>
         write_string(key);
         write_string_list(values);
     }
+}
+
+void cql_server::response::append_body(const bytes_ostream& body)
+{
+    _body.append(body);
 }
 
 void cql_server::response::write_string_bytes_map(const std::unordered_map<sstring, bytes>& map)
