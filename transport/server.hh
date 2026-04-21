@@ -235,6 +235,7 @@ private:
     std::unique_ptr<event_notifier> _notifier;
 private:
     client_options_cache_type _connection_options_keys_and_values;
+    bytes_ostream _supported_body; // cached serialized body for SUPPORTED responses
     transport_stats _stats;
     auth::service& _auth_service;
     qos::service_level_controller& _sl_controller;
@@ -275,6 +276,7 @@ public:
     future<std::vector<connection_service_level_params>> get_connections_service_level_params();
 private:
     class fmt_visitor;
+    void build_supported_body();
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
             const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata);
