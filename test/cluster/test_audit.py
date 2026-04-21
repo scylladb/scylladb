@@ -72,18 +72,18 @@ class AuditTester:
     def __init__(self, manager: ManagerClient):
         self.manager = manager
 
-    def _build_server_config(self, needed: dict[str, str],
+    def _build_server_config(self, target_config: dict[str, str],
                              enable_compact_storage: bool,
                              user: str | None) -> dict[str, Any]:
         """Build the full server config dict from audit settings, auth, and flags."""
-        cfg: dict[str, Any] = dict(needed)
+        cfg: dict[str, Any] = dict(target_config)
         cfg["enable_create_table_with_compact_storage"] = enable_compact_storage
         if user:
             cfg.update(AUTH_CONFIG)
         return cfg
 
     async def _check_restart_needed(self, current: dict[str, str],
-                                    needed: dict[str, str],
+                                    target_config: dict[str, str],
                                     absent_keys: set[str],
                                     user: str | None) -> bool:
         """Decide whether a running server must be restarted.
@@ -92,8 +92,8 @@ class AuditTester:
         """
         # Non-live audit keys changed or need to be removed.
         restart = any(
-            str(current.get(k, "")) != str(needed.get(k, ""))
-            for k in NON_LIVE_AUDIT_KEYS if k in needed
+            str(current.get(k, "")) != str(target_config.get(k, ""))
+            for k in NON_LIVE_AUDIT_KEYS if k in target_config
         ) or any(k in current for k in NON_LIVE_AUDIT_KEYS & absent_keys)
 
         # Auth config changes also require a restart.
@@ -108,7 +108,7 @@ class AuditTester:
 
         return restart
 
-    async def _apply_config_to_running_servers(self, servers, needed: dict[str, str],
+    async def _apply_config_to_running_servers(self, servers, target_config: dict[str, str],
                                                absent_keys: set[str],
                                                enable_compact_storage: bool,
                                                user: str | None,
@@ -117,7 +117,7 @@ class AuditTester:
         for srv in servers:
             current = await self.manager.server_get_config(srv.server_id)
 
-            needs_restart = await self._check_restart_needed(current, needed, absent_keys, user)
+            needs_restart = await self._check_restart_needed(current, target_config, absent_keys, user)
 
             # Transitioning from auth to no-auth: remove auth keys before restart.
             has_auth = any(k in current for k in AUTH_CONFIG)
@@ -130,13 +130,13 @@ class AuditTester:
                 for k in absent_keys:
                     await self.manager.server_remove_config_option(srv.server_id, k)
                 await self.manager.server_stop_gracefully(srv.server_id)
-                full_cfg = self._build_server_config(needed, enable_compact_storage, user)
+                full_cfg = self._build_server_config(target_config, enable_compact_storage, user)
                 await self.manager.server_update_config(srv.server_id, config_options=full_cfg)
                 await self.manager.server_start(srv.server_id)
                 await self.manager.driver_connect(auth_provider=auth_provider)
             else:
                 # Server stays up — only push live-updatable keys.
-                live_cfg = {k: v for k, v in needed.items() if k in LIVE_AUDIT_KEYS}
+                live_cfg = {k: v for k, v in target_config.items() if k in LIVE_AUDIT_KEYS}
                 live_cfg["enable_create_table_with_compact_storage"] = enable_compact_storage
                 log_file = await self.manager.server_open_log(srv.server_id)
                 # Each remove/update sends a SIGHUP.  Wait for each one's
@@ -150,7 +150,7 @@ class AuditTester:
                 await self.manager.server_update_config(srv.server_id, config_options=live_cfg)
                 await log_file.wait_for(r"completed re-reading configuration file", from_mark=from_mark, timeout=60)
 
-    async def _start_fresh_servers(self, needed: dict[str, str],
+    async def _start_fresh_servers(self, target_config: dict[str, str],
                                    enable_compact_storage: bool,
                                    rf: int,
                                    user: str | None,
@@ -168,7 +168,7 @@ class AuditTester:
             audit_cmdline.extend(cmdline)
         cmdline = audit_cmdline
 
-        cfg = self._build_server_config(needed, enable_compact_storage, user)
+        cfg = self._build_server_config(target_config, enable_compact_storage, user)
         connect_opts: dict[str, Any] = {}
         if auth_provider:
             connect_opts["auth_provider"] = auth_provider
@@ -216,8 +216,8 @@ class AuditTester:
         Returns:
             List of server IP addresses.
         """
-        needed = helper.update_audit_settings(audit_settings)
-        absent_keys = (NON_LIVE_AUDIT_KEYS | LIVE_AUDIT_KEYS) - needed.keys()
+        target_config = helper.update_audit_settings(audit_settings)
+        absent_keys = (NON_LIVE_AUDIT_KEYS | LIVE_AUDIT_KEYS) - target_config.keys()
         auth_provider = PlainTextAuthProvider(username=user, password=password or "") if user else None
         expected_servers = len(property_file) if property_file else rf
 
@@ -231,15 +231,15 @@ class AuditTester:
         if servers:
             server_ips = [srv.ip_addr for srv in servers]
             await self._apply_config_to_running_servers(
-                servers, needed, absent_keys, enable_compact_storage, user, auth_provider)
+                servers, target_config, absent_keys, enable_compact_storage, user, auth_provider)
         else:
             server_ips = await self._start_fresh_servers(
-                needed, enable_compact_storage, rf, user, auth_provider,
+                target_config, enable_compact_storage, rf, user, auth_provider,
                 property_file=property_file, cmdline=cmdline)
 
         cql = self.manager.get_cql()
         cql.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
-        audit_mode = needed.get("audit") or ""
+        audit_mode = target_config.get("audit") or ""
         if "table" not in audit_mode:
             cql.execute("DROP KEYSPACE IF EXISTS audit")
 
