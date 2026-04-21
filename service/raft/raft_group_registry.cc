@@ -16,7 +16,7 @@
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
 #include "idl/raft_util.dist.hh"
-#include "utils/composite_abort_source.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/error_injection.hh"
 #include <seastar/core/shared_future.hh>
 

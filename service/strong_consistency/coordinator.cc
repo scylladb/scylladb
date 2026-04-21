@@ -19,7 +19,7 @@
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "gms/gossiper.hh"
-#include "utils/composite_abort_source.hh"
+#include "utils/chain_abort_source.hh"
 
 namespace service::strong_consistency {
 
