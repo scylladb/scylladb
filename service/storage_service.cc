@@ -3754,7 +3754,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 }
 
 future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
-    return run_with_no_api_lock([this] (storage_service& ss) {
+    return run_with_no_api_lock([] (storage_service& ss) {
         const auto& tm = ss.get_token_metadata();
         auto token_map = dht::token::describe_ownership(tm.sorted_tokens());
         // describeOwnership returns tokens in an unspecified order, let's re-order them
@@ -3762,7 +3762,7 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
         for (auto entry : token_map) {
             locator::host_id id = tm.get_endpoint(entry.first).value();
             auto token_ownership = entry.second;
-            ownership[_address_map.get(id)] += token_ownership;
+            ownership[ss._address_map.get(id)] += token_ownership;
         }
         return ownership;
     });
@@ -4427,12 +4427,8 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
 }
 
 future<> storage_service::mark_excluded(const std::vector<locator::host_id>& hosts) {
-    if (this_shard_id() != 0) {
-        // group0 is only set on shard 0.
-        co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.mark_excluded(hosts);
-        });
-    }
+    // Callers forward to shard 0 via run_with_no_api_lock (group0 is only set on shard 0).
+    SCYLLA_ASSERT(this_shard_id() == 0);
 
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
@@ -5144,8 +5140,8 @@ future<sstring> storage_service::wait_for_topology_request_completion(utils::UUI
 }
 
 future<> storage_service::abort_topology_request(utils::UUID request_id) {
-    co_await container().invoke_on(0, [request_id, this] (storage_service& ss) {
-        return _topology_state_machine.abort_request(*ss._group0, ss._group0_as, ss._feature_service, request_id);
+    co_await container().invoke_on(0, [request_id] (storage_service& ss) {
+        return ss._topology_state_machine.abort_request(*ss._group0, ss._group0_as, ss._feature_service, request_id);
     });
 }
 

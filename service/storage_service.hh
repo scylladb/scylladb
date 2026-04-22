@@ -842,19 +842,29 @@ private:
      */
     future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, locator::host_id>> ranges_to_stream_by_keyspace);
 
+    // REST handlers are gated at the registration site (see gated() in
+    // api/storage_service.cc) so stop() drains in-flight requests before
+    // teardown.  run_with_api_lock_internal and run_with_no_api_lock hold
+    // _async_gate on shard 0 as well, because REST requests arriving on
+    // any shard are forwarded there for execution.
     template <typename Func>
     auto run_with_api_lock_internal(storage_service& ss, Func&& func, sstring& operation) {
+        auto holder = ss._async_gate.hold();
         if (!ss._operation_in_progress.empty()) {
             throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
         }
         ss._operation_in_progress = std::move(operation);
-        return func(ss).finally([&ss] {
+        return func(ss).finally([&ss, holder = std::move(holder)] {
             ss._operation_in_progress = sstring();
         });
     }
 
 public:
     int32_t get_exception_count();
+
+    auto hold_async_gate() {
+        return _async_gate.hold();
+    }
 
     template <typename Func>
     auto run_with_api_lock(sstring operation, Func&& func) {
@@ -866,8 +876,10 @@ public:
 
     template <typename Func>
     auto run_with_no_api_lock(Func&& func) {
-        return container().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
-            return func(ss);
+        return container().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable
+                -> futurize_t<std::invoke_result_t<Func, storage_service&>> {
+            auto holder = ss._async_gate.hold();
+            co_return co_await futurize_invoke(func, ss);
         });
     }
 
