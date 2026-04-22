@@ -924,7 +924,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -997,7 +997,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -1148,7 +1148,7 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -1228,7 +1228,7 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
