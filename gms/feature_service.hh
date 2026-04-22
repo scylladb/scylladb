@@ -119,6 +119,7 @@ public:
     gms::feature supports_consistent_topology_changes { *this, "SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES"sv };
     gms::feature host_id_based_hinted_handoff { *this, "HOST_ID_BASED_HINTED_HANDOFF"sv };
     gms::feature topology_requests_type_column { *this, "TOPOLOGY_REQUESTS_TYPE_COLUMN"sv };
+    gms::feature topology_requests_target_host_column { *this, "TOPOLOGY_REQUESTS_TARGET_HOST_COLUMN"sv };
     gms::feature native_reverse_queries { *this, "NATIVE_REVERSE_QUERIES"sv };
     gms::feature zero_token_nodes { *this, "ZERO_TOKEN_NODES"sv };
     gms::feature views_with_tablets { *this, "VIEWS_WITH_TABLETS"sv };

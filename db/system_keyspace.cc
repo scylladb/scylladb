@@ -314,6 +314,7 @@ schema_ptr system_keyspace::topology_requests() {
         return schema_builder(NAME, TOPOLOGY_REQUESTS, std::optional(id))
             .with_column("id", timeuuid_type, column_kind::partition_key)
             .with_column("initiating_host", uuid_type)
+            .with_column("target_host", uuid_type)
             .with_column("request_type", utf8_type)
             .with_column("start_time", timestamp_type)
             .with_column("done", boolean_type)
@@ -3541,6 +3542,9 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     entry.id = id;
     if (row.has("initiating_host")) {
         entry.initiating_host = row.get_as<utils::UUID>("initiating_host");
+    }
+    if (row.has("target_host")) {
+        entry.target_host = row.get_as<utils::UUID>("target_host");
     }
     if (row.has("request_type")) {
         auto rts = row.get_as<sstring>("request_type");
