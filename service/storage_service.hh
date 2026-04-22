@@ -753,6 +753,7 @@ private:
 public:
     int32_t get_exception_count();
 
+<<<<<<< HEAD
     auto hold_async_gate() {
         return _async_gate.hold();
     }
@@ -762,6 +763,13 @@ public:
     // teardown.  run_with_api_lock and run_with_no_api_lock hold
     // _async_gate on shard 0 as well, because REST requests arriving on
     // any shard are forwarded there for execution.
+||||||| parent of 74dd33811e (storage_service: prepare for async gate in REST handlers)
+=======
+    auto hold_async_gate() {
+        return _async_gate.hold();
+    }
+
+>>>>>>> 74dd33811e (storage_service: prepare for async gate in REST handlers)
     template <typename Func>
     auto run_with_api_lock(sstring operation, Func&& func) {
         return container().invoke_on(0, [operation = std::move(operation),
@@ -779,10 +787,19 @@ public:
 
     template <typename Func>
     auto run_with_no_api_lock(Func&& func) {
+<<<<<<< HEAD
         return container().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable
                 -> futurize_t<std::invoke_result_t<Func, storage_service&>> {
             auto holder = ss._async_gate.hold();
             co_return co_await futurize_invoke(func, ss);
+||||||| parent of 74dd33811e (storage_service: prepare for async gate in REST handlers)
+        return container().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            return func(ss);
+=======
+        return container().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable
+                -> futurize_t<std::invoke_result_t<Func, storage_service&>> {
+            co_return co_await futurize_invoke(func, ss);
+>>>>>>> 74dd33811e (storage_service: prepare for async gate in REST handlers)
         });
     }
 
