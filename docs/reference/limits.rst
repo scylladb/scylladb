@@ -16,7 +16,7 @@ Cluster and Node Limits
    * - Nodes per cluster
      - Low hundreds
    * - Node size
-     - 256 vcpu
+     - 4096 CPUs
   
 See :ref:`Hardware Requirements <system-requirements-hardware>` for storage
 and memory requirements and limits.
