@@ -8,7 +8,6 @@
 
 #include "seastarx.hh"
 #include "cql3/statements/list_service_level_statement.hh"
-#include "cql3/column_identifier.hh"
 #include "service/qos/service_level_controller.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/overloaded_functor.hh"
@@ -18,6 +17,20 @@
 namespace cql3 {
 
 namespace statements {
+
+shared_ptr<const cql3::metadata> list_service_level_statement::get_result_metadata() const {
+    std::vector<lw_shared_ptr<column_specification>> metadata{
+            make_column_spec("QOS", "service_levels", "service_level", utf8_type),
+            make_column_spec("QOS", "service_levels", "timeout", duration_type),
+            make_column_spec("QOS", "service_levels", "workload_type", utf8_type),
+            make_column_spec("QOS", "service_levels", "shares", int32_type),
+    };
+    if (_describe_all) {
+        metadata.push_back(make_column_spec("QOS", "service_levels", "percentage of all service level shares", utf8_type));
+    }
+
+    return ::make_shared<cql3::metadata>(std::move(metadata));
+}
 
 list_service_level_statement::list_service_level_statement(sstring service_level, bool describe_all) :
     _service_level(service_level), _describe_all(describe_all) {
@@ -38,23 +51,7 @@ list_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &,
         std::optional<service::group0_guard> guard) const {
-
-    static auto make_column = [] (sstring name, const shared_ptr<const abstract_type> type) {
-        return make_lw_shared<column_specification>(
-                "QOS",
-                "service_levels",
-                ::make_shared<column_identifier>(std::move(name), true),
-                type);
-    };
-
-    std::vector<lw_shared_ptr<column_specification>> metadata({make_column("service_level", utf8_type),
-        make_column("timeout", duration_type),
-        make_column("workload_type", utf8_type),
-        make_column("shares", int32_type),
-    });
-    if (_describe_all) {
-        metadata.push_back(make_column("percentage of all service level shares", utf8_type));
-    }
+    auto metadata = ::make_shared<cql3::metadata>(*get_result_metadata());
 
     return make_ready_future().then([this, &state] () {
                                   if (_describe_all) {

@@ -27,6 +27,7 @@
 #include "cql3/statements/list_roles_statement.hh"
 #include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/request_validations.hh"
+#include "db/system_keyspace.hh"
 #include "exceptions/exceptions.hh"
 #include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"
@@ -347,6 +348,17 @@ std::unique_ptr<prepared_statement> list_roles_statement::prepare(
     return std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_roles_statement>(*this));
 }
 
+shared_ptr<const cql3::metadata> list_roles_statement::get_result_metadata() const {
+    static const thread_local auto custom_options_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
+
+    return ::make_shared<cql3::metadata>(
+            std::vector<lw_shared_ptr<column_specification>>{
+                    make_column_spec(db::system_keyspace::NAME, "roles", "role", utf8_type),
+                    make_column_spec(db::system_keyspace::NAME, "roles", "super", boolean_type),
+                    make_column_spec(db::system_keyspace::NAME, "roles", "login", boolean_type),
+                    make_column_spec(db::system_keyspace::NAME, "roles", "options", custom_options_type)});
+}
+
 future<> list_roles_statement::check_access(query_processor& qp, const service::client_state& state) const {
     state.ensure_not_anonymous();
 
@@ -376,24 +388,8 @@ future<> list_roles_statement::check_access(query_processor& qp, const service::
 
 future<result_message_ptr>
 list_roles_statement::execute(query_processor& qp, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
-    static const sstring virtual_table_name("roles");
-
-    const auto make_column_spec = [auth_ks = auth::get_auth_ks_name(qp)](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
-        return make_lw_shared<column_specification>(
-                auth_ks,
-                virtual_table_name,
-                ::make_shared<column_identifier>(name, true),
-                ty);
-    };
-
     static const thread_local auto custom_options_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
-
-    auto metadata = ::make_shared<cql3::metadata>(
-            std::vector<lw_shared_ptr<column_specification>>{
-                    make_column_spec("role", utf8_type),
-                    make_column_spec("super", boolean_type),
-                    make_column_spec("login", boolean_type),
-                    make_column_spec("options", custom_options_type)});
+    auto metadata = ::make_shared<cql3::metadata>(*get_result_metadata());
 
     auto make_results = [metadata = std::move(metadata)](
             auth::role_manager& rm,
