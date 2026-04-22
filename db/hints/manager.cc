@@ -41,6 +41,7 @@
 #include "locator/host_id.hh"
 #include "locator/token_metadata.hh"
 #include "replica/database.hh"
+#include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "utils/directories.hh"
 #include "utils/disk-error-handler.hh"
@@ -641,17 +642,18 @@ bool manager::check_dc_for(endpoint_id ep) const noexcept {
 }
 
 future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip, std::optional<service::topology_request> reason) noexcept {
+    bool discard = (reason == service::topology_request::remove || reason == service::topology_request::replace);
     if (!started() || stopping() || draining_all()) {
         co_return;
     }
 
-    if (!replay_allowed()) {
-        auto reason = seastar::format("Precondition violdated while trying to drain {} / {}: "
-                "hint replay is not allowed", host_id, ip);
-        on_internal_error(manager_logger, std::move(reason));
+    if (!discard && !replay_allowed()) {
+        // Hint replay is not yet allowed; drain_left_nodes() will handle this
+        // host once replay is enabled.
+        co_return;
     }
 
-    manager_logger.info("Draining starts for {}", host_id);
+    manager_logger.info("{} starts for {}", discard ? "Discarding" : "Draining", host_id);
 
     const auto holder = seastar::gate::holder{_draining_eps_gate};
     // As long as we hold on to this lock, no migration of hinted handoff to host IDs
@@ -683,15 +685,29 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip, std::opti
         });
     };
 
+    // After discarding, remove the directory and all its contents without replaying hints.
+    auto discard_ep_manager = [] (hint_endpoint_manager& ep_man) -> future<> {
+        co_await ep_man.stop(drain::no);
+        co_await ep_man.with_file_update_mutex([&ep_man] -> future<> {
+            return seastar::recursive_remove_directory(ep_man.hints_dir()).then([&ep_man] {
+                manager_logger.info("Discarded hint directory for {}", ep_man.end_point_key());
+            });
+        });
+    };
+
     std::exception_ptr eptr = nullptr;
+
+    std::function<future<>(hint_endpoint_manager&)> process_ep_manager =
+        discard ? std::function<future<>(hint_endpoint_manager&)>(discard_ep_manager)
+                : std::function<future<>(hint_endpoint_manager&)>(drain_ep_manager);
 
     if (_proxy.local_db().get_token_metadata().get_topology().is_me(host_id)) {
         set_draining_all();
 
         try {
             co_await coroutine::parallel_for_each(_ep_managers | std::views::values,
-                    [&drain_ep_manager] (hint_endpoint_manager& ep_man) {
-                return drain_ep_manager(ep_man);
+                    [&process_ep_manager] (hint_endpoint_manager& ep_man) {
+                return process_ep_manager(ep_man);
             });
         } catch (...) {
             eptr = std::current_exception();
@@ -720,7 +736,7 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip, std::opti
 
             if (it != _ep_managers.end()) {
                 try {
-                    co_await drain_ep_manager(it->second);
+                    co_await process_ep_manager(it->second);
                 } catch (...) {
                     eptr = std::current_exception();
                 }
@@ -735,10 +751,10 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip, std::opti
     }
 
     if (eptr) {
-        manager_logger.error("Exception when draining {}: {}", host_id, eptr);
+        manager_logger.error("Exception when {} hints for {}: {}", discard ? "discarding" : "draining", host_id, eptr);
     }
 
-    manager_logger.info("drain_for: finished draining {}", host_id);
+    manager_logger.info("drain_for: finished {} hints for {}", discard ? "discarding" : "draining", host_id);
 }
 
 void manager::update_backlog(size_t backlog, size_t max_backlog) {
@@ -989,11 +1005,25 @@ future<> manager::perform_migration() {
 //                 this constraint early on with possible future refactors in mind. It should be easier
 //                 to modify the function this way.
 future<> manager::drain_left_nodes() {
+    // Build the set of hosts that have endpoint managers but are no longer normal token owners.
+    std::unordered_set<locator::host_id> left_hosts;
     for (const auto& [host_id, ep_man] : _ep_managers) {
         if (!_proxy.get_token_metadata_ptr()->is_normal_token_owner(host_id)) {
-            // It's safe to discard this future. It's awaited in `manager::stop()`.
-            (void) drain_for(host_id, {});
+            left_hosts.insert(host_id);
         }
+    }
+
+    // Query the topology_requests table to determine the reason each host left the cluster.
+    auto host_requests = co_await _proxy.system_keyspace().get_topology_request_for_hosts(left_hosts);
+
+    for (const auto& host_id : left_hosts) {
+        auto it = host_requests.find(host_id);
+        std::optional<service::topology_request> reason;
+        if (it != host_requests.end()) {
+            reason = it->second;
+        }
+        // It's safe to discard this future. It's awaited in `manager::stop()`.
+        (void) drain_for(host_id, {}, reason);
     }
 
     co_return;

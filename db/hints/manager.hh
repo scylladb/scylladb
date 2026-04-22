@@ -313,17 +313,26 @@ public:
     bool have_ep_manager(const std::variant<locator::host_id, gms::inet_address>& ep) const noexcept;
 
 public:
-    /// \brief Initiate the draining when we detect that the node has left the cluster.
+    /// \brief Initiate the draining or discarding when we detect that the node has left the cluster.
     ///
     /// If the node that has left is the current node - drains all pending hints to all nodes.
-    /// Otherwise drains hints to the node that has left.
+    /// Otherwise drains or discards hints to the node that has left, depending on the `reason` parameter:
+    /// * If reason is unegaged or reason is topology_requests::decommission: hints will be drained.
+    /// * If reason is either topology_requests::remove or topology_requests::replace: hints will be discarded.
     ///
-    /// In both cases - removes the corresponding hints' directories after all hints have been drained and erases the
+    /// Decomission redistributes data on the leaving replica among the other replicas.
+    /// So any pending hints to this replica has to be broadcasted to all replicas.
+    /// Removenode redistributes the former data of the leaving replica among other replicas,
+    /// while replace rebuilds the joining replica from the other replicas.
+    /// In both cases the leaving node's data is lost and for quorum continuity it is strongly recommended that
+    /// these node ops use RBNO, or repair right after the node op. So hints are redundant in either case.
+    ///
+    /// In both cases - removes the corresponding hints' directories and erases the
     /// corresponding hint_endpoint_manager objects.
     ///
-    /// Preconditions:
-    /// * Hint replay must be allowed (i.e. `replay_allowed()` must be true) throughout
-    ///   the execution of this function.
+    /// If hint replay is not yet allowed and a drain (not discard) is requested,
+    /// this function returns immediately without error; the drain will be performed
+    /// later by drain_left_nodes() once hint replay is enabled.
     ///
     /// \param host_id host ID of the node that left the cluster
     /// \param ip the IP of the node that left the cluster

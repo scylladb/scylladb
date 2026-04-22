@@ -325,8 +325,10 @@ async def test_draining_hints(manager: ManagerClient):
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_canceling_hint_draining(manager: ManagerClient):
     """
-    This test verifies that draining hints is canceled as soon as we issue a shutdown,
-    but it's resumed after starting the node again.
+    Verifies that after a removenode, pending hints are discarded (not drained) even when
+    hint replay is paused via injection. Unlike draining, discarding does not replay hints
+    and therefore is not affected by the replay pause injection.
+    After the node is restarted, there should be no hint directory left for the removed node.
     """
     s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc")
 
@@ -344,29 +346,56 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     for i in range(1000):
         await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
 
-    sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
+    s1_log = await manager.server_open_log(s1.server_id)
+    s1_mark = await s1_log.mark()
 
+    # Pause hint replay; discarding (used for removenode) is not affected by this injection.
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", False, {})
     nodetool.excludenode(cql, host_id2)
     await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s1.rack, s3.rack]}}}")
 
     await manager.remove_node(s1.server_id, s2.server_id)
-    await manager.server_stop_gracefully(s1.server_id)
+
+    # Discarding should proceed despite the replay pause.
+    await s1_log.wait_for(f"Discarding starts for {host_id2}", from_mark=s1_mark)
+    await s1_log.wait_for(f"Discarded hint directory for {host_id2}", from_mark=s1_mark)
+
+@pytest.mark.asyncio
+async def test_discarding_hints_on_removenode(manager: ManagerClient):
+    """
+    Verifies that hints are discarded (not drained) when a node is removed via removenode.
+    After removenode, the removed node's data is rebuilt via repair from other replicas,
+    so replaying hints to the current ring owners would be redundant.
+    This is a regression test for the fix to https://github.com/scylladb/scylladb/issues/XXXX.
+    """
+    s1, s2, _ = await manager.servers_add(3, config={
+        "error_injections_at_startup": ["decrease_hints_flush_period"]
+    })
+    cql = manager.get_cql()
+
+    host_id2 = await manager.get_host_id(s2.server_id)
+
+    await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
+
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(s2.server_id)
+
+    # Generate hints towards s2 on s1.
+    for i in range(100):
+        await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
 
     s1_log = await manager.server_open_log(s1.server_id)
     s1_mark = await s1_log.mark()
 
-    await manager.server_update_cmdline(s1.server_id, ["--logger-log-level", "hints_manager=trace"])
-    await manager.server_start(s1.server_id)
+    # removenode: hints for the removed node should be discarded, not drained.
+    await manager.remove_node(s1.server_id, s2.server_id)
 
-    s1_log = await manager.server_open_log(s1.server_id)
-
-    # Make sure the node still knows about the decommissioned node and does start draining for it.
-    await s1_log.wait_for(f"Draining starts for {host_id2}", from_mark=s1_mark)
-
-    # Make sure draining finishes successfully.
-    assert await await_sync_point(manager.api.client, s1.ip_addr, sync_point, 60)
-    await s1_log.wait_for(f"Removed hint directory for {host_id2}")
+    # Verify that hints are discarded (not drained) - the log should say "Discarding starts for"
+    # not "Draining starts for".
+    await s1_log.wait_for(f"Discarding starts for {host_id2}", from_mark=s1_mark)
+    await s1_log.wait_for(f"Discarded hint directory for {host_id2}", from_mark=s1_mark)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
