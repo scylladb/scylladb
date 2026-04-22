@@ -1684,11 +1684,14 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
     # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
     extra_node = 0 if with_zero_token_node else 1
     servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    # Capture token-owning servers before adding zero-token nodes; only these
+    # become CQL hosts visible to the driver.
+    token_owning_servers = servers['dc1'] + servers['dc2']
     if with_zero_token_node:
         servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1_1'}))
         servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(token_owning_servers)
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 } AND tablets = { 'initial': 1 }") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -1806,11 +1809,14 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
         {'dc': 'dc1', 'rack': 'rack1_1'},
         {'dc': 'dc1', 'rack': 'rack1_2'}])
     servers['dc2'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    # Capture token-owning servers before adding zero-token nodes; only these
+    # become CQL hosts visible to the driver.
+    token_owning_servers = servers['dc1'] + servers['dc2']
     if with_zero_token_node:
         servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1_1'}))
         servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(token_owning_servers)
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 } AND tablets = { 'initial': 1 }") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -1845,11 +1851,14 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient,
     # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
     extra_node = 0 if with_zero_token_node else 1
     servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
+    # Capture token-owning servers before adding zero-token nodes; only these
+    # become CQL hosts visible to the driver.
+    token_owning_servers = servers['dc1'] + servers['dc2']
     if with_zero_token_node:
         servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1_1'}))
         servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(token_owning_servers)
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 } AND tablets = { 'initial': 1 }") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 

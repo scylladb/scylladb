@@ -224,9 +224,12 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
     # Step 1.
     # -------
     # dc1: r1=1, rzerotoken=1 (Note: zero-token nodes have NO impact. In this case, this rack should behave as if it never existed).
-    _ = await manager.server_add(property_file={"dc": "dc1", "rack": "r1"}, config=cfg)
+    normal_servers = []
+    normal_servers.append(await manager.server_add(property_file={"dc": "dc1", "rack": "r1"}, config=cfg))
     _ = await manager.server_add(property_file={"dc": "dc1", "rack": "rzerotoken"}, config=cfg_zero_token)
-    cql = manager.get_cql()
+    # The zero-token node never becomes a CQL host visible to the driver, so
+    # we only wait on the token-owning servers here.
+    cql, _ = await manager.get_ready_cql(normal_servers)
 
     ks1 = await create_ok([1])
     await create_ok([0])
@@ -246,7 +249,8 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
     # -------
     # dc1: r1=1, rzerotoken=1.
     # dc2: r1=1.
-    _ = await manager.server_add(property_file={"dc": "dc2", "rack": "r1"}, config=cfg)
+    normal_servers.append(await manager.server_add(property_file={"dc": "dc2", "rack": "r1"}, config=cfg))
+    await manager.get_ready_cql(normal_servers)
 
     ks2 = await create_ok([1, 1])
 
@@ -294,7 +298,8 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
     # -------
     # dc1: r1=1, r2=1, rzerotoken=1.
     # dc2: r1=1.
-    _ = await manager.server_add(property_file={"dc": "dc1", "rack": "r2"}, config=cfg)
+    normal_servers.append(await manager.server_add(property_file={"dc": "dc1", "rack": "r2"}, config=cfg))
+    await manager.get_ready_cql(normal_servers)
 
     ks3 = await create_ok([2, 1])
     # RF = 1 is always OK!
@@ -339,9 +344,10 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     zero_token_cfg = {"rf_rack_valid_keyspaces": "true", "join_ring": "false"}
 
     # Regular DC.
-    _ = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
-    _ = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"})
-    _ = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
+    servers = []
+    servers.append(await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"}))
+    servers.append(await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"}))
+    servers.append(await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"}))
     # Zero-token node. This rack should behave as if it didn't exist.
     _ = await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc1", "rack": "r4"})
 
@@ -350,7 +356,9 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     _ = await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc2", "rack": "r2"})
     _ = await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc2", "rack": "r3"})
 
-    cql = manager.get_cql()
+    # Only token-owning servers become CQL hosts visible to the driver, so we
+    # only wait on the regular DC1 nodes here.
+    cql, _ = await manager.get_ready_cql(servers)
 
     async def create_aux(ks: str, rfs: Union[List[int], int]):
         if type(rfs) is int:
@@ -416,16 +424,18 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
     cfg_false = {"rf_rack_valid_keyspaces": "false"}
 
     s1 = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r1"})
-    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r2"})
-    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r3"})
-    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc2", "rack": "r4"})
+    s2 = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r2"})
+    s3 = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r3"})
+    s4 = await manager.server_add(config=cfg_false, property_file={"dc": "dc2", "rack": "r4"})
     # Note: This rack should behave as if it never existed.
     _ = await manager.server_add(config={"join_ring": "false", "rf_rack_valid_keyspaces": "false"}, property_file={"dc": "dc1", "rack": "rzerotoken"})
 
     # Current situation:
     # DC1: {r1, r2, r3}, DC2: {r4}
 
-    cql = manager.get_cql()
+    # The zero-token node never becomes a CQL host visible to the driver, so
+    # we only wait on the token-owning servers here.
+    cql, _ = await manager.get_ready_cql([s1, s2, s3, s4])
 
     async def create_keyspace(rfs: List[int], tablets: bool) -> str:
         dcs = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])

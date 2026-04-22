@@ -1180,6 +1180,10 @@ async def test_zero_token_node_load_balancer(manager, tablets):
     # Add a fifth node, with zero tokens (no data), by setting join_ring=false:
     zero_token_server = await manager.server_add(config=alternator_config | {'join_ring': False},
                                                  property_file={'dc': 'dc1', 'rack': 'rack-zero-token'})
+    # Wait until the driver sees the token-owning servers before issuing
+    # cql queries. The zero-token node never becomes a CQL host visible to
+    # the driver, so we only wait on the token-owning servers here.
+    cql, _ = await manager.get_ready_cql(servers)
 
     # Get an Alternator connection to the zero-token node:
     alternator = get_alternator(zero_token_server.ip_addr)
@@ -1206,7 +1210,7 @@ async def test_zero_token_node_load_balancer(manager, tablets):
     # we want this to be just the first four nodes in "servers", not the
     # fifth node zero_token_server.
     ks = f"alternator_{table.name}"
-    repl = get_replication(manager.get_cql(), ks)
+    repl = get_replication(cql, ks)
     if type(repl["dc1"]) is list:
         expected = { await manager.get_host_id(s.server_id) for s in servers if s.rack in repl["dc1"] }
     else:
