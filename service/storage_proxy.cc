@@ -7416,7 +7416,7 @@ void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint, const lo
     }
 }
 
-void storage_proxy::on_released(const locator::host_id& hid) {
+void storage_proxy::on_released(const locator::host_id& hid, std::optional<service::topology_request> reason) {
     // Discarding these futures is safe. They're awaited by db::hints::manager::stop().
     //
     // Hint replay must be allowed throughout the execution of `drain_for`
@@ -7426,11 +7426,12 @@ void storage_proxy::on_released(const locator::host_id& hid) {
     // Note that if we don't perform draining here because hint replay is not
     // allowed yet, it'll be conducted by a call to `db::hints::manager::drain_left_nodes()`,
     // which is called by `main.cc` after hint replay is turned on.
-    if (_hints_manager.replay_allowed() && _hints_manager.uses_host_id()) {
-        (void) _hints_manager.drain_for(hid, {});
+    bool discard = (reason == service::topology_request::remove);
+    if ((_hints_manager.replay_allowed() || discard) && _hints_manager.uses_host_id()) {
+        (void) _hints_manager.drain_for(hid, {}, reason);
     }
-    if (_hints_for_views_manager.replay_allowed() && _hints_for_views_manager.uses_host_id()) {
-        (void) _hints_for_views_manager.drain_for(hid, {});
+    if ((_hints_for_views_manager.replay_allowed() || discard) && _hints_for_views_manager.uses_host_id()) {
+        (void) _hints_for_views_manager.drain_for(hid, {}, reason);
     }
 }
 

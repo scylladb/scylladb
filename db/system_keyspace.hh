@@ -691,6 +691,11 @@ public:
     future<std::optional<topology_requests_entry>> get_topology_request_entry_opt(utils::UUID id);
     future<system_keyspace::topology_requests_entries> get_topology_request_entries(std::vector<std::variant<service::topology_request, service::global_topology_request>> request_types, db_clock::time_point end_time_limit);
     future<topology_requests_entries> get_node_ops_request_entries(db_clock::time_point end_time_limit);
+    // For each host in `hosts` that has a matching target_host in the topology_requests table,
+    // returns the corresponding topology_request for that host.
+    // Hosts not present in the table (e.g. because the feature flag was not yet active when they
+    // left) are omitted from the result; callers should treat them as unknown / default to draining.
+    future<std::unordered_map<locator::host_id, service::topology_request>> get_topology_request_for_hosts(std::unordered_set<locator::host_id> hosts);
 
 public:
     future<std::optional<bool>> get_service_level_driver_created();

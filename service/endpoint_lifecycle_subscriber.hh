@@ -10,8 +10,10 @@
 
 #pragma once
 
+#include <optional>
 #include "gms/inet_address.hh"
 #include "locator/host_id.hh"
+#include "service/topology_state_machine.hh"
 #include "utils/atomic_vector.hh"
 #include "service/client_routes.hh"
 
@@ -51,7 +53,7 @@ public:
      *
      * @param host_id the host ID of the endpoint that was released.
      */
-    virtual void on_released(const locator::host_id& host_id) {}
+    virtual void on_released(const locator::host_id& host_id, std::optional<service::topology_request> reason) {}
 
     /**
      * Called when a node is marked UP.
@@ -78,7 +80,7 @@ public:
 
     future<> notify_down(gms::inet_address endpoint, locator::host_id host_id);
     future<> notify_left(gms::inet_address endpoint, locator::host_id host_id);
-    future<> notify_released(locator::host_id host_id);
+    future<> notify_released(locator::host_id host_id, std::optional<service::topology_request> reason);
     future<> notify_up(gms::inet_address endpoint, locator::host_id host_id);
     future<> notify_joined(gms::inet_address endpoint, locator::host_id host_id);
 

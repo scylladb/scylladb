@@ -3657,6 +3657,29 @@ future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops
     }, end_time_limit);
 }
 
+future<std::unordered_map<locator::host_id, service::topology_request>> system_keyspace::get_topology_request_for_hosts(std::unordered_set<locator::host_id> hosts) {
+    std::unordered_map<locator::host_id, service::topology_request> result;
+    co_await _qp.query_internal(
+        format("SELECT target_host, request_type FROM system.{}", TOPOLOGY_REQUESTS),
+        [&result, &hosts] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+            if (!row.has("target_host") || !row.has("request_type")) {
+                co_return stop_iteration::no;
+            }
+            auto target_host = locator::host_id(row.get_as<utils::UUID>("target_host"));
+            if (!hosts.contains(target_host)) {
+                co_return stop_iteration::no;
+            }
+            auto req_type_str = row.get_as<sstring>("request_type");
+            auto req_type = service::try_topology_request_from_string(req_type_str);
+            if (!req_type) {
+                co_return stop_iteration::no;
+            }
+            result.emplace(target_host, *req_type);
+            co_return stop_iteration::no;
+        });
+    co_return result;
+}
+
 future<mutation> system_keyspace::get_insert_dict_mutation(
     std::string_view name,
     bytes data,

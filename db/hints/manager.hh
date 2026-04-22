@@ -27,9 +27,11 @@
 #include "db/hints/sync_point.hh"
 #include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "service/topology_state_machine.hh"
 
 // STD.
 #include <chrono>
+#include <optional>
 #include <span>
 #include <unordered_map>
 
@@ -325,7 +327,8 @@ public:
     ///
     /// \param host_id host ID of the node that left the cluster
     /// \param ip the IP of the node that left the cluster
-    future<> drain_for(endpoint_id host_id, gms::inet_address ip) noexcept;
+    /// \param reason the topology request that caused the node to leave (nullopt if unknown)
+    future<> drain_for(endpoint_id host_id, gms::inet_address ip, std::optional<service::topology_request> reason = std::nullopt) noexcept;
 
     void update_backlog(size_t backlog, size_t max_backlog);
 

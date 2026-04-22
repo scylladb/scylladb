@@ -640,7 +640,7 @@ bool manager::check_dc_for(endpoint_id ep) const noexcept {
     }
 }
 
-future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept {
+future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip, std::optional<service::topology_request> reason) noexcept {
     if (!started() || stopping() || draining_all()) {
         co_return;
     }

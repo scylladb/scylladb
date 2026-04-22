@@ -621,7 +621,17 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     if (prev_released) {
         auto nodes_to_release = get_released_nodes(t, *tmptr);
         std::erase_if(nodes_to_release, [&] (const auto& host_id) { return prev_released->contains(host_id); });
-        std::copy(nodes_to_release.begin(), nodes_to_release.end(), std::back_inserter(nodes_to_notify.released));
+        if (!nodes_to_release.empty()) {
+            auto host_requests = co_await _sys_ks.local().get_topology_request_for_hosts(nodes_to_release);
+            for (const auto& host_id : nodes_to_release) {
+                auto it = host_requests.find(host_id);
+                std::optional<service::topology_request> reason;
+                if (it != host_requests.end()) {
+                    reason = it->second;
+                }
+                nodes_to_notify.released.emplace_back(host_id, reason);
+            }
+        }
     }
 
     co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
@@ -632,8 +642,8 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
 }
 
 future<> storage_service::notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify) {
-    for (auto host_id : nodes_to_notify.released) {
-        co_await notify_released(host_id);
+    for (auto [host_id, reason] : nodes_to_notify.released) {
+        co_await notify_released(host_id, reason);
     }
     for (auto [ip, host_id] : nodes_to_notify.left) {
         co_await notify_left(ip, host_id);
@@ -6515,11 +6525,11 @@ future<> endpoint_lifecycle_notifier::notify_left(gms::inet_address endpoint, lo
     });
 }
 
-future<> endpoint_lifecycle_notifier::notify_released(locator::host_id hid) {
-    return seastar::async([this, hid] {
-        _subscribers.thread_for_each([hid] (endpoint_lifecycle_subscriber* subscriber) {
+future<> endpoint_lifecycle_notifier::notify_released(locator::host_id hid, std::optional<service::topology_request> reason) {
+    return seastar::async([this, hid, reason] {
+        _subscribers.thread_for_each([hid, reason] (endpoint_lifecycle_subscriber* subscriber) {
             try {
-                subscriber->on_released(hid);
+                subscriber->on_released(hid, reason);
             } catch (...) {
                 slogger.warn("Node released notification failed {}: {}", hid, std::current_exception());
             }
@@ -6534,9 +6544,9 @@ future<> storage_service::notify_left(inet_address endpoint, locator::host_id hi
     slogger.debug("Notify node {} has left the cluster", endpoint);
 }
 
-future<> storage_service::notify_released(locator::host_id hid) {
-    co_await container().invoke_on_all([hid] (auto&& ss) {
-        return ss._lifecycle_notifier.notify_released(hid);
+future<> storage_service::notify_released(locator::host_id hid, std::optional<service::topology_request> reason) {
+    co_await container().invoke_on_all([hid, reason] (auto&& ss) {
+        return ss._lifecycle_notifier.notify_released(hid, reason);
     });
     slogger.debug("Notify node {} been released from the cluster and no longer owns any tokens", hid);
 }
