@@ -3638,7 +3638,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 }
 
 future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
-    return run_with_no_api_lock([this] (storage_service& ss) {
+    return run_with_no_api_lock([] (storage_service& ss) {
         const auto& tm = ss.get_token_metadata();
         auto token_map = dht::token::describe_ownership(tm.sorted_tokens());
         // describeOwnership returns tokens in an unspecified order, let's re-order them
@@ -3646,7 +3646,7 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
         for (auto entry : token_map) {
             locator::host_id id = tm.get_endpoint(entry.first).value();
             auto token_ownership = entry.second;
-            ownership[_address_map.get(id)] += token_ownership;
+            ownership[ss._address_map.get(id)] += token_ownership;
         }
         return ownership;
     });

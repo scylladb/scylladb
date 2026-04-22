@@ -1739,82 +1739,98 @@ rest_bind(FuncType func, BindArgs&... args) {
     return std::bind_front(func, std::ref(args)...);
 }
 
+// Hold the storage_service async gate for the duration of async REST
+// handlers so stop() drains in-flight requests before teardown.
+// Synchronous handlers don't yield and need no gate.
+static seastar::httpd::future_json_function
+gated(sharded<service::storage_service>& ss, seastar::httpd::future_json_function fn) {
+    return [fn = std::move(fn), &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto holder = ss.local().hold_async_gate();
+        co_return co_await fn(std::move(req));
+    };
+}
+
+static seastar::httpd::json_request_function
+gated(sharded<service::storage_service>&, seastar::httpd::json_request_function fn) {
+    return fn;
+}
+
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
-    ss::get_token_endpoint.set(r, rest_bind(rest_get_token_endpoint, ctx, ss));
-    ss::toppartitions_generic.set(r, rest_bind(rest_toppartitions_generic, ctx));
-    ss::get_release_version.set(r, rest_bind(rest_get_release_version, ss));
-    ss::get_scylla_release_version.set(r, rest_bind(rest_get_scylla_release_version, ss));
-    ss::get_schema_version.set(r, rest_bind(rest_get_schema_version, ss));
-    ss::get_range_to_endpoint_map.set(r, rest_bind(rest_get_range_to_endpoint_map, ctx, ss));
-    ss::get_pending_range_to_endpoint_map.set(r, rest_bind(rest_get_pending_range_to_endpoint_map, ctx));
-    ss::describe_ring.set(r, rest_bind(rest_describe_ring, ctx, ss));
-    ss::get_current_generation_number.set(r, rest_bind(rest_get_current_generation_number, ss));
-    ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
-    ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
-    ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
-    ss::reset_cleanup_needed.set(r, rest_bind(rest_reset_cleanup_needed, ctx, ss));
-    ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
-    ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
-    ss::decommission.set(r, rest_bind(rest_decommission, ss));
-    ss::move.set(r, rest_bind(rest_move, ss));
-    ss::remove_node.set(r, rest_bind(rest_remove_node, ss));
-    ss::get_removal_status.set(r, rest_bind(rest_get_removal_status, ss));
-    ss::force_remove_completion.set(r, rest_bind(rest_force_remove_completion, ss));
-    ss::set_logging_level.set(r, rest_bind(rest_set_logging_level));
-    ss::get_logging_levels.set(r, rest_bind(rest_get_logging_levels));
-    ss::get_operation_mode.set(r, rest_bind(rest_get_operation_mode, ss));
-    ss::is_starting.set(r, rest_bind(rest_is_starting, ss));
-    ss::get_drain_progress.set(r, rest_bind(rest_get_drain_progress, ss));
-    ss::drain.set(r, rest_bind(rest_drain, ss));
-    ss::stop_gossiping.set(r, rest_bind(rest_stop_gossiping, ss));
-    ss::start_gossiping.set(r, rest_bind(rest_start_gossiping, ss));
-    ss::is_gossip_running.set(r, rest_bind(rest_is_gossip_running, ss));
-    ss::stop_daemon.set(r, rest_bind(rest_stop_daemon));
-    ss::is_initialized.set(r, rest_bind(rest_is_initialized, ss));
-    ss::join_ring.set(r, rest_bind(rest_join_ring));
-    ss::is_joined.set(r, rest_bind(rest_is_joined, ss));
-    ss::is_incremental_backups_enabled.set(r, rest_bind(rest_is_incremental_backups_enabled, ctx));
-    ss::set_incremental_backups_enabled.set(r, rest_bind(rest_set_incremental_backups_enabled, ctx));
-    ss::rebuild.set(r, rest_bind(rest_rebuild, ss));
-    ss::bulk_load.set(r, rest_bind(rest_bulk_load));
-    ss::bulk_load_async.set(r, rest_bind(rest_bulk_load_async));
-    ss::reschedule_failed_deletions.set(r, rest_bind(rest_reschedule_failed_deletions));
-    ss::sample_key_range.set(r, rest_bind(rest_sample_key_range));
-    ss::reset_local_schema.set(r, rest_bind(rest_reset_local_schema, ss));
-    ss::set_trace_probability.set(r, rest_bind(rest_set_trace_probability));
-    ss::get_trace_probability.set(r, rest_bind(rest_get_trace_probability));
-    ss::get_slow_query_info.set(r, rest_bind(rest_get_slow_query_info));
-    ss::set_slow_query.set(r, rest_bind(rest_set_slow_query));
-    ss::deliver_hints.set(r, rest_bind(rest_deliver_hints));
-    ss::get_cluster_name.set(r, rest_bind(rest_get_cluster_name, ss));
-    ss::get_partitioner_name.set(r, rest_bind(rest_get_partitioner_name, ss));
-    ss::get_tombstone_warn_threshold.set(r, rest_bind(rest_get_tombstone_warn_threshold));
-    ss::set_tombstone_warn_threshold.set(r, rest_bind(rest_set_tombstone_warn_threshold));
-    ss::get_tombstone_failure_threshold.set(r, rest_bind(rest_get_tombstone_failure_threshold));
-    ss::set_tombstone_failure_threshold.set(r, rest_bind(rest_set_tombstone_failure_threshold));
-    ss::get_batch_size_failure_threshold.set(r, rest_bind(rest_get_batch_size_failure_threshold));
-    ss::set_batch_size_failure_threshold.set(r, rest_bind(rest_set_batch_size_failure_threshold));
-    ss::set_hinted_handoff_throttle_in_kb.set(r, rest_bind(rest_set_hinted_handoff_throttle_in_kb));
-    ss::get_exceptions.set(r, rest_bind(rest_get_exceptions, ss));
-    ss::get_total_hints_in_progress.set(r, rest_bind(rest_get_total_hints_in_progress));
-    ss::get_total_hints.set(r, rest_bind(rest_get_total_hints));
-    ss::get_ownership.set(r, rest_bind(rest_get_ownership, ctx, ss));
-    ss::get_effective_ownership.set(r, rest_bind(rest_get_effective_ownership, ctx, ss));
-    ss::retrain_dict.set(r, rest_bind(rest_retrain_dict, ctx, ss, group0_client));
-    ss::estimate_compression_ratios.set(r, rest_bind(rest_estimate_compression_ratios, ctx, ss));
-    ss::sstable_info.set(r, rest_bind(rest_sstable_info, ctx));
-    ss::reload_raft_topology_state.set(r, rest_bind(rest_reload_raft_topology_state, ss, group0_client));
-    ss::upgrade_to_raft_topology.set(r, rest_bind(rest_upgrade_to_raft_topology, ss));
-    ss::raft_topology_upgrade_status.set(r, rest_bind(rest_raft_topology_upgrade_status, ss));
-    ss::raft_topology_get_cmd_status.set(r, rest_bind(rest_raft_topology_get_cmd_status, ss));
-    ss::move_tablet.set(r, rest_bind(rest_move_tablet, ctx, ss));
-    ss::add_tablet_replica.set(r, rest_bind(rest_add_tablet_replica, ctx, ss));
-    ss::del_tablet_replica.set(r, rest_bind(rest_del_tablet_replica, ctx, ss));
-    ss::repair_tablet.set(r, rest_bind(rest_repair_tablet, ctx, ss));
-    ss::tablet_balancing_enable.set(r, rest_bind(rest_tablet_balancing_enable, ss));
-    ss::quiesce_topology.set(r, rest_bind(rest_quiesce_topology, ss));
-    sp::get_schema_versions.set(r, rest_bind(rest_get_schema_versions, ss));
-    ss::drop_quarantined_sstables.set(r, rest_bind(rest_drop_quarantined_sstables, ctx, ss));
+    ss::get_token_endpoint.set(r, gated(ss, rest_bind(rest_get_token_endpoint, ctx, ss)));
+    ss::toppartitions_generic.set(r, gated(ss, rest_bind(rest_toppartitions_generic, ctx)));
+    ss::get_release_version.set(r, gated(ss, rest_bind(rest_get_release_version, ss)));
+    ss::get_scylla_release_version.set(r, gated(ss, rest_bind(rest_get_scylla_release_version, ss)));
+    ss::get_schema_version.set(r, gated(ss, rest_bind(rest_get_schema_version, ss)));
+    ss::get_range_to_endpoint_map.set(r, gated(ss, rest_bind(rest_get_range_to_endpoint_map, ctx, ss)));
+    ss::get_pending_range_to_endpoint_map.set(r, gated(ss, rest_bind(rest_get_pending_range_to_endpoint_map, ctx)));
+    ss::describe_ring.set(r, gated(ss, rest_bind(rest_describe_ring, ctx, ss)));
+    ss::get_current_generation_number.set(r, gated(ss, rest_bind(rest_get_current_generation_number, ss)));
+    ss::get_natural_endpoints.set(r, gated(ss, rest_bind(rest_get_natural_endpoints, ctx, ss)));
+    ss::cdc_streams_check_and_repair.set(r, gated(ss, rest_bind(rest_cdc_streams_check_and_repair, ss)));
+    ss::cleanup_all.set(r, gated(ss, rest_bind(rest_cleanup_all, ctx, ss)));
+    ss::reset_cleanup_needed.set(r, gated(ss, rest_bind(rest_reset_cleanup_needed, ctx, ss)));
+    ss::force_flush.set(r, gated(ss, rest_bind(rest_force_flush, ctx)));
+    ss::force_keyspace_flush.set(r, gated(ss, rest_bind(rest_force_keyspace_flush, ctx)));
+    ss::decommission.set(r, gated(ss, rest_bind(rest_decommission, ss)));
+    ss::move.set(r, gated(ss, rest_bind(rest_move, ss)));
+    ss::remove_node.set(r, gated(ss, rest_bind(rest_remove_node, ss)));
+    ss::get_removal_status.set(r, gated(ss, rest_bind(rest_get_removal_status, ss)));
+    ss::force_remove_completion.set(r, gated(ss, rest_bind(rest_force_remove_completion, ss)));
+    ss::set_logging_level.set(r, gated(ss, rest_bind(rest_set_logging_level)));
+    ss::get_logging_levels.set(r, gated(ss, rest_bind(rest_get_logging_levels)));
+    ss::get_operation_mode.set(r, gated(ss, rest_bind(rest_get_operation_mode, ss)));
+    ss::is_starting.set(r, gated(ss, rest_bind(rest_is_starting, ss)));
+    ss::get_drain_progress.set(r, gated(ss, rest_bind(rest_get_drain_progress, ss)));
+    ss::drain.set(r, gated(ss, rest_bind(rest_drain, ss)));
+    ss::stop_gossiping.set(r, gated(ss, rest_bind(rest_stop_gossiping, ss)));
+    ss::start_gossiping.set(r, gated(ss, rest_bind(rest_start_gossiping, ss)));
+    ss::is_gossip_running.set(r, gated(ss, rest_bind(rest_is_gossip_running, ss)));
+    ss::stop_daemon.set(r, gated(ss, rest_bind(rest_stop_daemon)));
+    ss::is_initialized.set(r, gated(ss, rest_bind(rest_is_initialized, ss)));
+    ss::join_ring.set(r, gated(ss, rest_bind(rest_join_ring)));
+    ss::is_joined.set(r, gated(ss, rest_bind(rest_is_joined, ss)));
+    ss::is_incremental_backups_enabled.set(r, gated(ss, rest_bind(rest_is_incremental_backups_enabled, ctx)));
+    ss::set_incremental_backups_enabled.set(r, gated(ss, rest_bind(rest_set_incremental_backups_enabled, ctx)));
+    ss::rebuild.set(r, gated(ss, rest_bind(rest_rebuild, ss)));
+    ss::bulk_load.set(r, gated(ss, rest_bind(rest_bulk_load)));
+    ss::bulk_load_async.set(r, gated(ss, rest_bind(rest_bulk_load_async)));
+    ss::reschedule_failed_deletions.set(r, gated(ss, rest_bind(rest_reschedule_failed_deletions)));
+    ss::sample_key_range.set(r, gated(ss, rest_bind(rest_sample_key_range)));
+    ss::reset_local_schema.set(r, gated(ss, rest_bind(rest_reset_local_schema, ss)));
+    ss::set_trace_probability.set(r, gated(ss, rest_bind(rest_set_trace_probability)));
+    ss::get_trace_probability.set(r, gated(ss, rest_bind(rest_get_trace_probability)));
+    ss::get_slow_query_info.set(r, gated(ss, rest_bind(rest_get_slow_query_info)));
+    ss::set_slow_query.set(r, gated(ss, rest_bind(rest_set_slow_query)));
+    ss::deliver_hints.set(r, gated(ss, rest_bind(rest_deliver_hints)));
+    ss::get_cluster_name.set(r, gated(ss, rest_bind(rest_get_cluster_name, ss)));
+    ss::get_partitioner_name.set(r, gated(ss, rest_bind(rest_get_partitioner_name, ss)));
+    ss::get_tombstone_warn_threshold.set(r, gated(ss, rest_bind(rest_get_tombstone_warn_threshold)));
+    ss::set_tombstone_warn_threshold.set(r, gated(ss, rest_bind(rest_set_tombstone_warn_threshold)));
+    ss::get_tombstone_failure_threshold.set(r, gated(ss, rest_bind(rest_get_tombstone_failure_threshold)));
+    ss::set_tombstone_failure_threshold.set(r, gated(ss, rest_bind(rest_set_tombstone_failure_threshold)));
+    ss::get_batch_size_failure_threshold.set(r, gated(ss, rest_bind(rest_get_batch_size_failure_threshold)));
+    ss::set_batch_size_failure_threshold.set(r, gated(ss, rest_bind(rest_set_batch_size_failure_threshold)));
+    ss::set_hinted_handoff_throttle_in_kb.set(r, gated(ss, rest_bind(rest_set_hinted_handoff_throttle_in_kb)));
+    ss::get_exceptions.set(r, gated(ss, rest_bind(rest_get_exceptions, ss)));
+    ss::get_total_hints_in_progress.set(r, gated(ss, rest_bind(rest_get_total_hints_in_progress)));
+    ss::get_total_hints.set(r, gated(ss, rest_bind(rest_get_total_hints)));
+    ss::get_ownership.set(r, gated(ss, rest_bind(rest_get_ownership, ctx, ss)));
+    ss::get_effective_ownership.set(r, gated(ss, rest_bind(rest_get_effective_ownership, ctx, ss)));
+    ss::retrain_dict.set(r, gated(ss, rest_bind(rest_retrain_dict, ctx, ss, group0_client)));
+    ss::estimate_compression_ratios.set(r, gated(ss, rest_bind(rest_estimate_compression_ratios, ctx, ss)));
+    ss::sstable_info.set(r, gated(ss, rest_bind(rest_sstable_info, ctx)));
+    ss::reload_raft_topology_state.set(r, gated(ss, rest_bind(rest_reload_raft_topology_state, ss, group0_client)));
+    ss::upgrade_to_raft_topology.set(r, gated(ss, rest_bind(rest_upgrade_to_raft_topology, ss)));
+    ss::raft_topology_upgrade_status.set(r, gated(ss, rest_bind(rest_raft_topology_upgrade_status, ss)));
+    ss::raft_topology_get_cmd_status.set(r, gated(ss, rest_bind(rest_raft_topology_get_cmd_status, ss)));
+    ss::move_tablet.set(r, gated(ss, rest_bind(rest_move_tablet, ctx, ss)));
+    ss::add_tablet_replica.set(r, gated(ss, rest_bind(rest_add_tablet_replica, ctx, ss)));
+    ss::del_tablet_replica.set(r, gated(ss, rest_bind(rest_del_tablet_replica, ctx, ss)));
+    ss::repair_tablet.set(r, gated(ss, rest_bind(rest_repair_tablet, ctx, ss)));
+    ss::tablet_balancing_enable.set(r, gated(ss, rest_bind(rest_tablet_balancing_enable, ss)));
+    ss::quiesce_topology.set(r, gated(ss, rest_bind(rest_quiesce_topology, ss)));
+    sp::get_schema_versions.set(r, gated(ss, rest_bind(rest_get_schema_versions, ss)));
+    ss::drop_quarantined_sstables.set(r, gated(ss, rest_bind(rest_drop_quarantined_sstables, ctx, ss)));
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
