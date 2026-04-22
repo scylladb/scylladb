@@ -899,7 +899,57 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     }));
 
+<<<<<<< HEAD
     ss::get_removal_status.set(r, gated(ss, [&ss](std::unique_ptr<http::request> req) {
+||||||| parent of 6a91d046f3 (storage_service: gate REST-facing async operations during shutdown)
+static
+future<json::json_return_type>
+rest_exclude_node(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto hosts = utils::split_comma_separated_list(req->get_query_param("hosts"))
+        | std::views::transform([] (const sstring& s) { return locator::host_id(utils::UUID(s)); })
+        | std::ranges::to<std::vector<locator::host_id>>();
+
+    auto& topo = ss.local().get_token_metadata().get_topology();
+    for (auto host : hosts) {
+        if (!topo.has_node(host)) {
+            throw bad_param_exception(fmt::format("Host ID {} does not belong to this cluster", host));
+        }
+    }
+
+    apilog.info("exclude_node: hosts={}", hosts);
+    co_await ss.local().mark_excluded(hosts);
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
+rest_get_removal_status(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+=======
+static
+future<json::json_return_type>
+rest_exclude_node(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto hosts = utils::split_comma_separated_list(req->get_query_param("hosts"))
+        | std::views::transform([] (const sstring& s) { return locator::host_id(utils::UUID(s)); })
+        | std::ranges::to<std::vector<locator::host_id>>();
+
+    auto& topo = ss.local().get_token_metadata().get_topology();
+    for (auto host : hosts) {
+        if (!topo.has_node(host)) {
+            throw bad_param_exception(fmt::format("Host ID {} does not belong to this cluster", host));
+        }
+    }
+
+    apilog.info("exclude_node: hosts={}", hosts);
+    co_await ss.local().run_with_no_api_lock([hosts = std::move(hosts)] (service::storage_service& ss) {
+        return ss.mark_excluded(hosts);
+    });
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
+rest_get_removal_status(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+>>>>>>> 6a91d046f3 (storage_service: gate REST-facing async operations during shutdown)
         return ss.local().get_removal_status().then([] (auto status) {
             return make_ready_future<json::json_return_type>(status);
         });
@@ -1558,7 +1608,151 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     }));
 
+<<<<<<< HEAD
     ss::quiesce_topology.set(r, gated(ss, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+||||||| parent of 6a91d046f3 (storage_service: gate REST-facing async operations during shutdown)
+static
+future<json::json_return_type>
+rest_create_vnode_tablet_migration(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+        apilog.warn("create_vnode_tablet_migration: called before the cluster feature was enabled");
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
+    }
+    auto keyspace = validate_keyspace(ctx, req);
+    co_await ss.local().prepare_for_tablets_migration(keyspace);
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
+rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+        apilog.warn("get_vnode_tablet_migration: called before the cluster feature was enabled");
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
+    }
+    auto keyspace = validate_keyspace(ctx, req);
+    auto status = co_await ss.local().get_tablets_migration_status_with_node_details(keyspace);
+
+    ss::vnode_tablet_migration_status result;
+    result.keyspace = status.keyspace;
+    result.status = fmt::format("{}", status.status);
+    result.nodes._set = true;
+    for (const auto& node : status.nodes) {
+        ss::vnode_tablet_migration_node_status n;
+        n.host_id = fmt::to_string(node.host_id);
+        n.current_mode = node.current_mode;
+        n.intended_mode = node.intended_mode;
+        result.nodes.push(n);
+    }
+    co_return result;
+}
+
+static
+future<json::json_return_type>
+rest_set_vnode_tablet_migration_node_storage_mode(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+        apilog.warn("set_vnode_tablet_migration_node_storage_mode: called before the cluster feature was enabled");
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
+    }
+    auto mode_str = req->get_query_param("intended_mode");
+    auto mode = service::intended_storage_mode_from_string(mode_str);
+    co_await ss.local().set_node_intended_storage_mode(mode);
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
+rest_finalize_vnode_tablet_migration(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+        apilog.warn("finalize_vnode_tablet_migration: called before the cluster feature was enabled");
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
+    }
+    auto keyspace = validate_keyspace(ctx, req);
+    validate_keyspace(ctx, keyspace);
+
+    co_await ss.local().finalize_tablets_migration(keyspace);
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
+rest_quiesce_topology(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+=======
+static
+future<json::json_return_type>
+rest_create_vnode_tablet_migration(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+        apilog.warn("create_vnode_tablet_migration: called before the cluster feature was enabled");
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
+    }
+    auto keyspace = validate_keyspace(ctx, req);
+    co_await ss.local().run_with_no_api_lock([keyspace] (service::storage_service& ss) {
+        return ss.prepare_for_tablets_migration(keyspace);
+    });
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
+rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+        apilog.warn("get_vnode_tablet_migration: called before the cluster feature was enabled");
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
+    }
+    auto keyspace = validate_keyspace(ctx, req);
+    auto status = co_await ss.local().run_with_no_api_lock([keyspace] (service::storage_service& ss) {
+        return ss.get_tablets_migration_status_with_node_details(keyspace);
+    });
+
+    ss::vnode_tablet_migration_status result;
+    result.keyspace = status.keyspace;
+    result.status = fmt::format("{}", status.status);
+    result.nodes._set = true;
+    for (const auto& node : status.nodes) {
+        ss::vnode_tablet_migration_node_status n;
+        n.host_id = fmt::to_string(node.host_id);
+        n.current_mode = node.current_mode;
+        n.intended_mode = node.intended_mode;
+        result.nodes.push(n);
+    }
+    co_return result;
+}
+
+static
+future<json::json_return_type>
+rest_set_vnode_tablet_migration_node_storage_mode(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+        apilog.warn("set_vnode_tablet_migration_node_storage_mode: called before the cluster feature was enabled");
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
+    }
+    auto mode_str = req->get_query_param("intended_mode");
+    auto mode = service::intended_storage_mode_from_string(mode_str);
+    co_await ss.local().run_with_no_api_lock([mode] (service::storage_service& ss) {
+        return ss.set_node_intended_storage_mode(mode);
+    });
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
+rest_finalize_vnode_tablet_migration(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+        apilog.warn("finalize_vnode_tablet_migration: called before the cluster feature was enabled");
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
+    }
+    auto keyspace = validate_keyspace(ctx, req);
+    validate_keyspace(ctx, keyspace);
+
+    co_await ss.local().run_with_no_api_lock([keyspace] (service::storage_service& ss) {
+        return ss.finalize_tablets_migration(keyspace);
+    });
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
+rest_quiesce_topology(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+>>>>>>> 6a91d046f3 (storage_service: gate REST-facing async operations during shutdown)
         co_await ss.local().await_topology_quiesced();
         co_return json_void();
     }));
@@ -1574,7 +1768,299 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             }
             return make_ready_future<json::json_return_type>(std::move(res));
         });
+<<<<<<< HEAD
     }));
+||||||| parent of 6a91d046f3 (storage_service: gate REST-facing async operations during shutdown)
+}
+
+static
+future<json::json_return_type>
+rest_drop_quarantined_sstables(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto keyspace = req->get_query_param("keyspace");
+    try {
+        if (!keyspace.empty()) {
+            keyspace = validate_keyspace(ctx, keyspace);
+            auto table_infos = parse_table_infos(keyspace, ctx, req->get_query_param("tables"));
+
+            co_await ctx.db.invoke_on_all([&table_infos](replica::database& db) -> future<> {
+                return parallel_for_each(table_infos, [&db](const auto& table) -> future<> {
+                    const auto& [table_name, table_id] = table;
+                    return db.find_column_family(table_id).drop_quarantined_sstables();
+                });
+            });
+        } else {
+            co_await ctx.db.invoke_on_all([](replica::database& db) -> future<> {
+                return db.get_tables_metadata().parallel_for_each_table([](table_id, lw_shared_ptr<replica::table> t) -> future<> {
+                    return t->drop_quarantined_sstables();
+                });
+            });
+        }
+    } catch (...) {
+        apilog.error("drop_quarantined_sstables: failed with exception: {}", std::current_exception());
+        throw;
+    }
+
+    co_return json_void();
+}
+
+// Disambiguate between a function that returns a future and a function that returns a plain value, also
+// add std::ref() as a courtesy. Also handles ks_cf_func signatures.
+template <typename FuncType, typename... BindArgs>
+requires std::invocable<FuncType, BindArgs&..., const_req>
+    && std::same_as<seastar::json::json_return_type, std::invoke_result_t<FuncType, BindArgs&..., const_req&>>
+static
+seastar::httpd::json_request_function
+rest_bind(FuncType func, BindArgs&... args) {
+    return std::bind_front(func, std::ref(args)...);
+}
+
+template <typename FuncType, typename... BindArgs>
+requires std::invocable<FuncType, BindArgs&..., std::unique_ptr<seastar::http::request>>
+    && std::same_as<future<seastar::json::json_return_type>, std::invoke_result_t<FuncType, BindArgs&..., std::unique_ptr<seastar::http::request>>>
+static
+seastar::httpd::future_json_function
+rest_bind(FuncType func, BindArgs&... args) {
+    return std::bind_front(func, std::ref(args)...);
+}
+
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& ssc, service::raft_group0_client& group0_client) {
+    ss::get_token_endpoint.set(r, rest_bind(rest_get_token_endpoint, ctx, ss));
+    ss::get_release_version.set(r, rest_bind(rest_get_release_version, ss));
+    ss::get_scylla_release_version.set(r, rest_bind(rest_get_scylla_release_version, ss));
+    ss::get_schema_version.set(r, rest_bind(rest_get_schema_version, ss));
+    ss::get_range_to_endpoint_map.set(r, rest_bind(rest_get_range_to_endpoint_map, ctx, ss));
+    ss::get_pending_range_to_endpoint_map.set(r, rest_bind(rest_get_pending_range_to_endpoint_map, ctx));
+    ss::describe_ring.set(r, rest_bind(rest_describe_ring, ctx, ss));
+    ss::get_current_generation_number.set(r, rest_bind(rest_get_current_generation_number, ss));
+    ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
+    ss::get_natural_endpoints_v2.set(r, rest_bind(rest_get_natural_endpoints_v2, ctx, ss));
+    ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
+    ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
+    ss::reset_cleanup_needed.set(r, rest_bind(rest_reset_cleanup_needed, ctx, ss));
+    ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
+    ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
+    ss::decommission.set(r, rest_bind(rest_decommission, ss, ssc));
+    ss::logstor_compaction.set(r, rest_bind(rest_logstor_compaction, ctx));
+    ss::logstor_flush.set(r, rest_bind(rest_logstor_flush, ctx));
+    ss::move.set(r, rest_bind(rest_move, ss));
+    ss::remove_node.set(r, rest_bind(rest_remove_node, ss));
+    ss::exclude_node.set(r, rest_bind(rest_exclude_node, ss));
+    ss::get_removal_status.set(r, rest_bind(rest_get_removal_status, ss));
+    ss::force_remove_completion.set(r, rest_bind(rest_force_remove_completion, ss));
+    ss::set_logging_level.set(r, rest_bind(rest_set_logging_level));
+    ss::get_logging_levels.set(r, rest_bind(rest_get_logging_levels));
+    ss::get_operation_mode.set(r, rest_bind(rest_get_operation_mode, ss));
+    ss::is_starting.set(r, rest_bind(rest_is_starting, ss));
+    ss::get_drain_progress.set(r, rest_bind(rest_get_drain_progress, ss));
+    ss::drain.set(r, rest_bind(rest_drain, ss));
+    ss::stop_gossiping.set(r, rest_bind(rest_stop_gossiping, ss));
+    ss::start_gossiping.set(r, rest_bind(rest_start_gossiping, ss));
+    ss::is_gossip_running.set(r, rest_bind(rest_is_gossip_running, ss));
+    ss::stop_daemon.set(r, rest_bind(rest_stop_daemon));
+    ss::is_initialized.set(r, rest_bind(rest_is_initialized, ss));
+    ss::join_ring.set(r, rest_bind(rest_join_ring));
+    ss::is_joined.set(r, rest_bind(rest_is_joined, ss));
+    ss::is_incremental_backups_enabled.set(r, rest_bind(rest_is_incremental_backups_enabled, ctx));
+    ss::set_incremental_backups_enabled.set(r, rest_bind(rest_set_incremental_backups_enabled, ctx));
+    ss::rebuild.set(r, rest_bind(rest_rebuild, ss));
+    ss::bulk_load.set(r, rest_bind(rest_bulk_load));
+    ss::bulk_load_async.set(r, rest_bind(rest_bulk_load_async));
+    ss::reschedule_failed_deletions.set(r, rest_bind(rest_reschedule_failed_deletions));
+    ss::sample_key_range.set(r, rest_bind(rest_sample_key_range));
+    ss::reset_local_schema.set(r, rest_bind(rest_reset_local_schema, ss));
+    ss::set_trace_probability.set(r, rest_bind(rest_set_trace_probability));
+    ss::get_trace_probability.set(r, rest_bind(rest_get_trace_probability));
+    ss::get_slow_query_info.set(r, rest_bind(rest_get_slow_query_info));
+    ss::set_slow_query.set(r, rest_bind(rest_set_slow_query));
+    ss::deliver_hints.set(r, rest_bind(rest_deliver_hints));
+    ss::get_cluster_name.set(r, rest_bind(rest_get_cluster_name, ss));
+    ss::get_partitioner_name.set(r, rest_bind(rest_get_partitioner_name, ss));
+    ss::get_tombstone_warn_threshold.set(r, rest_bind(rest_get_tombstone_warn_threshold));
+    ss::set_tombstone_warn_threshold.set(r, rest_bind(rest_set_tombstone_warn_threshold));
+    ss::get_tombstone_failure_threshold.set(r, rest_bind(rest_get_tombstone_failure_threshold));
+    ss::set_tombstone_failure_threshold.set(r, rest_bind(rest_set_tombstone_failure_threshold));
+    ss::get_batch_size_failure_threshold.set(r, rest_bind(rest_get_batch_size_failure_threshold));
+    ss::set_batch_size_failure_threshold.set(r, rest_bind(rest_set_batch_size_failure_threshold));
+    ss::set_hinted_handoff_throttle_in_kb.set(r, rest_bind(rest_set_hinted_handoff_throttle_in_kb));
+    ss::get_exceptions.set(r, rest_bind(rest_get_exceptions, ss));
+    ss::get_total_hints_in_progress.set(r, rest_bind(rest_get_total_hints_in_progress));
+    ss::get_total_hints.set(r, rest_bind(rest_get_total_hints));
+    ss::get_ownership.set(r, rest_bind(rest_get_ownership, ctx, ss));
+    ss::get_effective_ownership.set(r, rest_bind(rest_get_effective_ownership, ctx, ss));
+    ss::retrain_dict.set(r, rest_bind(rest_retrain_dict, ctx, ss, group0_client));
+    ss::estimate_compression_ratios.set(r, rest_bind(rest_estimate_compression_ratios, ctx, ss));
+    ss::sstable_info.set(r, rest_bind(rest_sstable_info, ctx));
+    ss::logstor_info.set(r, rest_bind(rest_logstor_info, ctx));
+    ss::reload_raft_topology_state.set(r, rest_bind(rest_reload_raft_topology_state, ss, group0_client));
+    ss::upgrade_to_raft_topology.set(r, rest_bind(rest_upgrade_to_raft_topology, ss));
+    ss::raft_topology_upgrade_status.set(r, rest_bind(rest_raft_topology_upgrade_status, ss));
+    ss::raft_topology_get_cmd_status.set(r, rest_bind(rest_raft_topology_get_cmd_status, ss));
+    ss::move_tablet.set(r, rest_bind(rest_move_tablet, ctx, ss));
+    ss::add_tablet_replica.set(r, rest_bind(rest_add_tablet_replica, ctx, ss));
+    ss::del_tablet_replica.set(r, rest_bind(rest_del_tablet_replica, ctx, ss));
+    ss::repair_tablet.set(r, rest_bind(rest_repair_tablet, ctx, ss));
+    ss::tablet_balancing_enable.set(r, rest_bind(rest_tablet_balancing_enable, ss));
+    ss::create_vnode_tablet_migration.set(r, rest_bind(rest_create_vnode_tablet_migration, ctx, ss));
+    ss::get_vnode_tablet_migration.set(r, rest_bind(rest_get_vnode_tablet_migration, ctx, ss));
+    ss::set_vnode_tablet_migration_node_storage_mode.set(r, rest_bind(rest_set_vnode_tablet_migration_node_storage_mode, ctx, ss));
+    ss::finalize_vnode_tablet_migration.set(r, rest_bind(rest_finalize_vnode_tablet_migration, ctx, ss));
+    ss::quiesce_topology.set(r, rest_bind(rest_quiesce_topology, ss));
+    sp::get_schema_versions.set(r, rest_bind(rest_get_schema_versions, ss));
+    ss::drop_quarantined_sstables.set(r, rest_bind(rest_drop_quarantined_sstables, ctx, ss));
+=======
+}
+
+static
+future<json::json_return_type>
+rest_drop_quarantined_sstables(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto keyspace = req->get_query_param("keyspace");
+    try {
+        if (!keyspace.empty()) {
+            keyspace = validate_keyspace(ctx, keyspace);
+            auto table_infos = parse_table_infos(keyspace, ctx, req->get_query_param("tables"));
+
+            co_await ctx.db.invoke_on_all([&table_infos](replica::database& db) -> future<> {
+                return parallel_for_each(table_infos, [&db](const auto& table) -> future<> {
+                    const auto& [table_name, table_id] = table;
+                    return db.find_column_family(table_id).drop_quarantined_sstables();
+                });
+            });
+        } else {
+            co_await ctx.db.invoke_on_all([](replica::database& db) -> future<> {
+                return db.get_tables_metadata().parallel_for_each_table([](table_id, lw_shared_ptr<replica::table> t) -> future<> {
+                    return t->drop_quarantined_sstables();
+                });
+            });
+        }
+    } catch (...) {
+        apilog.error("drop_quarantined_sstables: failed with exception: {}", std::current_exception());
+        throw;
+    }
+
+    co_return json_void();
+}
+
+// Disambiguate between a function that returns a future and a function that returns a plain value, also
+// add std::ref() as a courtesy. Also handles ks_cf_func signatures.
+template <typename FuncType, typename... BindArgs>
+requires std::invocable<FuncType, BindArgs&..., const_req>
+    && std::same_as<seastar::json::json_return_type, std::invoke_result_t<FuncType, BindArgs&..., const_req&>>
+static
+seastar::httpd::json_request_function
+rest_bind(FuncType func, BindArgs&... args) {
+    return std::bind_front(func, std::ref(args)...);
+}
+
+template <typename FuncType, typename... BindArgs>
+requires std::invocable<FuncType, BindArgs&..., std::unique_ptr<seastar::http::request>>
+    && std::same_as<future<seastar::json::json_return_type>, std::invoke_result_t<FuncType, BindArgs&..., std::unique_ptr<seastar::http::request>>>
+static
+seastar::httpd::future_json_function
+rest_bind(FuncType func, BindArgs&... args) {
+    return std::bind_front(func, std::ref(args)...);
+}
+
+// Hold the storage_service async gate for the duration of async REST
+// handlers so stop() drains in-flight requests before teardown.
+// Synchronous handlers don't yield and need no gate.
+static seastar::httpd::future_json_function
+gated(sharded<service::storage_service>& ss, seastar::httpd::future_json_function fn) {
+    return [fn = std::move(fn), &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto holder = ss.local().hold_async_gate();
+        co_return co_await fn(std::move(req));
+    };
+}
+
+static seastar::httpd::json_request_function
+gated(sharded<service::storage_service>&, seastar::httpd::json_request_function fn) {
+    return fn;
+}
+
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& ssc, service::raft_group0_client& group0_client) {
+    ss::get_token_endpoint.set(r, gated(ss, rest_bind(rest_get_token_endpoint, ctx, ss)));
+    ss::get_release_version.set(r, gated(ss, rest_bind(rest_get_release_version, ss)));
+    ss::get_scylla_release_version.set(r, gated(ss, rest_bind(rest_get_scylla_release_version, ss)));
+    ss::get_schema_version.set(r, gated(ss, rest_bind(rest_get_schema_version, ss)));
+    ss::get_range_to_endpoint_map.set(r, gated(ss, rest_bind(rest_get_range_to_endpoint_map, ctx, ss)));
+    ss::get_pending_range_to_endpoint_map.set(r, gated(ss, rest_bind(rest_get_pending_range_to_endpoint_map, ctx)));
+    ss::describe_ring.set(r, gated(ss, rest_bind(rest_describe_ring, ctx, ss)));
+    ss::get_current_generation_number.set(r, gated(ss, rest_bind(rest_get_current_generation_number, ss)));
+    ss::get_natural_endpoints.set(r, gated(ss, rest_bind(rest_get_natural_endpoints, ctx, ss)));
+    ss::get_natural_endpoints_v2.set(r, gated(ss, rest_bind(rest_get_natural_endpoints_v2, ctx, ss)));
+    ss::cdc_streams_check_and_repair.set(r, gated(ss, rest_bind(rest_cdc_streams_check_and_repair, ss)));
+    ss::cleanup_all.set(r, gated(ss, rest_bind(rest_cleanup_all, ctx, ss)));
+    ss::reset_cleanup_needed.set(r, gated(ss, rest_bind(rest_reset_cleanup_needed, ctx, ss)));
+    ss::force_flush.set(r, gated(ss, rest_bind(rest_force_flush, ctx)));
+    ss::force_keyspace_flush.set(r, gated(ss, rest_bind(rest_force_keyspace_flush, ctx)));
+    ss::decommission.set(r, gated(ss, rest_bind(rest_decommission, ss, ssc)));
+    ss::logstor_compaction.set(r, gated(ss, rest_bind(rest_logstor_compaction, ctx)));
+    ss::logstor_flush.set(r, gated(ss, rest_bind(rest_logstor_flush, ctx)));
+    ss::move.set(r, gated(ss, rest_bind(rest_move, ss)));
+    ss::remove_node.set(r, gated(ss, rest_bind(rest_remove_node, ss)));
+    ss::exclude_node.set(r, gated(ss, rest_bind(rest_exclude_node, ss)));
+    ss::get_removal_status.set(r, gated(ss, rest_bind(rest_get_removal_status, ss)));
+    ss::force_remove_completion.set(r, gated(ss, rest_bind(rest_force_remove_completion, ss)));
+    ss::set_logging_level.set(r, gated(ss, rest_bind(rest_set_logging_level)));
+    ss::get_logging_levels.set(r, gated(ss, rest_bind(rest_get_logging_levels)));
+    ss::get_operation_mode.set(r, gated(ss, rest_bind(rest_get_operation_mode, ss)));
+    ss::is_starting.set(r, gated(ss, rest_bind(rest_is_starting, ss)));
+    ss::get_drain_progress.set(r, gated(ss, rest_bind(rest_get_drain_progress, ss)));
+    ss::drain.set(r, gated(ss, rest_bind(rest_drain, ss)));
+    ss::stop_gossiping.set(r, gated(ss, rest_bind(rest_stop_gossiping, ss)));
+    ss::start_gossiping.set(r, gated(ss, rest_bind(rest_start_gossiping, ss)));
+    ss::is_gossip_running.set(r, gated(ss, rest_bind(rest_is_gossip_running, ss)));
+    ss::stop_daemon.set(r, gated(ss, rest_bind(rest_stop_daemon)));
+    ss::is_initialized.set(r, gated(ss, rest_bind(rest_is_initialized, ss)));
+    ss::join_ring.set(r, gated(ss, rest_bind(rest_join_ring)));
+    ss::is_joined.set(r, gated(ss, rest_bind(rest_is_joined, ss)));
+    ss::is_incremental_backups_enabled.set(r, gated(ss, rest_bind(rest_is_incremental_backups_enabled, ctx)));
+    ss::set_incremental_backups_enabled.set(r, gated(ss, rest_bind(rest_set_incremental_backups_enabled, ctx)));
+    ss::rebuild.set(r, gated(ss, rest_bind(rest_rebuild, ss)));
+    ss::bulk_load.set(r, gated(ss, rest_bind(rest_bulk_load)));
+    ss::bulk_load_async.set(r, gated(ss, rest_bind(rest_bulk_load_async)));
+    ss::reschedule_failed_deletions.set(r, gated(ss, rest_bind(rest_reschedule_failed_deletions)));
+    ss::sample_key_range.set(r, gated(ss, rest_bind(rest_sample_key_range)));
+    ss::reset_local_schema.set(r, gated(ss, rest_bind(rest_reset_local_schema, ss)));
+    ss::set_trace_probability.set(r, gated(ss, rest_bind(rest_set_trace_probability)));
+    ss::get_trace_probability.set(r, gated(ss, rest_bind(rest_get_trace_probability)));
+    ss::get_slow_query_info.set(r, gated(ss, rest_bind(rest_get_slow_query_info)));
+    ss::set_slow_query.set(r, gated(ss, rest_bind(rest_set_slow_query)));
+    ss::deliver_hints.set(r, gated(ss, rest_bind(rest_deliver_hints)));
+    ss::get_cluster_name.set(r, gated(ss, rest_bind(rest_get_cluster_name, ss)));
+    ss::get_partitioner_name.set(r, gated(ss, rest_bind(rest_get_partitioner_name, ss)));
+    ss::get_tombstone_warn_threshold.set(r, gated(ss, rest_bind(rest_get_tombstone_warn_threshold)));
+    ss::set_tombstone_warn_threshold.set(r, gated(ss, rest_bind(rest_set_tombstone_warn_threshold)));
+    ss::get_tombstone_failure_threshold.set(r, gated(ss, rest_bind(rest_get_tombstone_failure_threshold)));
+    ss::set_tombstone_failure_threshold.set(r, gated(ss, rest_bind(rest_set_tombstone_failure_threshold)));
+    ss::get_batch_size_failure_threshold.set(r, gated(ss, rest_bind(rest_get_batch_size_failure_threshold)));
+    ss::set_batch_size_failure_threshold.set(r, gated(ss, rest_bind(rest_set_batch_size_failure_threshold)));
+    ss::set_hinted_handoff_throttle_in_kb.set(r, gated(ss, rest_bind(rest_set_hinted_handoff_throttle_in_kb)));
+    ss::get_exceptions.set(r, gated(ss, rest_bind(rest_get_exceptions, ss)));
+    ss::get_total_hints_in_progress.set(r, gated(ss, rest_bind(rest_get_total_hints_in_progress)));
+    ss::get_total_hints.set(r, gated(ss, rest_bind(rest_get_total_hints)));
+    ss::get_ownership.set(r, gated(ss, rest_bind(rest_get_ownership, ctx, ss)));
+    ss::get_effective_ownership.set(r, gated(ss, rest_bind(rest_get_effective_ownership, ctx, ss)));
+    ss::retrain_dict.set(r, gated(ss, rest_bind(rest_retrain_dict, ctx, ss, group0_client)));
+    ss::estimate_compression_ratios.set(r, gated(ss, rest_bind(rest_estimate_compression_ratios, ctx, ss)));
+    ss::sstable_info.set(r, gated(ss, rest_bind(rest_sstable_info, ctx)));
+    ss::logstor_info.set(r, gated(ss, rest_bind(rest_logstor_info, ctx)));
+    ss::reload_raft_topology_state.set(r, gated(ss, rest_bind(rest_reload_raft_topology_state, ss, group0_client)));
+    ss::upgrade_to_raft_topology.set(r, gated(ss, rest_bind(rest_upgrade_to_raft_topology, ss)));
+    ss::raft_topology_upgrade_status.set(r, gated(ss, rest_bind(rest_raft_topology_upgrade_status, ss)));
+    ss::raft_topology_get_cmd_status.set(r, gated(ss, rest_bind(rest_raft_topology_get_cmd_status, ss)));
+    ss::move_tablet.set(r, gated(ss, rest_bind(rest_move_tablet, ctx, ss)));
+    ss::add_tablet_replica.set(r, gated(ss, rest_bind(rest_add_tablet_replica, ctx, ss)));
+    ss::del_tablet_replica.set(r, gated(ss, rest_bind(rest_del_tablet_replica, ctx, ss)));
+    ss::repair_tablet.set(r, gated(ss, rest_bind(rest_repair_tablet, ctx, ss)));
+    ss::tablet_balancing_enable.set(r, gated(ss, rest_bind(rest_tablet_balancing_enable, ss)));
+    ss::create_vnode_tablet_migration.set(r, gated(ss, rest_bind(rest_create_vnode_tablet_migration, ctx, ss)));
+    ss::get_vnode_tablet_migration.set(r, gated(ss, rest_bind(rest_get_vnode_tablet_migration, ctx, ss)));
+    ss::set_vnode_tablet_migration_node_storage_mode.set(r, gated(ss, rest_bind(rest_set_vnode_tablet_migration_node_storage_mode, ctx, ss)));
+    ss::finalize_vnode_tablet_migration.set(r, gated(ss, rest_bind(rest_finalize_vnode_tablet_migration, ctx, ss)));
+    ss::quiesce_topology.set(r, gated(ss, rest_bind(rest_quiesce_topology, ss)));
+    sp::get_schema_versions.set(r, gated(ss, rest_bind(rest_get_schema_versions, ss)));
+    ss::drop_quarantined_sstables.set(r, gated(ss, rest_bind(rest_drop_quarantined_sstables, ctx, ss)));
+>>>>>>> 6a91d046f3 (storage_service: gate REST-facing async operations during shutdown)
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
