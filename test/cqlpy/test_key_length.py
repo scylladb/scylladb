@@ -34,7 +34,6 @@ def table1(cql, test_keyspace):
 # partition key should fail, with a clean InvalidRequest - not some internal
 # server error or worse.
 # Reproduces #12247
-@pytest.mark.xfail(reason="Issue #12247")
 def test_insert_65k_pk(cql, table1):
     stmt = cql.prepare(f'INSERT INTO {table1} (p, c) VALUES (?,?)')
     # Cassandra writes: "Key length of 66560 is longer than maximum of 65535"
@@ -42,7 +41,6 @@ def test_insert_65k_pk(cql, table1):
         cql.execute(stmt, ['x'*(65*1024), 'hello'])
 
 # Reproduces #12247
-@pytest.mark.xfail(reason="Issue #12247")
 def test_insert_65k_ck(cql, table1):
     stmt = cql.prepare(f'INSERT INTO {table1} (p, c) VALUES (?,?)')
     # Cassandra writes: "Key length of 66560 is longer than maximum of 65535"
@@ -53,7 +51,6 @@ def test_insert_65k_ck(cql, table1):
 # key should fail, with a clean InvalidRequest - not some internal server
 # error or worse.
 # Reproduces #10366.
-@pytest.mark.xfail(reason="Issue #10366")
 def test_where_65k_pk(cql, table1):
     stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p = ?')
     # Cassandra writes: "Key length of 66560 is longer than maximum of 65535"
@@ -68,7 +65,6 @@ def test_where_65k_pk(cql, table1):
 # return no match as Cassandra does. In any case, returning some ugly internal
 # error (as happened in Scylla) is a bug.
 # Reproduces #10366.
-@pytest.mark.xfail(reason="Issue #10366")
 def test_where_65k_ck(cql, table1):
     stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p = ? AND c = ?')
     try:
@@ -86,6 +82,30 @@ def test_where_65k_ck(cql, table1):
 # written and then correctly read back.
 # Scylla shouldn't impose its own smaller size limit - but in issue #16772,
 # it did (the limit was 65533).
+
+# Tight-boundary SELECT tests for #10366: values at MAX-allowed (MAX-2 for
+# Scylla because of the 2-byte framing overhead per component) must not
+# error out during SELECT; values at MAX-allowed+1 must raise a clean
+# InvalidRequest. The MAX-allowed case for the 65533/65535 discrepancy is
+# tracked by #16772 and remains xfail; here we just pin the failure side
+# of the boundary so a regression would be caught immediately.
+def test_select_at_max_pk_plus_one_fails(cql, table1):
+    stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p = ?')
+    over = 'x' * (65535 + 1)
+    with pytest.raises(InvalidRequest, match='Key length'):
+        cql.execute(stmt, [over])
+
+def test_insert_at_max_pk_plus_one_fails(cql, table1):
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, c) VALUES (?,?)')
+    over = 'x' * (65535 + 1)
+    with pytest.raises(InvalidRequest, match='Key length'):
+        cql.execute(stmt, [over, 'c'])
+
+def test_insert_at_max_ck_plus_one_fails(cql, table1):
+    stmt = cql.prepare(f'INSERT INTO {table1} (p, c) VALUES (?,?)')
+    over = 'x' * (65535 + 1)
+    with pytest.raises(InvalidRequest, match='Key length'):
+        cql.execute(stmt, ['p', over])
 
 @pytest.mark.xfail(reason="Issue #16772")
 def test_insert_65535_pk(cql, table1):
@@ -134,11 +154,19 @@ def table2(cql, test_keyspace):
 
 # As we checked above for single-component keys, a 65 KB key is definitely
 # oversized and no key component can be this big.
-# Cassandra also has a bug (see CASSANDRA-19270) in the compound pk case -
-# instead of the expected InvalidRequest error, it generates an internal
-# server error (i.e., NoHostAvailable) with the message "'H' format requires
-# 0 <= number <= 65535".
-@pytest.mark.xfail(reason="Issue #12247")
+# In the *compound* partition-key case the Python driver rejects the
+# oversized component locally, before the request reaches the server: when
+# computing the token-aware routing key it serializes each compound key
+# component with a 2-byte length prefix:
+#   cassandra/query.py:304:
+#       yield struct.pack(">H%dsB" % l, l, p, 0)
+# For l > 65535 this raises struct.error("'H' format requires 0 <= number
+# <= 65535"), which the driver re-raises as NoHostAvailable - not as a
+# server-side InvalidRequest. The server-side fix in this PR for #12247
+# therefore cannot make this test pass; it stays xfail until the driver
+# either lifts the limit or surfaces the error as InvalidRequest. The
+# matching upstream issue is CASSANDRA-19270.
+@pytest.mark.xfail(reason="Driver rejects oversized compound-pk component (struct.pack '>H'); see CASSANDRA-19270, #12247")
 def test_insert_65k_pk_compound(cql, table2, cassandra_bug):
     stmt = cql.prepare(f'INSERT INTO {table2} (p1, p2, c1, c2) VALUES (?,?,?,?)')
     big = 'x'*(65*1024)
@@ -147,7 +175,6 @@ def test_insert_65k_pk_compound(cql, table2, cassandra_bug):
     with pytest.raises(InvalidRequest, match='Key length'):
         cql.execute(stmt, ['dog', big, 'cat', 'mouse'])
 
-@pytest.mark.xfail(reason="Issue #12247")
 def test_insert_65k_ck_composite(cql, table2):
     stmt = cql.prepare(f'INSERT INTO {table2} (p1, p2, c1, c2) VALUES (?,?,?,?)')
     big = 'x'*(65*1024)
@@ -182,7 +209,6 @@ def test_insert_total_compound_pk_ok(cql, table2):
     stmt = cql.prepare(f'SELECT * FROM {table2} WHERE p1=? AND p2=?')
     assert list(cql.execute(stmt, [p1, p2])) == [(p1, p2, c1, c2)]
 
-@pytest.mark.xfail(reason="Issue #12247")
 def test_insert_total_compound_pk_err(cql, table2):
     stmt = cql.prepare(f'INSERT INTO {table2} (p1, p2, c1, c2) VALUES (?,?,?,?)')
     # A total compound pk of size 65536 is definitely too long
@@ -225,7 +251,6 @@ def test_insert_total_composite_ck_ok(cql, table2):
     stmt = cql.prepare(f'SELECT * FROM {table2} WHERE p1=? AND p2=?')
     assert list(cql.execute(stmt, [p1, p2])) == [(p1, p2, c1, c2)]
 
-@pytest.mark.xfail(reason="Issue #12247")
 def test_insert_total_composite_ck_err(cql, table2):
     stmt = cql.prepare(f'INSERT INTO {table2} (p1, p2, c1, c2) VALUES (?,?,?,?)')
     # A total composite ck of size 65536 is definitely too long

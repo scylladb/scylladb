@@ -55,7 +55,7 @@ class TestLimits(Tester):
 
         c = f"CREATE TABLE test1 ({key_name} int PRIMARY KEY)"
         if expect_failure:
-            expected_error = r"Key size too large: \d+ > 65535"
+            expected_error = r"Key length of \d+ is longer than maximum of 65535"
             self.ignore_log_patterns += [expected_error]
             with pytest.raises(Exception, match=expected_error):
                 session.execute(c)

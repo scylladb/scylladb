@@ -15,6 +15,7 @@
 #include <ranges>
 #include "utils/assert.hh"
 #include "utils/serialization.hh"
+#include "exceptions/exceptions.hh"
 #include <seastar/util/backtrace.hh>
 
 enum class allow_prefixes { no, yes };
@@ -103,7 +104,12 @@ public:
     static managed_bytes serialize_value(RangeOfSerializedComponents&& values) {
         auto size = serialized_size(values);
         if (size > std::numeric_limits<size_type>::max()) {
-            throw std::runtime_error(format("Key size too large: {:d} > {:d}", size, std::numeric_limits<size_type>::max()));
+            // Matches Cassandra's wording so CQL-level compatibility tests
+            // (and client-visible error messages) line up.
+            // Issues #10366 (SELECT) and #12247 (INSERT) both require a
+            // clean InvalidRequest here rather than a generic server error.
+            throw exceptions::invalid_request_exception(format("Key length of {:d} is longer than maximum of {:d}",
+                    size, std::numeric_limits<size_type>::max()));
         }
         managed_bytes b(managed_bytes::initialized_later(), size);
         serialize_value(values, managed_bytes_mutable_view(b));
