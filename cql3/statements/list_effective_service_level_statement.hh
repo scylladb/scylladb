@@ -21,6 +21,8 @@ public:
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
+    virtual seastar::shared_ptr<const metadata> get_result_metadata() const override;
+
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(query_processor&, service::query_state&, const query_options&, std::optional<service::group0_guard>) const override;
 };

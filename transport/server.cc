@@ -2240,7 +2240,6 @@ void cql_server::response::write(const cql3::metadata& m, const cql_metadata_id_
         flags.set<cql3::metadata::flag::NO_METADATA>();
     }
 
-    cql3::cql_metadata_id_type calculated_metadata_id{bytes{}};
     if (metadata_id.has_request_metadata_id() && metadata_id.has_response_metadata_id()) {
         if (metadata_id.get_request_metadata_id() != metadata_id.get_response_metadata_id()) {
             flags.remove<cql3::metadata::flag::NO_METADATA>();

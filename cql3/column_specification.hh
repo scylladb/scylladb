@@ -42,4 +42,6 @@ public:
     static bool all_in_same_table(const std::vector<lw_shared_ptr<column_specification>>& names);
 };
 
+lw_shared_ptr<column_specification> make_column_spec(std::string_view ks_name, std::string_view cf_name, sstring name, data_type type);
+
 }
