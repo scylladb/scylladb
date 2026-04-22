@@ -876,7 +876,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_cdc) {
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UNUSED});
     BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -888,7 +887,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_unused) {
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UNUSED});
     BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -900,7 +898,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_udf) {
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UDF});
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -909,10 +906,9 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_alternator_streams) {
     auto cfg_ptr = std::make_unique<config>();
     config& cfg = *cfg_ptr;
     cfg.read_from_yaml("experimental_features:\n    - alternator-streams\n", throw_on_error);
-    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::ALTERNATOR_STREAMS});
-    BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
+    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UNUSED});
+    BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(cfg.check_experimental(ef::ALTERNATOR_STREAMS));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -924,7 +920,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_broadcast_tables) {
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::BROADCAST_TABLES});
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
     BOOST_CHECK(cfg.check_experimental(ef::BROADCAST_TABLES));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
@@ -937,7 +932,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_keyspace_storage_options) {
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::KEYSPACE_STORAGE_OPTIONS});
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
     BOOST_CHECK(cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -949,7 +943,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_multiple) {
     BOOST_CHECK_EQUAL(cfg.experimental_features(), (features{ef::UNUSED, ef::UNUSED, ef::UNUSED}));
     BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-    BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
     BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
     return make_ready_future();
 }
@@ -964,7 +957,6 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
                            BOOST_REQUIRE_NE(msg.find("line 2, column 7"), msg.npos);
                            BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
                            BOOST_CHECK(!cfg.check_experimental(ef::UDF));
-                           BOOST_CHECK(!cfg.check_experimental(ef::ALTERNATOR_STREAMS));
                            BOOST_CHECK(!cfg.check_experimental(ef::KEYSPACE_STORAGE_OPTIONS));
                        });
     return make_ready_future();
