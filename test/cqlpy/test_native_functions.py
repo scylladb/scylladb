@@ -194,3 +194,25 @@ def test_set_intersection_fn(cql, tbl_set, scylla_only):
         cql.execute(f"SELECT set_intersection(s1, p) FROM {tbl_set} WHERE p={p1}")
     with pytest.raises(InvalidRequest, match='both arguments are of the same set type'):
         cql.execute(f"SELECT set_intersection(s1, s3) FROM {tbl_set} WHERE p={p1}")
+
+# An unqualified native function (e.g. intAsBlob) called against a `system`
+# keyspace table used to be added as a candidate twice. It was registered once
+# under the native "system" name, and once under the current keyspace, which is
+# also "system". A weakly-assignable argument then matched both copies and
+# raised a spurious "Ambiguous call to function" InvalidRequest error.
+# Reproduces SCYLLADB-1682.
+#
+# "Ambiguous call to function" is a hard error, so the regression check is
+# simply that these queries execute without raising: if the duplicate candidate
+# came back, the call would throw InvalidRequest and fail the test.
+def test_native_function_in_system_keyspace_query(cql):
+    # Literal: weakly assignable to int under the current type inference.
+    list(cql.execute("SELECT intAsBlob(4) FROM system.local"))
+    # Bind marker: untyped by construction, so the canonical reproducer.
+    stmt = cql.prepare("SELECT intAsBlob(?) FROM system.local")
+    list(cql.execute(stmt, [4]))
+    # Nested unqualified calls.
+    stmt = cql.prepare("SELECT blobAsInt(intAsBlob(?)) FROM system.local")
+    list(cql.execute(stmt, [4]))
+    # Fully-qualified call takes the single-candidate path; regression guard.
+    list(cql.execute("SELECT system.intAsBlob(4) FROM system.local"))
