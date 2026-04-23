@@ -76,14 +76,14 @@ category_set parse_categories(const std::vector<sstring>& categories) {
 }
 
 void validate_audit_rule(const audit_rule& rule) {
-    // Sinks: must be non-empty, each must be "table" or "syslog"
+    // Sinks: must be non-empty, each must be "table", "syslog" or "stdout"
     if (rule.sinks.empty()) {
         throw audit_exception("Bad configuration: 'sinks' must be non-empty in audit rule");
     }
     for (const auto& sink : rule.sinks) {
-        if (sink != "table" && sink != "syslog") {
+        if (sink != "table" && sink != "syslog" && sink != "stdout") {
             throw audit_exception(fmt::format(
-                "Bad configuration: invalid sink '{}' in audit rule (must be 'table' or 'syslog')", sink));
+                "Bad configuration: invalid sink '{}' in audit rule (must be 'table', 'syslog' or 'stdout')", sink));
         }
     }
 }
@@ -191,6 +191,8 @@ audit_sink_set rule_sinks(const audit_rule& rule) {
             result.set(audit_sink::table);
         } else if (s == "syslog") {
             result.set(audit_sink::syslog);
+        } else if (s == "stdout") {
+            result.set(audit_sink::stdout);
         } else {
             // Should never happen — validate_audit_rule() rejects unknown sinks.
             on_internal_error(logger, fmt::format("Unknown audit sink '{}' in validated rule", s));

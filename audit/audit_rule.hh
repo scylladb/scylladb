@@ -73,9 +73,10 @@ inline sstring qualified_table_name(std::string_view keyspace, std::string_view 
 enum class audit_sink {
     table,
     syslog,
+    stdout,
 };
 
-using audit_sink_set = enum_set<super_enum<audit_sink, audit_sink::table, audit_sink::syslog>>;
+using audit_sink_set = enum_set<super_enum<audit_sink, audit_sink::table, audit_sink::syslog, audit_sink::stdout>>;
 
 /// Returns true if the category is table-scoped (DML, DDL, QUERY).
 /// Table-independent categories (AUTH, ADMIN, DCL) bypass the table filter
