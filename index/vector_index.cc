@@ -327,13 +327,17 @@ void vector_index::validate(const schema &schema, const cql3::statements::index_
     check_index_options(properties);
 }
 
-bool vector_index::has_vector_index_on_column(const schema& s, const sstring& target_name) {
-    for (const auto& index : s.indices()) {
-        if (is_vector_index_on_column(index, target_name)) {
-            return true;
-        }
+bool vector_index::is_local(const sstring& target_string) {
+    std::optional<rjson::value> json_value = rjson::try_parse(target_string);
+    if (!json_value || !json_value->IsObject()) {
+        return false;
     }
-    return false;
+    rjson::value* pk = rjson::find(*json_value, PK_TARGET_KEY);
+    if (!pk || !pk->IsArray() || pk->Empty()) {
+        return false;
+    }
+    rjson::value* tc = rjson::find(*json_value, TC_TARGET_KEY);
+    return tc && tc->IsString();
 }
 
 bool vector_index::is_vector_index_on_column(const index_metadata& im, const sstring& target_name) {
