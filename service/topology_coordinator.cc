@@ -4477,7 +4477,8 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
 
             locator::load_stats node_stats;
             if (!_gossiper.is_alive(dst)) {
-                if (_load_stats_per_node.contains(dst)) {
+                if (_load_stats_per_node.contains(dst) &&
+                        !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
                     node_stats = _load_stats_per_node[dst];
                 } else {
                     rtlogger.debug("raft topology: Unable to refresh table load on {} because it's down.", dst);

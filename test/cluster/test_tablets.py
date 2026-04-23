@@ -1751,6 +1751,7 @@ async def test_excludenode(manager: ManagerClient):
         await manager.remove_node(live_node.server_id, server_id=node_to_remove.server_id)
 
 @pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_excludenode_shrink_rf(manager: ManagerClient):
     """
     Verifies that ALTER keyspace removing replicas from a DC succeeds when the only
@@ -1768,6 +1769,11 @@ async def test_excludenode_shrink_rf(manager: ManagerClient):
     dc1_servers = await manager.servers_add(servers_num=2, config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1'})
     dc2_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2'})
 
+    # Force incomplete load_stats for the down node on every potential topology
+    # coordinator, so the shrink plan deterministically hits the excluded-node
+    # path instead of relying on stale cached stats.
+    await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "force_down_node_load_stats_invalid", one_shot=False) for s in dc1_servers))
+
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
                                           "'dc1': 1, 'dc2': 1} AND tablets = { 'initial': 4 }") as ks:
@@ -1784,7 +1790,7 @@ async def test_excludenode_shrink_rf(manager: ManagerClient):
         # ALTER keyspace to remove dc2 from replication.
         # This should succeed without timing out, even though the excluded node
         # has tablet replicas that need to be shrunk away.
-        await cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0}}")
+        await asyncio.wait_for(cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0}}"), timeout=120)
 
         await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in dc1_servers))
 
