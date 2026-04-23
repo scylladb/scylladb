@@ -552,7 +552,8 @@ class ManagerClient:
                                 seeds: Optional[List[IPAddress]],
                                 expected_error: Optional[str],
                                 server_encryption: Optional[str],
-                                expected_server_up_state: Optional[ServerUpState]) -> dict[str, Any]:
+                                expected_server_up_state: Optional[ServerUpState],
+                                append_env: Optional[dict[str, str]] = None) -> dict[str, Any]:
         data: dict[str, Any] = {'start': start}
         if replace_cfg:
             data['replace_cfg'] = replace_cfg._asdict()
@@ -572,6 +573,8 @@ class ManagerClient:
             data['server_encryption'] = server_encryption
         if expected_server_up_state:
             data['expected_server_up_state'] = expected_server_up_state.name
+        if append_env:
+            data['append_env'] = append_env
         return data
 
     async def server_add(self,
@@ -586,7 +589,8 @@ class ManagerClient:
                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT,
                          server_encryption: str = "none",
                          expected_server_up_state: ServerUpState = ServerUpState.SERVING,
-                         connect_driver: bool = True) -> ServerInfo:
+                         connect_driver: bool = True,
+                         append_env: Optional[dict[str, str]] = None) -> ServerInfo:
         """Add a new server.
 
         When start=True and expected_error is None, waits until Scylla reports
@@ -613,6 +617,7 @@ class ManagerClient:
                 expected_error,
                 server_encryption,
                 expected_server_up_state,
+                append_env,
             )
 
             # If we replace, we should wait until other nodes see the node being
@@ -650,7 +655,8 @@ class ManagerClient:
                           driver_connect_opts: dict[str, Any] = {},
                           expected_error: Optional[str] = None,
                           server_encryption: str = "none",
-                          auto_rack_dc: Optional[str] = None) -> List[ServerInfo]:
+                          auto_rack_dc: Optional[str] = None,
+                          append_env: Optional[dict[str, str]] = None) -> List[ServerInfo]:
         """Add new servers concurrently.
 
         When start=True and expected_error is None, waits until Scylla reports
@@ -671,7 +677,7 @@ class ManagerClient:
             property_file = [{"dc":auto_rack_dc, "rack":f"rack{i+1}"} for i in range(servers_num)]
 
         try:
-            data = self._create_server_add_data(None, cmdline, config, version, property_file, start, seeds, expected_error, server_encryption, None)
+            data = self._create_server_add_data(None, cmdline, config, version, property_file, start, seeds, expected_error, server_encryption, None, append_env)
             data['servers_num'] = servers_num
             server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
                                                       timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)
