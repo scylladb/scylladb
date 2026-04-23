@@ -385,7 +385,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_test_ann_request) 
                 BOOST_REQUIRE_EQUAL(server->ann_requests().back().path, "/api/v1/indexes/ks/idx2/ann");
                 BOOST_REQUIRE(!keys);
                 auto* err = std::get_if<vector_store_client::service_error>(&keys.error());
-                BOOST_CHECK(err != nullptr);
+                BOOST_REQUIRE(err != nullptr);
                 BOOST_CHECK_EQUAL(err->status, status_type::not_found);
                 BOOST_CHECK_EQUAL(err->message, "idx2 not found");
 
@@ -857,7 +857,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(vector_store_client_node_recovery_afte
                 // Send request to unavailable node - this will put the node to backoff.
                 auto result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
 
-                BOOST_CHECK(!result);
+                BOOST_REQUIRE(!result);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(result.error()));
 
                 // Replace the unavailable server with an available one.

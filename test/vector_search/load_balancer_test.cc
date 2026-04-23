@@ -29,7 +29,7 @@ BOOST_AUTO_TEST_CASE(next_returns_all_elements_in_random_order) {
         read.push_back(n);
     }
 
-    BOOST_CHECK_EQUAL(read.size(), 3);
+    BOOST_REQUIRE_EQUAL(read.size(), 3);
     BOOST_CHECK_EQUAL(*read[0], 2);
     BOOST_CHECK_EQUAL(*read[1], 3);
     BOOST_CHECK_EQUAL(*read[2], 1);

@@ -95,7 +95,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_up_when_request_is_aborted) {
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as);
 
     BOOST_CHECK(client.is_up());
-    BOOST_CHECK(!res);
+    BOOST_REQUIRE(!res);
     BOOST_CHECK(std::holds_alternative<aborted_error>(res.error()));
 
     co_await client.close();
@@ -144,7 +144,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_down_when_server_is_not_available) 
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
     BOOST_CHECK(!client.is_up());
-    BOOST_CHECK(!res);
+    BOOST_REQUIRE(!res);
     BOOST_CHECK(std::holds_alternative<service_unavailable_error>(res.error()));
 
     co_await client.close();
@@ -208,7 +208,7 @@ SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(is_down_when_connection_times_out) {
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
     BOOST_CHECK(!client.is_up());
-    BOOST_CHECK(!res);
+    BOOST_REQUIRE(!res);
     BOOST_CHECK(std::holds_alternative<service_unavailable_error>(res.error()));
 
     co_await unreachable.close();
