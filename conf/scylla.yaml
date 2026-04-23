@@ -585,6 +585,8 @@ column_index_size_in_kb: 1
 #   - "none": auditing is disabled
 #   - "table": save audited events in audit.audit_log column family (default)
 #   - "syslog": send audited events via syslog (depends on OS, but usually to /dev/log)
+#   - "stdout": write audited events to the process standard output
+# Multiple backends can be combined with a comma, e.g. "syslog,table" or "stdout,table".
 audit: "table"
 #
 # List of statement categories that should be audited.
