@@ -633,21 +633,27 @@ create_index_statement::build_index_schema(data_dictionary::database db, locator
     }
     auto index = make_index_metadata(targets, accepted_name, kind, index_options);
     auto existing_index = schema->find_index_noname(index);
-    if (existing_index) {
+    bool is_vector = _idx_properties->custom_class && _idx_properties->custom_class == "vector_index";
+    // For vector indexes:
+    // - unnamed ones are blocked by the duplicate check on the same column;
+    // - named ones are only checked for name uniqueness — allowing multiple named indexes on the same column.
+    // For all other indexes:
+    // - always block duplicates on the same column.
+    //
+    // Name uniqueness without IF NOT EXISTS is enforced before.
+    // The name check here handles IF NOT EXISTS when the index with same name
+    // exists in the same keyspace (on the same or different table) - needed because
+    // vector indexes have no backing view table, so the `has_schema()` check
+    // below cannot catch this case (issue #26672).
+    bool duplicate = (is_vector && !_index_name.empty())
+        ? db.existing_index_names(keyspace()).contains(_index_name)
+        : existing_index.has_value();
+    if (duplicate) {
         if (_if_not_exists) {
             return std::make_pair(std::nullopt, std::move(warnings));
         } else {
             throw exceptions::invalid_request_exception(
                     format("Index {} is a duplicate of existing index {}", index.name(), existing_index.value().name()));
-        }
-    }
-    bool existing_vector_index = _idx_properties->custom_class && _idx_properties->custom_class == "vector_index" && secondary_index::vector_index::has_vector_index_on_column(*schema, targets[0]->column_name());
-    bool custom_index_with_same_name = _idx_properties->custom_class && db.existing_index_names(keyspace()).contains(_index_name);
-    if (existing_vector_index || custom_index_with_same_name) {
-        if (_if_not_exists) {
-            return std::make_pair(std::nullopt, std::move(warnings));
-        } else {
-            throw exceptions::invalid_request_exception("There exists a duplicate custom index");
         }
     }
     auto index_table_name = secondary_index::index_table_name(accepted_name);
