@@ -543,11 +543,16 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
             // during SSTable writing and removed before sealing.  If the write
             // failed before sealing, the file may still be on disk and must be
             // cleaned up explicitly.
+            // The component is only defined for the `ms` sstable format; for
+            // older formats it is absent from the component map and looking up
+            // its filename would throw std::out_of_range.
             // Use file_exists() to avoid a C++ exception on the common path
             // where the file was already removed before sealing.
-            auto temp_hashes = filename(sst, dir_name.native(), sst._generation, component_type::TemporaryHashes);
-            if (co_await file_exists(temp_hashes)) {
-                co_await sst.sstable_write_io_check(remove_file, std::move(temp_hashes));
+            if (sstable_version_constants::get_component_map(sst.get_version()).contains(component_type::TemporaryHashes)) {
+                auto temp_hashes = filename(sst, dir_name.native(), sst._generation, component_type::TemporaryHashes);
+                if (co_await file_exists(temp_hashes)) {
+                    co_await sst.sstable_write_io_check(remove_file, std::move(temp_hashes));
+                }
             }
             if (sync) {
                 co_await sst.sstable_write_io_check(sync_directory, dir_name.native());

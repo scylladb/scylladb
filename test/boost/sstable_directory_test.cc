@@ -246,6 +246,33 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
     });
 }
 
+// Reproducer for SCYLLADB-1697
+SEASTAR_TEST_CASE(sstable_directory_test_unlink_sstable_leaves_no_orphans) {
+    return sstables::test_env::do_with_async([] (test_env& env) {
+        for (const auto version : {sstable_version_types::me, sstable_version_types::ms}) {
+            testlog.info("Testing sstable version: {}", version);
+            auto sst = make_sstable_for_this_shard([&env, version] {
+                return env.make_sstable(test_table_schema(), version);
+            });
+
+            // Sanity: the TOC was written, otherwise the assertion below would be vacuous.
+            BOOST_REQUIRE(file_exists(test(sst).filename(sstables::component_type::TOC).native()).get());
+
+            sst->unlink().get();
+
+            std::vector<sstring> remaining;
+            lister::scan_dir(env.tempdir().path(), lister::dir_entry_types::of<directory_entry_type::regular>(),
+                    [&remaining] (fs::path, directory_entry de) {
+                remaining.push_back(de.name);
+                return make_ready_future<>();
+            }).get();
+
+            BOOST_REQUIRE_MESSAGE(remaining.empty(),
+                    fmt::format("Expected empty sstable dir after unlink for version {}, found: {}", version, remaining));
+        }
+    });
+}
+
 // Test the absence of TOC. Behavior is controllable by a flag
 SEASTAR_TEST_CASE(sstable_directory_test_table_missing_toc) {
     return sstables::test_env::do_with_async([] (test_env& env) {
