@@ -701,7 +701,11 @@ query_processor::do_execute_prepared(
         cql3::prepared_cache_key_type cache_key,
         bool needs_authorization) {
     if (needs_authorization) {
-        co_await statement->check_access(*this, query_state.get_client_state());
+        auto access_future = co_await coroutine::as_future(statement->check_access(*this, query_state.get_client_state()));
+        if (access_future.failed()) {
+            co_await audit::inspect(statement, query_state, options, true);
+            std::rethrow_exception(access_future.get_exception());
+        }
         try {
             co_await _authorized_prepared_cache.insert(*query_state.get_client_state().user(), std::move(cache_key), std::move(prepared));
         } catch (...) {
@@ -709,8 +713,20 @@ query_processor::do_execute_prepared(
         }
     }
 
-    co_await audit::inspect(statement, query_state, options, false);
-    co_return co_await process_authorized_statement(std::move(statement), query_state, options, std::move(guard));
+    auto mfut = co_await coroutine::as_future(process_authorized_statement(statement, query_state, options, std::move(guard)));
+    ::shared_ptr<result_message> m;
+    if (!mfut.failed()) {
+        m = mfut.get();
+    } else {
+        co_await audit::inspect(statement, query_state, options, true);
+        std::rethrow_exception(mfut.get_exception());
+    }
+    bool is_error = true;
+    if (m.get()) {
+        is_error = m->is_exception();
+    }
+    co_await audit::inspect(statement, query_state, options, is_error);
+    co_return std::move(m);
 }
 
 future<::shared_ptr<result_message>>
