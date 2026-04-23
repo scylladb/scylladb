@@ -5171,8 +5171,16 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
 SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    // Use make_pkey() to generate a shard-local key (avoids "Failed to generate sharding metadata").
-    mutation partition(s.schema(), s.make_pkey());
+    // Use a fixed partition key. The row-size thresholds below are chosen at exact
+    // byte boundaries of the MC sstable row encoding: the first clustering row body
+    // encodes prev_row_size as a vint, and prev_row_size includes the partition
+    // header (which contains the partition key's serialized length+bytes). A
+    // random-size partition key (as produced by simple_schema::make_pkey() /
+    // tests::generate_partition_key(), which default to key_size{1,128}) would
+    // perturb the encoded row size by 1-2 bytes across runs and flip the threshold
+    // comparison, making this test flaky. Under smp=1 (which this test runs with),
+    // a fixed key is always shard-local, so no sharding-metadata issue arises.
+    mutation partition = s.new_mutation("pv");
     const partition_key& pk = partition.key();
     s.add_static_row(partition, "foo bar zed");
 
@@ -5244,8 +5252,16 @@ static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, 
 SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_cell) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    // Use make_pkey() to generate a shard-local key (avoids "Failed to generate sharding metadata").
-    mutation partition(s.schema(), s.make_pkey());
+    // Use a fixed partition key. The cell-size thresholds below are chosen at exact
+    // byte boundaries of the MC sstable row encoding: the first clustering row body
+    // encodes prev_row_size as a vint, and prev_row_size includes the partition
+    // header (which contains the partition key's serialized length+bytes). A
+    // random-size partition key (as produced by simple_schema::make_pkey() /
+    // tests::generate_partition_key(), which default to key_size{1,128}) would
+    // perturb the encoded row size by 1-2 bytes across runs and flip the threshold
+    // comparison, making this test flaky. Under smp=1 (which this test runs with),
+    // a fixed key is always shard-local, so no sharding-metadata issue arises.
+    mutation partition = s.new_mutation("pv");
     const partition_key& pk = partition.key();
     s.add_static_row(partition, "foo bar zed");
 
@@ -5264,7 +5280,6 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_cell) {
 static void test_sstable_log_too_many_rows_f(int rows, int range_tombstones, uint64_t threshold, bool expected, sstable_version_types version) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    // Use make_pkey() to generate a shard-local key (avoids "Failed to generate sharding metadata").
     mutation p(s.schema(), s.make_pkey());
     sstring sv;
     for (auto idx = 0; idx < rows - 1; idx++) {
@@ -5326,7 +5341,6 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
 static void test_sstable_log_too_many_dead_rows_f(int rows, uint64_t threshold, bool expected, sstable_version_types version) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    // Use make_pkey() to generate a shard-local key (avoids "Failed to generate sharding metadata").
     mutation p(s.schema(), s.make_pkey());
     sstring sv;
     int live_rows = 0;
@@ -5436,7 +5450,6 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_dead_rows) {
 static void test_sstable_too_many_collection_elements_f(int elements, uint64_t threshold, bool expected, sstable_version_types version) {
     simple_schema s(simple_schema::with_static::no, simple_schema::with_collection::yes);
     tests::reader_concurrency_semaphore_wrapper semaphore;
-    // Use make_pkey() to generate a shard-local key (avoids "Failed to generate sharding metadata").
     mutation p(s.schema(), s.make_pkey());
     std::map<bytes, bytes> kv_map;
     for (auto i = 0; i < elements; i++) {
@@ -5512,7 +5525,6 @@ SEASTAR_THREAD_TEST_CASE(test_large_data_records_round_trip) {
             // Create a mutation with a clustering row whose serialized cell value
             // exceeds the 1-byte thresholds, so partition_size, row_size, and
             // cell_size records are all generated.
-            // Use make_pkey() (no argument) to generate a key on this shard.
             auto pk = ss.make_pkey();
             mutation m(s, pk);
             auto ck = ss.make_ckey("ck1");
@@ -5622,7 +5634,6 @@ SEASTAR_THREAD_TEST_CASE(test_large_data_records_top_n_bounded) {
             // Create 6 partitions, each with one row of increasing size.
             // Since each partition has exactly one row, we get 6 row_size records
             // competing for 3 slots.
-            // Use make_pkeys() to generate shard-local keys.
             auto pkeys = ss.make_pkeys(6);
             utils::chunked_vector<mutation> muts;
             for (int i = 0; i < 6; i++) {
