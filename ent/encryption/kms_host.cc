@@ -406,7 +406,7 @@ future<rjson::value> encryption::kms_host::impl::do_post(std::string_view target
         static constexpr const char* HOST_HEADER = "host";
 
         static auto logged_send = [](httpclient& client) -> future<result_type> {
-            kms_log.trace("Request: {}", client.request());
+            kms_log.trace("Request: {}", client);
             result_type res;
             try {
                 res = co_await client.send();
@@ -843,7 +843,7 @@ future<encryption::kms_host::impl::result_type> encryption::kms_host::impl::post
     client.content(query.content_type, query.content);
     client.method(httpclient::method_type::POST);
 
-    kms_log.trace("Request: {}", client.request());
+    kms_log.trace("Request: {}", client);
 
     auto res = co_await client.send();
 
