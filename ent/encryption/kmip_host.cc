@@ -289,8 +289,8 @@ private:
 
     sstring _host;
     host_options& _options;
-    output_stream<char> _output;
-    input_stream<char> _input;
+    std::optional<output_stream<char>> _output;
+    std::optional<input_stream<char>> _input;
     seastar::connected_socket _socket;
     std::optional<temporary_buffer<char>> _in_buffer;
     std::optional<future<>> _pending;
@@ -347,8 +347,8 @@ future<> kmip_host::impl::connection::connect() {
                 // #998 Set keepalive to try avoiding connection going stale in between commands.
                 s.set_keepalive_parameters(net::tcp_keepalive_params{60s, 60s, 10});
                 s.set_keepalive(true);
-                _input = s.input();
-                _output = s.output();
+                _input.emplace(s.input());
+                _output.emplace(s.output());
             });
         });
     });
@@ -367,9 +367,9 @@ int kmip_host::impl::connection::send(void* data, unsigned int len, unsigned int
     }
     kmip_log.trace("{}: Sending {} bytes", *this, len);
 
-    auto f = _output.write(reinterpret_cast<char *>(data), len).then([this] {
+    auto f = _output->write(reinterpret_cast<char *>(data), len).then([this] {
         kmip_log.trace("{}: send done. flushing...", *this);
-        return _output.flush();
+        return _output->flush();
     });
     // if the call failed already, we still want to
     // drop back to "wait_for_io()", because we cannot throw
@@ -405,7 +405,7 @@ int kmip_host::impl::connection::recv(void* data, unsigned int len, unsigned int
         }
 
         kmip_log.trace("{}: issue read", *this);
-        auto f = _input.read().then([this](temporary_buffer<char> buf) {
+        auto f = _input->read().then([this](temporary_buffer<char> buf) {
             kmip_log.trace("{}: got {} bytes", *this, buf.size());
            _in_buffer = std::move(buf);
         });
@@ -462,8 +462,8 @@ void kmip_host::impl::connection::attach(KMIP_CMD* cmd) {
 }
 
 future<> kmip_host::impl::connection::close() {
-    return _output.close().finally([this] {
-        return _input.close();
+    return _output->close().finally([this] {
+        return _input->close();
     });
 }
 
