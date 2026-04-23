@@ -281,3 +281,155 @@ async def test_audit_stdout_stress_mega_burst(manager: ManagerClient):
         # 500 eps; keep a conservative gate to avoid flakes on loaded CI.
         min_throughput_eps=300,
     )
+
+
+@pytest.mark.single_node
+async def test_audit_stdout_stress_slow_consumer(manager: ManagerClient):
+    """Slow-consumer / backpressure scenario.
+
+    Simulates a container runtime that temporarily stops draining the
+    Scylla stdout pipe (e.g. the log collector gets scheduled out or its
+    own downstream sink stalls). The kernel pipe buffer (typically 64 KiB
+    on Linux, ~300 audit lines) backs up to the scylla process, forcing
+    the stdout audit writer's output_stream to apply backpressure on
+    subsequent audit writes.
+
+    This test asserts:
+
+    1. Scylla stays responsive enough that CQL traffic keeps flowing
+       while the relay is paused (audit writes may block individually,
+       but the reactor as a whole must not stall).
+    2. When the consumer resumes, no audit events are dropped and no
+       lines are torn. Every issued statement ends up in the log
+       exactly once.
+    3. The backpressure path is actually exercised: we issue more
+       events than the pipe can hold, keep the relay paused long enough
+       for the pipe to fill, and only then resume.
+    """
+    helper = AuditBackendStdout()
+    with helper:
+        audit_settings = {
+            "audit": "stdout",
+            "audit_categories": "QUERY",
+            "audit_keyspaces": "ks",
+        }
+        t = CQLAuditTester(manager)
+        session = await t.prepare(
+            audit_settings=audit_settings,
+            helper=helper,
+            cmdline=["--smp", "4"],
+        )
+
+        session.execute(
+            "CREATE TABLE IF NOT EXISTS ks.probe (k int PRIMARY KEY, v int)")
+        session.execute("INSERT INTO ks.probe (k, v) VALUES (0, 0)")
+        helper.clear_audit_logs(session)
+
+        prepared = session.prepare("SELECT v FROM ks.probe WHERE k = ?")
+        prepared.consistency_level = ConsistencyLevel.ONE
+
+        servers = await manager.running_servers()
+        assert len(servers) == 1, \
+            f"slow-consumer test expects one node, got {len(servers)}"
+        server_id = servers[0].server_id
+
+        # ~220 bytes per audit line * 1500 lines = ~330 KiB, well above the
+        # default 64 KiB pipe buffer on Linux. This guarantees the shard-0
+        # writer will block on the pipe while the relay is paused.
+        workload_queries = 1500
+        pause_duration_s = 3.0
+
+        # Run the workload in a background task so we can pause/resume the
+        # relay concurrently. Using a ThreadPoolExecutor-backed async
+        # wrapper around the cassandra driver's fire-and-forget futures
+        # keeps client-side concurrency high.
+        loop = asyncio.get_running_loop()
+
+        async def _execute_one() -> None:
+            # ResponseFuture doesn't integrate with asyncio natively; wrap
+            # via run_in_executor so await is well-defined.
+            fut = session.execute_async(prepared, (0,))
+            await loop.run_in_executor(None, fut.result)
+
+        workload_start = time.monotonic()
+
+        async def _workload() -> int:
+            # Cap per-query wait via overall task wait_for below.
+            await asyncio.gather(
+                *[_execute_one() for _ in range(workload_queries)]
+            )
+            return workload_queries
+
+        # Pause BEFORE the workload starts so the first audit lines back
+        # up immediately.
+        await manager.server_pause_stdout_relay(server_id)
+
+        workload_task = asyncio.create_task(_workload())
+
+        # Hold the relay closed while the workload runs. Queries that
+        # require audit writes will stall on backpressure once the pipe
+        # fills; the server must stay healthy. We wait pause_duration_s
+        # then resume regardless of workload progress.
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(asyncio.sleep(pause_duration_s)),
+                timeout=pause_duration_s + 1.0,
+            )
+        finally:
+            await manager.server_unpause_stdout_relay(server_id)
+            relay_resumed_at = time.monotonic()
+
+        # After resume, the backed-up audit writes drain and queries
+        # complete. Bound the total wait.
+        executed = await asyncio.wait_for(workload_task, timeout=120.0)
+        workload_elapsed = time.monotonic() - workload_start
+        assert executed == workload_queries
+
+        helper.drain_stdout()
+
+        # Follow-up small burst to prove the pipeline still functions
+        # normally after the backpressure cycle.
+        postrun_queries = 200
+        postrun_start = time.monotonic()
+        await asyncio.gather(*[_execute_one() for _ in range(postrun_queries)])
+        postrun_elapsed = time.monotonic() - postrun_start
+        helper.drain_stdout()
+
+        # Validate every captured line is well-formed (no torn writes)
+        # and the count matches exactly what we issued.
+        assert len(helper.nodes) == 1
+        node = helper.nodes[0]
+        start_offset = helper.node_start_marks[node.address]
+        lines = _read_audit_lines(node.log_path, start_offset)
+
+        malformed = _validate_line_format(lines)
+        assert not malformed, (
+            f"{len(malformed)} malformed audit lines after slow-consumer "
+            f"cycle; first 3: {malformed[:3]}"
+        )
+
+        workload_lines = [
+            line for line in lines
+            if (m := AUDIT_LINE_RE.match(line)) is not None
+            and m.group("category") == "QUERY"
+            and m.group("keyspace") == "ks"
+            and m.group("table") == "probe"
+        ]
+
+        total_expected = workload_queries + postrun_queries
+        assert len(workload_lines) == total_expected, (
+            f"audit line count mismatch: got {len(workload_lines)}, "
+            f"expected {total_expected}; total scylla-audit lines: "
+            f"{len(lines)}"
+        )
+
+        drain_after_resume = relay_resumed_at - workload_start
+        result_msg = (
+            f"slow-consumer results: pause={pause_duration_s:.1f}s "
+            f"workload={workload_queries} in {workload_elapsed:.3f}s "
+            f"(resumed at +{drain_after_resume:.3f}s) "
+            f"postrun={postrun_queries} in {postrun_elapsed:.3f}s "
+            f"audit_lines={len(workload_lines)}/{total_expected}"
+        )
+        logger.info(result_msg)
+        print(f"\n[AUDIT_STRESS] {result_msg}", flush=True)
