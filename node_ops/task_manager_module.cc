@@ -111,36 +111,21 @@ tasks::task_manager::task_group node_ops_virtual_task::get_group() const noexcep
     return tasks::task_manager::task_group::topology_change_group;
 }
 
-static std::map<tasks::task_id, locator::host_id> get_requests(const service::topology& topology) {
-    std::map<tasks::task_id, locator::host_id> result;
-    for (auto& request : topology.requests) {
-        auto* rs = topology.find(request.first);
-        if (rs) {
-            result.emplace(tasks::task_id(rs->second.request_id), locator::host_id(request.first.uuid()));
-        }
-    }
-    for (auto& [node, rs] : topology.transition_nodes) {
-        result.emplace(tasks::task_id(rs.request_id), locator::host_id(node.uuid()));
-    }
-    return result;
-}
-
 future<std::optional<tasks::virtual_task_hint>> node_ops_virtual_task::contains(tasks::task_id task_id) const {
     if (!task_id.uuid().is_timestamp()) {
         // Task id of node ops operation is always a timestamp.
         co_return std::nullopt;
     }
 
-    auto hint = std::make_optional<tasks::virtual_task_hint>({});
-    service::topology& topology = _ss._topology_state_machine._topology;
-    auto reqs = get_requests(topology);
-    if (reqs.contains(task_id)) {
-        hint->node_id = reqs.at(task_id);
-        co_return hint;
-    }
-
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry_opt(task_id.uuid());
-    co_return entry && std::holds_alternative<service::topology_request>(entry->request_type) ? hint : std::nullopt;
+    if (!entry || !std::holds_alternative<service::topology_request>(entry->request_type)) {
+        co_return std::nullopt;
+    }
+    auto hint = std::make_optional<tasks::virtual_task_hint>({});
+    if (entry->target_host) {
+        hint->node_id = locator::host_id(*entry->target_host);
+    }
+    co_return hint;
 }
 
 future<tasks::is_abortable> node_ops_virtual_task::is_abortable(tasks::virtual_task_hint hint) const {
@@ -165,12 +150,11 @@ future<> node_ops_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hin
 future<std::vector<tasks::task_stats>> node_ops_virtual_task::get_stats() {
     db::system_keyspace& sys_ks = _ss._sys_ks.local();
     co_return std::ranges::to<std::vector<tasks::task_stats>>(co_await get_entries(sys_ks, get_task_manager().get_user_task_ttl())
-            | std::views::transform([reqs = get_requests(_ss._topology_state_machine._topology)] (const auto& e) {
-        auto id = tasks::task_id{e.first};
+            | std::views::transform([] (const auto& e) {
         auto& entry = e.second;
         tasks::virtual_task_hint hint;
-        if (reqs.contains(id)) {
-            hint.node_id = reqs.at(id);
+        if (entry.target_host) {
+            hint.node_id = locator::host_id(*entry.target_host);
         }
         return get_task_stats(entry, hint);
     }));
