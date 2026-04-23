@@ -519,6 +519,18 @@ class ManagerClient:
         logger.debug("ManagerClient unpausing %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/unpause")
 
+    async def server_pause_stdout_relay(self, server_id: ServerNum) -> None:
+        """Pause the server's stdout pipe relay; the kernel pipe buffer
+        backs up to the scylla process, exercising the stdout audit
+        backend's backpressure path."""
+        logger.debug("ManagerClient pausing stdout relay on %s", server_id)
+        await self.client.put_json(f"/cluster/server/{server_id}/pause_stdout_relay")
+
+    async def server_unpause_stdout_relay(self, server_id: ServerNum) -> None:
+        """Resume the server's stdout pipe relay."""
+        logger.debug("ManagerClient resuming stdout relay on %s", server_id)
+        await self.client.put_json(f"/cluster/server/{server_id}/unpause_stdout_relay")
+
     async def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
         """Switch the executable path of a stopped server"""
         logger.debug("ManagerClient starting %s", server_id)

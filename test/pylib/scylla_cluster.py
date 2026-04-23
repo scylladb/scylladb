@@ -359,6 +359,9 @@ class ScyllaServer:
         self.logger = logger
         self.log_file = None
         self.stdout_task: asyncio.Task[None] | None = None
+        # Cleared to pause the stdout relay (for slow-consumer tests); set = running.
+        self.stdout_relay_gate: asyncio.Event = asyncio.Event()
+        self.stdout_relay_gate.set()
         self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
         self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
         self.cluster_name = cluster_name
@@ -986,7 +989,14 @@ class ScyllaServer:
 
     async def _copy_stdout_to_log(self) -> None:
         assert self.cmd is not None and self.cmd.stdout is not None
-        while chunk := await self.cmd.stdout.read(65536):
+        while True:
+            # Wait here while paused; the kernel pipe buffer backs up to the
+            # scylla process, exercising the stdout audit writer's
+            # backpressure path (slow-consumer scenario).
+            await self.stdout_relay_gate.wait()
+            chunk = await self.cmd.stdout.read(65536)
+            if not chunk:
+                break
             assert self.log_file is not None
             assert self.stdout_log_file is not None
             self.log_file.write(chunk)
@@ -994,9 +1004,20 @@ class ScyllaServer:
             self.stdout_log_file.write(chunk)
             self.stdout_log_file.flush()
 
+    def pause_stdout_relay(self) -> None:
+        """Stop draining the stdout pipe, letting the kernel buffer fill."""
+        self.stdout_relay_gate.clear()
+
+    def unpause_stdout_relay(self) -> None:
+        """Resume draining the stdout pipe."""
+        self.stdout_relay_gate.set()
+
     async def _finish_stdout_task(self) -> None:
         if self.stdout_task is None:
             return
+        # Ensure we are not paused; otherwise the relay would wait forever
+        # on the gate and never observe the pipe EOF.
+        self.stdout_relay_gate.set()
         await self.stdout_task
         self.stdout_task = None
         if hasattr(self, "stdout_log_file") and self.stdout_log_file is not None and not self.stdout_log_file.closed:
@@ -1570,6 +1591,19 @@ class ScyllaCluster:
         server = self.running[server_id]
         server.unpause()
 
+    def server_pause_stdout_relay(self, server_id: ServerNum) -> None:
+        """Pause the stdout pipe relay (fills kernel pipe buffer, exercises backpressure)."""
+        self.logger.info("Cluster %s pausing stdout relay for server %s", self.name, server_id)
+        assert server_id in self.running
+        self.is_dirty = True
+        self.running[server_id].pause_stdout_relay()
+
+    def server_unpause_stdout_relay(self, server_id: ServerNum) -> None:
+        """Resume the stdout pipe relay."""
+        self.logger.info("Cluster %s resuming stdout relay for server %s", self.name, server_id)
+        assert server_id in self.running
+        self.running[server_id].unpause_stdout_relay()
+
     def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
         """Switch the executable path of a stopped server"""
         self.logger.info("Cluster %s upgrading server %s to executable %s", self.name, server_id, path)
@@ -1847,6 +1881,8 @@ class ScyllaClusterManager:
         add_put('/cluster/server/{server_id}/start', self._cluster_server_start)
         add_put('/cluster/server/{server_id}/pause', self._cluster_server_pause)
         add_put('/cluster/server/{server_id}/unpause', self._cluster_server_unpause)
+        add_put('/cluster/server/{server_id}/pause_stdout_relay', self._cluster_server_pause_stdout_relay)
+        add_put('/cluster/server/{server_id}/unpause_stdout_relay', self._cluster_server_unpause_stdout_relay)
         add_put('/cluster/addserver', self._cluster_server_add)
         add_put('/cluster/addservers', self._cluster_servers_add)
         add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
@@ -2009,6 +2045,18 @@ class ScyllaClusterManager:
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
         self.cluster.server_unpause(server_id)
+
+    async def _cluster_server_pause_stdout_relay(self, request) -> None:
+        """Pause the stdout pipe relay for the specified server."""
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        self.cluster.server_pause_stdout_relay(server_id)
+
+    async def _cluster_server_unpause_stdout_relay(self, request) -> None:
+        """Resume the stdout pipe relay for the specified server."""
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        self.cluster.server_unpause_stdout_relay(server_id)
 
     async def _cluster_server_add(self, request) -> dict[str, object]:
         """Add a new server."""
