@@ -5672,6 +5672,21 @@ class scylla_sstable_summary(gdb.Command):
           position: 0}
 
     Keys are printed in the hexadecimal notation.
+
+    For ms-format (trie-based) sstables, displays data from the
+    partitions db footer instead:
+
+        (gdb) scylla sstable-summary $sst
+        sstable uses ms format (trie-based index).
+        first_key: 63617373616e647261
+        last_key: 63617373616e647261
+        partition_count: 42
+        trie_root_position: 12345
+
+    If the partitions db footer has not been lazily loaded yet (e.g. the
+    sstable was opened but never read from), the command will report:
+
+        sstable uses ms format but partitions db footer is not loaded.
     """
     def __init__(self):
         gdb.Command.__init__(self, 'scylla sstable-summary', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
@@ -5693,7 +5708,16 @@ class scylla_sstable_summary(gdb.Command):
             sst = arg
         ms_version = int(gdb.parse_and_eval('sstables::sstable_version_types::ms'))
         if int(sst['_version']) >= ms_version:
-            gdb.write("sstable uses ms format (trie-based index); summary is not populated.\n")
+            footer_opt = std_optional(sst['_partitions_db_footer'])
+            if not footer_opt:
+                gdb.write("sstable uses ms format but partitions db footer is not loaded.\n")
+                return
+            footer = footer_opt.get()
+            gdb.write("sstable uses ms format (trie-based index).\n")
+            gdb.write("first_key: {}\n".format(sstring(footer['first_key']['_bytes'])))
+            gdb.write("last_key: {}\n".format(sstring(footer['last_key']['_bytes'])))
+            gdb.write("partition_count: {}\n".format(footer['partition_count']))
+            gdb.write("trie_root_position: {}\n".format(footer['trie_root_position']))
             return
         summary = seastar_lw_shared_ptr(sst['_components']['_value']).get().dereference()['summary']
 
