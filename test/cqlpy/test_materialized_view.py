@@ -309,20 +309,12 @@ def test_is_not_operator_must_be_null(cql, test_keyspace):
 # if this usage is not allowed, we expect to see a clear error and not silently
 # ignoring the IS NOT NULL condition as happens in issue #10365.
 #
-# NOTE: if issue #8517 (IS NOT NULL in filters) is implemented, we will need to
-# replace this test by a test that checks that the filter works as expected,
-# both in ordinary base-table SELECT and in materialized-view definition.
+# Note that since #8517 was implemented, "xyz IS NOT NULL" *is* a valid filter
+# in a base-table SELECT (see test_is_null.py) - but a materialized view still
+# cannot filter on a non-key column, so it must still be rejected here.
 def test_is_not_null_forbidden_in_filter(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, 'p int primary key, xyz int') as table:
-        # Check that "IS NOT NULL" is not supported in a regular (base table)
-        # SELECT filter. Cassandra reports an InvalidRequest: "Unsupported
-        # restriction: xyz IS NOT NULL". In Scylla the message is different:
-        # "restriction '(xyz) IS NOT { null }' is only supported in materialized
-        # view creation".
-        #
-        with pytest.raises(InvalidRequest, match="xyz"):
-            cql.execute(f'SELECT * FROM {table} WHERE xyz IS NOT NULL ALLOW FILTERING')
-        # Check that "xyz IS NOT NULL" is also not supported in a
+        # Check that "xyz IS NOT NULL" is not supported in a
         # materialized-view definition (where xyz is not a key column)
         # Reproduces #8517
         mv = unique_name()

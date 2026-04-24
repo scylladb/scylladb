@@ -25,7 +25,11 @@ extern logging::logger expr_logger;
 namespace {
 
 bool is_legal_relation_for_non_frozen_collection(oper_t oper, bool is_lhs_col_indexed) {
-    return oper == oper_t::CONTAINS_KEY || oper == oper_t::CONTAINS || (oper == oper_t::EQ && is_lhs_col_indexed);
+    // IS NULL / IS NOT NULL don't compare the collection against a value, they
+    // only test whether the column has any live cells at all, so they are
+    // meaningful for non-frozen collections too.
+    return oper == oper_t::CONTAINS_KEY || oper == oper_t::CONTAINS || (oper == oper_t::EQ && is_lhs_col_indexed)
+           || oper == oper_t::IS || oper == oper_t::IS_NOT;
 }
 
 void validate_single_column_relation(const column_value& lhs, oper_t oper, const schema& schema, bool is_lhs_subscripted) {
