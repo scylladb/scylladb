@@ -602,7 +602,12 @@ def testInvalidNonFrozenUDTRelation(cql, test_keyspace):
             assert_invalid_message(cql, table, "Unsupported \"!=\" relation",
                              "SELECT * FROM %s WHERE b != {a: 0}", udt)
             # Reproduces #10632:
-            assert_invalid_message(cql, table, "b IS NOT",
-                             "SELECT * FROM %s WHERE b IS NOT NULL", udt)
+            # Scylla now supports IS NOT NULL on non-frozen UDT columns in
+            # regular SELECT queries (with ALLOW FILTERING), so the restriction
+            # itself is no longer rejected with "b IS NOT NULL is only supported
+            # in materialized view creation". Scylla instead complains that
+            # ALLOW FILTERING is required (same pattern as =, >, <, etc. above).
+            #assert_invalid_message(cql, table, "b IS NOT",
+            #                 "SELECT * FROM %s WHERE b IS NOT NULL", udt)
             assert_invalid_message(cql, table, "Cannot use CONTAINS on non-collection column",
                              "SELECT * FROM %s WHERE b CONTAINS ?", udt)
