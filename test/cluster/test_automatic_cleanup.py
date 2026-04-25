@@ -79,11 +79,11 @@ async def test_no_cleanup_when_unnecessary(manager: ManagerClient):
 async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
     """Scenario:
        * Start two nodes, a vnodes-based table with an rf=2
-       * Run insert while bootstrapping another node, suspend this insert in database_apply_wait injection
+       * Run insert while bootstrapping another node, suspend this insert in database_apply injection
        * Bootstrap succeeds, capture the final topology version
        * Start decommission -> triggers global barrier, which we fail on another injection
        * This failure is not fatal, the cleanup procedure continues and blocks on waiting for the stale write
-       * We release the database_apply_wait injection, cleanup succeeds, write fails with 'stale topology exception'
+       * We release the database_apply injection, cleanup succeeds, write fails with 'stale topology exception'
     """
 
     config = {'tablets_mode_for_new_keyspaces': 'disabled'}
@@ -119,15 +119,15 @@ async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
         # Have a write request with write_both_read_new version stuck on both nodes:
         # - On the first node, this exercises the coordinator fencing code path.
         # - On the second node, this exercises the replica code path.
-        logger.info("Enable 'database_apply_wait' injection")
+        logger.info("Enable 'database_apply' injection")
         for s in servers[:-1]:
-            await manager.api.enable_injection(s.ip_addr, 'database_apply_wait',
-                                               False, parameters={'cf_name': 'my_test_table'})
+            await manager.api.enable_injection(s.ip_addr, 'database_apply',
+                                               False, parameters={'ks_name': ks, 'cf_name': 'my_test_table', 'what': 'wait'})
         logger.info("Start write")
         write_task = cql.run_async(f"INSERT INTO {ks}.my_test_table (pk, c) VALUES (1, 1)", host=hosts[0])
-        logger.info("Waiting for database_apply_wait")
-        await log0.wait_for("database_apply_wait: wait")
-        await log1.wait_for("database_apply_wait: wait")
+        logger.info("Waiting for database_apply")
+        await log0.wait_for("database_apply: wait")
+        await log1.wait_for("database_apply: wait")
 
         # Finish bootstrapping the node
         logger.info("Trigger topology_coordinator/write_both_read_new/after_barrier")
@@ -159,9 +159,9 @@ async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
         assert len(flush_matches) == 0
 
         # Release the write -- the cleanup process should resume and the decommission succeed
-        await manager.api.message_injection(servers[0].ip_addr, "database_apply_wait")
+        await manager.api.message_injection(servers[0].ip_addr, "database_apply")
         await log0.wait_for("vnodes_cleanup: flush_all_tables", timeout=15)
-        await manager.api.message_injection(servers[1].ip_addr, "database_apply_wait")
+        await manager.api.message_injection(servers[1].ip_addr, "database_apply")
         await log1.wait_for("vnodes_cleanup: flush_all_tables", timeout=15)
 
         await decommission_task

@@ -2156,7 +2156,7 @@ async def test_split_and_incremental_repair_synchronization(manager: ManagerClie
             insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
             insert_stmt.consistency_level = ConsistencyLevel.ONE
 
-            await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False)
+            await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": "test", "what": "throw"})
             pks = range(256, 512)
             await asyncio.gather(*[cql.run_async(insert_stmt, (k, k)) for k in pks])
             await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
