@@ -7461,16 +7461,54 @@ void failure_when_adding_new_sstable_fn(test_env& env) {
     auto on_add = [] (sstables::shared_sstable) { throw std::runtime_error("fail to seal"); return make_ready_future<>(); };
     BOOST_REQUIRE_THROW(table->add_new_sstable_and_update_cache(sst, on_add).get(), std::runtime_error);
 
-    // Verify new sstable was unlinked on failure.
-    BOOST_REQUIRE(!sst->get_storage().exists(*sst, sstables::component_type::Data).get());
+    if (env.get_storage_options().is_local_type()) {
+        // Verify new sstable was unlinked on failure.
+        BOOST_REQUIRE(!sst->get_storage().exists(*sst, sstables::component_type::Data).get());
+    } else {
+        // wipe() deletes the registry entry; verify it is gone.
+        bool found = false;
+        env.manager()
+            .sstables_registry()
+            .sstables_registry_list(table.schema()->id(), env.manager().get_local_host_id(),
+                                    [&found, sst_desc = sst->get_descriptor(component_type::Data)](sstring, sstable_state, entry_descriptor desc) {
+                                        if (desc.generation == sst_desc.generation) {
+                                            found = true;
+                                        }
+                                        return make_ready_future();
+                                    })
+            .get();
+        BOOST_REQUIRE(!found);
+    }
 
     auto sst2 = make_sstable_containing(env.make_sstable(s), {mut1}).get();
     auto sst3 = make_sstable_containing(env.make_sstable(s), {mut1}).get();
     BOOST_REQUIRE_THROW(table->add_new_sstables_and_update_cache({sst2, sst3}, on_add).get(), std::runtime_error);
 
-    // Verify both sstables are unlinked on failure.
-    BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::Data).get());
-    BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::Data).get());
+    if (env.get_storage_options().is_local_type()) {
+        // Verify both sstables are unlinked on failure.
+        BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::Data).get());
+        BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::Data).get());
+    } else {
+        // wipe() deletes registry entries; verify they are gone.
+        bool found2 = false, found3 = false;
+        env.manager()
+            .sstables_registry()
+            .sstables_registry_list(table.schema()->id(), env.manager().get_local_host_id(),
+                                    [&found2, &found3,
+                                     sst2_desc = sst2->get_descriptor(component_type::Data),
+                                     sst3_desc = sst3->get_descriptor(component_type::Data)](sstring, sstable_state, entry_descriptor desc) {
+                                        if (desc.generation == sst2_desc.generation) {
+                                            found2 = true;
+                                        }
+                                        if (desc.generation == sst3_desc.generation) {
+                                            found3 = true;
+                                        }
+                                        return make_ready_future();
+                                    })
+            .get();
+        BOOST_REQUIRE(!found2);
+        BOOST_REQUIRE(!found3);
+    }
 }
 
 SEASTAR_TEST_CASE(failure_when_adding_new_sstable_test) {
