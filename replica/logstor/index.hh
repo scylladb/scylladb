@@ -34,6 +34,10 @@ public:
 
     primary_index_entry(primary_index_entry&&) noexcept = default;
 
+    size_t memory_usage() const noexcept {
+        return sizeof(primary_index_entry) + _key.external_memory_usage();
+    }
+
     bool is_head() const noexcept { return _flags._head; }
     void set_head(bool v) noexcept { _flags._head = v; }
     bool is_tail() const noexcept { return _flags._tail; }
@@ -58,8 +62,25 @@ private:
     partitions_type _partitions;
     schema_ptr _schema;
     size_t _key_count = 0;
+    size_t _memory_usage = 0;
 
     mutable utils::phased_barrier _reads_phaser{"logstor_primary_index"};
+
+    void on_entry_added(const primary_index_entry& e) noexcept {
+        _memory_usage += e.memory_usage();
+        ++_key_count;
+    }
+
+    void on_entry_removed(const primary_index_entry& e) noexcept {
+        _memory_usage -= e.memory_usage();
+        --_key_count;
+    }
+
+    // Update counters and remove an entry from the B+tree.
+    void erase_entry(partitions_type::iterator it) noexcept {
+        on_entry_removed(*it);
+        it.erase(dht::raw_token_less_comparator{});
+    }
 
 public:
     explicit primary_index(schema_ptr schema)
@@ -74,6 +95,7 @@ public:
     void clear() {
         _partitions.clear();
         _key_count = 0;
+        _memory_usage = 0;
     }
 
     utils::phased_barrier::operation start_read() const {
@@ -130,8 +152,8 @@ public:
                 return {false, std::make_optional(i->_e)};
             }
         } else {
-            _partitions.emplace_before(i, key.dk.token().raw(), hint, key.dk, std::move(new_entry));
-            ++_key_count;
+            auto it = _partitions.emplace_before(i, key.dk.token().raw(), hint, key.dk, std::move(new_entry));
+            on_entry_added(*it);
             return {true, std::nullopt};
         }
     }
@@ -139,8 +161,7 @@ public:
     bool erase(const primary_index_key& key, log_location loc) {
         auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
         if (it != _partitions.end() && it->_e.location == loc) {
-            it.erase(dht::raw_token_less_comparator{});
-            --_key_count;
+            erase_entry(it);
             return true;
         }
         return false;
@@ -153,8 +174,7 @@ public:
         while (it != end_it) {
             auto prev = it;
             ++it;
-            prev.erase(dht::raw_token_less_comparator{});
-            --_key_count;
+            erase_entry(prev);
             co_await coroutine::maybe_yield();
         }
     }
@@ -163,10 +183,8 @@ public:
     auto end() const noexcept { return _partitions.end(); }
 
     bool empty() const noexcept { return _partitions.empty(); }
-
     size_t get_key_count() const noexcept { return _key_count; }
-
-    size_t get_memory_usage() const noexcept { return _key_count * sizeof(index_entry); }
+    size_t get_memory_usage() const noexcept { return _memory_usage; }
 
     // First entry with key >= pos (for positioning at range start)
     partitions_type::const_iterator lower_bound(const dht::ring_position_view& pos) const {

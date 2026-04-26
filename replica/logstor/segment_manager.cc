@@ -888,6 +888,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of times the separator buffer has been flushed.")),
         sm::make_counter("separator_segments_freed", _compaction_mgr.get_stats().separator_segments_freed,
                        sm::description("Counts number of segments freed by the separator.")),
+        sm::make_gauge("separator_buffers_in_use", [this]() { return _separator_buffer_pool.size() - _available_separator_buffers.size(); },
+                       sm::description("Current number of separator buffers in use.")),
         sm::make_gauge("separator_flow_control_delay", [this]() { return calculate_separator_delay().count(); },
                        sm::description("Current delay applied to writes to control separator debt in microseconds.")),
     });
