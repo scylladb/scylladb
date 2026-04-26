@@ -15,8 +15,8 @@ jobs:
   check-license-headers:
     name: Check License Headers
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
+    # check + artifact upload only; no token permissions needed
+    permissions: {}
 
     steps:
       - name: Checkout code
@@ -39,15 +39,13 @@ jobs:
             --check-lines "${{ env.HEADER_CHECK_LINES }}" \
             --extensions ${{ env.CHECKED_EXTENSIONS }}
 
-      - name: Comment on PR if check fails
+      - name: Save PR number
         if: failure()
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        run: echo "${{ github.event.pull_request.number }}" > pr_number.txt
+
+      - name: Upload failure marker
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          script: |
-            const license = '${{ env.LICENSE }}';
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `❌ License header check failed. Please ensure all new files include the header within the first ${{ env.HEADER_CHECK_LINES }} lines:\n\`\`\`\n${license}\n\`\`\`\nSee action logs for details.`
-            });
+          name: license-check-failed
+          path: pr_number.txt
