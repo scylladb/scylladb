@@ -188,8 +188,16 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
         return make_checked_file(error_handler, std::move(f));
     });
 
-    return f.handle_exception([this, type, &error_handler] (auto ep) {
-        sstlog.error("Could not create SSTable component {}. Found exception: {}", filename(type), ep);
+    return f.handle_exception([this, type, flags, &error_handler] (auto ep) {
+        const bool is_create = (flags & open_flags::create) != open_flags{};
+        const auto unlinked_at_str = _unlinked_at
+                ? fmt::format("{}", *_unlinked_at) : std::string("never");
+        if (!is_create) {
+            sstlog.error("Could not open SSTable component {} (origin: \"{}\", unlinked_at: {}). Found exception: {}",
+                    filename(type), _origin, unlinked_at_str, ep);
+        } else {
+            sstlog.error("Could not create SSTable component {}. Found exception: {}", filename(type), ep);
+        }
         try {
             error_handler(ep);
         } catch (...) {
@@ -3150,7 +3158,7 @@ future<std::optional<uint32_t>> sstable::read_digest() {
     if (_components->digest) {
         co_return *_components->digest;
     }
-    if (!has_component(component_type::Digest) || _unlinked) {
+    if (!has_component(component_type::Digest) || _unlinked_at) {
         co_return std::nullopt;
     }
     uint32_t digest;
@@ -3228,7 +3236,7 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     if (_components->checksum) {
         co_return _components->checksum->shared_from_this();
     }
-    if (!has_component(component_type::CRC) || _unlinked) {
+    if (!has_component(component_type::CRC) || _unlinked_at) {
         co_return nullptr;
     }
     lw_shared_ptr<checksum> checksum;
@@ -3442,7 +3450,7 @@ future<> sstable::close_files() {
     }
 
     auto unlinked = make_ready_future<>();
-    if (_marked_for_deletion != mark_for_deletion::none && !_unlinked) {
+    if (_marked_for_deletion != mark_for_deletion::none && !_unlinked_at) {
         // If a deletion fails for some reason we
         // log and ignore this failure, because on startup we'll again try to
         // clean up unused sstables, and because we'll never reuse the same
@@ -3713,11 +3721,11 @@ future<>
 sstable::unlink(storage::sync_dir sync) noexcept {
     // Serialize with other calls to unlink or potentially ongoing mutations.
     auto lock = co_await get_units(_mutate_sem, 1);
-    if (_unlinked) {
+    if (_unlinked_at) {
         co_return;
     }
 
-    _unlinked = true;
+    _unlinked_at = db_clock::now();
     _on_delete(*this);
 
     auto remove_fut = _storage->wipe(*this, sync);
