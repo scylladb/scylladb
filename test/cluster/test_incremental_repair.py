@@ -9,7 +9,7 @@ from test.cluster.conftest import skip_mode
 from test.pylib.repair import load_tablet_sstables_repaired_at, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import reconnect_driver, find_server_by_host_id, get_topology_coordinator, new_test_keyspace, new_test_table, trigger_stepdown
+from test.cluster.util import reconnect_driver, find_server_by_host_id, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown
 
 from cassandra.query import ConsistencyLevel
 
@@ -965,8 +965,18 @@ async def test_incremental_repair_race_window_promotes_unrepaired_data(manager: 
         await manager.api.flush_keyspace(s.ip_addr, ks)
     current_key += 10
 
+    # Ensure servers[1] is not the topology coordinator.  If the coordinator is
+    # restarted, the Raft leader dies, a new election occurs, and the new
+    # coordinator re-initiates tablet repair -- flushing memtables on all replicas
+    # and marking post-repair data as repaired.  That legitimate re-repair masks
+    # the compaction-merge bug this test detects.
     coord = await get_topology_coordinator(manager)
     coord_serv = await find_server_by_host_id(manager, servers, coord)
+    if coord_serv == servers[1]:
+        other = next(s for s in servers if s != servers[1])
+        await ensure_group0_leader_on(manager, other)
+        coord = await get_topology_coordinator(manager)
+        coord_serv = await find_server_by_host_id(manager, servers, coord)
     coord_log = await manager.server_open_log(coord_serv.server_id)
     coord_mark = await coord_log.mark()
 
