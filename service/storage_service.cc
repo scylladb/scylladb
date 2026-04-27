@@ -2732,12 +2732,22 @@ future<> storage_service::decommission(sharded<db::snapshot_ctl>& snapshot_ctl) 
                 throw std::runtime_error(::format("Node in {} state; wait for status to become normal or restart", ss._operation_mode));
             }
 
+            ss.raft_decommission().get();
+
+            // SCYLLADB-1693. In case we abort, the snapshot/backup mechanism need
+            // to remain open. Move it to after raft_decommission.
+            // In the case of a cluster snapshot, our nodes ownership
+            // or not of tables will be serialized by raft anyway, so
+            // should remain consistent. In that case we at worst coordinate
+            // from a node in "leave" status
+            // In the case of a local snapshot, ownership matters less,
+            // only sstables on disk, which should not change.
+            // In the case of backup, this operates on a snapshot, state of which
+            // is not affected.
             snapshot_ctl.invoke_on_all([](auto& sctl) {
                 return sctl.disable_all_operations();
             }).get();
             slogger.info("DECOMMISSIONING: disabled backup and snapshots");
-
-            ss.raft_decommission().get();
 
             ss.stop_transport().get();
             slogger.info("DECOMMISSIONING: stopped transport");
