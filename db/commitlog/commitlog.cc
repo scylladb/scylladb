@@ -1807,6 +1807,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                 auto max_write = data_size - off;
                 auto to_write = std::min(avail, max_write);
                 auto rem = max_write - to_write;
+                auto saved_strm = strm;
                 partial_writer pw(writer, i, to_write, strm.read_view(to_write).value(), rem, off, id);
 
                 switch (s->allocate(pw, fake_permit, timeout)) {
@@ -1816,6 +1817,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                     case write_result::ok:
                         break;
                     case write_result::must_sync:
+                        strm = saved_strm;
                         s = co_await with_timeout(timeout, s->sync());
                         continue;
                     case write_result::no_space:
