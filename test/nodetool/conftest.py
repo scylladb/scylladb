@@ -6,7 +6,6 @@
 
 import os
 import random
-import socket
 import subprocess
 import sys
 import time
@@ -43,6 +42,10 @@ class ServerAddress(NamedTuple):
 
 @pytest.fixture(scope="module")
 async def server_address(request, testpy_test: None|Test):
+    # Each test module gets a unique IP, so a fixed port suffices and
+    # avoids any port-collision or TOCTOU concerns. This mirrors the
+    # approach used in test/cqlpy/run.py.
+    port = 12345
     # unshare(1) -rn drops us in a new network namespace in which the "lo" is
     # not up yet, so let's set it up first.
     if request.config.getoption('--run-within-unshare', default=False):
@@ -52,22 +55,13 @@ async def server_address(request, testpy_test: None|Test):
         except FileNotFoundError:
             args = "/sbin/ifconfig lo up".split()
             subprocess.run(args, check=True)
-        # we use a fixed ip and port, because the network namespace is not shared
+        # the network namespace isn't shared, so any IP works
         ip = '127.0.0.1'
-        port = 12345
     else:
         if testpy_test is not None:
             ip = await testpy_test.suite.hosts.lease_host()
         else:
             ip = f"127.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
-        # Ask the OS to pick a free port by binding to port 0. This avoids
-        # collisions with ports still in TIME_WAIT from a previous test module
-        # that used the same IP. SO_REUSEADDR is set on the probe socket so it
-        # can reclaim a TIME_WAIT port itself
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind((ip, 0))
-            port = s.getsockname()[1]
     yield ServerAddress(ip, port)
     if testpy_test is not None:
         await testpy_test.suite.hosts.release_host(ip)

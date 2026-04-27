@@ -257,7 +257,10 @@ async def run_server(ip, port):
 
     runner = aiohttp.web.AppRunner(app)
     await runner.setup()
-    site = aiohttp.web.TCPSite(runner, ip, port, reuse_address=True, reuse_port=True)
+    # reuse_address lets the server bind even if a previous mock server
+    # left the (ip, port) pair in TIME_WAIT. This can happen when the host
+    # registry recycles an IP across modules.
+    site = aiohttp.web.TCPSite(runner, ip, port, reuse_address=True)
     await site.start()
 
     try:
