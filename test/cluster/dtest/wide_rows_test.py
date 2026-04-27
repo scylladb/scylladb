@@ -444,8 +444,8 @@ class TestWideRows(Tester):
 
             # Search warning in the log
             current_node_info = cluster_state[node.name]
-            expect_warning = expect_warning if not expect_warning else bool(current_node_info["sstables_from_disk"])
-            self.search_warning(node=node, warning_text=f"Writing large {entity_type} {keyspace_name}/{table_name}:", marked_logs_dict=marked_logs_dict or {}, expect_warning=expect_warning)
+            node_expect_warning = expect_warning if not expect_warning else bool(current_node_info["sstables_from_disk"])
+            self.search_warning(node=node, warning_text=f"Writing large {entity_type} {keyspace_name}/{table_name}:", marked_logs_dict=marked_logs_dict or {}, expect_warning=node_expect_warning)
 
     def set_ttl_on_few_rows_in_partition(  # noqa: PLR0913
         self,
