@@ -435,8 +435,9 @@ async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager:
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
-    async def get_replication_options(ks: str):
-        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
+    async def get_replication_options(ks: str, host, ip_addr):
+        await read_barrier(manager.api, ip_addr)
+        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'", host=host)
         repl = parse_replication_options(res[0].replication_v2 or res[0].replication)
         return repl
 
@@ -451,43 +452,44 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
 
     cql = manager.get_cql()
+    host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key);")
-    repl = await get_replication_options("ks1")
+    repl = await get_replication_options("ks1", host, servers[0].ip_addr)
     assert repl['dc1'] == '1'
 
     await cql.run_async("create keyspace ks2 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 2} and tablets = {'initial': 4};")
     await cql.run_async("create table ks2.t (pk int primary key);")
-    repl = await get_replication_options("ks2")
+    repl = await get_replication_options("ks2", host, servers[0].ip_addr)
     assert repl['dc1'] == '1'
     assert repl['dc2'] == '2'
 
     await cql.run_async("create keyspace ks3 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} and tablets = {'initial': 4};")
     await cql.run_async("create table ks3.t (pk int primary key);")
-    repl = await get_replication_options("ks3")
+    repl = await get_replication_options("ks3", host, servers[0].ip_addr)
     assert repl['dc1'] == '1'
 
     await cql.run_async("create keyspace ks4 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} and tablets = {'initial': 4};")
     await cql.run_async("create table ks4.t (pk int primary key);")
-    repl = await get_replication_options("ks4")
+    repl = await get_replication_options("ks4", host, servers[0].ip_addr)
     assert repl['dc1'] == '1'
 
     await cql.run_async(f"create keyspace ks5 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 2}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks5.t (pk int primary key);")
-    repl = await get_replication_options("ks5")
+    repl = await get_replication_options("ks5", host, servers[0].ip_addr)
     assert repl['dc1'] == '2'
     assert repl['dc2'] == '2'
 
     await cql.run_async(f"create keyspace ks6 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks6.t (pk int primary key);")
-    repl = await get_replication_options("ks6")
+    repl = await get_replication_options("ks6", host, servers[0].ip_addr)
     assert repl['dc1'] == '2'
 
     [await manager.api.disable_injection(s.ip_addr, injection) for s in servers]
 
     await cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1b']};")
-    repl = await get_replication_options("ks1")
+    repl = await get_replication_options("ks1", host, servers[0].ip_addr)
     assert repl['dc1'] == ['rack1b']
 
     tablet_replicas = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")
@@ -497,7 +499,7 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
         assert r.replicas[0][0] == host_ids[1]
 
     await cql.run_async("alter keyspace ks2 with replication = {'class': 'NetworkTopologyStrategy', 'dc1' : ['rack1a'], 'dc2' : ['rack2a', 'rack2b']};")
-    repl = await get_replication_options("ks2")
+    repl = await get_replication_options("ks2", host, servers[0].ip_addr)
     assert repl['dc1'] == ['rack1a']
     assert len(repl['dc2']) == 2
     assert 'rack2a' in repl['dc2'] and 'rack2b' in repl['dc2']
@@ -523,13 +525,13 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
         pass
 
     await cql.run_async("alter keyspace ks5 with replication = {'class': 'NetworkTopologyStrategy', 'dc1' : ['rack1a', 'rack1b'], 'dc2' : 2};")
-    repl = await get_replication_options("ks5")
+    repl = await get_replication_options("ks5", host, servers[0].ip_addr)
     assert len(repl['dc1']) == 2
     assert 'rack1a' in repl['dc1'] and 'rack1b' in repl['dc1']
     assert repl['dc2'] == '2'
 
     await cql.run_async("alter keyspace ks6 with replication = {'class': 'NetworkTopologyStrategy', 'dc1' : 2, 'dc2' : ['rack2a']};")
-    repl = await get_replication_options("ks6")
+    repl = await get_replication_options("ks6", host, servers[0].ip_addr)
     assert repl['dc1'] == '2'
     assert len(repl['dc2']) == 1
     assert repl['dc2'][0] == 'rack2a'
@@ -1110,8 +1112,9 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
-    async def get_replication_options(ks: str):
-        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'")
+    async def get_replication_options(ks: str, host, ip_addr):
+        await read_barrier(manager.api, ip_addr)
+        res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'", host=host)
         repl = parse_replication_options(res[0].replication_v2 or res[0].replication)
         return repl
 
@@ -1129,10 +1132,11 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
 
     cql = manager.get_cql()
+    host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key);")
-    repl = await get_replication_options("ks1")
+    repl = await get_replication_options("ks1", host, servers[0].ip_addr)
     assert repl['dc1'] == '1'
 
     [await manager.api.disable_injection(s.ip_addr, numeric_injection) for s in servers]
@@ -1166,7 +1170,7 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
         failed = True
     assert failed
 
-    repl = await get_replication_options("ks1")
+    repl = await get_replication_options("ks1", host, servers[0].ip_addr)
     assert repl['dc1'] == '1'
 
 @pytest.mark.asyncio
