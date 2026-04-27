@@ -222,7 +222,7 @@ class CppTestCase(pytest.Item):
             print('\n'.join(lines))
             print("=" * 70 + "\n")
 
-        if not self.config.getoption("--save-log-on-success"):
+        if not self.config.getoption("--save-log-on-success") and not failures:
             output.unlink(missing_ok=True)
 
         if failures:
