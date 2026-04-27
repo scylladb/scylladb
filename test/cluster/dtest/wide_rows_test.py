@@ -353,7 +353,7 @@ class TestWideRows(Tester):
         key_appearance = 0
         for node_info in cluster_state.values():
             large_primary_keys.update(node_info["info_from_system_table"]["partition_keys"])
-            key_appearance = sum(node_info["info_from_system_table"]["key_appearance"].values())
+            key_appearance += sum(node_info["info_from_system_table"]["key_appearance"].values())
 
         if entity_type == "cell":
             entities_count = key_appearance
@@ -1178,7 +1178,8 @@ class TestWideRows(Tester):
         entity_type = "cell"
         view_name = "%s_view" % self.TABLE_NAME
 
-        session = self.prepare_cluster(nodes=3, rf=3)
+        rf = 3
+        session = self.prepare_cluster(nodes=3, rf=rf)
 
         self.create_large_row_table(session=session, table_name=self.TABLE_NAME, columns_num=columns_num, entity_type=entity_type)
         # Insert large row
@@ -1191,11 +1192,11 @@ class TestWideRows(Tester):
         self.trigger_compaction_by_data_write_and_flush(session, entity_type, rows_number)
 
         # Validate base table
-        cluster_state = self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=columns_num * rows_number, expected_entity_data_size=expected_cells_data_size)
+        cluster_state = self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=columns_num * rows_number * rf, expected_entity_data_size=expected_cells_data_size)
         self.validate_log_warnings(cluster_state=cluster_state, entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME)
 
         # Validate view
-        cluster_state = self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=view_name, expected_entity_number=columns_num * rows_number, expected_entity_data_size=expected_cells_data_size)
+        cluster_state = self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=view_name, expected_entity_number=columns_num * rows_number * rf, expected_entity_data_size=expected_cells_data_size)
         self.validate_log_warnings(cluster_state=cluster_state, entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=view_name)
 
     @pytest.mark.single_node
