@@ -472,7 +472,7 @@ class TestWideRows(Tester):
         self.cluster.flush()
         logger.debug("Wait %d sec while the TTLed rows expiration" % ttl)
         time.sleep(ttl + 5)
-        self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
         expected_partitions.pop(userid)
 
         return expected_partitions
@@ -502,7 +502,7 @@ class TestWideRows(Tester):
         self.cluster.flush()
         logger.debug("Wait %d sec while the TTLed rows expiration" % ttl)
         time.sleep(ttl + 5)
-        self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
         expected_rows.pop(f"{userid}.{event}")
         return expected_rows
 
@@ -525,7 +525,7 @@ class TestWideRows(Tester):
             func(session, self.TABLE_NAME, row_number, 1, size, index)
             self.cluster.flush()
             time.sleep(0.5)
-        self.cluster.compact()
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
         return row_number
 
     @pytest.mark.single_node
@@ -566,12 +566,12 @@ class TestWideRows(Tester):
         self.create_too_many_rows_table(session=session, table_name=self.TABLE_NAME, columns_num=columns_num)
         self.create_too_many_rows_data(session=session, table_name=self.TABLE_NAME, columns_num=columns_num, rows_num=initial_rows_number, one_blob_size=128, partition_index=0, start_row_index=0)
 
-        self.cluster.compact()
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, data_column="rows", expected_entity_number=0, expected_entity_data_size=initial_rows_number)
 
         self.create_too_many_rows_data(session=session, table_name=self.TABLE_NAME, columns_num=columns_num, rows_num=additional_rows_number, one_blob_size=128, partition_index=0, start_row_index=initial_rows_number)
-        self.cluster.compact()
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         self.validate_system_table(
             entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, data_column="rows", expected_entity_number=1, expected_entity_data_size=(initial_rows_number + additional_rows_number)
@@ -602,7 +602,7 @@ class TestWideRows(Tester):
             session=session, table_name=self.TABLE_NAME, columns_num=columns_num, rows_num=1, one_blob_size=128, partition_index=0, start_row_index=0, collection_elements=initial_collection_elements_number, collection_type=collection_type
         )
 
-        self.cluster.compact()
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         logger.debug("No large cells expected")
         self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=0, expected_entity_data_size=initial_collection_elements_number, with_collection=True)
@@ -621,7 +621,7 @@ class TestWideRows(Tester):
             collection_type=collection_type,
         )
 
-        self.cluster.compact()
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         logger.debug("1 large cell(s) expected")
         self.validate_system_table(
@@ -656,7 +656,7 @@ class TestWideRows(Tester):
         time.sleep(gc_grace_seconds + 1)
 
         logger.debug(f"Compacting {self.TABLE_NAME}")
-        self.cluster.compact()
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         logger.debug("No large cells expected")
         self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=0, expected_entity_data_size=initial_collection_elements_number, with_collection=True)
@@ -716,7 +716,7 @@ class TestWideRows(Tester):
         node2.start(wait_other_notice=True, wait_for_binary_proto=True)
         node2.repair()
         logger.debug("Run compaction")
-        self.cluster.compact()
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
     def test_large_partition_detector_with_node_stop(self):
         """
@@ -1066,7 +1066,7 @@ class TestWideRows(Tester):
         session.execute(f"create materialized view {view_name} as select * from {self.TABLE_NAME} where userid is not null and event is not null primary key (userid, event)")
         wait_for_view(cluster=self.cluster, session=session, ks=self.KEYSPACE_NAME, view=view_name)
 
-        self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         # Validate base table
         cluster_state = self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=partition_num, expected_entity_data_size=expected_partition_data_size)
@@ -1344,7 +1344,7 @@ class TestWideRows(Tester):
         maximum_primary_key_value = rows_num - 1
         self.create_large_row_data(session=session, table_name=self.TABLE_NAME, one_blob_size=self.BLOB_SIZE_1MB / 2, columns_num=columns_num, rows_num=rows_num, start_row_index=rows_num)
 
-        self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         cluster_state = self.validate_system_table(
             entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=columns_num * rows_num, expected_entity_data_size=expected_cells_data_size, pk_max_index=maximum_primary_key_value
@@ -1372,7 +1372,7 @@ class TestWideRows(Tester):
         maximum_primary_key_value = rows_num - 1
         self.create_large_row_data(session=session, table_name=self.TABLE_NAME, one_blob_size=10, columns_num=columns_num, rows_num=small_row_num, start_row_index=rows_num)
 
-        self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         cluster_state = self.validate_system_table(
             entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=rows_num, expected_entity_data_size=expected_rows_data_size, pk_max_index=maximum_primary_key_value
@@ -1396,11 +1396,11 @@ class TestWideRows(Tester):
 
         pk_max_index = partition_num - 1
         self.create_large_partition_data(session=session, table_name=self.TABLE_NAME, partition_rows=3000, partitions_num=10, one_blob_size=1024, start_partition_index=partition_num + 1)
-        self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         # adding more data and running flush again to give time to the compaction of the large partition to finish
         self.create_large_partition_data(session=session, table_name=self.TABLE_NAME, partition_rows=3000, partitions_num=10, one_blob_size=1024, start_partition_index=partition_num + partition_num + 1)
-        self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
+        self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
 
         cluster_state = self.validate_system_table(
             entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=partition_num, expected_entity_data_size=expected_partition_data_size, pk_max_index=pk_max_index
