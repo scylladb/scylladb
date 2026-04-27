@@ -79,19 +79,6 @@ class TestWideRows(Tester):
         create_ks(session=session, name=keyspace_name, rf=rf)
         return session
 
-    def validation_small_entity(self, entity_type, keyspace_name, table_name):
-        """
-        :param entity_type: expected "partition" or "row"
-        """
-        for node in self.cluster.nodelist():
-            session = self.patient_exclusive_cql_connection(node=node, keyspace=keyspace_name)
-            system_data_size_dict = self.get_large_entity_info(session=session, keyspace_name=keyspace_name, table_name=table_name, entity_type=entity_type, expect_system_report=False)
-
-            assert not system_data_size_dict, f"Not expected large {entity_type} found"
-
-            # Search warning in the log
-            self.search_warning(node=node, warning_text=f"Writing large {entity_type} {keyspace_name}/{table_name}", marked_logs_dict={}, expect_warning=False)
-
     def create_large_partition_table(self, session, table_name, with_static_column: bool = False):
         logger.debug(f"Create table {table_name} with large partition")
         create_table_query = f"CREATE TABLE IF NOT EXISTS {table_name} (userid text, event text, value blob, "
@@ -459,25 +446,6 @@ class TestWideRows(Tester):
             current_node_info = cluster_state[node.name]
             expect_warning = expect_warning if not expect_warning else bool(current_node_info["sstables_from_disk"])
             self.search_warning(node=node, warning_text=f"Writing large {entity_type} {keyspace_name}/{table_name}:", marked_logs_dict=marked_logs_dict or {}, expect_warning=expect_warning)
-
-    def get_large_entity_info(self, session, keyspace_name, table_name, entity_type, expect_system_report=True):
-        """
-        :param entity_type: expected "partition" or "row"
-        """
-        clustering_key = "clustering_key, " if entity_type == "row" else ""
-        query = f"select sstable_name, partition_key, {clustering_key}{entity_type}_size from system.large_{entity_type}s where keyspace_name='{{keyspace_name}}' and table_name='{{table_name}}'"
-        result = list(session.execute(query))
-        if not expect_system_report:
-            assert not result, f"Not expected large {entity_type} info in the system.large_{entity_type}s, but it found"
-            return None
-
-        entity_info = defaultdict(int)
-        sstables_set = set()
-        for row in result:
-            key = row[1] if len(row) == 3 else f"{row[1]}.{row[2]}"
-            entity_info[key] += row[-1]
-            sstables_set.add(row[0])
-        return entity_info, sorted(list(sstables_set))
 
     def set_ttl_on_few_rows_in_partition(  # noqa: PLR0913
         self,
