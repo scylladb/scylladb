@@ -1,5 +1,11 @@
 # Alternator Vector Search
 
+```{admonition} Availability
+:class: important
+
+The Vector Search feature is only available in [ScyllaDB Cloud](https://cloud.docs.scylladb.com/) - a fully managed DBaaS running ScyllaDB.
+```
+
 ## Introduction
 
 Alternator vector search is a ScyllaDB extension to the DynamoDB-compatible
