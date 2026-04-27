@@ -71,7 +71,7 @@ used. If it is used, the statement will be a no-op if the materialized view alre
 MV Select Statement
 ...................
 
-The select statement of a materialized view creation defines which of the base table is included in the view. That
+The select statement of a materialized view creation defines which of the base table columns are included in the view. That
 statement is limited in a number of ways:
 
 - The :ref:`selection <selection-clause>` is limited to those that only select columns of the base table. In other
