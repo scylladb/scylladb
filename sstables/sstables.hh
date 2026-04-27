@@ -628,7 +628,15 @@ private:
     mutable std::optional<size_t> _total_reclaimable_memory{0};
     // Total memory reclaimed so far from this sstable
     size_t _total_memory_reclaimed{0};
+<<<<<<< HEAD
     bool _unlinked{false};
+||||||| parent of 4e0fc9b4be (sstables/replica: Add diagnostics for unlinked SSTable being opened or re-added)
+    bool _unlinked{false};
+    const bool _ignore_component_digest_mismatch;
+=======
+    std::optional<db_clock::time_point> _unlinked_at;
+    const bool _ignore_component_digest_mismatch;
+>>>>>>> 4e0fc9b4be (sstables/replica: Add diagnostics for unlinked SSTable being opened or re-added)
 
     // The mutate semaphore is used to serialize operations like rewrite_statistics
     // with linking or moving the sstable between directories.
@@ -1064,6 +1072,10 @@ public:
 
     const sstring& get_origin() const noexcept {
         return _origin;
+    }
+
+    const std::optional<db_clock::time_point>& unlinked_at() const noexcept {
+        return _unlinked_at;
     }
 
     // sstable_id is null iff not present in scylla_metadata
