@@ -263,3 +263,25 @@ def assert_lists_equal_ignoring_order(list1, list2, sort_key=None):
         sorted_list2 = sorted(normalized_list2, key=lambda elm: str(elm[sort_key]))
 
     assert sorted_list1 == sorted_list2
+
+
+def assert_equal_more_with_deviation(actual, expect, deviation_perc):
+    """
+    Assert actual is within inclusive interval [expected...expected+deviation_perc]
+    @param actual Value inspected
+    @param expect Beginning of expected interval
+    @param deviation_perc allowed percent increase
+    """
+    deviation_high = (expect * (100 + deviation_perc)) / 100
+    assert expect <= actual <= deviation_high, f"Expect result interval  {expect}..{deviation_high}, received {actual}"
+
+
+def assert_less_equal_lists(actual_list, expected_list, msg=None):
+    """
+    Assert actual_list is a subset of the expected list, prints hardcoded or parameterized error message
+    @param actual_list Inspected list
+    @param expected_list List that supposed to include actual_list
+    @param msg Configured message default None.
+    """
+    standardMsg = msg or f"{actual_list} not less than or equal to {expected_list}"
+    assert set(actual_list) <= set(expected_list), standardMsg
