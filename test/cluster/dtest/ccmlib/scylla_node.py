@@ -115,6 +115,7 @@ class ScyllaNode:
         self.data_center = server.datacenter
         self.rack = server.rack
 
+        self._hostid = None
         self._smp_set_during_test = None
         self._smp = None
         self._memory = None
@@ -476,6 +477,9 @@ class ScyllaNode:
         if wait_for_binary_proto:
             self.wait_for_binary_interface(from_mark=self.mark)
 
+        if not self._hostid:
+            self.hostid()
+
         if wait_other_notice:
             timeout = self.cluster.default_wait_other_notice_timeout
             for node, mark in marks:
@@ -836,10 +840,13 @@ class ScyllaNode:
         assert timeout is None, "argument `timeout` is not supported"  # not used in scylla-dtest
         assert force_refresh is None, "argument `force_refresh` is not supported"  # not used in scylla-dtest
 
-        try:
-            return self.cluster.manager.get_host_id(server_id=self.server_id)
-        except Exception as exc:
-            self.error(f"Failed to get hostid: {exc}")
+        if not self._hostid:
+            try:
+                self._hostid = self.cluster.manager.get_host_id(server_id=self.server_id)
+            except Exception as exc:
+                self.error(f"Failed to get hostid: {exc}")
+
+        return self._hostid
 
     def rmtree(self, path: str | Path) -> None:
         """Delete a directory content without removing the directory.
