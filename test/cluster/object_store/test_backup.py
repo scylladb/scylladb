@@ -20,6 +20,8 @@ from cassandra.cluster import ConsistencyLevel
 from collections import defaultdict
 from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
+from test.cluster.tasks.task_manager_client import TaskManagerClient
+from test.cluster.util import wait_for_token_ring_and_group0_consistency
 import statistics
 
 logger = logging.getLogger(__name__)
@@ -964,3 +966,64 @@ async def test_decommision_waits_for_backup(manager: ManagerClient, object_stora
 
     await do_test_backup_helper(manager, object_storage, "backup_task_pre_upload", decommission_and_check, 2)
 
+async def test_aborted_decommision_reenables_snapshot(manager: ManagerClient, object_storage):
+    """
+    Tests that an aborted decommission will still allow snapshots
+    """
+    num_servers = 2
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
+    servers = (await manager.servers_add(num_servers, config=cfg, cmdline=cmd))
+    cql = manager.get_cql()
+    cf = 'test_cf'
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
+
+        await manager.server_sees_others(servers[1].server_id, 1)
+
+        async def abort_decommission():
+            tm = TaskManagerClient(manager.api)
+            while True:
+                logger.info("Listing tasks in %s", servers[1])
+                tasks = await tm.list_tasks(servers[1].ip_addr, "node_ops")
+                for t in tasks:
+                    if t.type == 'decommission':
+                        logger.debug("Found decommission task. Aborting...")
+                        await tm.abort_task(servers[1].ip_addr, t.task_id)
+
+                        for s in servers:
+                            await manager.api.message_injection(s.ip_addr, "topology_coordinator_before_leave")
+
+                        try:
+                            logger.debug("Checking decommission task status")
+                            status = await tm.wait_for_task(servers[1].ip_addr, t.task_id)
+                            logger.debug("Task status %s", status)
+                            return status.state != "done"
+                        except:
+                            return False
+                await asyncio.sleep(.1)
+
+        async def decommission():
+            try:
+                logger.info("Decommissioning %s", servers[0])
+                await manager.api.decommission_node(servers[0].ip_addr, 1000)
+            except Exception as e:
+                logger.error("Exception in decommission %s", e)
+                pass
+
+        for s in servers:
+            await manager.api.enable_injection(s.ip_addr, "topology_coordinator_before_leave", one_shot=True)
+
+        _, aborted = await asyncio.gather(decommission(), abort_decommission())
+
+        assert aborted, "Injection point sync should ensure we abort decommission"
+
+        logger.info("Decommissioned was aborted. Creating snapshot")
+        await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+        await take_snapshot_on_one_server(ks, servers[0], manager, logger)
