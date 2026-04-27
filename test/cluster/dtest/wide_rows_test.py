@@ -109,7 +109,7 @@ class TestWideRows(Tester):
         one_blob_size,
         start_partition_index,
     ):
-        expected_row_size = (one_blob_size + 8 + 8) * partition_rows  # aproximately partition size
+        expected_row_size = (one_blob_size + 8 + 8) * partition_rows  # approximately partition size
         expected_rows = {}
 
         value = "a" * one_blob_size  # 1K value in the blob column
@@ -120,8 +120,8 @@ class TestWideRows(Tester):
 
             # Write the first row of the partition and obtain the write timestamp
             date_str = (self.date + datetime.timedelta(0)).strftime("%Y-%m-%d")
-            # We need to run the the UPDATE and the SELECT below with CL:QUORUM to avoid cases where we get an empty
-            # result set when quering a node which has not yet received a replica of the data we just inserted
+            # We need to run the UPDATE and the SELECT below with CL:QUORUM to avoid cases where we get an empty
+            # result set when querying a node which has not yet received a replica of the data we just inserted
             query = f"UPDATE {table_name} SET value = textAsBlob('{value}') WHERE userid='{user}' and event='{date_str}'"
             statement = SimpleStatement(query, consistency_level=ConsistencyLevel.QUORUM)
             session.execute(statement)
@@ -158,7 +158,7 @@ class TestWideRows(Tester):
             case "list":
                 col_type_str = "mylist list<text>"
             case _:
-                raise Exception(f"{collection_type=} is not supported by function 'create_too_many_elements_table' \nUse only 'map', 'set', or 'list''")
+                raise Exception(f"{collection_type=} is not supported by function 'create_too_many_elements_table' \nUse only 'map', 'set', or 'list'")
 
         logger.debug(f"Create table {table_name} with too many collection items")
         create_table_query = f"CREATE TABLE IF NOT EXISTS %s (userid text, event text, value0 blob, {col_type_str}, PRIMARY KEY (userid, event)) with compression = {{ }} and %s" % (table_name, self.compaction_option)
@@ -190,7 +190,7 @@ class TestWideRows(Tester):
             value = "a" * int(one_blob_size)
             event = (self.date + datetime.timedelta(k)).strftime("%Y-%m-%d")
             for i in range(columns_num):
-                out = session.execute(f"UPDATE {table_name} SET value{i} = textAsBlob('{value}') WHERE userid='{user}' and event='{event}'")
+                session.execute(f"UPDATE {table_name} SET value{i} = textAsBlob('{value}') WHERE userid='{user}' and event='{event}'")
             expected_rows[f"{user}.{event}"] = expected_row_size
 
         return expected_rows
@@ -227,7 +227,7 @@ class TestWideRows(Tester):
                     case "list":
                         collection_type_string = "mylist = mylist + [ '{j}' ]"
                     case _:
-                        raise Exception(f"{collection_type=} is not supported by function 'create_too_many_rows_data' \nUse only 'map', 'set', or 'list''")
+                        raise Exception(f"{collection_type=} is not supported by function 'create_too_many_rows_data' \nUse only 'map', 'set', or 'list'")
                 for i in range(start_collection_element_index, start_collection_element_index + collection_elements):
                     logger.debug(f"UPDATE {table_name} SET {collection_type_string.format(j=i)} WHERE userid='{user}' and event='{event}'")
                     session.execute(f"UPDATE {table_name} SET {collection_type_string.format(j=i)} WHERE userid='{user}' and event='{event}'")
@@ -264,7 +264,7 @@ class TestWideRows(Tester):
                     case "list":
                         remove_collection_element_cmd = "DELETE mylist[{i}] FROM {table_name} WHERE userid='{user}' and event='{event}'"
                     case _:
-                        raise Exception(f"{collection_type=} is not supported by function 'delete_too_many_rows_data' \nUse only 'map', 'set', 'list''")
+                        raise Exception(f"{collection_type=} is not supported by function 'delete_too_many_rows_data' \nUse only 'map', 'set', 'list'")
                 for i in range(start_collection_element_index, start_collection_element_index + collection_elements):
                     logger.debug(remove_collection_element_cmd.format(i=i, table_name=table_name, user=user, event=event))
                     session.execute(remove_collection_element_cmd.format(i=i, table_name=table_name, user=user, event=event))
@@ -337,7 +337,7 @@ class TestWideRows(Tester):
                         key_appearance[key] += 1
                     sstables_set.add(Path(row["sstable_name"]).name)
 
-                # Get DB files for the keyspace_name and table_nam
+                # Get DB files for the keyspace_name and table_name
                 files = node.get_sstables(keyspace_name, table_name)
                 assert files is not None, "Data file has not found"
 
@@ -384,7 +384,7 @@ class TestWideRows(Tester):
             wrong_large_entity_in_system = [key for key in large_primary_keys if int(key.replace("user", "")) > pk_max_index]
         else:
             wrong_large_entity_in_system = [key for key in large_primary_keys if int(key.split(".")[0].replace("user", "")) > pk_max_index]
-        msg = f"Small {entity_type}s detected large: {'/n'.join(e for e in wrong_large_entity_in_system)}"
+        msg = f"Small {entity_type}s detected large: {chr(10).join(wrong_large_entity_in_system)}"
         assert not wrong_large_entity_in_system, msg
 
     def validate_entity_size(self, cluster_state, expected_entity_data_size, entity_type, data_column):
@@ -428,7 +428,7 @@ class TestWideRows(Tester):
     ):
         cluster_state = self.get_cluster_system_state(entity_type=entity_type, keyspace_name=keyspace_name, table_name=table_name, with_collection=with_collection)
         self.validate_entities_recognized_as_large(entity_type=entity_type, cluster_state=cluster_state, expected_count=expected_entity_number)
-        # In case there are small partitions/rows - verify the they didn't recognized as large
+        # In case there are small partitions/rows - verify they didn't get recognized as large
         if pk_max_index is not None:
             self.validate_entities_not_recognized_as_large(entity_type=entity_type, cluster_state=cluster_state, pk_max_index=pk_max_index)
 
@@ -450,7 +450,7 @@ class TestWideRows(Tester):
     ):
         for node in self.cluster.nodelist():
             # If large partition/row wasn't found - expect don't find the warnings
-            if not node.name in cluster_state or not cluster_state[node.name]["info_from_system_table"]["partition_keys"]:
+            if node.name not in cluster_state or not cluster_state[node.name]["info_from_system_table"]["partition_keys"]:
                 if not self.check_warning(node=node, warning_text=f"Dropping entries from large_{entity_type}s: ks = {keyspace_name}, table = {table_name},", marked_logs_dict=marked_logs_dict or {}):
                     self.search_warning(node=node, warning_text=f"Writing large {entity_type} {keyspace_name}/{table_name}:", marked_logs_dict=marked_logs_dict or {}, expect_warning=False)
                 continue
@@ -577,7 +577,6 @@ class TestWideRows(Tester):
                 client = random.choice(clients)
                 msg = random.choice(status_messages)
                 query = f"UPDATE user_events SET value = '{{msg:{msg}, client:{client}}}' WHERE userid='{user}' and event='{date_str}';"
-                # logger.debug(query)
                 session.execute(query)
 
         # Pick out an update for a specific date:
@@ -656,7 +655,7 @@ class TestWideRows(Tester):
 
         self.cluster.compact()
 
-        logger.debug(f"1 large cell(s) expected")
+        logger.debug("1 large cell(s) expected")
         self.validate_system_table(
             entity_type=entity_type,
             keyspace_name=self.KEYSPACE_NAME,
@@ -669,7 +668,7 @@ class TestWideRows(Tester):
         node1.nodetool("snapshot")
 
         start_collection_element_index = random.randint(0, initial_collection_elements_number + additional_collection_elements_number - 1)
-        logger.debug("Deleting 1 colection element: key{start_collection_element_index}")
+        logger.debug("Deleting 1 collection element: key{start_collection_element_index}")
         self.delete_too_many_rows_data(
             session=session,
             table_name=self.TABLE_NAME,
@@ -1281,7 +1280,6 @@ class TestWideRows(Tester):
 
         self.create_large_row_table(session=session, table_name=self.TABLE_NAME, columns_num=columns_num, entity_type=entity_type)
         # Insert small cells
-        maximum_primary_key_value = rows_number - 1
         self.create_large_row_data(session=session, table_name=self.TABLE_NAME, one_blob_size=self.BLOB_SIZE_1MB, columns_num=columns_num, rows_num=small_rows, start_row_index=0)
 
         self.cluster.flush()
