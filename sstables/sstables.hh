@@ -641,7 +641,7 @@ private:
     mutable std::optional<size_t> _total_reclaimable_memory{0};
     // Total memory reclaimed so far from this sstable
     size_t _total_memory_reclaimed{0};
-    bool _unlinked{false};
+    std::optional<db_clock::time_point> _unlinked_at;
     const bool _ignore_component_digest_mismatch;
 
     // The mutate semaphore is used to serialize operations like rewrite_statistics
@@ -1108,6 +1108,10 @@ public:
 
     const sstring& get_origin() const noexcept {
         return _origin;
+    }
+
+    const std::optional<db_clock::time_point>& unlinked_at() const noexcept {
+        return _unlinked_at;
     }
 
     // sstable_id is null iff not present in scylla_metadata
