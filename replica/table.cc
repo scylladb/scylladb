@@ -549,6 +549,10 @@ compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, 
     if (belongs_to_other_shard(sstable->get_shards_for_this_sstable())) {
         on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
     }
+    if (sstable->unlinked_at()) {
+        on_internal_error(tlogger, fmt::format("Attempted to add already-unlinked SSTable {} (origin: \"{}\", unlinked_at: {}) to table",
+                sstable->get_filename(), sstable->get_origin(), *sstable->unlinked_at()));
+    }
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
     new_sstables->insert(sstable);
@@ -2527,6 +2531,10 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
             // Segregate output sstables according to their owner compaction group.
             // If not in splitting mode, then all output sstables will belong to the same group.
             for (auto& sst : _desc.new_sstables) {
+                if (sst->unlinked_at()) {
+                    on_internal_error(tlogger, fmt::format("Compaction output SSTable {} (origin: \"{}\", unlinked_at: {}) was already unlinked before being added to table",
+                            sst->get_filename(), sst->get_origin(), *sst->unlinked_at()));
+                }
                 auto& cg = _t.compaction_group_for_sstable(sst);
                 _cg_desc[&cg].desc.new_sstables.push_back(sst);
             }
