@@ -3811,6 +3811,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             on_internal_error(rtlogger, ::format("Leaving node {} doesn't own tokens", node.id));
                         }
 
+                        // Leave break point. For testing decommission
+                        co_await utils::get_local_injector().inject("topology_coordinator_before_leave", utils::wait_for_message(std::chrono::minutes(2)));
+
                         auto validation_result = validate_removing_node(_db, to_host_id(node.id));
                         if (std::holds_alternative<node_validation_failure>(validation_result)) {
                             builder.with_node(node.id)
