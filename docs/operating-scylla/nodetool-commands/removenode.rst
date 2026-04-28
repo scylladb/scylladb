@@ -45,7 +45,7 @@ Example:
 
 .. code-block:: console
 
-    nodetool removenode 675ed9f4-6564-6dbd-can8-43fddce952gy
+    nodetool removenode 675ed9f4-6564-6dbd-ca08-43fddce952de
 
 To only mark the node as permanently down without doing actual removal, use :doc:`nodetool excludenode </operating-scylla/nodetool-commands/excludenode>`:
 
@@ -79,6 +79,6 @@ Example:
 
 .. code-block:: console
 
-    nodetool removenode --ignore-dead-nodes 8d5ed9f4-7764-4dbd-bad8-43fddce94b7c,125ed9f4-7777-1dbn-mac8-43fddce9123e 675ed9f4-6564-6dbd-can8-43fddce952gy   
+    nodetool removenode --ignore-dead-nodes 8d5ed9f4-7764-4dbd-bad8-43fddce94b7c,125ed9f4-7777-1db0-aac8-43fddce9123e 675ed9f4-6564-6dbd-ca08-43fddce952de   
 
 .. include:: nodetool-index.rst

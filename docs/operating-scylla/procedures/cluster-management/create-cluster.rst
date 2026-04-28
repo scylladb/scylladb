@@ -163,5 +163,5 @@ This example shows how to install and configure a three-node cluster using Gossi
    --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
    UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   43
    UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   44
-   UN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   45
+   UN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-ca08-43fddce952de   45
 

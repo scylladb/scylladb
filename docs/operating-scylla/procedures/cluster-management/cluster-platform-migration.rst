@@ -192,7 +192,7 @@ Adding new nodes
       --  Address        Load       Tokens  Owns   Host ID                               Rack
       UN  192.168.1.10   500 MB     256     33.3%  8d5ed9f4-7764-4dbd-bad8-43fddce94b7c  RACK0
       UN  192.168.1.11   500 MB     256     33.3%  125ed9f4-7777-1dbn-mac8-43fddce9123e  RACK1
-      UN  192.168.1.12   500 MB     256     33.3%  675ed9f4-6564-6dbd-can8-43fddce952gy  RACK2
+      UN  192.168.1.12   500 MB     256     33.3%  675ed9f4-6564-6dbd-ca08-43fddce952de  RACK2
       UJ  192.168.2.10   250 MB     256     ?      a1b2c3d4-5678-90ab-cdef-112233445566  RACK0
 
    **Example output after bootstrap completes:**
@@ -205,7 +205,7 @@ Adding new nodes
       --  Address        Load       Tokens  Owns   Host ID                               Rack
       UN  192.168.1.10   400 MB     256     25.0%  8d5ed9f4-7764-4dbd-bad8-43fddce94b7c  RACK0
       UN  192.168.1.11   400 MB     256     25.0%  125ed9f4-7777-1dbn-mac8-43fddce9123e  RACK1
-      UN  192.168.1.12   400 MB     256     25.0%  675ed9f4-6564-6dbd-can8-43fddce952gy  RACK2
+      UN  192.168.1.12   400 MB     256     25.0%  675ed9f4-6564-6dbd-ca08-43fddce952de  RACK2
       UN  192.168.2.10   400 MB     256     25.0%  a1b2c3d4-5678-90ab-cdef-112233445566  RACK0
 
 #. For tablets-enabled clusters, wait for tablet load balancing to complete.

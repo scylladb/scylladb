@@ -29,7 +29,7 @@ Down (DN), and the node can be replaced.
    --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
    UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
    UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
-   DN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   B1
+   DN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-ca08-43fddce952de   B1
 
 Remove the Data
 ==================
@@ -72,7 +72,7 @@ Procedure
 
    For example (using the Host ID of the failed node from above):
 
-   ``replace_node_first_boot: 675ed9f4-6564-6dbd-can8-43fddce952gy``
+   ``replace_node_first_boot: 675ed9f4-6564-6dbd-ca08-43fddce952de``
 
 #. Start the new node.
 
@@ -90,7 +90,7 @@ Procedure
        --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
        UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
        UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
-       DN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   B1
+       DN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-ca08-43fddce952de   B1
     
     ``192.168.1.203`` is the dead node.
     
@@ -121,7 +121,7 @@ Procedure
        /192.168.1.203
          generation:1553759866
          heartbeat:2147483647
-         HOST_ID:675ed9f4-6564-6dbd-can8-43fddce952gy
+         HOST_ID:675ed9f4-6564-6dbd-ca08-43fddce952de
          STATUS:shutdown,true
          RELEASE_VERSION:3.0.8
          X3:3
@@ -178,7 +178,7 @@ In this case, the node's data will be cleaned after restart. To remedy this, you
 
    .. code-block:: none
 
-      echo 'replace_node_first_boot: 675ed9f4-6564-6dbd-can8-43fddce952gy' | sudo tee --append /etc/scylla/scylla.yaml
+      echo 'replace_node_first_boot: 675ed9f4-6564-6dbd-ca08-43fddce952de' | sudo tee --append /etc/scylla/scylla.yaml
 
 #. Run the following command to re-setup RAID
 

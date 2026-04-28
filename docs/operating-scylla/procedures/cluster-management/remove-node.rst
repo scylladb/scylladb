@@ -18,7 +18,7 @@ Removing a Running Node
          --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
          UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
          UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
-         UN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   B1
+         UN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-ca08-43fddce952de   B1
 
 #. If the node status is **Up Normal (UN)**, run the :doc:`nodetool decommission </operating-scylla/nodetool-commands/decommission>` command
    to remove the node you are connected to. Using ``nodetool decommission`` is the recommended method for cluster scale-down operations. It prevents data loss
@@ -75,7 +75,7 @@ command providing the Host ID of the node you are removing. See :doc:`nodetool r
 
 .. code-block:: console
    
-   nodetool removenode 675ed9f4-6564-6dbd-can8-43fddce952gy
+   nodetool removenode 675ed9f4-6564-6dbd-ca08-43fddce952de
 
 The ``nodetool removenode`` command notifies other nodes that the token range it owns needs to be moved and
 the nodes should redistribute the data using streaming. Using the command does not guarantee the consistency of the rebalanced data if

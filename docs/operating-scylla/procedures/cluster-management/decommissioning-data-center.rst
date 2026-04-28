@@ -19,7 +19,7 @@ Prerequisites
    --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
    UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
    UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-lac8-23fddce9123e   B1
-   UN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   B1
+   UN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-ca08-43fddce952de   B1
 
    Datacenter: ASIA-DC
    Status=Up/Down
@@ -165,7 +165,7 @@ Procedure
       --  Address        Load       Tokens  Owns (effective)                         Host ID         Rack
       UN  192.168.1.201  112.82 KB  256     32.7%             8d5ed9f4-7764-4dbd-bad8-43fddce94b7c   B1
       UN  192.168.1.202  91.11 KB   256     32.9%             125ed9f4-7777-1dbn-mac8-43fddce9123e   B1
-      UN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-can8-43fddce952gy   B1
+      UN  192.168.1.203  124.42 KB  256     32.6%             675ed9f4-6564-6dbd-ca08-43fddce952de   B1
 
       Datacenter: EUROPE-DC
       Status=Up/Down
