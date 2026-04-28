@@ -36,6 +36,7 @@ from botocore.exceptions import ClientError
 from test.alternator.test_cql_rbac import new_dynamodb, new_role
 from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request
 from test.pylib.skip_types import skip_env
+from test.alternator.test_streams import wait_for_active_stream
 from test.alternator.test_vector import vs, needs_vector_store, wait_for_vector_index_active, table_vs
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
@@ -624,25 +625,106 @@ def test_streams_latency(dynamodb, dynamodbstreams, metrics):
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
         StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}
         ) as table:
-        # Wait for the stream to become active. This should be instantenous
-        # in Alternator, so the following loop won't wait
-        stream_enabled = False
-        start_time = time.time()
-        while time.time() < start_time + 60:
-            desc = table.meta.client.describe_table(TableName=table.name)['Table']
-            if 'LatestStreamArn' in desc:
-                arn = desc['LatestStreamArn']
-                desc = dynamodbstreams.describe_stream(StreamArn=arn)
-                if desc['StreamDescription']['StreamStatus'] == 'ENABLED':
-                    stream_enabled = True
-                    break
-            time.sleep(1)
-        assert stream_enabled
+        arn, _ = wait_for_active_stream(dynamodbstreams, table)
         desc = dynamodbstreams.describe_stream(StreamArn=arn)
         shard_id = desc['StreamDescription']['Shards'][0]['ShardId'];
         it = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
         with check_sets_latency(metrics, ['GetRecords']):
             dynamodbstreams.get_records(ShardIterator=it)
+
+# Test that a successful GetRecords call increments both
+# scylla_alternator_returned_records (by the number of records returned) and
+# scylla_alternator_operation_size_kb{op="GetRecords"} (the response-size
+# histogram).
+# This test does not verify the correctness of the measured operation_size_kb,
+# just that it gets updated.
+def test_getrecords_records_and_size(dynamodb, dynamodbstreams, metrics):
+    with new_test_table(dynamodb,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+        StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}
+        ) as table:
+        arn, _ = wait_for_active_stream(dynamodbstreams, table)
+        # Get TRIM_HORIZON iterators for all shards so we catch the writes
+        # regardless of which shard each item's partition key maps to.
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        iterators = {
+            shard['ShardId']: dynamodbstreams.get_shard_iterator(
+                StreamArn=arn, ShardId=shard['ShardId'],
+                ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+            for shard in desc['StreamDescription']['Shards']
+        }
+        # Write some 2 items that should eventually appear in the stream:
+        for i in range(2):
+            table.put_item(Item={'p': random_string(), 'x': i})
+        before_records = get_metric(metrics, 'scylla_alternator_returned_records')
+        before_size = get_metric(metrics, 'scylla_alternator_operation_size_kb_count', {'op': 'GetRecords'})
+        # Poll all shards until at least 2 records appear (the stream may
+        # have a short delay, and items with random keys may land on
+        # different shards).
+        nreturned = 0
+        deadline = time.time() + 60
+        while time.time() < deadline and nreturned < 2:
+            for shard_id, it in iterators.items():
+                if it is None:
+                    continue
+                result = dynamodbstreams.get_records(ShardIterator=it)
+                nreturned += len(result['Records'])
+                iterators[shard_id] = result.get('NextShardIterator')
+            if nreturned < 2:
+                time.sleep(0.1)
+        assert nreturned >= 2
+        after_records = get_metric(metrics, 'scylla_alternator_returned_records')
+        after_size = get_metric(metrics, 'scylla_alternator_operation_size_kb_count', {'op': 'GetRecords'})
+        assert after_records >= before_records + nreturned
+        assert after_size > before_size
+
+# Test that GetRecords also updates per-table metrics: operation count,
+# latency, returned_records, and operation_size_kb{op="GetRecords"}.
+def test_getrecords_per_table_stats(dynamodb, dynamodbstreams, metrics):
+    with new_test_table(dynamodb,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+        StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}
+        ) as table:
+        arn, _ = wait_for_active_stream(dynamodbstreams, table)
+        # Get TRIM_HORIZON iterators for all shards so we catch all writes.
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        iterators = {
+            shard['ShardId']: dynamodbstreams.get_shard_iterator(
+                StreamArn=arn, ShardId=shard['ShardId'],
+                ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+            for shard in desc['StreamDescription']['Shards']
+        }
+        for i in range(2):
+            table.put_item(Item={'p': random_string(), 'x': i})
+        cf = table.name
+        before_count = get_metric(metrics, 'scylla_alternator_table_operation', {'op': 'GetRecords', 'cf': cf})
+        before_latency_count = get_metric(metrics, 'scylla_alternator_table_op_latency_count', {'op': 'GetRecords', 'cf': cf})
+        before_records = get_metric(metrics, 'scylla_alternator_table_returned_records', {'cf': cf})
+        before_size = get_metric(metrics, 'scylla_alternator_table_operation_size_kb_count', {'op': 'GetRecords', 'cf': cf})
+        nreturned = 0
+        npolls = 0
+        deadline = time.time() + 60
+        while time.time() < deadline and nreturned < 2:
+            for shard_id, it in list(iterators.items()):
+                if it is None:
+                    continue
+                result = dynamodbstreams.get_records(ShardIterator=it)
+                nreturned += len(result['Records'])
+                npolls += 1
+                iterators[shard_id] = result.get('NextShardIterator')
+            if nreturned < 2:
+                time.sleep(0.1)
+        assert nreturned >= 2
+        after_count = get_metric(metrics, 'scylla_alternator_table_operation', {'op': 'GetRecords', 'cf': cf})
+        after_latency_count = get_metric(metrics, 'scylla_alternator_table_op_latency_count', {'op': 'GetRecords', 'cf': cf})
+        after_records = get_metric(metrics, 'scylla_alternator_table_returned_records', {'cf': cf})
+        after_size = get_metric(metrics, 'scylla_alternator_table_operation_size_kb_count', {'op': 'GetRecords', 'cf': cf})
+        assert after_count == before_count + npolls
+        assert after_latency_count == before_latency_count + npolls
+        assert after_records == before_records + nreturned
+        assert after_size == before_size + npolls
 
 ###### Test metrics that are item size histograms of DynamoDB API operations which manipulate data:
 # Tests for histogram metrics operation_size_kb.

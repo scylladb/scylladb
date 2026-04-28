@@ -129,6 +129,10 @@ public:
         op_size_histogram batch_get_item_op_size_kb;
         // The sizes are the the written items' sizes grouped per table.
         op_size_histogram batch_write_item_op_size_kb;
+        // A size is the sum of the attribute sizes (name + value lengths) of
+        // the returned stream records, approximating record sizes the same way
+        // the other read operations approximate item sizes.
+        op_size_histogram get_records_op_size_kb;
     } operation_sizes;
     // Count of authentication and authorization failures, counted if either
     // alternator_enforce_authorization or alternator_warn_authorization are
@@ -147,6 +151,8 @@ public:
     uint64_t returned_items = 0;
     // Histogram of the number of items returned per Query or Scan operation
     batch_histogram returned_items_histogram;
+    // Count of stream records returned by GetRecords operations
+    uint64_t returned_records = 0;
     // Count of HTTP 400 errors (DynamoDB "UserErrors"), excluding
     // ConditionalCheckFailedException which DynamoDB does not count.
     uint64_t user_errors = 0;

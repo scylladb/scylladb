@@ -162,6 +162,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     [&stats]{ return to_metrics_histogram(stats.operation_sizes.batch_get_item_op_size_kb);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
                     [&stats]{ return to_metrics_histogram(stats.operation_sizes.batch_write_item_op_size_kb);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
+                    [&stats]{ return to_metrics_histogram(stats.operation_sizes.get_records_op_size_kb);})(op("GetRecords")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
     });
 
     seastar::metrics::label expression_label("expression");

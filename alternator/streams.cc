@@ -1243,6 +1243,8 @@ future<executor::request_return_type> executor::get_records(client_state& client
     if (!schema || !base || !is_alternator_keyspace(schema->ks_name())) {
         co_return api_error::resource_not_found(fmt::to_string(iter.table));
     }
+    auto per_table_stats = get_stats_from_schema(_proxy, *base);
+    per_table_stats->api_operations.get_records++;
     db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
 
     maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(),
@@ -1355,6 +1357,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     ) : 0;
 
     std::optional<utils::UUID> timestamp;
+    uint64_t total_item_bytes = 0;
     struct Record {
         rjson::value record;
         rjson::value dynamodb;
@@ -1377,7 +1380,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             record.dynamodb = rjson::empty_object();
             record.record = rjson::empty_object();
             auto keys = rjson::empty_object();
-            describe_single_item(*selection, row, key_names, keys);
+            describe_single_item(*selection, row, key_names, keys, &total_item_bytes);
             rjson::add(record.dynamodb, "Keys", std::move(keys));
             rjson::add(record.dynamodb, "ApproximateCreationDateTime", utils::UUID_gen::unix_timestamp_in_sec(ts).count());
             rjson::add(record.dynamodb, "SequenceNumber", sequence_number(ts));
@@ -1415,8 +1418,8 @@ future<executor::request_return_type> executor::get_records(client_state& client
         case cdc::operation::post_image:
         {
             auto item = rjson::empty_object();
-            describe_single_item(*selection, row, attr_names, item, nullptr, true);
-            describe_single_item(*selection, row, key_names, item);
+            describe_single_item(*selection, row, attr_names, item, &total_item_bytes, true);
+            describe_single_item(*selection, row, key_names, item, &total_item_bytes);
             rjson::add(record.dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
             break;
         }
@@ -1463,6 +1466,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         }
     }
 
+    size_t nrecords = records.Size();
     auto ret = rjson::empty_object();
     rjson::add(ret, "Records", std::move(records));
 
@@ -1474,8 +1478,15 @@ future<executor::request_return_type> executor::get_records(client_state& client
         // shard did end, then the next read will have nrecords == 0 and
         // will notice end end of shard and not return NextShardIterator.
         rjson::add(ret, "NextShardIterator", next_iter);
-        _stats.api_operations.get_records_latency.mark(std::chrono::steady_clock::now() - start_time);
-        co_return rjson::print(std::move(ret));
+        auto duration = std::chrono::steady_clock::now() - start_time;
+        _stats.api_operations.get_records_latency.mark(duration);
+        per_table_stats->api_operations.get_records_latency.mark(duration);
+        _stats.returned_records += nrecords;
+        per_table_stats->returned_records += nrecords;
+        _stats.operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
+        per_table_stats->operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
+        auto str = rjson::print(std::move(ret));
+        co_return str;
     }
 
     // ugh. figure out if we are and end-of-shard
@@ -1503,7 +1514,13 @@ future<executor::request_return_type> executor::get_records(client_state& client
         // Return the original iterator so the client can poll again.
         rjson::add(ret, "NextShardIterator", iter);
     }
-    _stats.api_operations.get_records_latency.mark(std::chrono::steady_clock::now() - start_time);
+    auto duration = std::chrono::steady_clock::now() - start_time;
+    _stats.api_operations.get_records_latency.mark(duration);
+    per_table_stats->api_operations.get_records_latency.mark(duration);
+    _stats.returned_records += nrecords;
+    per_table_stats->returned_records += nrecords;
+    _stats.operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
+    per_table_stats->operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
     if (is_big(ret)) {
         co_return make_streamed(std::move(ret));
     }
