@@ -1328,9 +1328,27 @@ future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, 
 
 future<tables_metadata_lock_on_all_shards> database::lock_tables_metadata(sharded<database>& sharded_db) {
     tables_metadata_lock_on_all_shards locks;
-    co_await sharded_db.invoke_on_all([&] (auto& db) -> future<> {
+    // Acquire write lock on shard 0 first, and then on the remaining shards.
+    //
+    // Parallel acquisition on all shards could deadlock when two
+    // fibers call lock_tables_metadata() concurrently: parallel_for_each
+    // sends SMP messages to all shards even when the local shard's lock
+    // attempt blocks.  If task reordering (SEASTAR_SHUFFLE_TASK_QUEUE in
+    // debug/sanitize builds) causes fiber A to win on shard X while
+    // fiber B wins on shard Y, neither can make progress — classic
+    // cross-shard lock-ordering deadlock.
+    //
+    // Acquiring the write lock on shard 0 first, and then on the remaining
+    // shards, eliminates this: whichever fiber acquires shard 0 first is
+    // guaranteed to acquire locks on all other shards before the other fiber
+    // can acquire the lock on shard 0.
+    co_await sharded_db.invoke_on(0, [&locks, &sharded_db] (auto& db) -> future<> {
         locks.assign_lock(co_await db.get_tables_metadata().hold_write_lock());
+        co_await sharded_db.invoke_on_others([&locks] (auto& db) -> future<> {
+            locks.assign_lock(co_await db.get_tables_metadata().hold_write_lock());
+        });
     });
+
     co_return locks;
 }
 
