@@ -126,6 +126,9 @@ class CppFile(pytest.File, ABC):
         return args
 
     def collect(self) -> Iterator[CppTestCase]:
+        if BUILD_MODE not in self.stash:
+            return
+
         custom_args = self.suite_config.get("custom_args", {}).get(self.test_name, DEFAULT_CUSTOM_ARGS)
 
         for test_case in self.list_test_cases():

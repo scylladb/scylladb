@@ -75,6 +75,7 @@ def test_no_bare_skip_markers_in_collection():
          "--collect-only",
          "--ignore=boost", "--ignore=raft",
          "--ignore=ldap", "--ignore=vector_search",
+         "--ignore=unit",
          "-p", "no:sugar"],
         capture_output=True, text=True,
         cwd=str(_TEST_ROOT),

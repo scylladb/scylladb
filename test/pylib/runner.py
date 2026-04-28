@@ -163,6 +163,11 @@ def scylla_binary(testpy_test) -> Path:
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    items[:] = [
+        item for item in items
+        if (parent_file := item.getparent(cls=pytest.File)) is not None
+           and BUILD_MODE in parent_file.stash
+    ]
     for item in items:
         modify_pytest_item(item=item)
 
@@ -285,7 +290,10 @@ def pytest_configure(config: pytest.Config) -> None:
         pytest_log_dir.mkdir(parents=True, exist_ok=True)
         if not _pytest_config.getoption("--save-log-on-success"):
             for file in pytest_log_dir.glob("*"):
-                file.unlink()
+                # This will help in case framework tests are executed with test.py event if it's the wrong way to run them.
+                # test_no_bare_skip_markers_in_collection uses a subprocess to run a collection that has lead to race
+                # condition, especially with repeat.
+                file.unlink(missing_ok=True)
 
         _pytest_config.stash[PYTEST_LOG_FILE] = f"{pytest_log_dir}/pytest_main_{HOST_ID}.log"
 
@@ -340,7 +348,8 @@ def pytest_collect_file(file_path: pathlib.Path,
         repeats = list(product(build_modes, parent.config.run_ids))
 
         if not repeats:
-            return []
+            parent.stash[REPEATING_FILES].remove(file_path)
+            return collectors
 
         ihook = parent.ihook
         collectors = list(chain(collectors, chain.from_iterable(
