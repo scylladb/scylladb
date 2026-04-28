@@ -116,6 +116,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     seastar::metrics::description("Counts a number of requests blocked due to memory pressure."), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("requests_shed", stats.requests_shed,
                     seastar::metrics::description("Counts a number of requests shed due to overload."), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("conditional_check_failed", stats.conditional_check_failed,
+                    seastar::metrics::description("number of conditional requests whose condition was false (ConditionalCheckFailedException)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_read_total", stats.cql_stats.filtered_rows_read_total,
                     seastar::metrics::description("number of rows read during filtering operations"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_matched_total", stats.cql_stats.filtered_rows_matched_total,

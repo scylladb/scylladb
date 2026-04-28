@@ -139,6 +139,8 @@ public:
     // superuser status).
     uint64_t authentication_failures = 0;
     uint64_t authorization_failures = 0;
+    // Count of ConditionalCheckFailedException errors
+    uint64_t conditional_check_failed = 0;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;

@@ -1244,6 +1244,51 @@ def test_reads_before_write_and_write_using_lwt_metrics(dynamodb, test_table_s, 
             with check_increases_metric_exact(metrics, table_lwt, [[1, lwt_cf]]):
                 lwt_table.put_item(Item={'p': p})
 
+# Test that ConditionalCheckFailedRequests (scylla_alternator_conditional_check_failed)
+# is incremented when a conditional write (PutItem, UpdateItem, DeleteItem) fails due to
+# an unsatisfied ConditionExpression. Both the global metric and the per-table metric must
+# increase.
+def test_conditional_check_failed(test_table_s, metrics):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'x': 1})
+    with check_increases_metric(metrics, ['scylla_alternator_conditional_check_failed']):
+        # PutItem with a condition that will fail because 'x' equals 1, not 2
+        try:
+            test_table_s.put_item(Item={'p': p, 'x': 3},
+                ConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 2})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+    with check_increases_metric(metrics, ['scylla_alternator_conditional_check_failed']):
+        # UpdateItem with a condition that will fail
+        try:
+            test_table_s.update_item(Key={'p': p},
+                UpdateExpression='SET x = :val',
+                ConditionExpression='x = :cond',
+                ExpressionAttributeValues={':val': 5, ':cond': 99})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+    with check_increases_metric(metrics, ['scylla_alternator_conditional_check_failed']):
+        # DeleteItem with a condition that will fail
+        try:
+            test_table_s.delete_item(Key={'p': p},
+                ConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 99})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+
+def test_conditional_check_failed_per_table(test_table_s, metrics):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'x': 1})
+    with check_increases_metric(metrics, ['scylla_alternator_table_conditional_check_failed'],
+                                requested_labels={'cf': test_table_s.name}):
+        try:
+            test_table_s.put_item(Item={'p': p, 'x': 3},
+                ConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 2})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
 # shard_bounce_for_lwt, requests_blocked_memory, requests_shed
