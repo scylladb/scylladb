@@ -100,9 +100,14 @@ class TestWideRows(Tester):
         expected_row_size = (one_blob_size + 8 + 8) * partition_rows  # approximately partition size
         expected_rows = {}
 
-        value = "a" * one_blob_size  # 1K value in the blob column
+        value = ("a" * one_blob_size).encode()
 
         logger.debug(f"Prefill table {table_name} with {partitions_num} partition(s), {partition_rows} row(s) each")
+        update_stmt = session.prepare(f"UPDATE {table_name} SET value = ? WHERE userid = ? and event = ?")
+        update_stmt_ts = session.prepare(f"UPDATE {table_name} USING TIMESTAMP ? SET value = ? WHERE userid = ? and event = ?")
+        select_ts_stmt = session.prepare(f"SELECT writetime(value) as ts FROM {table_name} WHERE userid = ? and event = ?")
+        update_stmt.consistency_level = ConsistencyLevel.QUORUM
+        select_ts_stmt.consistency_level = ConsistencyLevel.QUORUM
         for k in range(start_partition_index, start_partition_index + partitions_num):
             user = "user%d" % k
 
@@ -110,19 +115,15 @@ class TestWideRows(Tester):
             date_str = (self.date + datetime.timedelta(0)).strftime("%Y-%m-%d")
             # We need to run the UPDATE and the SELECT below with CL:QUORUM to avoid cases where we get an empty
             # result set when querying a node which has not yet received a replica of the data we just inserted
-            query = f"UPDATE {table_name} SET value = textAsBlob('{value}') WHERE userid='{user}' and event='{date_str}'"
-            statement = SimpleStatement(query, consistency_level=ConsistencyLevel.QUORUM)
-            session.execute(statement)
+            session.execute(update_stmt, [value, user, date_str])
             expected_rows[user] = expected_row_size
             # Use this timestamp below, for all the remaining rows of the partition
             # This guarantees that when using TWCS, the partition won't be segregated into two windows, breaking the test.
-            query = f"SELECT writetime(value) as ts FROM {table_name} WHERE userid='{user}' and event='{date_str}'"
-            statement = SimpleStatement(query, consistency_level=ConsistencyLevel.QUORUM)
-            timestamp = session.execute(statement).one().ts
+            timestamp = session.execute(select_ts_stmt, [user, date_str]).one().ts
 
             for i in range(1, partition_rows):
                 date_str = (self.date + datetime.timedelta(i)).strftime("%Y-%m-%d")
-                session.execute(f"UPDATE {table_name} USING TIMESTAMP {timestamp} SET value = textAsBlob('{value}') WHERE userid='{user}' and event='{date_str}'")
+                session.execute(update_stmt_ts, [timestamp, value, user, date_str])
         return expected_rows
 
     def create_large_row_table(self, session, table_name, columns_num, entity_type="row"):
@@ -160,25 +161,26 @@ class TestWideRows(Tester):
         """
         large_data_1_mb = "x" * 1024 * 1024
         logger.debug(f"Prefill table {table_name} with {rows_num} rows")
+        insert_stmt = session.prepare(f"INSERT INTO {table_name} (userid, event, static_value) VALUES (?, ?, ?)")
         for index in range(1, rows_num + 1):
             userid = f"user{index}"
             event = (self.date + datetime.timedelta(index)).strftime("%Y-%m-%d")
             # Default large data threshold for cells is 1 mb, for rows it is 10 mb.
             large_data = large_data_1_mb * random.choice(range(1, 11))
-            query = f"INSERT INTO {table_name} (userid, event, static_value) VALUES ('{userid}', '{event}', '{large_data}')"
-            session.execute(query)
+            session.execute(insert_stmt, [userid, event, large_data])
 
     def create_large_row_data(self, session, table_name, rows_num, columns_num, one_blob_size, start_row_index):  # noqa: PLR0913
         expected_rows = {}
         expected_row_size = columns_num * one_blob_size  # approximately row size
 
         logger.debug(f"Prefill table {table_name} with {rows_num} rows")
+        value = ("a" * int(one_blob_size)).encode()
+        update_stmts = [session.prepare(f"UPDATE {table_name} SET value{i} = ? WHERE userid = ? and event = ?") for i in range(columns_num)]
         for k in range(start_row_index, start_row_index + rows_num):
             user = "user%d" % k
-            value = "a" * int(one_blob_size)
             event = (self.date + datetime.timedelta(k)).strftime("%Y-%m-%d")
-            for i in range(columns_num):
-                session.execute(f"UPDATE {table_name} SET value{i} = textAsBlob('{value}') WHERE userid='{user}' and event='{event}'")
+            for stmt in update_stmts:
+                session.execute(stmt, [value, user, event])
             expected_rows[f"{user}.{event}"] = expected_row_size
 
         return expected_rows
@@ -200,25 +202,32 @@ class TestWideRows(Tester):
         expected_row_size = columns_num * one_blob_size  # approximately row size
 
         logger.debug(f"Prefill table {table_name} with {rows_num} rows")
+        value = ("a" * int(one_blob_size)).encode()
+        update_stmts = [session.prepare(f"UPDATE {table_name} SET value{i} = ? WHERE userid = ? and event = ?") for i in range(columns_num)]
+        if collection_elements:
+            match collection_type:
+                case "map":
+                    collection_stmt = session.prepare(f"UPDATE {table_name} SET kvmap[?] = ? WHERE userid = ? and event = ?")
+                case "set":
+                    collection_stmt = session.prepare(f"UPDATE {table_name} SET myset = myset + ? WHERE userid = ? and event = ?")
+                case "list":
+                    collection_stmt = session.prepare(f"UPDATE {table_name} SET mylist = mylist + ? WHERE userid = ? and event = ?")
+                case _:
+                    raise Exception(f"{collection_type=} is not supported by function 'create_too_many_rows_data'\nUse only 'map', 'set', or 'list'")
         for k in range(start_row_index, start_row_index + rows_num):
             user = f"user{partition_index}"
-            value = "a" * int(one_blob_size)
             event = (self.date + datetime.timedelta(k)).strftime("%Y-%m-%d")
-            for i in range(columns_num):
-                session.execute(f"UPDATE {table_name} SET value{i} = textAsBlob('{value}') WHERE userid='{user}' and event='{event}'")
+            for stmt in update_stmts:
+                session.execute(stmt, [value, user, event])
             if collection_elements:
-                match collection_type:
-                    case "map":
-                        collection_type_string = "kvmap['key{j}'] = 'val{j}'"
-                    case "set":
-                        collection_type_string = "myset = myset + {{ 'cat{j}' }}"
-                    case "list":
-                        collection_type_string = "mylist = mylist + [ '{j}' ]"
-                    case _:
-                        raise Exception(f"{collection_type=} is not supported by function 'create_too_many_rows_data' \nUse only 'map', 'set', or 'list'")
                 for i in range(start_collection_element_index, start_collection_element_index + collection_elements):
-                    logger.debug(f"UPDATE {table_name} SET {collection_type_string.format(j=i)} WHERE userid='{user}' and event='{event}'")
-                    session.execute(f"UPDATE {table_name} SET {collection_type_string.format(j=i)} WHERE userid='{user}' and event='{event}'")
+                    match collection_type:
+                        case "map":
+                            session.execute(collection_stmt, [f"key{i}", f"val{i}", user, event])
+                        case "set":
+                            session.execute(collection_stmt, [{f"cat{i}"}, user, event])
+                        case "list":
+                            session.execute(collection_stmt, [[f"{i}"], user, event])
             expected_rows[f"{user}.{event}"] = expected_row_size
 
         return expected_rows
@@ -237,27 +246,37 @@ class TestWideRows(Tester):
         start_collection_element_index=0,
     ):
         logger.debug(f"Delete from table {table_name} with {rows_num} rows, {columns_num} columns, and {collection_elements} collection items")
+        if columns_num:
+            delete_stmts = [session.prepare(f"DELETE value{i} FROM {table_name} WHERE userid = ? and event = ?") for i in range(start_col_index, start_col_index + columns_num)]
+        elif collection_elements:
+            match collection_type:
+                case "map":
+                    collection_stmt = session.prepare(f"DELETE kvmap[?] FROM {table_name} WHERE userid = ? and event = ?")
+                case "set":
+                    collection_stmt = session.prepare(f"UPDATE {table_name} SET myset = myset - ? WHERE userid = ? and event = ?")
+                case "list":
+                    collection_stmt = session.prepare(f"DELETE mylist[?] FROM {table_name} WHERE userid = ? and event = ?")
+                case _:
+                    raise Exception(f"{collection_type=} is not supported by function 'delete_too_many_rows_data'\nUse only 'map', 'set', 'list'")
+        else:
+            delete_row_stmt = session.prepare(f"DELETE FROM {table_name} WHERE userid = ? and event = ?")
         for k in range(start_row_index, start_row_index + rows_num):
             user = f"user{partition_index}"
             event = (self.date + datetime.timedelta(k)).strftime("%Y-%m-%d")
             if columns_num:
-                for i in range(start_col_index, start_col_index + columns_num):
-                    session.execute(f"DELETE value{i} FROM {table_name} WHERE userid='{user}' and event='{event}'")
+                for stmt in delete_stmts:
+                    session.execute(stmt, [user, event])
             elif collection_elements:
-                match collection_type:
-                    case "map":
-                        remove_collection_element_cmd = "DELETE kvmap['key{i}'] FROM {table_name} WHERE userid='{user}' and event='{event}'"
-                    case "set":
-                        remove_collection_element_cmd = "UPDATE {table_name} SET myset = myset - {{ 'cat{i}' }} WHERE userid='{user}' and event='{event}'"
-                    case "list":
-                        remove_collection_element_cmd = "DELETE mylist[{i}] FROM {table_name} WHERE userid='{user}' and event='{event}'"
-                    case _:
-                        raise Exception(f"{collection_type=} is not supported by function 'delete_too_many_rows_data' \nUse only 'map', 'set', 'list'")
                 for i in range(start_collection_element_index, start_collection_element_index + collection_elements):
-                    logger.debug(remove_collection_element_cmd.format(i=i, table_name=table_name, user=user, event=event))
-                    session.execute(remove_collection_element_cmd.format(i=i, table_name=table_name, user=user, event=event))
+                    match collection_type:
+                        case "map":
+                            session.execute(collection_stmt, [f"key{i}", user, event])
+                        case "set":
+                            session.execute(collection_stmt, [{f"cat{i}"}, user, event])
+                        case "list":
+                            session.execute(collection_stmt, [i, user, event])
             else:
-                session.execute(f"DELETE FROM {table_name} WHERE userid='{user}' and event='{event}'")
+                session.execute(delete_row_stmt, [user, event])
 
     def search_warning(self, node, warning_text, marked_logs_dict, expect_warning=True):
         from_mark = marked_logs_dict.get(node.name) or 0
@@ -458,17 +477,19 @@ class TestWideRows(Tester):
         ttl_rows_amount,
     ):
         userid = "user%d" % random.randint(0, partition_num - 1)
-        cks_for_ttl = list(session.execute(f"SELECT event FROM {table_name} WHERE userid='{userid}'"))
+        select_stmt = session.prepare(f"SELECT event FROM {table_name} WHERE userid = ?")
+        cks_for_ttl = list(session.execute(select_stmt, [userid]))
 
         one_blob_size = 1024
-        value = "b" * one_blob_size
+        value = ("b" * one_blob_size).encode()
         ttl = 1
         # TTL part of rows in partition or full partition
         logger.debug('Update %d rows of partition where PK "%s" with TTL %d' % (ttl_rows_amount, userid, ttl))
+        update_stmt = session.prepare(f"UPDATE {table_name} USING TTL ? SET value = ? WHERE userid = ? and event = ?")
         for i, event_row in enumerate(cks_for_ttl):
             if i < ttl_rows_amount:
                 event = event_row[0]
-                session.execute(f"UPDATE {table_name} USING TTL {ttl} SET value = textAsBlob('{value}') WHERE userid='{userid}' and event='{event}'")
+                session.execute(update_stmt, [ttl, value, userid, event])
 
         self.cluster.flush()
         logger.debug("Wait %d sec while the TTLed rows expiration" % ttl)
@@ -488,17 +509,19 @@ class TestWideRows(Tester):
         expected_rows,
     ):
         userid = "user%d" % random.randint(0, rows_num - 1)
-        ck_for_ttl = list(session.execute(f"SELECT event FROM {table_name} WHERE userid='{userid}' LIMIT 1"))
+        select_stmt = session.prepare(f"SELECT event FROM {table_name} WHERE userid = ? LIMIT 1")
+        ck_for_ttl = list(session.execute(select_stmt, [userid]))
 
-        value = "b" * self.BLOB_SIZE_10k
+        value = ("b" * self.BLOB_SIZE_10k).encode()
         ttl = 1
         # TTL one row
         event = ck_for_ttl[0][0]
-        columns = ", ".join(["value%d = textAsBlob('%s')" % (i, value) for i in range(columns_num)])
+        columns = ", ".join([f"value{i} = ?" for i in range(columns_num)])
 
         logger.debug('Update row where USERID="%s" and EVENT="%s" with TTL %d' % (userid, event, ttl))
 
-        session.execute(f"UPDATE {table_name} USING TTL {ttl} SET {columns} WHERE userid='{userid}' and event='{event}'")
+        update_stmt = session.prepare(f"UPDATE {table_name} USING TTL ? SET {columns} WHERE userid = ? and event = ?")
+        session.execute(update_stmt, [ttl] + [value] * columns_num + [userid, event])
 
         self.cluster.flush()
         logger.debug("Wait %d sec while the TTLed rows expiration" % ttl)
@@ -676,22 +699,20 @@ class TestWideRows(Tester):
         session.execute(create_table_query)
 
         # Now insert 100,000 columns to row 'row0'
-        insert_column_query = "UPDATE test_table SET value = {value} WHERE row = '{row}' AND name = '{name}';"
+        insert_stmt = session.prepare("UPDATE test_table SET value = ? WHERE row = ? AND name = ?")
         for i in range(100000):
-            row = "row0"
-            name = "val" + str(i)
-            session.execute(insert_column_query.format(value=i, row=row, name=name))
+            session.execute(insert_stmt, [i, "row0", "val" + str(i)])
 
         # now randomly fetch columns: 1 to 3 at a time
+        select_stmt = session.prepare("SELECT value FROM test_table WHERE row='row0' AND name in (?, ?, ?)")
         for i in range(10000):
-            select_column_query = "SELECT value FROM test_table WHERE row='row0' AND name in ('{name1}', '{name2}', '{name3}');"
             values2fetch = [str(random.randint(0, 99999)) for i in range(3)]
             # values2fetch is a list of random values.  Because they are random, they will not be unique necessarily.
             # To simplify the template logic in the select_column_query I will not expect the query to
             # necessarily return 3 values.  Hence I am computing the number of unique values in values2fetch
             # and using that in the assert at the end.
             expected_rows = len(set(values2fetch))
-            rows = list(session.execute(select_column_query.format(name1="val" + values2fetch[0], name2="val" + values2fetch[1], name3="val" + values2fetch[2])))
+            rows = list(session.execute(select_stmt, ["val" + values2fetch[0], "val" + values2fetch[1], "val" + values2fetch[2]]))
             assert len(rows) == expected_rows, f"expects {expected_rows}, actual len(rows)={len(rows)}"
 
     def test_large_row_with_static_cell(self):
