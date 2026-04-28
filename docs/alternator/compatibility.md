@@ -226,6 +226,73 @@ This monitoring stack is different from DynamoDB's offering - but ScyllaDB's
 is significantly more powerful and gives the user better insights on
 the internals of the database and its performance.
 
+If you are looking for familiar DynamoDB metrics, the table below lists each
+DynamoDB CloudWatch metric (see the full AWS documentation at
+<https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/metrics-dimensions.html>)
+and the closest ScyllaDB metric, if one exists. ScyllaDB metrics follow the
+Prometheus naming convention and are accessible via ScyllaDB's monitoring stack.
+
+Per-table variants of most metrics are available under the `scylla_alternator_table_*`
+prefix, with an added `{cf="table_name"}` label (and also a `ks="keyspace_name"}` label, where the keyspace name for a table named `T` is `alternator_T`).
+
+| DynamoDB metric | ScyllaDB equivalent | Notes |
+|---|---|---|
+| `ConditionalCheckFailedRequests` | `scylla_alternator_conditional_check_failed` | |
+| `ConsumedReadCapacityUnits` | `scylla_alternator_rcu_total` | One RCU represents reading up to 4 KB. |
+| `ConsumedWriteCapacityUnits` | `scylla_alternator_wcu_total{op="X"}` | Available for `PutItem`, `DeleteItem`, `UpdateItem` and `Index`. Sum all `op` label values for a total. The `Index` op accounts for WCUs consumed by writes to GSIs. |
+| `OnlineIndexPercentageProgress` | Not yet available | GSI backfill metrics are not yet exposed. |
+| `ReturnedBytes` | `scylla_alternator_operation_size_kb{op="GetRecords"}` (histogram) | Approximate `GetRecords` response size in KB, derived from record attribute name/value sizes rather than exact serialized response/body bytes; do not treat as exact CloudWatch `ReturnedBytes` parity. |
+| `ReturnedItemCount` | `scylla_alternator_returned_items` | Counts items returned by `Query` and `Scan` after filter evaluation. Also available as `scylla_alternator_returned_items_histogram` (histogram of per-operation item counts). |
+| `ReturnedRecordsCount` | `scylla_alternator_returned_records` | Counts stream records returned by `GetRecords` operations. |
+| `SuccessfulRequestLatency` | `scylla_alternator_op_latency{op="X"}` (histogram) | Available for `PutItem`, `GetItem`, `DeleteItem`, `UpdateItem`, `BatchWriteItem`, `BatchGetItem`, `GetRecords`, `Query`, and `Scan`. Also available as `scylla_alternator_op_latency_summary{op="X"}` (global only; pre-computed quantiles, not aggregatable across shards). |
+| `SystemErrors` | `scylla_alternator_system_errors` | Global only. Counts HTTP 500 (internal server error) responses. |
+| `UserErrors` | `scylla_alternator_user_errors` | Global only. Counts HTTP 400 (client error) responses, excluding `ConditionalCheckFailedException` (which DynamoDB also excludes). Authentication and authorization failures also have dedicated counters; see the Authentication and Authorization section above. |
+| `TableCount` | Not yet available | The number of active DynamoDB tables in the account. |
+| `TimeToLiveDeletedItemCount` | `scylla_expiration_items_deleted` | See also `scylla_expiration_scan_passes` and `scylla_expiration_scan_table` for additional metrics on TTL scan activity. |
+| `TransactionConflict` | Not yet available | Alternator does not yet support `TransactWriteItems`. |
+
+Several groups of DynamoDB metrics have no equivalent in Alternator because
+the underlying feature does not exist:
+
+* **Provisioned throughput limits** are not enforced in Alternator (see
+  the Provisioning section above), so the following metrics are not
+  applicable: `AccountMaxReads`, `AccountMaxTableLevelReads`,
+  `AccountMaxTableLevelWrites`, `AccountMaxWrites`,
+  `AccountProvisionedReadCapacityUtilization`,
+  `AccountProvisionedWriteCapacityUtilization`,
+  `MaxProvisionedTableReadCapacityUtilization`,
+  `MaxProvisionedTableWriteCapacityUtilization`,
+  `OnDemandMaxReadRequestUnits`, `OnDemandMaxWriteRequestUnits`,
+  `ProvisionedReadCapacityUnits`, `ProvisionedWriteCapacityUnits`,
+  `AccountProvisionedReadCapacityUnits`, `AccountProvisionedWriteCapacityUnits`.
+
+* **Throttle events** do not occur in Alternator because per-table throughput
+  limits are not enforced. The metric `scylla_alternator_requests_shed` counts
+  requests rejected due to memory pressure or general overload, which is the
+  closest analogue. The following DynamoDB metrics are therefore not
+  applicable: `ReadThrottleEvents`, `WriteThrottleEvents`,
+  `ThrottledRequests`, `ReadAccountLimitThrottleEvents`,
+  `ReadKeyRangeThroughputThrottleEvents`,
+  `ReadMaxOnDemandThroughputThrottleEvents`,
+  `ReadProvisionedThroughputThrottleEvents`,
+  `WriteAccountLimitThrottleEvents`,
+  `WriteKeyRangeThroughputThrottleEvents`,
+  `WriteMaxOnDemandThroughputThrottleEvents`,
+  `WriteProvisionedThroughputThrottleEvents`.
+
+* **Kinesis Data Streams** integration is not supported by Alternator, so the
+  following metrics are not applicable: `AgeOfOldestUnreplicatedRecord`,
+  `ConsumedChangeDataCaptureUnits`, `FailedToReplicateRecordCount`,
+  `ThrottledPutRecordCount`.
+
+* **AWS Fault Injection Service (FIS)** experiments are not supported by
+  Alternator, so the metric `FaultInjectionServiceInducedErrors` (simulated
+  HTTP 500 errors induced by an AWS FIS experiment) is not applicable.
+
+* **DynamoDB Global Tables** For global (cross-region) tables, Alternator
+  relies on ScyllaDB's native multi-DC replication. The following metrics
+  are not applicable: `PendingReplicationCount`, `ReplicationLatency`.
+
 ## Time To Live (TTL)
 
 Like in DynamoDB, Alternator items which are set to expire at a certain
