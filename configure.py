@@ -285,8 +285,12 @@ def generate_compdb(compdb, ninja, buildfile, modes):
                 os.symlink(compdb_target, compdb)
             except FileExistsError:
                 # if there is already a valid compile_commands.json link in the
-                # source root, we are done.
-                pass
+                # source root, we are done. if it's a stale link, update it.
+                if os.path.islink(compdb):
+                    current_target = os.readlink(compdb)
+                    if not os.path.exists(current_target):
+                        os.unlink(compdb)
+                        os.symlink(compdb_target, compdb)
             return
 
 
