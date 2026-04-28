@@ -461,7 +461,7 @@ class TestWideRows(Tester):
 
         one_blob_size = 1024
         value = "b" * one_blob_size
-        ttl = 60
+        ttl = 1
         # TTL part of rows in partition or full partition
         logger.debug('Update %d rows of partition where PK "%s" with TTL %d' % (ttl_rows_amount, userid, ttl))
         for i, event_row in enumerate(cks_for_ttl):
@@ -471,7 +471,7 @@ class TestWideRows(Tester):
 
         self.cluster.flush()
         logger.debug("Wait %d sec while the TTLed rows expiration" % ttl)
-        time.sleep(ttl + 5)
+        time.sleep(ttl + 1)
         self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
         expected_partitions.pop(userid)
 
@@ -490,7 +490,7 @@ class TestWideRows(Tester):
         ck_for_ttl = list(session.execute(f"SELECT event FROM {table_name} WHERE userid='{userid}' LIMIT 1"))
 
         value = "b" * self.BLOB_SIZE_10k
-        ttl = 60
+        ttl = 1
         # TTL one row
         event = ck_for_ttl[0][0]
         columns = ", ".join(["value%d = textAsBlob('%s')" % (i, value) for i in range(columns_num)])
@@ -501,7 +501,7 @@ class TestWideRows(Tester):
 
         self.cluster.flush()
         logger.debug("Wait %d sec while the TTLed rows expiration" % ttl)
-        time.sleep(ttl + 5)
+        time.sleep(ttl + 1)
         self.cluster.compact(self.KEYSPACE_NAME, [self.TABLE_NAME])
         expected_rows.pop(f"{userid}.{event}")
         return expected_rows
