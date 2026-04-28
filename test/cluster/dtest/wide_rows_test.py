@@ -1,3 +1,11 @@
+#
+# Copyright (C) 2013-present The Apache Software Foundation
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
 import datetime
 import logging
 import random
@@ -12,9 +20,10 @@ from cassandra.query import SimpleStatement, dict_factory
 from dtest_class import Tester, create_ks
 from tools.assertions import assert_equal_more_with_deviation, assert_less_equal_lists
 from tools.cluster_topology import generate_cluster_topology
-from tools.tables_view_manager import wait_for_view
+from tools.misc import wait_for_view
 
 logger = logging.getLogger(__name__)
+
 
 status_messages = (
     "I''m going to the Cassandra Summit in June!",
@@ -29,14 +38,13 @@ status_messages = (
 clients = ("Android", "iThing", "Chromium", "Mozilla", "Emacs")
 
 
-@pytest.mark.dtest_full
 @pytest.mark.parametrize(
     "strategy",
     [
         pytest.param("LeveledCompactionStrategy"),
         pytest.param("SizeTieredCompactionStrategy"),
-        pytest.param("TimeWindowCompactionStrategy", marks=pytest.mark.next_gating),
-        pytest.param("IncrementalCompactionStrategy", marks=pytest.mark.next_gating),
+        pytest.param("TimeWindowCompactionStrategy"),
+        pytest.param("IncrementalCompactionStrategy"),
     ],
 )
 class TestWideRows(Tester):
@@ -346,7 +354,7 @@ class TestWideRows(Tester):
                         "key_appearance": key_appearance,
                     },
                     "sstables_from_disk": sstables_on_disk,
-                    "node_status": node.status,
+                    "node_status": "UP" if node.is_running() else "DOWN",
                 }
                 logger.debug(f"{node.name} state: {node_state}")
                 cluster_state[node.name] = node_state
@@ -552,7 +560,6 @@ class TestWideRows(Tester):
         self.cluster.compact()
         return row_number
 
-    @pytest.mark.dtest_debug
     @pytest.mark.single_node
     def test_wide_rows(self):
         self.write_wide_rows()
@@ -592,13 +599,11 @@ class TestWideRows(Tester):
         self.create_too_many_rows_table(session=session, table_name=self.TABLE_NAME, columns_num=columns_num)
         self.create_too_many_rows_data(session=session, table_name=self.TABLE_NAME, columns_num=columns_num, rows_num=initial_rows_number, one_blob_size=128, partition_index=0, start_row_index=0)
 
-        self.cluster.flush()
-        self.cluster.wait_for_compactions()
+        self.cluster.compact()
 
         self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, data_column="rows", expected_entity_number=0, expected_entity_data_size=initial_rows_number)
 
         self.create_too_many_rows_data(session=session, table_name=self.TABLE_NAME, columns_num=columns_num, rows_num=additional_rows_number, one_blob_size=128, partition_index=0, start_row_index=initial_rows_number)
-        self.cluster.flush()
         self.cluster.compact()
 
         self.validate_system_table(
@@ -630,8 +635,7 @@ class TestWideRows(Tester):
             session=session, table_name=self.TABLE_NAME, columns_num=columns_num, rows_num=1, one_blob_size=128, partition_index=0, start_row_index=0, collection_elements=initial_collection_elements_number, collection_type=collection_type
         )
 
-        self.cluster.flush()
-        self.cluster.wait_for_compactions()
+        self.cluster.compact()
 
         logger.debug("No large cells expected")
         self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=0, expected_entity_data_size=initial_collection_elements_number, with_collection=True)
@@ -650,7 +654,6 @@ class TestWideRows(Tester):
             collection_type=collection_type,
         )
 
-        self.cluster.flush()
         self.cluster.compact()
 
         logger.debug(f"1 large cell(s) expected")
@@ -687,7 +690,6 @@ class TestWideRows(Tester):
 
         logger.debug(f"Compacting {self.TABLE_NAME}")
         self.cluster.compact()
-        node1.wait_for_compactions()
 
         logger.debug("No large cells expected")
         self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=0, expected_entity_data_size=initial_collection_elements_number, with_collection=True)
@@ -929,8 +931,6 @@ class TestWideRows(Tester):
         logger.debug(f"Start {node2.name}")
         node2.start(wait_other_notice=True, wait_for_binary_proto=True)
         node2.repair()
-        # self.cluster.flush()
-        # extra_rows += self.trigger_compaction_by_data_write_and_flush(session, entity_type, rows_number + extra_rows)
 
         cluster_state = self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=rows_number, expected_entity_data_size=expected_rows_data_size)
         self.validate_log_warnings(cluster_state=cluster_state, entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME)
@@ -1099,9 +1099,7 @@ class TestWideRows(Tester):
         session.execute(f"create materialized view {view_name} as select * from {self.TABLE_NAME} where userid is not null and event is not null primary key (userid, event)")
         wait_for_view(cluster=self.cluster, session=session, ks=self.KEYSPACE_NAME, view=view_name)
 
-        self.cluster.flush()
         self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
-        # self.trigger_compaction_by_data_write_and_flush(session, entity_type, partition_num)
 
         # Validate base table
         cluster_state = self.validate_system_table(entity_type=entity_type, keyspace_name=self.KEYSPACE_NAME, table_name=self.TABLE_NAME, expected_entity_number=partition_num, expected_entity_data_size=expected_partition_data_size)
@@ -1380,7 +1378,6 @@ class TestWideRows(Tester):
         maximum_primary_key_value = rows_num - 1
         self.create_large_row_data(session=session, table_name=self.TABLE_NAME, one_blob_size=self.BLOB_SIZE_1MB / 2, columns_num=columns_num, rows_num=rows_num, start_row_index=rows_num)
 
-        self.cluster.flush()
         self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
 
         cluster_state = self.validate_system_table(
@@ -1409,7 +1406,6 @@ class TestWideRows(Tester):
         maximum_primary_key_value = rows_num - 1
         self.create_large_row_data(session=session, table_name=self.TABLE_NAME, one_blob_size=10, columns_num=columns_num, rows_num=small_row_num, start_row_index=rows_num)
 
-        self.cluster.flush()
         self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
 
         cluster_state = self.validate_system_table(
@@ -1434,12 +1430,10 @@ class TestWideRows(Tester):
 
         pk_max_index = partition_num - 1
         self.create_large_partition_data(session=session, table_name=self.TABLE_NAME, partition_rows=3000, partitions_num=10, one_blob_size=1024, start_partition_index=partition_num + 1)
-        self.cluster.flush()
         self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
 
         # adding more data and running flush again to give time to the compaction of the large partition to finish
         self.create_large_partition_data(session=session, table_name=self.TABLE_NAME, partition_rows=3000, partitions_num=10, one_blob_size=1024, start_partition_index=partition_num + partition_num + 1)
-        self.cluster.flush()
         self.cluster.nodetool(f"compact {self.KEYSPACE_NAME} {self.TABLE_NAME}")
 
         cluster_state = self.validate_system_table(
