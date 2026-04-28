@@ -147,6 +147,11 @@ public:
     uint64_t returned_items = 0;
     // Histogram of the number of items returned per Query or Scan operation
     batch_histogram returned_items_histogram;
+    // Count of HTTP 400 errors (DynamoDB "UserErrors"), excluding
+    // ConditionalCheckFailedException which DynamoDB does not count.
+    uint64_t user_errors = 0;
+    // Count of HTTP 500 errors (DynamoDB "SystemErrors")
+    uint64_t system_errors = 0;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;

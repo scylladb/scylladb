@@ -122,6 +122,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     seastar::metrics::description("number of conditional requests whose condition was false (ConditionalCheckFailedException)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("returned_items", stats.returned_items,
                     seastar::metrics::description("number of items returned by Query and Scan operations (not other operations)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("returned_records", stats.returned_records,
+                    seastar::metrics::description("number of stream records returned by GetRecords operations"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_read_total", stats.cql_stats.filtered_rows_read_total,
                     seastar::metrics::description("number of rows read during filtering operations"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_matched_total", stats.cql_stats.filtered_rows_matched_total,
@@ -202,6 +204,10 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                 seastar::metrics::description("total number of authentication failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_counter("authorization_failures", stats.authorization_failures,
                 seastar::metrics::description("total number of authorization failures"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("user_errors", stats.user_errors,
+                    seastar::metrics::description("number of HTTP 400 client error responses, excluding ConditionalCheckFailedException"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("system_errors", stats.system_errors,
+                    seastar::metrics::description("number of HTTP 500 internal server error responses"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
         });
     }
 }

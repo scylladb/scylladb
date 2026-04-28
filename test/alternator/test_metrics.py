@@ -1441,6 +1441,40 @@ def test_returned_item_count_vector(vs, metrics, needs_vector_store):
         assert get_metric(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
             {'le': '2.000000', 'cf': cf}) == before_hist_table
 
+# Test that HTTP 400 errors increment scylla_alternator_user_errors, but
+# that ConditionalCheckFailedException (which DynamoDB excludes from its
+# UserErrors metric) does not.
+def test_user_errors(test_table_s, metrics):
+    # A ValidationException (HTTP 400) should increment user_errors
+    with check_increases_metric(metrics, ['scylla_alternator_user_errors']):
+        try:
+            test_table_s.get_item(Key={'wrong_key': 'x'})
+        except ClientError as e:
+            assert e.response['Error']['Code'] == 'ValidationException'
+    # A ConditionalCheckFailedException (HTTP 400) should NOT increment user_errors
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'x': 1})
+    before = get_metric(metrics, 'scylla_alternator_user_errors')
+    try:
+        test_table_s.put_item(Item={'p': p},
+            ConditionExpression='x = :val',
+            ExpressionAttributeValues={':val': 2})
+    except ClientError as e:
+        assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+    assert get_metric(metrics, 'scylla_alternator_user_errors') == before
+
+# Test that HTTP 500 errors increment scylla_alternator_system_errors.
+# An unsupported Content-Encoding header triggers a 500 response.
+def test_system_errors(dynamodb, test_table_s, metrics):
+    with check_increases_metric(metrics, ['scylla_alternator_system_errors']):
+        p = random_string()
+        payload = '{}'
+        req = get_signed_request(dynamodb, 'DescribeEndpoints', payload)
+        headers = dict(req.headers)
+        headers.update({'Content-Encoding': 'garbage'})
+        r = requests.post(req.url, headers=headers, data=req.body, verify=False)
+        assert r.status_code == 500
+
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
 # shard_bounce_for_lwt, requests_blocked_memory, requests_shed
