@@ -18,6 +18,7 @@
 #include <seastar/testing/test_case.hh>
 
 #include "test/lib/exception_utils.hh"
+#include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 #include "ldap_common.hh"
 #include "service/migration_manager.hh"
@@ -681,3 +682,41 @@ SEASTAR_TEST_CASE(ldap_config) {
     },
         make_ldap_config());
 }
+
+// Reproduces the race between the cache pruner and the permission
+// loader lifecycle during shutdown. Refs SCYLLADB-1679.
+SEASTAR_TEST_CASE(ldap_pruner_no_crash_after_loader_cleared) {
+    auto cfg = make_ldap_config();
+    cfg->permissions_update_interval_in_ms.set(1);
+
+    auto call_count = seastar::make_lw_shared<int>(0);
+
+    co_await do_with_cql_env_thread([call_count](cql_test_env& env) {
+        auto& cache = env.auth_cache().local();
+
+        testlog.info("Populating 50 cache entries");
+        for (int i = 0; i < 50; i++) {
+            auto r = auth::make_data_resource("system", fmt::format("t{}", i));
+            cache.get_permissions(auth::role_or_anonymous(), r).get();
+        }
+
+        testlog.info("Installing slow permission loader (10ms per call)");
+        cache.set_permission_loader(
+            [call_count] (const auth::role_or_anonymous&, const auth::resource&)
+                    -> seastar::future<auth::permission_set> {
+                ++(*call_count);
+                co_await seastar::sleep(std::chrono::milliseconds(10));
+                co_return auth::permission_set();
+            });
+
+        testlog.info("Waiting for pruner to start reloading");
+        while (*call_count == 0) {
+            seastar::sleep(std::chrono::milliseconds(1)).get();
+        }
+
+        testlog.info("Pruner started, letting teardown run");
+    }, cfg);
+
+    testlog.info("Loader called {} times", *call_count);
+}
+

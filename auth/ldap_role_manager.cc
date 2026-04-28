@@ -258,13 +258,11 @@ future<> ldap_role_manager::start() {
             } catch (const seastar::sleep_aborted&) {
                 co_return; // ignore
             }
-            co_await _cache.container().invoke_on_all([] (cache& c) -> future<> {
-                try {
-                    co_await c.reload_all_permissions();
-                } catch (...) {
-                    mylog.warn("Cache reload all permissions failed: {}", std::current_exception());
-                }
-            });
+            try {
+                co_await _cache.reload_all_permissions();
+            } catch (...) {
+                mylog.warn("Cache reload all permissions failed: {}", std::current_exception());
+            }
         }
     });
     return _std_mgr.start();
