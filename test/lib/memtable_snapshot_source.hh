@@ -91,7 +91,11 @@ public:
                 // Waiting on the future should not be covered by critical section.
                 f->get();
 
-                memory::scoped_critical_alloc_section dfg;
+                // compact() creates a reader_concurrency_semaphore_wrapper whose destructor
+                // calls stop().get(), which may yield. Holding scoped_critical_alloc_section
+                // across a yield point leaks the critical section counter to other fibers
+                // scheduled by the reactor, which corrupts with_allocation_failures() counting
+                // in test fibers. See: https://scylladb.atlassian.net/browse/SCYLLADB-1441
                 while (should_compact()) {
                     compact();
                 }
