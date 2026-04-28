@@ -692,6 +692,13 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         stats.cql_stats.filtered_rows_matched_total += size;
     }
     if (opt_items) {
+        // Note we only update the "returned items" statistics if opt_items is
+        // set, meaning that we were asked to return items (Select != COUNT).
+        stats.returned_items += size;
+        stats.returned_items_histogram.add(size);
+        auto per_table_stats = get_stats_from_schema(proxy, *table_schema);
+        per_table_stats->returned_items += size;
+        per_table_stats->returned_items_histogram.add(size);
         if (opt_items->size() >= max_items_for_rapidjson_array) {
             // There are many items, better print the JSON and the array of
             // items (opt_items) separately to avoid RapidJSON's contiguous
@@ -1528,6 +1535,10 @@ static future<executor::request_return_type> query_vector(
         auto count = static_cast<int>(items_json.Size());
         rjson::add(response, "Count", rjson::value(count));
         stats.vector_search.query_returned_items += count;
+        stats.returned_items += count;
+        stats.returned_items_histogram.add(count);
+        per_table_stats->returned_items += count;
+        per_table_stats->returned_items_histogram.add(count);
         rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
         rjson::add(response, "Items", std::move(items_json));
         if (return_scores) {
@@ -1640,6 +1651,10 @@ static future<executor::request_return_type> query_vector(
         auto count = static_cast<int>(items_json.Size());
         rjson::add(response, "Count", rjson::value(count));
         stats.vector_search.query_returned_items += count;
+        stats.returned_items += count;
+        stats.returned_items_histogram.add(count);
+        per_table_stats->returned_items += count;
+        per_table_stats->returned_items_histogram.add(count);
         rjson::add(response, "Items", std::move(items_json));
         if (return_scores) {
             rjson::add(response, "Scores", std::move(scores_json));

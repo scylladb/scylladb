@@ -1244,10 +1244,10 @@ def test_reads_before_write_and_write_using_lwt_metrics(dynamodb, test_table_s, 
             with check_increases_metric_exact(metrics, table_lwt, [[1, lwt_cf]]):
                 lwt_table.put_item(Item={'p': p})
 
-# Test that ConditionalCheckFailedRequests (scylla_alternator_conditional_check_failed)
-# is incremented when a conditional write (PutItem, UpdateItem, DeleteItem) fails due to
-# an unsatisfied ConditionExpression. Both the global metric and the per-table metric must
-# increase.
+# Test that scylla_alternator_conditional_check_failed  is incremented when a
+# conditional write (PutItem, UpdateItem, DeleteItem) fails due to an
+# unsatisfied ConditionExpression. Both the global metric and the per-table
+# metric must increase.
 def test_conditional_check_failed(test_table_s, metrics):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'x': 1})
@@ -1288,6 +1288,140 @@ def test_conditional_check_failed_per_table(test_table_s, metrics):
                 ExpressionAttributeValues={':val': 2})
         except ClientError as e:
             assert e.response['Error']['Code'] == 'ConditionalCheckFailedException'
+
+# Test that scylla_alternator_returned_items is incremented by the number of
+# items returned by Query and Scan operations. This counts items *after*
+# filter evaluation (i.e., items the caller receives), not the number of
+# items scanned. Both global and per-table variants must increase.
+def test_returned_item_count(test_table_ss, metrics):
+    p = random_string()
+    test_table_ss.put_item(Item={'p': p, 'c': 'a', 'x': 1})
+    test_table_ss.put_item(Item={'p': p, 'c': 'b', 'x': 2})
+    # Query returns 2 items. Check the global metric increases by at least 2
+    # (it may increase by more if running in parallel with other tests on a
+    # shared server).
+    before = get_metric(metrics, 'scylla_alternator_returned_items')
+    result = test_table_ss.query(KeyConditionExpression='p = :p',
+        ExpressionAttributeValues={':p': p}, ConsistentRead=True)
+    assert len(result['Items']) == 2
+    after = get_metric(metrics, 'scylla_alternator_returned_items')
+    assert after >= before + 2
+    # Also try Scan. The test table may have many items, but it must have
+    # at least the 2 we just added, so scanning with Limit=2 must return
+    # two items.
+    before = after
+    result = test_table_ss.scan(Limit=2, ConsistentRead=True)
+    assert len(result['Items']) == 2
+    after = get_metric(metrics, 'scylla_alternator_returned_items')
+    assert after >= before + 2
+    # Also check the returned_items_histogram. A query returning 2 items should
+    # fall in the le=2 bucket but not the le=1 bucket.
+    with check_increases_metric_exact(metrics, 'scylla_alternator_returned_items_histogram_bucket', [[0, {'le': '1.000000'}], [1, {'le': '2.000000'}]]):
+        result = test_table_ss.query(KeyConditionExpression='p = :p',
+            ExpressionAttributeValues={':p': p}, ConsistentRead=True)
+        assert len(result['Items']) == 2
+
+def test_returned_item_count_per_table(test_table_ss, metrics):
+    p = random_string()
+    test_table_ss.put_item(Item={'p': p, 'c': 'a', 'x': 1})
+    test_table_ss.put_item(Item={'p': p, 'c': 'b', 'x': 2})
+    test_table_ss.put_item(Item={'p': p, 'c': 'c', 'x': 3})
+    # While testing the per-table metric, because we are working on a
+    # temporary table not shared by unrelated workloads we can expect the
+    # metric to increase by exactly the number of items returned.
+    # Let's try a Query with a filter, which returns 2 items out of the 3
+    # scanned, and verify the metric increases by 2, not 3:
+    before = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name})
+    result = test_table_ss.query(KeyConditionExpression='p = :p',
+        FilterExpression='x > :one',
+        ExpressionAttributeValues={':p': p, ':one': 1})
+    assert len(result['Items']) == 2
+    after = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name})
+    assert after == before + 2
+    # Also check the per-table returned_items_histogram. The same query
+    # returning 2 items should fall in the le=2 bucket but not the le=1 bucket.
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_returned_items_histogram_bucket', [[0, {'le': '1.000000', 'cf': test_table_ss.name}], [1, {'le': '2.000000', 'cf': test_table_ss.name}]]):
+        result = test_table_ss.query(KeyConditionExpression='p = :p',
+            FilterExpression='x > :one',
+            ExpressionAttributeValues={':p': p, ':one': 1})
+        assert len(result['Items']) == 2
+    # GetItem and BatchGetItem should not increment returned_items. We check
+    # this using the per-table metric (not global) to allow exact equality.
+    before = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name})
+    result = test_table_ss.get_item(Key={'p': p, 'c': 'a'})
+    assert 'Item' in result
+    result = test_table_ss.meta.client.batch_get_item(RequestItems={
+        test_table_ss.name: {'Keys': [{'p': p, 'c': 'a'}, {'p': p, 'c': 'b'}], 'ConsistentRead': True}})
+    assert len(result['Responses'][test_table_ss.name]) == 2
+    assert get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name}) == before
+
+# Test that scylla_alternator_returned_items is NOT incremented by a Query
+# or Scan with Select=COUNT, because those operations return a count rather
+# than actual items.
+# We test this with the per-table metric scylla_alternator_table_returned_items
+# to potentially allow running this test on a server shared by other workloads.
+def test_returned_item_count_not_incremented_for_select_count(test_table_ss, metrics):
+    p = random_string()
+    test_table_ss.put_item(Item={'p': p, 'c': 'a'})
+    test_table_ss.put_item(Item={'p': p, 'c': 'b'})
+    before = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name})
+    result = test_table_ss.query(KeyConditionExpression='p = :p',
+        ExpressionAttributeValues={':p': p}, Select='COUNT', ConsistentRead=True)
+    assert result['Count'] == 2
+    assert 'Items' not in result
+    assert get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name}) == before
+
+# Test that a vector search Query also increments scylla_alternator_returned_items
+# and scylla_alternator_returned_items_histogram_bucket, and that SELECT=COUNT
+# does not. These are the same general Query/Scan counters tested above for
+# plain queries, but here we verify they work for the vector code path too.
+# This test requires a configured vector store and will be skipped otherwise.
+def test_returned_item_count_vector(vs, metrics, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        for i in range(3):
+            table.put_item(Item={'p': random_string(), 'v': [i, 0, 0]})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+
+        # A normal vector query returning 2 items should increment
+        # returned_items by 2 and the histogram bucket for le=2 by 1.
+        # For per-table metrics, we can use exact equality since no other
+        # workload touches this table.
+        cf = table.name
+        with check_increases_metric_exact(metrics, 'scylla_alternator_returned_items_histogram_bucket',
+                [[0, {'le': '1.000000'}], [1, {'le': '2.000000'}]]):
+            with check_increases_metric_exact(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
+                    [[0, {'le': '1.000000', 'cf': cf}], [1, {'le': '2.000000', 'cf': cf}]]):
+                before = get_metric(metrics, 'scylla_alternator_returned_items')
+                before_table = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf})
+                result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]},
+                    Limit=2, Select='ALL_ATTRIBUTES')
+                assert result['Count'] == 2
+                after = get_metric(metrics, 'scylla_alternator_returned_items')
+                after_table = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf})
+                assert after >= before + 2
+                assert after_table == before_table + 2
+
+        # SELECT=COUNT should not increment returned_items or the histogram.
+        before = get_metric(metrics, 'scylla_alternator_returned_items')
+        before_table = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf})
+        before_hist = get_metric(metrics, 'scylla_alternator_returned_items_histogram_bucket',
+            {'le': '2.000000'})
+        before_hist_table = get_metric(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
+            {'le': '2.000000', 'cf': cf})
+        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=2, Select='COUNT')
+        assert result['Count'] == 2
+        assert get_metric(metrics, 'scylla_alternator_returned_items') == before
+        assert get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf}) == before_table
+        assert get_metric(metrics, 'scylla_alternator_returned_items_histogram_bucket',
+            {'le': '2.000000'}) == before_hist
+        assert get_metric(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
+            {'le': '2.000000', 'cf': cf}) == before_hist_table
 
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:

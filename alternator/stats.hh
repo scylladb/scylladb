@@ -141,6 +141,10 @@ public:
     uint64_t authorization_failures = 0;
     // Count of ConditionalCheckFailedException errors
     uint64_t conditional_check_failed = 0;
+    // Count of items returned by Query and Scan operations
+    uint64_t returned_items = 0;
+    // Histogram of the number of items returned per Query or Scan operation
+    batch_histogram returned_items_histogram;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;
