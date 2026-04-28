@@ -157,15 +157,12 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
             return create_legacy_keyspace_if_missing(mm);
         });
     }
-    co_await _role_manager->start();
-    if (this_shard_id() == 0) {
-        // Role manager and password authenticator have this odd startup
-        // mechanism where they asynchronously create the superuser role
-        // in the background. Correct password creation depends on role
-        // creation therefore we need to wait here.
-        co_await _role_manager->ensure_superuser_is_created();
-    }
-    co_await when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
+    // Authorizer must be started before the permission loader is set,
+    // because the loader calls _authorizer->authorize().
+    // The loader must be set before starting the role manager, because
+    // LDAP role manager starts a pruner fiber that calls
+    // reload_all_permissions() which asserts _permission_loader is set.
+    co_await _authorizer->start();
     if (!_used_by_maintenance_socket) {
         // Maintenance socket mode can't cache permissions because it has
         // different authorizer. We can't mix cached permissions, they could be
@@ -174,12 +171,27 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
                 &service::get_uncached_permissions,
                 this, std::placeholders::_1, std::placeholders::_2));
     }
+    co_await _role_manager->start();
+    if (this_shard_id() == 0) {
+        // Role manager and password authenticator have this odd startup
+        // mechanism where they asynchronously create the superuser role
+        // in the background. Correct password creation depends on role
+        // creation therefore we need to wait here.
+        co_await _role_manager->ensure_superuser_is_created();
+    }
+    // Authenticator must be started after ensure_superuser_is_created()
+    // because password_authenticator queries system.roles for the
+    // superuser entry created by the role manager.
+    co_await _authenticator->start();
 }
 
 future<> service::stop() {
     _as.request_abort();
+    // Reverse of start() order.
+    co_await _authenticator->stop();
+    co_await _role_manager->stop();
     _cache.set_permission_loader(nullptr);
-    return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
+    co_await _authorizer->stop();
 }
 
 future<> service::ensure_superuser_is_created() {
