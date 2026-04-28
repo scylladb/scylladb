@@ -555,14 +555,19 @@ def test_streams_operations(test_table_s, dynamodbstreams, metrics):
 # to update latencies for one kind of operation (#17616, and compare #9406),
 # and to do that checking that ..._count increases for that op is enough.
 @contextmanager
-def check_sets_latency_by_metric(metrics, operation_names, metric_name):
+def check_sets_latency_by_metric(metrics, operation_names, metric_name, extra_labels=None):
+    def labels(op):
+        d = {'op': op}
+        if extra_labels:
+            d.update(extra_labels)
+        return d
     the_metrics = get_metrics(metrics)
-    saved_latency_count = { x: get_metric(metrics, f'{metric_name}_count', {'op': x}, the_metrics) for x in operation_names }
+    saved_latency_count = { x: get_metric(metrics, f'{metric_name}_count', labels(x), the_metrics) for x in operation_names }
     yield
     the_metrics = get_metrics(metrics)
     for op in operation_names:
         # The total "count" on all shards should strictly increase
-        assert saved_latency_count[op] < get_metric(metrics, f'{metric_name}_count', {'op': op}, the_metrics)
+        assert saved_latency_count[op] < get_metric(metrics, f'{metric_name}_count', labels(op), the_metrics)
 
 def check_sets_latency(metrics, operation_names):
     return check_sets_latency_by_metric(metrics, operation_names, 'scylla_alternator_op_latency')
@@ -582,7 +587,7 @@ def test_item_latency(test_table_s, metrics):
             test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
 
 def test_item_latency_per_table(test_table_s, metrics):
-    with check_sets_latency_by_metric(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem', 'BatchWriteItem', 'BatchGetItem'], 'scylla_alternator_table_op_latency'):
+    with check_sets_latency_by_metric(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem', 'BatchWriteItem', 'BatchGetItem'], 'scylla_alternator_table_op_latency', {'cf': test_table_s.name}):
         p = random_string()
         test_table_s.put_item(Item={'p': p})
         test_table_s.get_item(Key={'p': p})
@@ -592,6 +597,19 @@ def test_item_latency_per_table(test_table_s, metrics):
             test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': [{'p': random_string()}], 'ConsistentRead': True}})
+
+# Test latency metrics for Query and Scan, both global and per-table.
+def test_scan_query_latency(test_table_s, metrics):
+    with check_sets_latency(metrics, ['Query', 'Scan']):
+        test_table_s.scan(Limit=1)
+        test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
+            ExpressionAttributeValues={':p': 'dog'})
+
+def test_scan_query_latency_per_table(test_table_s, metrics):
+    with check_sets_latency_by_metric(metrics, ['Query', 'Scan'], 'scylla_alternator_table_op_latency', {'cf': test_table_s.name}):
+        test_table_s.scan(Limit=1)
+        test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
+            ExpressionAttributeValues={':p': 'dog'})
 
 # Test latency metrics for GetRecords. Other Streams-related operations -
 # ListStreams, DescribeStream, and GetShardIterator, have an operation

@@ -92,6 +92,8 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
     OPERATION_LATENCY(batch_write_item_latency, "BatchWriteItem")
     OPERATION_LATENCY(batch_get_item_latency, "BatchGetItem")
     OPERATION_LATENCY(get_records_latency, "GetRecords")
+    OPERATION_LATENCY(query_latency, "Query")
+    OPERATION_LATENCY(scan_latency, "Scan")
     if (!has_table) {
         // Create and delete operations are not applicable to a per-table metrics
         // only register it for the global metrics

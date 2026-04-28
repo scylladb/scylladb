@@ -77,6 +77,8 @@ public:
         utils::timed_rate_moving_average_summary_and_histogram batch_write_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram batch_get_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram get_records_latency;
+        utils::timed_rate_moving_average_summary_and_histogram query_latency;
+        utils::timed_rate_moving_average_summary_and_histogram scan_latency;
 
         batch_histogram batch_get_item_histogram;
         batch_histogram batch_write_item_histogram;

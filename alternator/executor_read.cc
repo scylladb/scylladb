@@ -756,7 +756,9 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     db::consistency_level cl = get_read_consistency(request);
     maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "Scan", request, cl);
     tracing::add_alternator_table_name(trace_state, schema->cf_name());
-    get_stats_from_schema(_proxy, *schema)->api_operations.scan++;
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *schema);
+    per_table_stats->api_operations.scan++;
+    auto start_time = std::chrono::steady_clock::now();
     auto segment = get_int_attribute(request, "Segment");
     auto total_segments = get_int_attribute(request, "TotalSegments");
     if (segment || total_segments) {
@@ -822,7 +824,13 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Scan");
 
     return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filter), query::partition_slice::option_set(), client_state, _stats, trace_state, std::move(permit), _enforce_authorization, _warn_authorization);
+            std::move(filter), query::partition_slice::option_set(), client_state, _stats, trace_state, std::move(permit), _enforce_authorization, _warn_authorization).then(
+            [this, per_table_stats, start_time] (request_return_type result) {
+        auto duration = std::chrono::steady_clock::now() - start_time;
+        _stats.api_operations.scan_latency.mark(duration);
+        per_table_stats->api_operations.scan_latency.mark(duration);
+        return result;
+    });
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, const rjson::value& comp_definition, const rjson::value& attrs) {
@@ -1323,9 +1331,15 @@ static future<executor::request_return_type> query_vector(
         alternator::stats& stats,
         parsed::expression_cache& parsed_expr_cache) {
     schema_ptr base_schema = get_table(proxy, request);
-    get_stats_from_schema(proxy, *base_schema)->api_operations.query++;
+    lw_shared_ptr<alternator::stats> per_table_stats = get_stats_from_schema(proxy, *base_schema);
+    per_table_stats->api_operations.query++;
     stats.vector_search.query++;
     tracing::add_alternator_table_name(trace_state, base_schema->cf_name());
+    auto mark_latency = [&stats, &per_table_stats, start_time = std::chrono::steady_clock::now()]() {
+        auto duration = std::chrono::steady_clock::now() - start_time;
+        stats.api_operations.query_latency.mark(duration);
+        per_table_stats->api_operations.query_latency.mark(duration);
+    };
 
     // If vector search is requested, IndexName must be given and must
     // refer to a vector index - not to a GSI or LSI.
@@ -1496,6 +1510,7 @@ static future<executor::request_return_type> query_vector(
         rjson::value response = rjson::empty_object();
         rjson::add(response, "Count", rjson::value(static_cast<int>(pkeys.size())));
         rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
+        mark_latency();
         co_return rjson::print(std::move(response));
     }
 
@@ -1544,6 +1559,7 @@ static future<executor::request_return_type> query_vector(
         if (return_scores) {
             rjson::add(response, "Scores", std::move(scores_json));
         }
+        mark_latency();
         co_return rjson::print(std::move(response));
     }
 
@@ -1661,6 +1677,7 @@ static future<executor::request_return_type> query_vector(
         }
     }
     rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
+    mark_latency();
     co_return rjson::print(std::move(response));
 }
 
@@ -1680,8 +1697,10 @@ future<executor::request_return_type> executor::query(client_state& client_state
     db::consistency_level cl = get_read_consistency(request);
     maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "Query", request, cl);
 
-    get_stats_from_schema(_proxy, *schema)->api_operations.query++;
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *schema);
+    per_table_stats->api_operations.query++;
     tracing::add_alternator_table_name(trace_state, schema->cf_name());
+    auto start_time = std::chrono::steady_clock::now();
 
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
     if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
@@ -1749,7 +1768,13 @@ future<executor::request_return_type> executor::query(client_state& client_state
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
     return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filter), opts, client_state, _stats, std::move(trace_state), std::move(permit), _enforce_authorization, _warn_authorization);
+            std::move(filter), opts, client_state, _stats, std::move(trace_state), std::move(permit), _enforce_authorization, _warn_authorization).then(
+            [this, per_table_stats, start_time] (request_return_type result) {
+        auto duration = std::chrono::steady_clock::now() - start_time;
+        _stats.api_operations.query_latency.mark(duration);
+        per_table_stats->api_operations.query_latency.mark(duration);
+        return result;
+    });
 }
 
 // Converts a multi-row selection result to JSON compatible with DynamoDB.
