@@ -38,15 +38,14 @@ status_messages = (
 clients = ("Android", "iThing", "Chromium", "Mozilla", "Emacs")
 
 
-@pytest.mark.parametrize(
-    "strategy",
-    [
-        pytest.param("LeveledCompactionStrategy"),
-        pytest.param("SizeTieredCompactionStrategy"),
-        pytest.param("TimeWindowCompactionStrategy"),
-        pytest.param("IncrementalCompactionStrategy"),
-    ],
-)
+COMPACTION_STRATEGIES = [
+    "LeveledCompactionStrategy",
+    "SizeTieredCompactionStrategy",
+    "TimeWindowCompactionStrategy",
+    "IncrementalCompactionStrategy",
+]
+
+
 class TestWideRows(Tester):
     BLOB_SIZE_10k = 1024 * 10
     BLOB_SIZE_1MB = 1024 * 1024
@@ -55,7 +54,9 @@ class TestWideRows(Tester):
     date = datetime.datetime.now()
 
     @pytest.fixture(autouse=True)
-    def setup_compaction_strategy(self, strategy):
+    def setup_compaction_strategy(self, pytestconfig):
+        strategy = pytestconfig.getoption("--compaction-strategy") or random.choice(COMPACTION_STRATEGIES)
+        assert strategy in COMPACTION_STRATEGIES, f"Unknown compaction strategy: {strategy}. Must be one of {COMPACTION_STRATEGIES}"
         self.compaction_option = f"compaction = {{'class': '{strategy}'}}"
         self.compaction_strategy = strategy
 
