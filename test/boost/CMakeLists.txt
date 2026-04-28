@@ -150,6 +150,8 @@ add_scylla_test(lister_test
   KIND SEASTAR)
 add_scylla_test(locator_topology_test
   KIND SEASTAR)
+add_scylla_test(lock_tables_metadata_test
+  KIND SEASTAR)
 add_scylla_test(log_heap_test
   KIND BOOST)
 add_scylla_test(logalloc_standard_allocator_segment_pool_backend_test
