@@ -3763,6 +3763,7 @@ public:
         , _topology_cmd_rpc_tracker(topology_cmd_rpc_tracker)
         , _async_gate("topology_coordinator")
     {
+        _lifecycle_notifier.register_subscriber(this);
         _db.get_notifier().register_listener(this);
     }
 
@@ -3941,6 +3942,7 @@ future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(
 }
 
 future<> topology_coordinator::refresh_tablet_load_stats() {
+    co_await utils::get_local_injector().inject("refresh_tablet_load_stats_pause", utils::wait_for_message(5min));
     auto tm = get_token_metadata_ptr();
 
     locator::load_stats stats;
@@ -4438,7 +4440,6 @@ future<> topology_coordinator::run() {
 
     co_await _async_gate.close();
     co_await std::move(tablet_load_stats_refresher);
-    co_await _tablet_load_stats_refresh.join();
     co_await std::move(cdc_generation_publisher);
     co_await std::move(cdc_streams_gc);
     co_await std::move(gossiper_orphan_remover);
@@ -4449,6 +4450,8 @@ future<> topology_coordinator::run() {
 
 future<> topology_coordinator::stop() {
     co_await _db.get_notifier().unregister_listener(this);
+    co_await _lifecycle_notifier.unregister_subscriber(this);
+    co_await _tablet_load_stats_refresh.join();
 
     // if topology_coordinator::run() is aborted either because we are not a
     // leader anymore, or we are shutting down as a leader, we have to handle
@@ -4510,7 +4513,6 @@ future<> run_topology_coordinator(
             topology_cmd_rpc_tracker};
 
     std::exception_ptr ex;
-    lifecycle_notifier.register_subscriber(&coordinator);
     try {
         rtlogger.info("start topology coordinator fiber");
         const bool upgrade_done = co_await coordinator.maybe_run_upgrade();
@@ -4534,7 +4536,7 @@ future<> run_topology_coordinator(
         }
         on_fatal_internal_error(rtlogger, format("unhandled exception in topology_coordinator::run: {}", ex));
     }
-    co_await lifecycle_notifier.unregister_subscriber(&coordinator);
+    co_await utils::get_local_injector().inject("topology_coordinator_pause_before_stop", utils::wait_for_message(5min));
     co_await coordinator.stop();
 }
 
