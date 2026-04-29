@@ -247,9 +247,9 @@ async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
     }
     servers = await manager.servers_add(2, config=cfg)
 
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         keys = dict()
-        cql, _ = await manager.get_ready_cql(servers)
         await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
         for i in range(100):
             key = random.randint(-1000000000, 1000000000)

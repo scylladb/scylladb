@@ -610,9 +610,8 @@ async def test_concurrent_tablet_migrations(manager: ManagerClient):
     await manager.disable_tablet_balancing()
     await pause_view_building_tasks(manager)
 
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1} AND tablets = {'initial': 2}") as ks:
-        cql, _ = await manager.get_ready_cql(servers)
-
         # The base and the view are colocated, so their tablets are always migrated together.
         # With 2 tablets per table and RF=3, we will have 2 tablet groups (base+view) per node.
         await cql.run_async(f"CREATE TABLE {ks}.base (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
