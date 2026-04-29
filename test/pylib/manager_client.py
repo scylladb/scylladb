@@ -347,7 +347,7 @@ class ManagerClient:
            To be used when a current cluster wants to be reused."""
         await self.client.put_json("/cluster/mark-clean")
 
-    async def server_stop(self, server_id: ServerNum, convict=False) -> None:
+    async def server_stop(self, server_id: ServerNum, convict: bool) -> None:
         """Stop specified server.
 
         convict: If True, immediately marks the node as DOWN on all live nodes,
