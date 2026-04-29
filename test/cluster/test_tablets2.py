@@ -1312,6 +1312,7 @@ async def create_cluster(manager: ManagerClient, num_dcs: int, num_racks: int, n
             rack_servers = await manager.servers_add(nodes_per_rack, config=config, property_file={"dc": f"dc{dc}", "rack": f"rack{rack}"})
             for s in rack_servers:
                 servers[s.server_id] = s
+    await manager.get_ready_cql(list(servers.values()))
     logger.debug(f"Created servers={list(servers.values())}")
     return servers
 

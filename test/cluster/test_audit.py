@@ -231,7 +231,7 @@ class AuditTester:
                 needed, enable_compact_storage, rf, user, auth_provider,
                 property_file=property_file, cmdline=cmdline)
 
-        cql = self.manager.get_cql()
+        cql, _ = await self.manager.get_ready_cql(await self.manager.running_servers())
         cql.get_execution_profile(EXEC_PROFILE_DEFAULT).consistency_level = ConsistencyLevel.ONE
         audit_mode = needed.get("audit") or ""
         if "table" not in audit_mode:
