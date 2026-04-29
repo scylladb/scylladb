@@ -385,12 +385,8 @@ future<compaction_result> compaction_task_executor::compact_sstables_and_update_
         co_return compaction_result{};
     }
 
-    bool should_update_history = this->should_update_history(descriptor.options.type());
     compaction_result res = co_await compact_sstables(std::move(descriptor), cdata, on_replace, std::move(can_purge));
-
-    if (should_update_history) {
-        co_await update_history(*_compacting_table, compaction_result(res), cdata);
-    }
+    co_await update_history(*_compacting_table, compaction_result(res), cdata);
 
     co_return res;
 }
@@ -1444,27 +1440,24 @@ protected:
             std::exception_ptr ex;
 
             try {
-                bool should_update_history = this->should_update_history(descriptor.options.type());
                 compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace);
                 cmlog.debug("Finished minor compaction old_sstables={} new_sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
                         old_sstables, res.new_sstables, compacting_table()->get_sstables_repaired_at(), compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
                 finish_compaction();
-                if (should_update_history) {
-                    // update_history can take a long time compared to
-                    // compaction, as a call issued on shard S1 can be
-                    // handled on shard S2. If the other shard is under
-                    // heavy load, we may unnecessarily block kicking off a
-                    // new compaction. Normally it isn't a problem, but there were
-                    // edge cases where the described behaviour caused
-                    // compaction to fail to keep up with excessive
-                    // flushing, leading to too many sstables on disk and
-                    // OOM during a read.  There is no need to wait with
-                    // next compaction until history is updated, so release
-                    // the weight earlier to remove unnecessary
-                    // serialization.
-                    weight_r.deregister();
-                    co_await update_history(*_compacting_table, std::move(res), _compaction_data);
-                }
+                // update_history can take a long time compared to
+                // compaction, as a call issued on shard S1 can be
+                // handled on shard S2. If the other shard is under
+                // heavy load, we may unnecessarily block kicking off a
+                // new compaction. Normally it isn't a problem, but there were
+                // edge cases where the described behaviour caused
+                // compaction to fail to keep up with excessive
+                // flushing, leading to too many sstables on disk and
+                // OOM during a read.  There is no need to wait with
+                // next compaction until history is updated, so release
+                // the weight earlier to remove unnecessary
+                // serialization.
+                weight_r.deregister();
+                co_await update_history(*_compacting_table, std::move(res), _compaction_data);
                 _cm.reevaluate_postponed_compactions();
                 continue;
             } catch (...) {

@@ -583,9 +583,6 @@ protected:
                                 compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes,
                                 sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> update_history(::compaction::compaction_group_view& t, compaction_result&& res, const compaction_data& cdata);
-    bool should_update_history(compaction_type ct) {
-        return ct == compaction_type::Compaction || ct == compaction_type::Major;
-    }
 public:
     compaction_manager::compaction_stats_opt get_stats() const noexcept {
         return _stats;
