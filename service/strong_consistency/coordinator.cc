@@ -447,10 +447,12 @@ auto coordinator::query(schema_ptr schema,
         }
         // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
 
-        co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
-            utils::wait_for_message(5min));
+        if (rtype == read_type::linearizable) {
+            co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
+                utils::wait_for_message(5min));
 
-        co_await op.raft_server.server().read_barrier(&aoe.abort_source());
+            co_await op.raft_server.server().read_barrier(&aoe.abort_source());
+        }
 
         auto [result, cache_temp] = co_await _db.query(schema, cmd,
             query::result_options::only_result(), ranges, trace_state, timeout);
