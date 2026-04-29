@@ -438,9 +438,10 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
 
     const auto cache_key = qp.compute_id(req, "", cql3::internal_dialect());
     auto ps_ptr = qp.get_prepared(cache_key);
+    shared_ptr<cql_transport::messages::result_message::prepared> prepared_msg;
     if (!ps_ptr) {
-        const auto msg_ptr = co_await qp.prepare(req, qs, cql3::internal_dialect());
-        ps_ptr = msg_ptr->get_prepared();
+        prepared_msg = co_await qp.prepare(req, qs, cql3::internal_dialect());
+        ps_ptr = prepared_msg->get_prepared();
         if (!ps_ptr) {
             on_internal_error(paxos_state::logger, "prepared statement is null");
         }
@@ -449,8 +450,8 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
         -1, service::node_local_only::yes);
     const auto st = ps_ptr->statement;
 
-    const auto msg_ptr = co_await st->execute(qp, qs, qo, std::nullopt);
-    co_return cql3::untyped_result_set(msg_ptr);
+    const auto result_ptr = co_await st->execute(qp, qs, qo, std::nullopt);
+    co_return cql3::untyped_result_set(result_ptr);
 }
 
 template <typename... Args>
