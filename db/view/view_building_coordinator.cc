@@ -698,12 +698,13 @@ void view_building_coordinator::generate_tablet_resize_updates(utils::chunked_ve
         vbc_logger.debug("Task {} was split into task {} and task {}", task.id, new_id, new_id2);
     };
 
-    // Task with tablet id `n` is updated to new task with tablet id `n/2` (integer division).
-    // If task with tablet id `n/2` is already created (information is stored in `created_tablet_ids`), only old task is removed.
+    // Task's token is looked up in the new tablet map to find the new tablet id.
+    // If a task for that new tablet was already created (tracked in `created_tablet_ids`),
+    // only the old task is removed.
     auto merge_task = [&] (std::unordered_set<locator::tablet_id>& created_tablet_ids, const view_building_task& task) {
         builder.del_task(task.id);
 
-        auto new_tid = locator::tablet_id(old_tmap.get_tablet_id(task.last_token).id / 2);
+        auto new_tid = new_tmap.get_tablet_id(task.last_token);
         if (!created_tablet_ids.contains(new_tid)) {
             created_tablet_ids.insert(new_tid);
             auto new_id = create_task_copy(task, new_tmap.get_last_token(new_tid));
