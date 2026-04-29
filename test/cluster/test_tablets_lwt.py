@@ -102,7 +102,7 @@ async def test_lwt(manager: ManagerClient):
         # so the table must be dropped from all replicas, not just a quorum.
         assert await check_paxos_state_table(False, len(hosts))
 
-    await manager.get_cql().run_async(f"DROP KEYSPACE \"{ks}\"")
+    await cql.run_async(f"DROP KEYSPACE \"{ks}\"")
 
 
 @pytest.mark.asyncio

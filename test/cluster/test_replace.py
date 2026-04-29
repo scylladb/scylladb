@@ -91,6 +91,7 @@ async def test_replace_reuse_ip(request, manager: ManagerClient, failure_detecto
     await manager.server_stop_gracefully(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = False)
     replace_future = asyncio.create_task(manager.server_add(replace_cfg, property_file=servers[0].property_file()))
+    cql, _ = await manager.get_ready_cql([s for s in servers if s.server_id != servers[0].server_id])
     start_time = time.time()
     next_id = 0
     logger.info(f"running write requests in a loop while the replacing node is starting")
@@ -101,7 +102,7 @@ async def test_replace_reuse_ip(request, manager: ManagerClient, failure_detecto
         k = f'key_{i}'
         v = f'value_{i}'
         expected_data.append((k, v))
-        await manager.get_cql().run_async(SimpleStatement("insert into ks.test_table(key, value) values (%s, %s)",
+        await cql.run_async(SimpleStatement("insert into ks.test_table(key, value) values (%s, %s)",
                                                           consistency_level=ConsistencyLevel.QUORUM),
                                           parameters=[k, v],
                                           host=host2)
@@ -115,7 +116,7 @@ async def test_replace_reuse_ip(request, manager: ManagerClient, failure_detecto
     errs = await log.grep("storage_proxy - Failed to apply mutation from", from_mark=m)
     assert len(errs) == 0
 
-    result_set = await manager.get_cql().run_async(SimpleStatement("select * from ks.test_table",
+    result_set = await cql.run_async(SimpleStatement("select * from ks.test_table",
                                                                    consistency_level=ConsistencyLevel.QUORUM),
                                                    host=host2, all_pages=True)
     read_data = [(row.key, row.value) for row in result_set]

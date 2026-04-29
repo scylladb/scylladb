@@ -140,10 +140,11 @@ async def test_change_two(manager, random_tables, build_mode):
     await table.add_column(column=Column("str_c", TextType))
     await random_tables.verify_schema()
 
-    host0 = (await wait_for_cql_and_get_hosts(manager.get_cql(), [servers[0]], time.time() + 60))[0]
-    await manager.get_cql().run_async(f"USE {random_tables.keyspace}")
-    await manager.get_cql().run_async("insert into t1(pk, int_c, str_c) values (1, 2, 'test-val')", host=host0)
-    rows = list(await manager.get_cql().run_async("select * from t1", host=host0))
+    cql, hosts = await manager.get_ready_cql(servers)
+    host0 = next(h for h in hosts if h.address == servers[0].ip_addr)
+    await cql.run_async(f"USE {random_tables.keyspace}")
+    await cql.run_async("insert into t1(pk, int_c, str_c) values (1, 2, 'test-val')", host=host0)
+    rows = list(await cql.run_async("select * from t1", host=host0))
     assert len(rows) == 1
     row = rows[0]
     assert row.pk == 1

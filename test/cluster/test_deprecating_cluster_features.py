@@ -68,10 +68,11 @@ async def test_features_suppress_works(manager: ManagerClient, build_mode) -> No
         ]
     })
     await manager.server_start(srv.server_id)
-    await check_features_status(manager.get_cql(), features_to_suppress, False)
+    cql, _ = await manager.get_ready_cql([srv])
+    await check_features_status(cql, features_to_suppress, False)
 
     await manager.server_stop_gracefully(srv.server_id)
     await manager.server_update_config(srv.server_id, ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY, [])
     await manager.server_start(srv.server_id)
-    await manager.get_ready_cql([srv])
-    await check_features_status(manager.get_cql(), features_to_suppress, True)
+    cql, _ = await manager.get_ready_cql([srv])
+    await check_features_status(cql, features_to_suppress, True)

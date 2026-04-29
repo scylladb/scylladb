@@ -54,7 +54,8 @@ async def test_auth_no_quorum(manager: ManagerClient) -> None:
     for role in roles:
         await manager.driver_connect(server=alive_server,
             auth_provider=PlainTextAuthProvider(username=role, password=role))
-    names = [row.role for row in await manager.get_cql().run_async(f"LIST ROLES", execution_profile='whitelist')]
+    cql, _ = await manager.get_ready_cql([alive_server])
+    names = [row.role for row in await cql.run_async(f"LIST ROLES", execution_profile='whitelist')]
     assert set(names) == set(roles)
 
 """

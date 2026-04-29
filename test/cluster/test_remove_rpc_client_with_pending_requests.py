@@ -38,11 +38,12 @@ async def test_remove_rpc_client_with_pending_requests(request, manager: Manager
     test_rows_count = 10
     futures = []
     expected_data = []
+    cql, _ = await manager.get_ready_cql(servers)
     for i in range(0, test_rows_count):
         k = f'key_{i}'
         v = f'value_{i}'
         expected_data.append((k, v))
-        futures.append(manager.get_cql().run_async("insert into ks.test_table(key, value) values (%s, %s)",
+        futures.append(cql.run_async("insert into ks.test_table(key, value) values (%s, %s)",
                                                    parameters=[k, v], host=host0))
     await asyncio.gather(*futures)
     expected_data.sort()
@@ -57,7 +58,7 @@ async def test_remove_rpc_client_with_pending_requests(request, manager: Manager
     reads_count = 0
     start_time = time.time()
     while not third_node_future.done():
-        result_set = await manager.get_cql().run_async(SimpleStatement("select * from ks.test_table",
+        result_set = await cql.run_async(SimpleStatement("select * from ks.test_table",
                                                                        consistency_level=ConsistencyLevel.ALL),
                                                        host=host0)
         actual_data = []

@@ -72,13 +72,14 @@ async def test_snapshot_on_all_nodes(manager: ManagerClient):
     topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
 
     servers, _ = await create_cluster(topology, manager, logger)
+    cql, _ = await manager.get_ready_cql(servers)
 
     snapshot_name = unique_name('snap_')
 
     async with new_test_keyspace(manager, f"WITH REPLICATION = {{ 'replication_factor' : {topology.rf} }} AND tablets = {{'initial': 20 }}") as ks:
         async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)", "") as tbl:
             cf = tbl.split('.')[1]
-            await prepare_write_workload(manager.get_cql(), tbl, flush=False)
+            await prepare_write_workload(cql, tbl, flush=False)
             await manager.api.take_cluster_snapshot(servers[0].ip_addr, ks, tag=snapshot_name, tables=[cf])
             try:
                 # Collect snapshot files from each server
