@@ -1,13 +1,13 @@
 .. |SCYLLA_NAME| replace:: ScyllaDB
 
-.. |SRC_VERSION| replace:: 2025.x
-.. |NEW_VERSION| replace:: 2026.1
+.. |SRC_VERSION| replace:: 2026.1
+.. |NEW_VERSION| replace:: 2026.2
 
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2025.x to 2026.1
-.. _SCYLLA_METRICS: ../metric-update-2025.x-to-2026.1
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2026.1 to 2026.2
+.. _SCYLLA_METRICS: ../metric-update-2026.1-to-2026.2
 
 =======================================================================================
 Upgrade from |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|
