@@ -169,8 +169,7 @@ async def test_alternator_tables_respect_compression_config(manager: ManagerClie
 
     # Connect to Alternator and CQL
     alternator = get_alternator(server.ip_addr)
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    cql, _ = await manager.get_ready_cql([server])
 
     # Create a table with GSI, LSI and Streams
     table = alternator.create_table(TableName='base',
@@ -248,8 +247,7 @@ async def test_cql_base_tables_respect_compression_config(manager: ManagerClient
     }
     server = await manager.server_add(config=compression_config)
 
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    cql, _ = await manager.get_ready_cql([server])
 
     ks = f"cql_aux_test_{int(time.time())}"
     await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
@@ -290,8 +288,7 @@ async def test_cql_aux_tables_respect_compression_config(manager: ManagerClient)
     }
     server = await manager.server_add(config=compression_config)
 
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    cql, _ = await manager.get_ready_cql([server])
 
     ks = f"cql_aux_test_{int(time.time())}"
     await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")

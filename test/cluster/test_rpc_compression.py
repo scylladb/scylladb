@@ -8,7 +8,7 @@ Test RPC compression
 """
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics
-from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
+from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace
 
@@ -26,8 +26,7 @@ import functools
 logger = logging.getLogger(__name__)
 
 async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: str):
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, deadline = time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
     await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
 
 def uncompressed_sent(metrics: list[ScyllaMetrics], algo: str) -> float:

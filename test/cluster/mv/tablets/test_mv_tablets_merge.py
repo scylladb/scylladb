@@ -10,7 +10,7 @@ import time
 
 from test.cluster.util import new_test_keyspace, new_test_table, new_materialized_view
 from test.pylib.tablets import get_tablet_count
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +22,7 @@ async def test_mv_merge_allowed(manager):
     """
     cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     server = await manager.server_add(config=cfg)
-    cql = manager.cql
-    _ = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    cql, _ = await manager.get_ready_cql([server])
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true, 'initial': 1}}") as ks:
         async with new_test_table(manager, ks, "p int PRIMARY KEY, x int", "WITH tablets = {'min_tablet_count': 2}") as table:
             async with new_materialized_view(manager, table, "*", "x, p", "p is not null and x is not null", "WITH tablets = {'min_tablet_count': 2}") as mv:

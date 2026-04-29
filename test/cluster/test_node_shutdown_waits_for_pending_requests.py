@@ -8,7 +8,6 @@ from test.pylib.rest_client import inject_error_one_shot
 from cassandra.query import SimpleStatement # type: ignore
 from cassandra.cluster import ConsistencyLevel # type: ignore
 from cassandra.protocol import ReadTimeout # type: ignore
-from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 
@@ -22,10 +21,8 @@ async def test_node_shutdown_waits_for_pending_requests(manager: ManagerClient) 
 
     logger.info('start two nodes')
     servers = await manager.servers_add(servers_num=2, auto_rack_dc="dc")
-    cql = manager.get_cql()
-
     logger.info(f'wait for host for the node {servers[0]}, servers {servers}')
-    h0 = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60))[0]
+    cql, [h0] = await manager.get_ready_cql([servers[0]])
 
     logger.info('create keyspace and table')
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:

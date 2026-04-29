@@ -119,8 +119,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
         manager.driver_close()
         await manager.server_start(s0, wait_others=2)
         await manager.driver_connect(server=servers[0])
-        cql = manager.get_cql()
-        await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
+        cql, _ = await manager.get_ready_cql([servers[0]])
 
         # Trigger a schema change to invoke schema agreement waiting to make sure that s0 has the latest schema
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as test_dummy:
@@ -497,11 +496,9 @@ async def test_tablet_cleanup(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     logger.info("Populate table")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     n_tablets = 32
     n_partitions = 1000
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    await manager.servers_see_each_other(servers)
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk) VALUES ({k});") for k in range(1000)])
@@ -570,11 +567,9 @@ async def test_tablet_cleanup_failure(manager: ManagerClient):
     # not attempt to migrate the tablet back to the first node.
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     n_tablets = 1
     n_partitions = 1000
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    await manager.servers_see_each_other(servers)
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk) VALUES ({k});") for k in range(n_partitions)])
@@ -1076,8 +1071,7 @@ async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_on
     moved_sstable_files = move_sstables_to_upload(table_dir, dst_table_dir)
 
     await manager.server_start(servers[0].server_id)
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, _ = await manager.get_ready_cql(servers)
 
     rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
     assert len(rows) == 0
@@ -1151,8 +1145,7 @@ async def test_tablet_storage_freeing(manager: ManagerClient):
     logger.info("Start first node")
     servers = [await manager.server_add()]
     await manager.disable_tablet_balancing()
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, _ = await manager.get_ready_cql(servers)
 
     logger.info("Create a table with two tablets and populate it with a moderate amount of data.")
     n_tablets = 2
@@ -1193,10 +1186,8 @@ async def test_schema_change_during_cleanup(manager: ManagerClient):
     logger.info("Start first node")
     servers = [await manager.server_add()]
     await manager.disable_tablet_balancing()
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, _ = await manager.get_ready_cql(servers)
 
-    cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -1526,11 +1517,9 @@ async def test_tablet_cleanup_vs_snapshot_race(manager: ManagerClient):
     servers = [await manager.server_add(cmdline=cmdline)]
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     n_tablets = 1
     n_partitions = 1000
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    await manager.servers_see_each_other(servers)
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk) VALUES ({k});") for k in range(n_partitions)])
@@ -1865,8 +1854,7 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
         move_sstables_to_upload(table_dir)
 
         await manager.server_start(servers[0].server_id)
-        cql = manager.get_cql()
-        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        cql, _ = await manager.get_ready_cql(servers)
 
         rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
         assert len(rows) == 0

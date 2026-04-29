@@ -11,7 +11,6 @@ import time
 from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
 from test.pylib.util import wait_for
 
@@ -29,17 +28,17 @@ logger = logging.getLogger(__name__)
 async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, manager: ManagerClient, use_tablets: bool) -> None:
     CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled" if use_tablets else "disabled"}
     logger.info("Creating a new cluster")
+    servers = []
     for i in range(2):
-        await manager.server_add(
+        servers.append(await manager.server_add(
             config=CONFIG,
-            property_file={'dc': f'dc{i}', 'rack': f'myrack{i}'})
+            property_file={'dc': f'dc{i}', 'rack': f'myrack{i}'}))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc0': 1, 'dc1': 1}") as ks:
         await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
         srvs = await manager.running_servers()
-        await wait_for_cql_and_get_hosts(cql, srvs, time.time() + 60)
 
         stmt = cql.prepare(f"SELECT * FROM {ks}.t where pk = ?")
         stmt.consistency_level = ConsistencyLevel.LOCAL_QUORUM
@@ -81,20 +80,19 @@ async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, 
 async def test_change_replication_factor_1_to_0_and_decommission(request: pytest.FixtureRequest, manager: ManagerClient, use_tablets: bool) -> None:
     CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled" if use_tablets else "disabled"}
     logger.info("Creating a new cluster")
+    servers = []
     for i in range(2):
-        await manager.server_add(
+        servers.append(await manager.server_add(
             config=CONFIG,
-            property_file={'dc': f'dc{i}', 'rack': 'myrack'})
+            property_file={'dc': f'dc{i}', 'rack': 'myrack'}))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc0': 1, 'dc1': 1}") as ks:
         await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
         srvs = await manager.running_servers()
         sorted(srvs, key=lambda si: si.datacenter)
         assert(srvs[1].datacenter == "dc1")
-
-        await wait_for_cql_and_get_hosts(cql, srvs, time.time() + 60)
 
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (pk) VALUES ({k});") for k in keys])

@@ -64,9 +64,7 @@ Tests raft snapshot transfer of auth data.
 async def test_auth_raft_snapshot_transfer(manager: ManagerClient) -> None:
     servers = await manager.servers_add(1, config=auth_config)
 
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    await manager.servers_see_each_other(servers)
+    cql, _ = await manager.get_ready_cql(servers)
 
     roles = ["ro" + unique_name() for _ in range(10)]
     for role in roles:

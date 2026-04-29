@@ -9,7 +9,6 @@ from test.pylib.repair import load_tablet_sstables_repaired_at, load_tablet_repa
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.util import reconnect_driver, find_server_by_host_id, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace
-from test.pylib.util import wait_for_cql_and_get_hosts
 
 from cassandra.query import ConsistencyLevel, SimpleStatement
 
@@ -1394,10 +1393,8 @@ async def test_tombstone_gc_no_resurrection_propagation_delay(manager: ManagerCl
 
     # Restart servers[2]; D and T are not on its disk yet.
     await manager.server_start(servers[2].server_id)
-    await manager.servers_see_each_other(servers)
     await reconnect_driver(manager)
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     # Repair: hints flush sends D and T to servers[2] before the repairing snapshot.
     # After row sync, mark_sstable_as_repaired() promotes D and T to repaired on servers[2].
@@ -1489,10 +1486,8 @@ async def test_tombstone_gc_mv_optimization_safe_via_hints(manager: ManagerClien
 
     # Restart servers[2]; view hints (D_view + T_mv) are still pending.
     await manager.server_start(servers[2].server_id)
-    await manager.servers_see_each_other(servers)
     await reconnect_driver(manager)
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     # MV tablet repair:
     #   flush_hints() → hints_for_views_manager replays D_view + T_mv to servers[2] before snapshot
@@ -1613,10 +1608,8 @@ async def test_tombstone_gc_mv_safe_staging_processor_delay(manager: ManagerClie
 
     # Restart servers[0]; still no D_base on base or D_view on MV for servers[0].
     await manager.server_start(servers[0].server_id)
-    await manager.servers_see_each_other(servers)
     await reconnect_driver(manager)
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     # Block the staging processor on servers[0] BEFORE running base repair, so that
     # the staged D_base (written by row-sync during base repair) never gets dispatched

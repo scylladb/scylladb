@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from test.pylib.manager_client import ManagerClient, ServerInfo
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for
 
 from cassandra.cluster import ConsistencyLevel, NoHostAvailable, Session
 from cassandra.protocol import InvalidRequest
@@ -63,10 +63,8 @@ async def test_writes_to_recent_previous_cdc_generations(request, manager: Manag
         'error_injections_at_startup': ['increase_cdc_generation_leeway']
     })
 
-    cql = manager.get_cql()
-
     logger.info("Waiting for driver")
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, _ = await manager.get_ready_cql(servers)
 
     gen_timestamps = await wait_for_publishing_generations(cql, servers)
 
@@ -113,10 +111,8 @@ async def test_writes_to_old_previous_cdc_generation(request, manager: ManagerCl
     logger.info("Bootstrapping nodes")
     servers = await manager.servers_add(2, cmdline=['--ring-delay', '5000'])
 
-    cql = manager.get_cql()
-
     logger.info("Waiting for driver")
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, _ = await manager.get_ready_cql(servers)
 
     gen_timestamps = await wait_for_publishing_generations(cql, servers)
 

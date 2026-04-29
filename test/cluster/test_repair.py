@@ -46,14 +46,13 @@ async def test_enable_compacting_data_for_streaming_and_repair_live_update(manag
     cmdline = ["--enable-compacting-data-for-streaming-and-repair", "0", "--smp", "1", "--logger-log-level", "api=trace"]
     node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, [host1, host2] = await manager.get_ready_cql([node1, node2])
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY)")
 
     config_item = "enable_compacting_data_for_streaming_and_repair"
 
-    host1, host2 = await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 30)
 
     for host in (host1, host2):
         res = list(cql.execute(f"SELECT value FROM system.config WHERE name = '{config_item}'", host=host))
@@ -291,13 +290,12 @@ async def test_repair_timtestamp_difference(manager):
     cmdline = [ "--smp", "1", "--logger-log-level", "api=trace", "--hinted-handoff-enabled", "0" ]
     node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, [host1, host2] = await manager.get_ready_cql([node1, node2])
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     cql.execute("CREATE TABLE ks.tbl (pk int, ck UUID, v text, PRIMARY KEY (pk, ck))")
 
     nodes = [node1, node2]
-    host1, host2 = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 30)
 
     pk = 1
     ck = uuid.uuid1()

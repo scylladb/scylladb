@@ -9,7 +9,7 @@ import asyncio
 import logging
 import pytest
 from test.pylib.rest_client import read_barrier, get_host_api_address
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
@@ -20,9 +20,8 @@ async def test_attach_service_level_to_user(request, manager: ManagerClient):
     # Start nodes with correct topology
     servers = await manager.servers_add(3, config=auth_config)
 
-    cql = manager.get_cql()
     logging.info("Waiting until driver connects to every server")
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
     ips = [get_host_api_address(host) for host in hosts]
 
     logging.info("Creating User")

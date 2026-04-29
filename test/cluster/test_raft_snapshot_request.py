@@ -22,10 +22,9 @@ async def test_raft_snapshot_request(manager: ManagerClient):
         '--logger-log-level', 'raft=trace',
         ]
     servers = await manager.servers_add(3, cmdline=cmdline)
-    cql = manager.get_cql()
 
     s1 = servers[0]
-    h1 = (await wait_for_cql_and_get_hosts(cql, [s1], time.time() + 60))[0]
+    cql, [h1] = await manager.get_ready_cql([s1])
 
     # Verify that snapshotting updates the snapshot ID and truncates the log.
     log_size = await get_raft_log_size(cql, h1)

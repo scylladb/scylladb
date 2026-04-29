@@ -13,7 +13,7 @@ from cassandra.cluster import NoHostAvailable  # type: ignore
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, new_test_table
 
 logger = logging.getLogger(__name__)
@@ -32,8 +32,7 @@ async def test_cancel_mapreduce(manager: ManagerClient):
     assert len(running_servers) >= 2
 
     s1, s2 = running_servers[0], running_servers[1]
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, [s1, s2], time.time() + 30)
+    cql, hosts = await manager.get_ready_cql([s1, s2])
 
     await manager.api.set_logger_level(s1.ip_addr, "forward_service", "debug")
 

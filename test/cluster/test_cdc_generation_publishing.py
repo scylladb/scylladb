@@ -5,7 +5,7 @@
 #
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.rest_client import inject_error
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for
 
 from cassandra.cluster import ConsistencyLevel # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement # type: ignore # pylint: disable=no-name-in-module
@@ -33,8 +33,7 @@ async def test_cdc_generations_are_published(request, manager: ManagerClient):
     gen_timestamps = set[datetime]()
 
     async def new_gen_appeared() -> Optional[set[datetime]]:
-        cql = manager.get_cql()
-        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        cql, _ = await manager.get_ready_cql(servers)
         new_gen_timestamps = {r.time for r in await cql.run_async(query_gen_timestamps)}
         assert len(gen_timestamps) + 1 >= len(new_gen_timestamps)
         if gen_timestamps < new_gen_timestamps:
@@ -93,8 +92,7 @@ async def test_multiple_unpublished_cdc_generations(request, manager: ManagerCli
         logger.info("Bootstrapping other nodes")
         servers += await manager.servers_add(3)
 
-        cql = manager.get_cql()
-        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        cql, _ = await manager.get_ready_cql(servers)
 
         gen_timestamps = set[datetime]()
 

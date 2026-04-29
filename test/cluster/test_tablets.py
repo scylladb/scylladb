@@ -401,9 +401,9 @@ async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager:
     await manager.servers_add(2, config=config, auto_rack_dc="dc1")
     await manager.servers_add(2, config=config, auto_rack_dc="dc2")
 
-    cql = manager.get_cql()
     servers = await manager.running_servers()
-    host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    cql, hosts = await manager.get_ready_cql([servers[0]])
+    host = hosts[0]
 
     async def check_rf(ks: str, expected_dc1_rf: int, expected_dc2_rf: int):
         await read_barrier(manager.api, servers[0].ip_addr)
@@ -452,7 +452,7 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
 
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
@@ -554,7 +554,7 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
                 await manager.server_add(config=config, cmdline=['--smp=2'], property_file={'dc': 'dc2', 'rack': 'rack2a'}),
                 await manager.server_add(config=config, cmdline=['--smp=2'], property_file={'dc': 'dc2', 'rack': 'rack2b'})]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
@@ -665,8 +665,8 @@ async def test_multi_rf_change_multi_dc_0_N(request: pytest.FixtureRequest, mana
     dc1_host_ids = [await manager.get_host_id(s.server_id) for s in servers[0:3]]
     dc2_host_ids = [await manager.get_host_id(s.server_id) for s in servers[3:6]]
 
-    cql = manager.get_cql()
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    cql, dc1_hosts = await manager.get_ready_cql([servers[0]])
+    dc1_host = dc1_hosts[0]
 
     # Create keyspace with RF=3 in dc1 only.
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c']}} and tablets = {{'initial': 4}};")
@@ -723,9 +723,9 @@ async def test_multi_rf_change_colocated_tables_0_N(request: pytest.FixtureReque
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'}),
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2c'})]
 
-    cql = manager.get_cql()
+    cql, dc1_hosts = await manager.get_ready_cql([servers[0]])
 
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    dc1_host = dc1_hosts[0]
 
     await cql.run_async("create keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']} and tablets = {'initial': 4};")
     await cql.run_async("create table ks1.t (pk int primary key, v int);")
@@ -803,9 +803,9 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
     dc1_host_ids = [await manager.get_host_id(s.server_id) for s in servers[0:3]]
 
-    cql = manager.get_cql()
+    cql, dc1_hosts = await manager.get_ready_cql([servers[0]])
 
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    dc1_host = dc1_hosts[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c']}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key, v int);")
@@ -953,9 +953,9 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
 
     dc2_host_ids = [await manager.get_host_id(s.server_id) for s in servers[3:6]]
 
-    cql = manager.get_cql()
+    cql, dc1_hosts = await manager.get_ready_cql([servers[0]])
 
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    dc1_host = dc1_hosts[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key, v int);")
@@ -1040,9 +1040,9 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
 
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
 
-    cql = manager.get_cql()
+    cql, dc1_hosts = await manager.get_ready_cql([servers[0]])
 
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    dc1_host = dc1_hosts[0]
 
     # Start with dc1 only (dc2: 0).
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c']}} and tablets = {{'initial': 4}};")
@@ -1133,7 +1133,7 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
 
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
@@ -1912,8 +1912,7 @@ async def test_drop_keyspace_while_split(manager: ManagerClient):
 
     s0_log = await manager.server_open_log(servers[0].server_id)
 
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
+    cql, _ = await manager.get_ready_cql([servers[0]])
 
     await manager.disable_tablet_balancing()
 
@@ -2130,7 +2129,7 @@ async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(m
 
     cql = await safe_rolling_restart(manager, [servers[0]], with_down=insert_with_down)
 
-    await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 30)
+    cql, _ = await manager.get_ready_cql(servers)
 
     all_replicas = await get_all_tablet_replicas(manager, servers[1], ks, "test")
     migration_replicas = all_replicas[0]
@@ -2400,8 +2399,8 @@ async def test_multi_rf_increase_auto_abort_excluded_node(request: pytest.Fixtur
     servers = [dc1_server, dc2_rack1_server, dc2_rack2_server]
     dc1_host_id = await manager.get_host_id(dc1_server.server_id)
 
-    cql = manager.get_cql()
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [dc1_server], time.time() + 30))[0]
+    cql, dc1_hosts = await manager.get_ready_cql([dc1_server])
+    dc1_host = dc1_hosts[0]
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']} AND tablets = {'initial': 4}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int);")
@@ -2461,8 +2460,8 @@ async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, ma
 
     dc1_host_id = await manager.get_host_id(dc1_server.server_id)
 
-    cql = manager.get_cql()
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [dc1_server], time.time() + 30))[0]
+    cql, dc1_hosts = await manager.get_ready_cql([dc1_server])
+    dc1_host = dc1_hosts[0]
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']} AND tablets = {'initial': 4}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int);")

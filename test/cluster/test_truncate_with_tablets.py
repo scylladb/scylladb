@@ -84,8 +84,7 @@ async def test_truncate_with_concurrent_drop(manager: ManagerClient):
     servers.append(await manager.server_add(config=cfg))
     servers.append(await manager.server_add(config=cfg))
 
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
@@ -133,8 +132,7 @@ async def test_truncate_while_node_restart(manager: ManagerClient):
     servers.append(await manager.server_add(config=cfg))
     servers.append(await manager.server_add(config=cfg))
 
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
@@ -180,8 +178,7 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
     servers.append(await manager.server_add(config=cfg))
     servers.append(await manager.server_add(config=cfg))
 
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:

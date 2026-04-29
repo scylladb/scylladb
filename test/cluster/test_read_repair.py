@@ -15,7 +15,7 @@ from cassandra.cluster import ConsistencyLevel, Session  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from cassandra.pool import Host  # type: ignore
 
-from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
+from test.pylib.util import execute_with_tracing
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace
@@ -199,9 +199,7 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
     nodes = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
     node1, node2 = nodes
 
-    cql = manager.get_cql()
-
-    host1, host2 = await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 30)
+    cql, [host1, host2] = await manager.get_ready_cql([node1, node2])
 
     # The test generates and uploads sstables, assuming their specific
     # contents. These assumptions are not held with tablets, which
@@ -317,9 +315,8 @@ async def test_read_repair_with_trace_logging(request, manager):
 
     [node1, node2] = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
     srvs = await manager.running_servers()
-    await wait_for_cql_and_get_hosts(cql, srvs, time.time() + 60)
+    cql, _ = await manager.get_ready_cql(srvs)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk bigint, ck bigint, c int, PRIMARY KEY (pk, ck));")

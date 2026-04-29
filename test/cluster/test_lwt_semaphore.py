@@ -5,9 +5,7 @@
 #
 
 import asyncio
-import time
 from test.pylib.rest_client import inject_error
-from test.pylib.util import wait_for_cql_and_get_hosts
 import pytest
 from cassandra.protocol import WriteTimeout
 from test.cluster.util import new_test_keyspace
@@ -19,7 +17,7 @@ async def test_cas_semaphore(manager):
     """ This is a regression test for scylladb/scylladb#19698 """
     servers = await manager.servers_add(1, cmdline=['--smp', '1', '--write-request-timeout-in-ms', '500'])
 
-    host = await wait_for_cql_and_get_hosts(manager.cql, {servers[0]}, time.time() + 60)
+    _, host = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         table = f"{ks}.test"

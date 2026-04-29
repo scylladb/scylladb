@@ -14,7 +14,7 @@ from cassandra.query import SimpleStatement  # type: ignore
 
 from test.cluster.util import new_test_keyspace
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
+from test.pylib.util import execute_with_tracing
 
 
 logger = logging.getLogger(__name__)
@@ -42,9 +42,7 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
 
     node1, node2, node3 = nodes
 
-    cql = manager.get_cql()
-
-    host1, host2, host3 = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 30)
+    cql, [host1, host2, host3] = await manager.get_ready_cql(nodes)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = { 'enabled': true }") as ks:
         cql.execute(f"CREATE TABLE {ks}.tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))"

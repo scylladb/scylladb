@@ -28,7 +28,7 @@ import time
 import pytest
 from cassandra.auth import PlainTextAuthProvider
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
+from test.pylib.util import wait_for
 
 
 logger = logging.getLogger(__name__)
@@ -82,8 +82,7 @@ async def test_connection_stage_ready_after_auth(manager: ManagerClient, auth_ty
         if auth_type == "password" else None
 
     await manager.driver_connect(server=server, auth_provider=auth_provider)
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    cql, _ = await manager.get_ready_cql([server])
 
     async def all_connections_ready():
         rows = list(cql.execute(

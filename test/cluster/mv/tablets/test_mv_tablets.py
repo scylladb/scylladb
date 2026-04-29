@@ -9,7 +9,6 @@
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
 from test.pylib.tablets import get_tablet_replicas, get_tablet_count
-from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.cluster.util import new_test_keyspace
 

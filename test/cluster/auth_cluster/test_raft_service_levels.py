@@ -33,9 +33,7 @@ async def test_service_levels_snapshot(manager: ManagerClient):
         Stop 3 `old` servers and query the new server to validete if it has the same service levels.
     """
     servers = await manager.servers_add(3, config=auth_config)
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    await manager.servers_see_each_other(servers)
+    cql, _ = await manager.get_ready_cql(servers)
 
     sls = ["sl" + unique_name() for _ in range(5)]
     for sl in sls:
@@ -50,8 +48,7 @@ async def test_service_levels_snapshot(manager: ManagerClient):
 
     new_server = await manager.server_add(config=auth_config)
     all_servers = servers + [new_server]
-    await wait_for_cql_and_get_hosts(cql, all_servers, time.time() + 60)
-    await manager.servers_see_each_other(all_servers)
+    await manager.get_ready_cql(all_servers)
 
     await asyncio.gather(*[manager.server_stop_gracefully(s.server_id)
                            for s in servers])
@@ -119,8 +116,7 @@ async def assert_connections_params(manager: ManagerClient, hosts, expect):
 @pytest.mark.skip_mode(mode='release', reason='cql server testing REST API is not supported in release mode')
 async def test_connections_parameters_auto_update(manager: ManagerClient, build_mode):
     servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     logging.info("Creating user roles and their connections")
     await asyncio.gather(*(
@@ -203,8 +199,7 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
 @pytest.mark.asyncio
 async def test_service_level_cache_after_restart(manager: ManagerClient):
     servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     await cql.run_async(f"CREATE SERVICE LEVEL sl1 WITH timeout=500ms AND workload_type='batch'")
 
@@ -250,9 +245,8 @@ async def test_shares_check(manager: ManagerClient):
     await manager.server_stop_gracefully(srv.server_id)
     await manager.server_update_config(srv.server_id, "error_injections_at_startup", [])
     await manager.server_start(srv.server_id)
-    await wait_for_cql_and_get_hosts(manager.get_cql(), [srv], time.time() + 60)
+    cql, _ = await manager.get_ready_cql([srv])
 
-    cql = manager.get_cql()
     await cql.run_async(f"CREATE SERVICE LEVEL {sl2} WITH shares=500")
     await cql.run_async(f"ALTER SERVICE LEVEL {sl1} WITH shares=100")
 
@@ -263,8 +257,7 @@ async def test_service_levels_over_limit(manager: ManagerClient):
         "error_injections_at_startup": ['allow_service_level_over_limit']
     })
     await manager.server_start(srv.server_id)
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
+    cql, hosts = await manager.get_ready_cql([srv])
 
     sls = []
     for i in range(MAX_USER_SERVICE_LEVELS + 1):
@@ -288,8 +281,7 @@ async def test_service_levels_over_limit(manager: ManagerClient):
 async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
     servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
     s = servers[0]
-    cql = manager.get_cql()
-    [h] = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60)
+    cql, [h] = await manager.get_ready_cql([s])
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     sl1 = unique_name()
@@ -332,8 +324,7 @@ async def test_reload_service_levels_after_auth_service_is_stopped(manager: Mana
 @pytest.mark.asyncio
 async def test_service_level_reuse_name(manager: ManagerClient):
     servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     sl1 = "sl1"
     sl2 = "sl2"
@@ -358,8 +349,7 @@ async def test_service_level_reuse_name(manager: ManagerClient):
 async def test_driver_service_level(manager: ManagerClient) -> None:
     servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     logger.info("Verify that sl:driver is created properly on system startup")
@@ -390,8 +380,7 @@ async def test_driver_service_level(manager: ManagerClient) -> None:
 async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
     servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     logger.info("Drop sl:driver to prepare the system state and re-create it later")
@@ -465,8 +454,7 @@ async def _verify_requests_count_metrics(manager, server, used_group, unused_gro
 async def test_driver_service_level_not_used_for_user_queries(manager: ManagerClient) -> None:
     server = await manager.server_add(config=auth_config)
 
-    cql = manager.get_cql()
-    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    cql, [h] = await manager.get_ready_cql([server])
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     func = lambda: cql.execute(f"SELECT * from system.peers")
@@ -482,8 +470,7 @@ async def test_driver_service_level_not_used_for_user_queries(manager: ManagerCl
 async def test_driver_service_level_used_for_driver_queries(manager: ManagerClient) -> None:
     server = await manager.server_add(config=auth_config)
 
-    cql = manager.get_cql()
-    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    cql, [h] = await manager.get_ready_cql([server])
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     await cql.run_async(f"CREATE SERVICE LEVEL test", host=h)
@@ -512,8 +499,7 @@ async def test_driver_service_level_used_for_driver_queries(manager: ManagerClie
 async def test_anonymous_user(manager: ManagerClient) -> None:
     allow_all_config = {'authenticator':'AllowAllAuthenticator', 'authorizer':'AllowAllAuthorizer'}
     server = await manager.server_add(config=allow_all_config)
-    cql = manager.get_cql()
-    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    cql, [h] = await manager.get_ready_cql([server])
 
     async def connections_ready():
         rows = list(cql.execute("SELECT connection_stage, username, scheduling_group FROM system.clients"))

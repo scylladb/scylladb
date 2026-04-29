@@ -10,7 +10,7 @@ import time
 import logging
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for
 from test.cluster.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id, create_new_test_keyspace
 from test.pylib.rest_client import inject_error_one_shot
 
@@ -40,10 +40,9 @@ async def test_raft_snapshot_truncation(manager: ManagerClient):
         '--logger-log-level', 'raft=trace',
     ]
     servers = await manager.servers_add(3, cmdline=cmdline)
-    cql = manager.get_cql()
 
     s1 = servers[0]
-    h1 = (await wait_for_cql_and_get_hosts(cql, [s1], time.time() + 60))[0]
+    cql, [h1] = await manager.get_ready_cql([s1])
 
     log_size = await get_raft_log_size(cql, h1)
     logger.info(f"Log size on {s1}: {log_size}")

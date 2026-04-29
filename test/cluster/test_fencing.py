@@ -89,11 +89,9 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
         Column("pk", IntType),
         Column('counter_c', CounterType)
     ])
-    cql = manager.get_cql()
-    await cql.run_async(f"USE {random_tables.keyspace}")
-
     logger.info('Waiting for cql and hosts')
-    host2 = (await wait_for_cql_and_get_hosts(cql, [servers[2]], time.time() + 60))[0]
+    cql, [host2] = await manager.get_ready_cql([servers[2]])
+    await cql.run_async(f"USE {random_tables.keyspace}")
 
     # Run cleanup_all so the global barrier distributes fence_version := version to all nodes.
     # It must be invoked on the same host where version and fence_version are decremented.
@@ -152,11 +150,9 @@ async def test_fence_hints(request, manager: ManagerClient):
         Column("pk", IntType),
         Column('int_c', IntType)
     ])
-    cql = manager.get_cql()
-    await cql.run_async(f"USE {random_tables.keyspace}")
-
     logger.info(f'Waiting for cql and hosts')
-    hosts = await wait_for_cql_and_get_hosts(cql, [s0, s2], time.time() + 60)
+    cql, hosts = await manager.get_ready_cql([s0, s2])
+    await cql.run_async(f"USE {random_tables.keyspace}")
 
     host2 = host_by_server(hosts, s2)
     new_version = (await get_topology_version(cql, host2)) + 1

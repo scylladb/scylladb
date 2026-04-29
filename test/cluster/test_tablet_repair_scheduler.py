@@ -347,14 +347,13 @@ async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraS
     servers = [await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
                await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R2'}),
                await manager.server_add(property_file = {'dc': 'DC2', 'rack' : 'R3'})]
-    cql = manager.get_cql()
+    cql, hosts = await manager.get_ready_cql(servers)
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                   "'DC1': 2, 'DC2': 1} AND tablets = {'initial': 8};")
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
     keys = range(256)
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
     table_id = await manager.get_table_id(ks, "test")
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     return (servers, cql, hosts, ks, table_id)
 
 @pytest.mark.asyncio
@@ -496,8 +495,7 @@ async def test_tablet_repair_multiple_rows_merge_fragments_size(manager: Manager
     await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_size", "1000")
 
 async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: str):
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, deadline = time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
     await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
 
 async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, auto_repair_threshold, config_per_table = False):

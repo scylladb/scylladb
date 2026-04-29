@@ -43,8 +43,7 @@ async def test_cdc_generation_clearing(manager: ManagerClient):
         await log_file1.wait_for("CDC generation publisher fiber has nothing to do. Sleeping.", from_mark=mark)
         new_mark = await log_file1.mark()
 
-        cql = manager.get_cql()
-        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        cql, hosts = await manager.get_ready_cql(servers)
         new_gen_ids = {r.id for r in await cql.run_async(query_gen_ids)}
 
         return (new_mark, new_gen_ids, hosts)
@@ -100,9 +99,8 @@ async def test_unpublished_cdc_generations_arent_cleared(manager: ManagerClient)
         'error_injections_at_startup': ['clean_obsolete_cdc_generations_change_ts_ub']
     })
 
-    cql = manager.get_cql()
     logger.info("Waiting for driver")
-    [host1] = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, [host1] = await manager.get_ready_cql(servers)
 
     logging.info("Waiting for the first CDC generation publishing")
     await wait_for_cdc_generations_publishing(cql, [host1], time.time() + 60)

@@ -8,7 +8,6 @@ import pytest
 import time
 import logging
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import create_new_test_keyspace
 
 logger = logging.getLogger(__name__)
@@ -25,8 +24,7 @@ async def test_partitioned_sstable_set(manager: ManagerClient, mode):
     server = await manager.server_add(config=cfg, cmdline=cmdline)
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    cql, _ = await manager.get_ready_cql([server])
 
     if mode == 'tablet':
         ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")

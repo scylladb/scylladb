@@ -10,7 +10,7 @@ import asyncio
 import time
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
+from test.pylib.util import wait_for_feature
 from test.cluster import test_cluster_features
 import pytest
 
@@ -81,6 +81,5 @@ async def test_cannot_disable_cluster_feature_after_all_declare_support(manager:
     await manager.server_start(servers[0].server_id)
 
     # Nodes should start supporting the feature
-    cql = cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
     await asyncio.gather(*(wait_for_feature('TEST_ONLY_FEATURE', cql, h, time.time() + 60) for h in hosts))

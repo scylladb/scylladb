@@ -25,7 +25,7 @@ async def test_remove_rpc_client_with_pending_requests(request, manager: Manager
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
 
     logger.info(f"wait_for_cql_and_get_hosts for the first node {servers[0]}")
-    host0 = (await wait_for_cql_and_get_hosts(manager.get_cql(), [servers[0]], time.time() + 60))[0]
+    _, [host0] = await manager.get_ready_cql([servers[0]])
 
     logger.info(f"creating test table")
     random_tables = RandomTables(request.node.name, manager, "ks", 2)

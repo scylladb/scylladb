@@ -17,7 +17,6 @@ import json
 import uuid
 
 from test.pylib.manager_client import ManagerClient, ServerInfo
-from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
 
 from test.cqlpy import nodetool
@@ -54,8 +53,7 @@ async def test_file_streaming_respects_encryption(manager: ManagerClient, workdi
     servers.append(await manager.server_add(config=cfg, cmdline=cmdline))
     await manager.disable_tablet_balancing()
 
-    cql = manager.cql
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, _ = await manager.get_ready_cql(servers)
     cql.execute("CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
     cql.execute(f"""CREATE TABLE ks.t(pk text primary key) WITH scylla_encryption_options = {{
         'cipher_algorithm' : 'AES/ECB/PKCS5Padding',
@@ -155,8 +153,7 @@ async def _smoke_test(manager: ManagerClient, key_provider: KeyProviderFactory,
     cfg = options | key_provider.configuration_parameters()
 
     servers: list[ServerInfo] = await manager.servers_add(servers_num = num_servers, config=cfg, auto_rack_dc='dc1')
-    cql = manager.cql
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with await create_ks(manager, replication_factor = num_servers) as ks:
         # to reduce test time, create one cf for every alg/len combo we test.
@@ -443,8 +440,7 @@ async def test_system_auth_encryption(manager: ManagerClient, tmpdir):
 
     servers: list[ServerInfo] = await manager.servers_add(servers_num = 1, config=cfg, 
                                                           driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')})
-    cql = manager.cql
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async def grep_database_files(pattern: str, path: str, files: str, expect:bool):
         pattern_found_counter = 0

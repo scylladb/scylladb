@@ -51,8 +51,7 @@ async def test_lwt(manager: ManagerClient):
         '--logger-log-level', 'paxos=trace'
     ]
     servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
     quorum = len(hosts) // 2 + 1
 
     await manager.disable_tablet_balancing()
@@ -231,7 +230,8 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
         '--logger-log-level', 'paxos=trace'
     ]
     servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
-    cql = manager.get_cql()
+    logger.info("Resolve hosts")
+    cql, hosts = await manager.get_ready_cql(servers)
 
     async def set_injection(set_to: list[ServerInfo], injection: str):
         logger.info(f"Injecting {injection} on {set_to}")
@@ -239,9 +239,6 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
         unset_from = [s for s in servers if s not in set_to]
         logger.info(f"Disabling {injection} on {unset_from}")
         await disable_injection_on(manager, injection, unset_from)
-
-    logger.info("Resolve hosts")
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logger.info("Disable tablet balancing")
     await manager.disable_tablet_balancing()
@@ -347,10 +344,8 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
         '--logger-log-level', 'paxos=trace'
     ]
     servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
-    cql = manager.get_cql()
-
     logger.info("Resolve hosts")
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     logger.info("Disable tablet balancing")
     await manager.disable_tablet_balancing()

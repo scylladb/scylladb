@@ -387,8 +387,7 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: M
         s0_sstables_in_staging = sstable_count_in_staging(s0_table_dir)
 
         await manager.server_start(servers[0].server_id)
-        cql = manager.get_cql()
-        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        cql, _ = await manager.get_ready_cql(servers)
 
         tablet_token = 0 # Doesn't matter since there is one tablet
         replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)

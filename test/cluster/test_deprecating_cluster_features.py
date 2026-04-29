@@ -7,7 +7,6 @@ import asyncio
 import time
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts
 import pytest
 
 
@@ -74,5 +73,5 @@ async def test_features_suppress_works(manager: ManagerClient, build_mode) -> No
     await manager.server_stop_gracefully(srv.server_id)
     await manager.server_update_config(srv.server_id, ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY, [])
     await manager.server_start(srv.server_id)
-    await wait_for_cql_and_get_hosts(manager.get_cql(), [srv], time.time() + 60)
+    await manager.get_ready_cql([srv])
     await check_features_status(manager.get_cql(), features_to_suppress, True)

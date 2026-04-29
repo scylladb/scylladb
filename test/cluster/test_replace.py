@@ -79,7 +79,7 @@ async def test_replace_different_ip_using_host_id(manager: ManagerClient, failur
 async def test_replace_reuse_ip(request, manager: ManagerClient, failure_detector_timeout) -> None:
     """Replace an existing node with new node using the same IP address"""
     servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout}, auto_rack_dc="dc1")
-    host2 = (await wait_for_cql_and_get_hosts(manager.get_cql(), [servers[2]], time.time() + 60))[0]
+    _, [host2] = await manager.get_ready_cql([servers[2]])
 
     logger.info(f"creating test table")
     random_tables = RandomTables(request.node.name, manager, "ks", 3)

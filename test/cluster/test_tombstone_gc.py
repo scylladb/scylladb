@@ -108,9 +108,7 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
         {"dc": "dc1", "rack": "r2"},
         {"dc": "dc1", "rack": "r2"}])
 
-    cql = manager.get_cql()
-    hosts = [(await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60))[0]
-             for s in servers]
+    cql, hosts = await manager.get_ready_cql(servers)
 
     host_primary = hosts[0]
 

@@ -6,7 +6,7 @@
 import pytest
 import time
 import asyncio
-from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_view
+from test.pylib.util import wait_for_view
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.cluster.util import trigger_snapshot, wait_for, create_new_test_keyspace
@@ -178,14 +178,13 @@ async def test_view_build_status_snapshot(manager: ManagerClient):
     # Add a new server which will recover from the snapshot
     new_server = await manager.server_add()
     all_servers = servers + [new_server]
-    await wait_for_cql_and_get_hosts(cql, all_servers, time.time() + 60)
-    await manager.servers_see_each_other(all_servers)
+    await manager.get_ready_cql(all_servers)
 
     await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers))
 
     # Read the table on the new server, verify it contains all the previous table content
     await manager.driver_connect(server=new_server)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([new_server])
     await wait_for_view(cql, "vt1", 4)
     await wait_for_view(cql, "vt2", 4)
 

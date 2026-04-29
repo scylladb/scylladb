@@ -8,7 +8,7 @@ import logging
 import time
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name
 from test.cluster.util import new_test_keyspace
 
 
@@ -50,9 +50,7 @@ async def test_not_enough_token_owners(manager: ManagerClient):
     logging.info('Adding a normal server')
     server_c = await manager.server_add(property_file={"dc": "dc1", "rack": "r2"})
 
-    cql = manager.get_cql()
-
-    await wait_for_cql_and_get_hosts(cql, [server_a, server_c], time.time() + 60)
+    cql, _ = await manager.get_ready_cql([server_a, server_c])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = { 'enabled': true }") as ks_name:
         await cql.run_async(f'CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)')
