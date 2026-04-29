@@ -1427,6 +1427,17 @@ public:
 
     position_type next_position(size_t size) const {
         auto used = _buffer_ostream_size - _buffer_ostream.size();
+        // #SCYLLADB-1757 - if the buffer is empty, a subsequent allocation
+        // will call new_buffer(), which prepends segment_overhead_size (and
+        // descriptor_header_size for the very first buffer of the segment).
+        // Mirror that here so callers asking "would size+overheads fit?" get
+        // a faithful answer instead of an optimistic underestimate.
+        if (_buffer.empty()) {
+            used += segment_overhead_size;
+            if (_file_pos == 0) {
+                used += descriptor_header_size;
+            }
+        }
         used += size;
         return _file_pos + used + sector_overhead(used);
     }
