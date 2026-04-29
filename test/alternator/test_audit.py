@@ -476,8 +476,7 @@ def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
 #     table is pipe-separated "base_table|cdc_table". CL=LOCAL_QUORUM.
 # Produces 5 audit entries.
 def test_audit_streams_operations(dynamodb, dynamodbstreams, cql, alternator_audit_enabled):
-    # With #23838 open, we will explicitly ask for a table with vnodes.
-    with new_test_table(dynamodb, StreamSpecification={"StreamEnabled": True, "StreamViewType": "NEW_AND_OLD_IMAGES"}, Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}], **HASH_ONLY_SCHEMA) as table:
+    with new_test_table(dynamodb, StreamSpecification={"StreamEnabled": True, "StreamViewType": "NEW_AND_OLD_IMAGES"}, **HASH_ONLY_SCHEMA) as table:
         ks_name = f"alternator_{table.name}"
         client = table.meta.client
         # Write data so that stream records exist.
