@@ -84,6 +84,7 @@ schema_ptr make_tablets_schema() {
             .with_column("resize_type", utf8_type, column_kind::static_column)
             .with_column("resize_seq_number", long_type, column_kind::static_column)
             .with_column("isolated_tablet_for_merge", long_type, column_kind::static_column)
+            .with_column("selected_tablets_for_merge", list_type_impl::get_instance(long_type, false), column_kind::static_column)
             .with_column("repair_time", timestamp_type)
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
@@ -278,6 +279,15 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
         if (merge.isolated_tablet) {
             m.set_static_cell("isolated_tablet_for_merge", data_value(int64_t(size_t(*merge.isolated_tablet))), ts);
         }
+        if (!merge.selected_left_tablets.empty()) {
+            std::vector<data_value> values;
+            values.reserve(merge.selected_left_tablets.size());
+            for (auto tid : merge.selected_left_tablets) {
+                values.emplace_back(int64_t(tid.value()));
+            }
+            auto list_type = list_type_impl::get_instance(long_type, false);
+            m.set_static_cell("selected_tablets_for_merge", make_list_value(list_type, std::move(values)), ts);
+        }
     }
     if (features.tablet_resize_virtual_task && tablets.resize_task_info().is_valid()) {
         m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(tablets.resize_task_info()), ts);
@@ -417,6 +427,15 @@ tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_dec
             if (merge.isolated_tablet) {
                 _m.set_static_cell("isolated_tablet_for_merge", data_value(int64_t(size_t(*merge.isolated_tablet))), _ts);
             }
+            if (!merge.selected_left_tablets.empty()) {
+                std::vector<data_value> values;
+                values.reserve(merge.selected_left_tablets.size());
+                for (auto tid : merge.selected_left_tablets) {
+                    values.emplace_back(int64_t(tid.value()));
+                }
+                auto list_type = list_type_impl::get_instance(long_type, false);
+                _m.set_static_cell("selected_tablets_for_merge", make_list_value(list_type, std::move(values)), _ts);
+            }
         }
         auto resize_task_info = std::holds_alternative<resize_decision::split>(resize_decision.way)
             ? locator::tablet_task_info::make_split_request()
@@ -425,6 +444,12 @@ tablet_mutation_builder::set_resize_decision(locator::resize_decision resize_dec
         resize_task_info.sched_time = db_clock::now();
         return set_resize_task_info(std::move(resize_task_info), features);
     } else {
+        // Clear merge-parameter columns on revocation to prevent stale values
+        // from being picked up by a subsequent merge decision.
+        auto col1 = _s->get_column_definition("isolated_tablet_for_merge");
+        _m.set_static_cell(*col1, atomic_cell::make_dead(_ts, gc_clock::now()));
+        auto col2 = _s->get_column_definition("selected_tablets_for_merge");
+        _m.set_static_cell(*col2, atomic_cell::make_dead(_ts, gc_clock::now()));
         return del_resize_task_info(features);
     }
     return *this;
@@ -925,10 +950,20 @@ struct tablet_metadata_builder {
                     } else if (resize_type_name == "split") {
                         return locator::resize_decision(locator::resize_decision::split(), resize_seq_number);
                     } else if (resize_type_name == "merge") {
-                        return locator::resize_decision(locator::resize_decision::merge {
+                        auto merge = locator::resize_decision::merge {
                             .isolated_tablet = row.get_opt<int64_t>("isolated_tablet_for_merge")
                                     .transform([] (int64_t v) { return tablet_id(v); })
-                        }, resize_seq_number);
+                        };
+                        if (row.has("selected_tablets_for_merge")) {
+                            auto list_type = list_type_impl::get_instance(long_type, false);
+                            auto values = value_cast<list_type_impl::native_type>(
+                                list_type->deserialize(row.get_view("selected_tablets_for_merge")));
+                            merge.selected_left_tablets.reserve(values.size());
+                            for (const auto& v : values) {
+                                merge.selected_left_tablets.emplace_back(tablet_id(value_cast<int64_t>(v)));
+                            }
+                        }
+                        return locator::resize_decision(std::move(merge), resize_seq_number);
                     } else {
                         throw std::runtime_error(format("Unknown resize_type '{}' for table {}", resize_type_name, table));
                     }

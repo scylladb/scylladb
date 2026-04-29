@@ -1978,7 +1978,11 @@ auto fmt::formatter<locator::resize_decision_way>::format(const locator::resize_
             fmt::format_to(ctx.out(), "split");
         },
         [&] (const locator::resize_decision::merge& merge) {
-            fmt::format_to(ctx.out(), "merge(isolated={})", merge.isolated_tablet);
+            if (!merge.selected_left_tablets.empty()) {
+                fmt::format_to(ctx.out(), "merge(selected={})", merge.selected_left_tablets);
+            } else {
+                fmt::format_to(ctx.out(), "merge(isolated={})", merge.isolated_tablet);
+            }
         }), way);
     return ctx.out();
 }

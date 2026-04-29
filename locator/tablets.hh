@@ -458,6 +458,12 @@ struct resize_decision {
         // In case the current tablet count is odd, this is the id of the tablet
         // which will not be merged.
         std::optional<tablet_id> isolated_tablet;
+        // When non-empty, only these specific adjacent pairs are merged:
+        // each entry is the left tablet of a pair (left, left + 1).
+        // Must be sorted and must not contain overlapping pairs
+        // (e.g., [1, 2] is invalid because pairs (1,2) and (2,3) share tablet 2).
+        // Cannot be used together with isolated_tablet.
+        std::vector<tablet_id> selected_left_tablets;
         auto operator<=>(const merge&) const = default;
     };
     using way_type = std::variant<none, split, merge>;
