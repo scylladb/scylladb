@@ -135,7 +135,23 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migr
 }
 
 future<> table_helper::insert(cql3::query_processor& qp, service::migration_manager& mm, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
-    co_await cache_table_info(qp, mm, qs);
+    // _prepared_stmt is a checked_weak_ptr into the prepared statements
+    // cache and can be invalidated by a concurrent purge (e.g. on a schema
+    // change). cache_table_info() (re-)prepares and assigns _prepared_stmt,
+    // but the pin protecting the entry is dropped when try_prepare()
+    // returns. In release the chain of ready-future co_awaits back to here
+    // resumes synchronously, but debug builds preempt on every co_await
+    // even for ready futures, opening a window for a purge to drop the
+    // entry and leave _prepared_stmt null. Loop until a synchronous
+    // post-resume check finds _prepared_stmt valid; nothing can run between
+    // that check and the dereference below. _insert_stmt is a strong
+    // shared_ptr and is not affected by cache invalidation.
+    while (true) {
+        co_await cache_table_info(qp, mm, qs);
+        if (_prepared_stmt) {
+            break;
+        }
+    }
     auto opts = opt_maker();
     opts.prepare(_prepared_stmt->bound_names);
     co_await _insert_stmt->execute(qp, qs, opts, std::nullopt);
