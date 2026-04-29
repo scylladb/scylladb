@@ -152,12 +152,39 @@ Using Oracle OCI Object Storage
 =================================
 
 Oracle Cloud Infrastructure (OCI) Object Storage is compatible with the Amazon
-S3 API, so it works with ScyllaDB without additional configuration.
+S3 API, so ScyllaDB can use it without any special configuration beyond
+specifying the OCI S3-compatible endpoint.
 
-To use OCI Object Storage, follow the same configuration as for AWS S3, and
-specify your OCI S3-compatible endpoint.
+**Endpoint URL format**
 
-Example:
+OCI S3-compatible endpoint URLs follow this pattern:
+
+.. code-block:: none
+
+   https://<namespace>.compat.objectstorage.<region>.oci.customer-oci.com:443
+
+Where:
+
+* ``<namespace>`` is your OCI Object Storage namespace.
+* ``<region>`` is the OCI region identifier, e.g. ``us-ashburn-1``.
+
+**Credentials**
+
+OCI does not expose an instance metadata endpoint compatible with AWS STS/EC2,
+so credentials **must** be supplied explicitly via environment variables. You
+need to create a Customer Secret Key in the OCI Console and set:
+
+.. code-block:: bash
+
+   export AWS_ACCESS_KEY_ID=<customer_secret_key_access_key>
+   export AWS_SECRET_ACCESS_KEY=<customer_secret_key_secret>
+
+.. note::
+
+   The ``iam_role_arn`` field is specific to AWS IAM and should be omitted
+   when configuring an OCI endpoint.
+
+**Configuration example**
 
 .. code:: yaml
 
