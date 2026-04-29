@@ -4695,7 +4695,12 @@ private:
     future<tablet_map> merge_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map(table);
 
-        tablet_map new_tablets(div_ceil(tablets.tablet_count(), 2), tablets.has_raft_info(), tablet_map::initialized_later());
+        auto& merge_plan = std::get<resize_decision::merge>(tablets.resize_decision().way);
+        size_t new_count = merge_plan.selected_left_tablets.empty()
+            ? div_ceil(tablets.tablet_count(), 2)
+            : tablets.tablet_count() - merge_plan.selected_left_tablets.size();
+
+        tablet_map new_tablets(new_count, tablets.has_raft_info(), tablet_map::initialized_later());
 
         std::optional<tablet_id> new_tid = new_tablets.first_tablet();
         co_await tablets.for_each_sibling_tablets([&] (tablet_desc left, std::optional<tablet_desc> right) {
