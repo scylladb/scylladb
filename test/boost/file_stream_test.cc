@@ -12,8 +12,17 @@
 #include "test/lib/log.hh"
 #include "test/lib/sstable_utils.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/sstables.hh"
+#include "utils/overloaded_functor.hh"
+#include "schema/schema_builder.hh"
+#include "test/lib/random_utils.hh"
+#include "test/lib/sstable_test_env.hh"
+#include "test/lib/test_utils.hh"
+#include "test/lib/gcs_fixture.hh"
 
 #include <boost/lexical_cast.hpp>
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/test_fixture.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/seastar.hh>
@@ -532,4 +541,56 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_compressed) {
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_uncompressed) {
     test_sstable_stream(compress_sstable::no, corrupt_digest_component, "Digest mismatch");
+}
+
+// Exercises the sstable_stream_sink_impl::output() path with local and object storage.
+// Before the fix, output() used open_file() which for S3 returns a readable_file
+// (read-only). Writing through it threw std::logic_error("unsupported operation
+// on s3 readable file"), breaking tablet migration streaming entirely.
+static future<> test_stream_sink_write(sstables::test_env_config cfg) {
+    return sstables::test_env::do_with_async([](sstables::test_env& env) {
+        using namespace sstables;
+
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v", utf8_type)
+            .build();
+
+        auto version = get_highest_sstable_version();
+        auto format = sstable::format_types::big;
+        auto generation = env.new_generation();
+        auto& mgr = env.manager();
+        auto s_opts = env.get_storage_options();
+
+        std::visit(overloaded_functor {
+            [&env] (data_dictionary::storage_options::local& o) { o.dir = env.tempdir().path().native(); },
+            [&s] (data_dictionary::storage_options::object_storage& o) { o.location = s->id(); },
+        }, s_opts.value);
+
+        auto toc_basename = sstable::component_basename(
+                s->ks_name(), s->cf_name(), version, generation, format, component_type::TOC);
+
+        auto sink = create_stream_sink(s, mgr, s_opts, sstable_state::normal, toc_basename, {});
+
+        // output() would succeed before the fix (wrapping the read-only file into a stream),
+        // but the write below would throw std::logic_error("unsupported operation on s3 readable file").
+        auto out = sink->output(file_open_options{}, file_output_stream_options{}).get();
+
+        auto data = tests::random::get_bytes(4096);
+        out.write(reinterpret_cast<const char*>(data.data()), data.size()).get();
+        out.flush().get();
+        out.close().get();
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(test_stream_sink_write_local) {
+    return test_stream_sink_write(sstables::test_env_config{});
+}
+
+SEASTAR_TEST_CASE(test_stream_sink_write_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    return test_stream_sink_write(sstables::test_env_config{ .storage = make_test_object_storage_options("S3") });
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_stream_sink_write_gs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_stream_sink_write(sstables::test_env_config{ .storage = make_test_object_storage_options("GS") });
 }
