@@ -277,53 +277,42 @@ is different, or can be configured in Alternator:
   The `alternator_describe_table_info_cache_validity_in_seconds` parameter allows
   users to change this timeout - the default value in seconds is set to 21600 (6 hours).
 
-## Experimental API features
+## Alternator Streams
 
-Some DynamoDB API features are supported by Alternator, but considered
-**experimental** in this release. An experimental feature in ScyllaDB is a
-feature whose functionality is complete, or mostly complete, but it is not
-as thoroughly tested or optimized as regular features. Also, an experimental
-feature's implementation is still subject to change and upgrades may not be
-possible if such a feature is used. For these reasons, experimental features
-are not recommended for mission-critical uses, and they need to be
-individually enabled with the "--experimental-features" configuration option.
-See [Enabling Experimental Features](../operating-scylla/admin.rst#enabling-experimental-features) for details.
+The DynamoDB Streams API for change data capture is supported by Alternator, however
+Alternator Streams differ in some respects from DynamoDB Streams:
 
-In this release, the following DynamoDB API features are considered
-experimental:
+* The number of separate "shards" in Alternator's streams is significantly
+  larger than is typical on DynamoDB.
+  <https://github.com/scylladb/scylla/issues/13080>
+* While in DynamoDB data usually appears in the stream less than a second
+  after it was written, in Alternator Streams there is currently a 10
+  second delay by default.
+  <https://github.com/scylladb/scylla/issues/6929>
+* In GetRecords responses, Alternator sets `eventSource` to
+  `scylladb:alternator`, rather than `aws:dynamodb`, and doesn't set the
+  `SizeBytes` subfield inside the `dynamodb` field.
+  <https://github.com/scylladb/scylla/issues/6931>
+* By default (with `alternator_streams_increased_compatibility` off)
+  Alternator Streams are optimized for performance: write operations
+  do not read the previous state of the item, which has two
+  consequences:
+  1. Operations that did not really modify the data (e.g., deleting
+     a non-existent item, removing a non-existent attribute, or
+     re-inserting an identical item) may still produce spurious
+     stream events.
+  2. Alternator cannot distinguish between an INSERT (new item) and
+     a MODIFY (overwrite of an existing item), so event types may
+     be inaccurate — for example, a PutItem that overwrites an
+     existing item will be reported as INSERT instead of MODIFY.
 
-* The DynamoDB Streams API for capturing change is supported, but still
-  considered experimental so needs to be enabled explicitly with the
-  `--experimental-features=alternator-streams` configuration option.
-
-  Alternator streams also differ in some respects from DynamoDB Streams:
-  * The number of separate "shards" in Alternator's streams is significantly
-    larger than is typical on DynamoDB.
-    <https://github.com/scylladb/scylla/issues/13080>
-  * While in DynamoDB data usually appears in the stream less than a second
-    after it was written, in Alternator Streams there is currently a 10
-    second delay by default.
-    <https://github.com/scylladb/scylla/issues/6929>
-  * Some events are represented differently in Alternator Streams. For
-    example, a single PutItem is represented by a REMOVE + MODIFY event,
-    instead of just a single MODIFY or INSERT.
-    <https://github.com/scylladb/scylla/issues/6930>
-    <https://github.com/scylladb/scylla/issues/6918>
-  * In GetRecords responses, Alternator sets `eventSource` to
-    `scylladb:alternator`, rather than `aws:dynamodb`, and doesn't set the
-    `SizeBytes` subfield inside the `dynamodb` field.
-    <https://github.com/scylladb/scylla/issues/6931>
-  * The optional ShardFilter parameter to DescribeStream, added to DynamoDB
-    in July 2025 to optimize shard discovery, is not yet implemented in
-    Alternator.
-    <https://github.com/scylladb/scylla/issues/25160>
-  * With the ``alternator_streams_increased_compatibility`` configuration
-    option enabled, operations that do not change the database state
-    (e.g., deleting a non-existent item, removing a non-existent
-    attribute, or re-inserting an identical item) will not produce
-    stream events. Without this option, such no-op operations may still
-    generate spurious stream events.
-    <https://github.com/scylladb/scylladb/issues/28368>
+  Enabling `alternator_streams_increased_compatibility` forces every
+  write to read the pre-image of the item, which fixes both issues
+  but at a performance cost — it effectively forces all writes
+  through the slower LWT (lightweight transaction) path. Enable this
+  option only if your application relies on the distinction between
+  INSERT and MODIFY events, or needs no-op writes to be silent.
+  <https://github.com/scylladb/scylladb/issues/28368>
 
 ## Unimplemented API features
 
