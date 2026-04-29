@@ -52,11 +52,13 @@ async def test_default_rf(manager: ManagerClient):
     #   scylladb/scylladb#23071 and scylladb/scylla-dtest#5633.
     cfg = {"rf_rack_valid_keyspaces": False}
 
-    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
-    await manager.server_add(config=cfg, property_file={"dc": "dc2", "rack": "r1"})
-    await manager.server_add(config=cfg, property_file={"dc": "dc3", "rack": "r1"})
+    servers = [
+        await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"}),
+        await manager.server_add(config=cfg, property_file={"dc": "dc2", "rack": "r1"}),
+        await manager.server_add(config=cfg, property_file={"dc": "dc3", "rack": "r1"}),
+    ]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     ks_name = unique_name()
     rf = {"dc1": 2, "dc2": 3, "dc3": 0}
     options = ", ".join([f"'{dc}':{rf_val}" for dc, rf_val in rf.items()])
@@ -87,8 +89,8 @@ async def test_all_rf_limits(manager: ManagerClient):
     }
 
     dc = "dc1"
-    await manager.server_add(config=cfg, property_file={"dc": dc, "rack": "r1"})
-    cql = manager.get_cql()
+    server = await manager.server_add(config=cfg, property_file={"dc": dc, "rack": "r1"})
+    cql, _ = await manager.get_ready_cql([server])
 
     for rf in range(MIN_FAIL_THRESHOLD - 1, MAX_FAIL_THRESHOLD + 1):
         ks_name = unique_name()

@@ -16,9 +16,9 @@ from test.pylib.manager_client import ManagerClient
 
 @pytest.mark.asyncio
 async def test_sticky_coordinator_enforced(manager: ManagerClient) -> None:
-    await manager.servers_add(2, cmdline=['--logger-log-level', 'paging=trace'], auto_rack_dc="dc1")
+    servers = await manager.servers_add(2, cmdline=['--logger-log-level', 'paging=trace'], auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         await cql.run_async(f"create table {ks}.tbl (pk int, ck int, v int, primary key (pk, ck))")

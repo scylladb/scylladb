@@ -27,7 +27,7 @@ async def test_send_data_in_parts(manager: ManagerClient):
 
     await check_token_ring_and_group0_consistency(manager)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
     rows = await cql.run_async("SELECT description FROM system.group0_history")
 
     for row in rows:

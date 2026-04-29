@@ -49,7 +49,7 @@ async def test_intranode_migration_not_blocked_by_backpressure(manager: ManagerC
     cmdline = ['--smp', '1']
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     extra_ks_param = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
     async with new_test_keyspace(manager, extra_ks_param) as ks:
         extra_table_param = "WITH compaction = {'class' : 'IncrementalCompactionStrategy', 'max_threshold': 64} and compression = {}"

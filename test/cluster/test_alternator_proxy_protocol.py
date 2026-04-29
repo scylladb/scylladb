@@ -206,6 +206,7 @@ async def alternator_proxy_server(manager: ManagerClient):
         config=ALTERNATOR_PROXY_SERVER_CONFIG,
         expected_server_up_state=ServerUpState.SERVING
     )
+    await manager.get_ready_cql([server])
     yield (server, manager)
 
 

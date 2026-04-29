@@ -16,7 +16,7 @@ from test.pylib.rest_client import inject_error_one_shot
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_prepare_fails_if_cached_statement_is_invalidated_mid_prepare(manager: ManagerClient):
     server = await manager.server_add()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     log = await manager.server_open_log(server.server_id)
     
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:

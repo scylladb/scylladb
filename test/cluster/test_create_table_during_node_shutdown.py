@@ -18,7 +18,7 @@ async def test_create_table_notification_deadlock_with_shutdown(manager: Manager
     Reproduces scylladb/scylladb#27364
     """
     server = await manager.server_add()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     async with new_test_keyspace(manager, "") as ks:
         pause_in_notif_injection = "pause_in_allocate_tablets_for_new_table"
         await manager.api.enable_injection(server.ip_addr, pause_in_notif_injection, one_shot=True)

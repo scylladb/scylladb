@@ -36,7 +36,7 @@ async def test_left_node_notification(manager: ManagerClient) -> None:
     # "zero replica after the removal" or "can not find new node in local dc" errors when
     # removing dc1 nodes, we alter the audit keyspace to have replicas only in dc2.
     # Only alter if the audit keyspace exists (it might not exist if audit is disabled).
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([dc1_node_a, dc1_node_b, dc2_node])
     result = await cql.run_async("SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
     if result:
         await cql.run_async("ALTER KEYSPACE audit WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc2': 1}")

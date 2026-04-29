@@ -26,7 +26,7 @@ async def test_load_stats_on_coordinator_failover(manager: ManagerClient):
     }
     servers = await manager.servers_add(3, config=cfg)
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     coord = await get_topology_coordinator(manager)
     coord_idx = host_ids.index(coord)

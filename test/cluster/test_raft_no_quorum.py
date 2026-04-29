@@ -202,8 +202,9 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
     servers += await manager.servers_add(servers_num=2, property_file={"dc": "dc1", "rack": "rack2"})
 
     logger.info('create keyspace and table')
-    ks = await create_new_test_keyspace(manager.get_cql(), "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
-    await manager.get_cql().run_async(f'create table {ks}.test_table (pk int primary key)')
+    cql, _ = await manager.get_ready_cql(servers)
+    ks = await create_new_test_keyspace(cql, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    await cql.run_async(f'create table {ks}.test_table (pk int primary key)')
 
     logger.info("stopping the second and third nodes")
     await asyncio.gather(manager.server_stop_gracefully(servers[1].server_id),
@@ -229,7 +230,7 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
 
     with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, "
                                         "there is no raft quorum, total voters count 3, alive voters count 1"):
-        await manager.get_cql().run_async(f'drop table {ks}.test_table', timeout=60)
+        await cql.run_async(f'drop table {ks}.test_table', timeout=60)
 
     logger.info("done")
 

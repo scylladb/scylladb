@@ -40,7 +40,7 @@ async def test_counter_updates_during_tablet_migration(manager: ManagerClient, m
     cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'storage_service=debug']
 
     servers = await manager.servers_add(node_count, cmdline=cmdline)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:

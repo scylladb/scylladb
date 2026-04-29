@@ -202,7 +202,7 @@ async def test_node_ops_tasks_tree(manager: ManagerClient):
     servers = [await manager.server_add(cmdline=cmdline) for _ in range(3)]
     assert module_name in await tm.list_modules(servers[0].ip_addr), "node_ops module wasn't registered"
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({1}, {1});")

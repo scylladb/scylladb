@@ -36,7 +36,7 @@ async def test_intranode_migration(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -71,7 +71,7 @@ async def test_crash_during_intranode_migration(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -139,7 +139,7 @@ async def test_cross_shard_migration(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 

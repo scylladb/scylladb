@@ -59,7 +59,7 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     # We fail a single streaming during decommission, we don't want to catch a background migration instead.
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 32}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 

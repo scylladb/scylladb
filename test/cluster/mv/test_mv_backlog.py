@@ -27,7 +27,7 @@ async def test_view_backlog_increased_after_write(manager: ManagerClient) -> Non
     node_count = 2
     # Use a higher smp to make it more likely that the writes go to a different shard than the coordinator.
     servers = await manager.servers_add(node_count, cmdline=['--smp', '5'], config={'error_injections_at_startup': ['never_finish_remote_view_updates'], 'tablets_mode_for_new_keyspaces': 'enabled'})
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (base_key int, view_key int, v text, PRIMARY KEY (base_key, view_key))")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "

@@ -30,7 +30,7 @@ async def test_hints_manager_shutdown_hang(manager: ManagerClient) -> None:
     s2 = await manager.server_add(property_file={"dc": "dc1", "rack": "rack2"})
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([s2])
 
     logger.info("Create keyspace and table")
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:

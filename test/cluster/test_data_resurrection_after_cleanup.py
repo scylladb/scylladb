@@ -25,7 +25,7 @@ async def test_data_resurrection_after_cleanup(manager: ManagerClient):
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
         table = f"{ks}.test"

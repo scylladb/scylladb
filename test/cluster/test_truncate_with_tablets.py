@@ -30,7 +30,7 @@ async def test_truncate_while_migration(manager: ManagerClient):
     servers = []
     servers.append(await manager.server_add(config=cfg))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
@@ -227,7 +227,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
     servers = []
     servers.append(await manager.server_add(config=cfg))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
@@ -273,7 +273,7 @@ async def test_replay_position_check_during_truncate(manager):
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     server = servers[0]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -311,7 +311,7 @@ async def test_parallel_truncate(manager: ManagerClient):
     servers = []
     servers.append(await manager.server_add(config=cfg))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
@@ -375,7 +375,7 @@ async def test_split_emitted_during_truncate(manager: ManagerClient):
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     server = servers[0]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
 

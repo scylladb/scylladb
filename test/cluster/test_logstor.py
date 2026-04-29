@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 async def test_property(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t_enabled (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
@@ -48,8 +48,8 @@ async def test_config_option_consistency(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     # Logstor feature is NOT enabled
     cfg = {'experimental_features': []}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "") as ks:
         # Should fail because logstor feature is not enabled
@@ -60,8 +60,8 @@ async def test_config_option_consistency(manager: ManagerClient):
 async def test_basic_write_and_read(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "") as ks:
 
@@ -104,8 +104,8 @@ async def test_basic_write_and_read(manager: ManagerClient):
 async def test_range_read(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
@@ -132,8 +132,8 @@ async def test_range_read(manager: ManagerClient):
 async def test_parallel_writes(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
@@ -151,8 +151,8 @@ async def test_parallel_writes(manager: ManagerClient):
 async def test_overwrites(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
@@ -174,8 +174,8 @@ async def test_parallel_big_writes(manager: ManagerClient):
     """
     cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
     cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
@@ -211,7 +211,7 @@ async def test_recovery_basic(manager: ManagerClient, fail_separator_flush: bool
     cmdline = ['--logger-log-level', 'logstor=trace']
     cfg = {'experimental_features': ['logstor']}
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     if fail_separator_flush:
         await manager.api.enable_injection(servers[0].ip_addr, "fail_flush_separator_buffer", one_shot=False)
@@ -304,7 +304,7 @@ async def test_recovery_with_segment_reuse(manager: ManagerClient):
         'experimental_features': ['logstor']
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
@@ -355,7 +355,7 @@ async def test_compaction(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
     cfg = {'experimental_features': ['logstor']}
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
@@ -396,7 +396,7 @@ async def test_drop_table(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=trace']
     cfg = {'experimental_features': ['logstor']}
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH tablets={'initial': 4}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
@@ -470,7 +470,7 @@ async def test_trigger_separator_flush(manager: ManagerClient):
         'experimental_features': ['logstor']
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
@@ -513,7 +513,7 @@ async def test_tablet_split_trigger_by_size(manager: ManagerClient):
         'experimental_features': ['logstor'],
     }
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     s0_log = await manager.server_open_log(servers[0].server_id)
 
@@ -559,7 +559,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient):
     }
     servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1 AND storage_engine='logstor';")
 

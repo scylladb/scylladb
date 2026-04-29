@@ -48,7 +48,7 @@ async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
     cfg = cfg | {'rf_rack_valid_keyspaces': False}
     servers = await manager.servers_add(2, config=cfg)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     res = await cql.run_async("SELECT data_center FROM system.local")
     this_dc = res[0].data_center
 
@@ -66,7 +66,7 @@ async def test_tablet_scaling_option_is_respected(manager: ManagerClient):
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled', 'tablets_initial_scale_factor': 32}
     servers = await manager.servers_add(1, config=cfg, cmdline=['--smp', '2'])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async(f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
@@ -87,7 +87,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
     ])
 
     logger.info("Creating table")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -113,10 +113,11 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
 async def test_reshape_with_tablets(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
-    server = (await manager.servers_add(1, config=cfg, cmdline=['--smp', '1', '--logger-log-level', 'compaction=debug']))[0]
+    servers = await manager.servers_add(1, config=cfg, cmdline=['--smp', '1', '--logger-log-level', 'compaction=debug'])
+    server = servers[0]
 
     logger.info("Creating table")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     number_of_tablets = 2
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} and tablets = {{'initial': {number_of_tablets} }}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -153,7 +154,7 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
     servers = await manager.servers_add(2, config=cfg, auto_rack_dc="dc1")
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     res = await cql.run_async("SELECT data_center FROM system.local")
     this_dc = res[0].data_center
 
@@ -228,7 +229,7 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
         {"dc": "dc1", "rack": "r2"}
     ])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -254,7 +255,7 @@ async def test_tablets_api_consistency(manager: ManagerClient, endpoint):
     servers += await manager.servers_add(2, property_file={'dc': f'dc1', 'rack': 'rack3'})
     await manager.disable_tablet_balancing()
     hosts = { await manager.get_host_id(s.server_id): s.ip_addr for s in servers }
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     expected_tablet_count = 4
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH TABLETS = {{'min_tablet_count': {expected_tablet_count}, 'max_tablet_count': {expected_tablet_count}}};")
@@ -304,8 +305,8 @@ async def test_tablets_api_consistency(manager: ManagerClient, endpoint):
 # enforcing RF-rack-valid keyspaces to be able to perform more flexible alterations.
 @pytest.mark.asyncio
 async def test_singledc_alter_tablets_rf(manager: ManagerClient):
-    await manager.server_add(config={"rf_rack_valid_keyspaces": "false", "enable_tablets": "true"}, property_file={"dc": "dc1", "rack": "r1"})
-    cql = manager.get_cql()
+    server = await manager.server_add(config={"rf_rack_valid_keyspaces": "false", "enable_tablets": "true"}, property_file={"dc": "dc1", "rack": "r1"})
+    cql, _ = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}") as ks:
         async def change_rf(rf):
@@ -330,13 +331,13 @@ async def test_singledc_alter_tablets_rf(manager: ManagerClient):
 async def test_arbitrary_multi_rf_change_fails(manager: ManagerClient):
     config = {"rf_rack_valid_keyspaces": "false", "enable_tablets": "true", "tablet_load_stats_refresh_interval_in_seconds": 1}
     cmdline = ['--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
-    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
-    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r2"})
-    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r3"})
-    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc2", "rack": "r4"})
-    await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc3", "rack": "r7"})
+    s1 = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
+    s2 = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r2"})
+    s3 = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r3"})
+    s4 = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc2", "rack": "r4"})
+    s5 = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc3", "rack": "r7"})
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([s1, s2, s3, s4, s5])
 
     err_msg = "Only one DC's RF can be changed at a time and not by more than 1"
 
@@ -767,7 +768,7 @@ async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: Mana
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'})]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']} AND tablets = {'initial': 4}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
@@ -880,7 +881,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
 
     dc1_host_ids = [await manager.get_host_id(s.server_id) for s in servers[0:3]]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key, v int);")
@@ -1191,7 +1192,7 @@ async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, 
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'})]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key);")
@@ -1245,7 +1246,7 @@ async def test_failed_tablet_rebuild_is_retried_on_alter(manager: ManagerClient)
                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'})]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key);")
@@ -1280,7 +1281,7 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode
     servers = await manager.servers_add(2, config=cfg)
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH"
                         " replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
@@ -1355,7 +1356,7 @@ async def test_read_of_pending_replica_during_migration(manager: ManagerClient, 
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv1 AS \
@@ -1414,7 +1415,7 @@ async def test_read_of_pending_replica_during_migration(manager: ManagerClient, 
 async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, tablets_mode_for_new_keyspaces, cql_tablets_params, replication_strategy):
     cfg = {'tablets_mode_for_new_keyspaces': tablets_mode_for_new_keyspaces}
     server = await manager.server_add(config=cfg)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     """
     tablets_mode_for_new_keyspaces |       enabled      |      disabled      |      enforced      |
@@ -1481,7 +1482,7 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     logger.info("Create table, populate it and flush the table to disk")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         num_of_rows = 64
@@ -1546,7 +1547,7 @@ async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     logger.info("Create the test table, populate few rows and flush to disk")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k%3});") for k in range(64)])
@@ -1635,7 +1636,7 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     logger.info("Create the test table, populate few rows and flush to disk")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k%3});") for k in range(256)])
@@ -1730,7 +1731,7 @@ async def test_excludenode(manager: ManagerClient):
     servers = await manager.servers_add(servers_num=3, auto_rack_dc='dc1')
     await manager.server_add(property_file={'dc': 'dc1', 'rack': 'rack2'})
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
                                           "'dc1': ['rack1', 'rack2']} AND tablets = { 'initial': 8 }") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -1771,7 +1772,7 @@ async def test_excludenode_shrink_rf(manager: ManagerClient):
     dc1_servers = await manager.servers_add(servers_num=2, config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1'})
     dc2_server = await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2'})
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(dc1_servers + [dc2_server])
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
                                           "'dc1': 1, 'dc2': 1} AND tablets = { 'initial': 4 }") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -1957,7 +1958,7 @@ async def test_drop_with_tablet_migration_cleanup(manager: ManagerClient):
     cmdline = ['--smp', '2' ]
     server = await manager.server_add(cmdline=cmdline, config=cfg)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     # We don't want the load balancer to migrate tablets during the test
     await manager.disable_tablet_balancing()
@@ -2059,7 +2060,7 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
     servers = await manager.servers_add(2, cmdline=cmdline, config=cfg)
 
     logger.info("Create and populate test table")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
     await manager.api.disable_autocompaction(servers[0].ip_addr, "test")
@@ -2168,7 +2169,7 @@ async def check_tablet_rebuild_with_repair(manager: ManagerClient, fail: bool):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -2329,7 +2330,7 @@ async def test_disabling_balancing_preempts_balancer(manager: ManagerClient):
     await manager.api.enable_injection(coord_srv.ip_addr, "tablet_keep_repairing", one_shot=False)
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy'}}") as ks:
-        cql = manager.get_cql()
+        cql, _ = await manager.get_ready_cql(servers)
         log = await manager.server_open_log(coord_srv.server_id)
         mark = await log.mark()
 
@@ -2354,7 +2355,7 @@ async def test_table_creation_wakes_up_balancer(manager: ManagerClient):
     """
     server = await manager.server_add()
     log = await manager.server_open_log(server.server_id)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
         # Block coordinator right before going to sleep

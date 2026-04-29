@@ -38,7 +38,7 @@ async def test_mv_topology_change(manager: ManagerClient):
 
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
         await cql.run_async(f"CREATE materialized view {ks}.t_view AS select pk, v from {ks}.t where v is not null primary key (v, pk)")
@@ -105,7 +105,7 @@ async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv1 AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, pk);")
@@ -187,7 +187,7 @@ async def test_mv_write_to_dead_node(manager: ManagerClient):
         {"dc": "dc1", "rack": "r3"}
     ])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
         await cql.run_async(f"CREATE materialized view {ks}.t_view AS select pk, v from {ks}.t where v is not null primary key (v, pk)")
@@ -210,7 +210,7 @@ async def test_mv_pairing_during_replace(manager: ManagerClient):
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r2"}
     ])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2};")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
     await cql.run_async("CREATE MATERIALIZED VIEW ks.t_view AS SELECT pk, v FROM ks.t WHERE v IS NOT NULL PRIMARY KEY (v, pk)")
@@ -267,7 +267,7 @@ async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altere
     servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc2', 'rack': 'myrack1'}))
     servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc2', 'rack': 'myrack2'}))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     await cql.run_async("CREATE KEYSPACE IF NOT EXISTS ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1} AND tablets = {'initial': 1}")
     await cql.run_async("CREATE TABLE ks.base (pk int, ck int, PRIMARY KEY (pk, ck))")
     await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT pk, ck FROM ks.base WHERE ck IS NOT NULL PRIMARY KEY (ck, pk)")
@@ -337,7 +337,7 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
     servers.append(await manager.server_add(cmdline=['--smp', '1'], config={"rf_rack_valid_keyspaces": "false"}, property_file={'dc': f'dc1', 'rack': 'myrack1'}))
     servers.append(await manager.server_add(cmdline=['--smp', '1'], property_file={'dc': f'dc2', 'rack': 'myrack1'}))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     await cql.run_async("CREATE KEYSPACE IF NOT EXISTS ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'initial': 1}")
     await cql.run_async("CREATE TABLE ks.base (pk int, ck int, PRIMARY KEY (pk, ck))")
     await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT pk, ck FROM ks.base WHERE ck IS NOT NULL PRIMARY KEY (ck, pk)")
@@ -398,7 +398,7 @@ async def test_mv_write_during_migration(manager: ManagerClient, migration_type:
     cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug', "--allowed-repair-based-node-ops", "replace,removenode,rebuild,bootstrap,decommission"]
 
     servers = await manager.servers_add(3, cmdline=cmdline)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     await manager.disable_tablet_balancing()
 
     tablets_enabled = migration_type.startswith("tablets")
@@ -487,7 +487,7 @@ async def test_mv_write_during_migration(manager: ManagerClient, migration_type:
 async def test_mv_write_during_node_join(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'storage_service=debug', '--logger-log-level', 'raft_topology=debug']
     servers = await manager.servers_add(1, cmdline=cmdline)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (id int PRIMARY KEY, val int)")

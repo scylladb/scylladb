@@ -87,7 +87,7 @@ async def test_retrain_dict(manager: ManagerClient):
     ], auto_rack_dc="dc1"))
 
     logger.info("Creating table")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     await cql.run_async(
         f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}"
     )
@@ -197,7 +197,7 @@ async def test_estimate_compression_ratios(manager: ManagerClient):
         *common_debug_cli_options,
     ], auto_rack_dc="dc1"))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     logger.info("Creating table")
     await cql.run_async(
@@ -314,7 +314,7 @@ async def test_dict_memory_limit(manager: ManagerClient):
     rf = 1
 
     # Create keyspace and table
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async(
         f"CREATE KEYSPACE test WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}"
@@ -377,7 +377,7 @@ async def test_sstable_compression_dictionaries_enable_writing(manager: ManagerC
 
     # Create keyspace and table
     logger.info("Creating tables")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     dict_algorithms = ['LZ4WithDicts', 'ZstdWithDicts']
     nondict_algorithms = ['Snappy', 'LZ4', 'Deflate', 'Zstd']

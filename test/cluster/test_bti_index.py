@@ -64,7 +64,7 @@ async def test_bti_index_enable(manager: ManagerClient) -> None:
         ],
         'column_index_size_in_kb': 1,
     })
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     workdirs = await asyncio.gather(*[manager.server_get_workdir(s.server_id) for s in servers])
 
     logger.info("Step 1: Creating keyspace and table")

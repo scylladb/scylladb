@@ -44,7 +44,7 @@ async def test_balance_empty_tablets(manager: ManagerClient):
     servers = [await manager.server_add(config=cfg_large, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'r1'})]
     large_host_id = await manager.get_host_id(servers[0].server_id)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 16}") as ks:
         for table in ('t1', 't2', 't3'):

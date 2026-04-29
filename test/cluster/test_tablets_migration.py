@@ -53,7 +53,7 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -141,7 +141,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -291,7 +291,7 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
 
     await make_server()
     await manager.disable_tablet_balancing()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await make_server()
@@ -332,7 +332,7 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: M
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv1 AS \
@@ -439,7 +439,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};")
 
@@ -515,7 +515,7 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};")
 

@@ -127,7 +127,7 @@ async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_202
     servers = await manager.servers_add(2, version=scylla_2025_1)
 
     logger.info("Creating a test keyspace")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     await cql.run_async("CREATE KEYSPACE test_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
 
     await create_table_and_check_compression(cql, "test_ks", "table_before_upgrade", "org.apache.cassandra.io.compress.LZ4Compressor", "before upgrade")

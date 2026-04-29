@@ -310,9 +310,9 @@ async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
             }
         ]
     }
-    await manager.server_add(config=config)
+    server = await manager.server_add(config=config)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (key int PRIMARY KEY, val int)")
         await cql.run_async(f"INSERT INTO {ks}.test (key, val) VALUES(1, 0)")
@@ -427,7 +427,7 @@ async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
     ]
 
     server = await manager.server_add(cmdline=cmdline)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     logger.info("Create a keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -478,7 +478,7 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClie
 
     logger.info("Bootstrap a cluster with three nodes")
     servers = await manager.servers_add(3, config=config)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     logger.info("Create a keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
@@ -610,7 +610,7 @@ async def test_lwt_coordinator_shard(manager: ManagerClient):
         '--smp', '2'
     ]
     servers = [await manager.server_add(cmdline=cmdline)]
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     logger.info("Disable tablet balancing")
     await manager.disable_tablet_balancing()
@@ -780,8 +780,8 @@ async def test_lwts_for_special_tables(manager: ManagerClient):
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    await manager.servers_add(1, cmdline=cmdline)
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, cmdline=cmdline)
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int, c int, v int, PRIMARY KEY(pk, c)) WITH cdc = {{'enabled': true}}")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")

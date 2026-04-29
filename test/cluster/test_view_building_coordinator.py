@@ -512,7 +512,7 @@ async def test_view_building_while_tablet_streaming_fail(manager: ManagerClient)
     servers = [await manager.server_add(cmdline=cmdline_loggers)]
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
@@ -611,7 +611,7 @@ async def test_concurrent_tablet_migrations(manager: ManagerClient):
     await pause_view_building_tasks(manager)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1} AND tablets = {'initial': 2}") as ks:
-        cql = manager.get_cql()
+        cql, _ = await manager.get_ready_cql(servers)
 
         # The base and the view are colocated, so their tablets are always migrated together.
         # With 2 tablets per table and RF=3, we will have 2 tablet groups (base+view) per node.

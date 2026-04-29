@@ -29,6 +29,7 @@ async def test_change_two(manager, random_tables, build_mode):
     """Stop two nodes, change their IPs and start, check the cluster is
     functional"""
     servers = await manager.running_servers()
+    await manager.get_ready_cql(servers)
     host_ids = {s.server_id: await manager.get_host_id(s.server_id) for s in servers}
     table = await random_tables.add_table(name='t1', pks=1, columns=[
         Column("pk", IntType),

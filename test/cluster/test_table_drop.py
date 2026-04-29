@@ -24,7 +24,7 @@ async def test_drop_table_during_flush(manager: ManagerClient):
 
     await manager.api.enable_injection(servers[0].ip_addr, "flush_tables_on_all_shards_table_drop", True)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k%3});") for k in range(64)])
@@ -52,7 +52,7 @@ async def test_drop_table_during_load_and_stream(manager: ManagerClient):
     """
     server = await manager.server_add()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     ks = unique_name("ks_")
     cf = "test"

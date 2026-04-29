@@ -94,7 +94,7 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
             "--logger-log-level", "api=trace:database=trace"]
     node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([node1, node2])
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH compaction = {'class': 'NullCompactionStrategy'}")
@@ -156,7 +156,7 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_succeeds_with_unitialized_bm(manager):
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
@@ -177,7 +177,7 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
     cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", str(cache_time_in_ms), "--smp", "1", "--logger-log-level", "api=trace"]
     node1, node2 = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([node1, node2])
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY) WITH tombstone_gc = {'mode': 'repair'}")
 
@@ -232,9 +232,9 @@ async def test_keyspace_drop_during_data_sync_repair(manager):
         'tablets_mode_for_new_keyspaces': 'disabled',
         'error_injections_at_startup': ['get_keyspace_erms_throw_no_such_keyspace']
     }
-    await manager.server_add(config=cfg)
+    server = await manager.server_add(config=cfg)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
     cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")
@@ -250,7 +250,7 @@ async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         keys = dict()
-        cql = manager.get_cql()
+        cql, _ = await manager.get_ready_cql(servers)
         await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
         for i in range(100):
             key = random.randint(-1000000000, 1000000000)
@@ -345,7 +345,7 @@ async def test_repair_timtestamp_difference(manager):
 async def test_small_table_optimization_repair(manager):
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND TABLETS = {'enabled': false}")
     cql.execute("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'repair'}")

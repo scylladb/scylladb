@@ -222,6 +222,9 @@ async def test_raft_limited_voters_retain_coordinator(manager: ManagerClient):
 
     assert len(dc_servers) == len(dc_setup)
 
+    all_servers = [s for dc in dc_servers for s in dc]
+    await manager.get_ready_cql(all_servers)
+
     coordinator_ids = await get_coordinator_host_ids(manager)
     assert coordinator_ids, "At least 1 coordinator id should be found"
 

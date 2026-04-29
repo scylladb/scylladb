@@ -110,7 +110,7 @@ async def test_refresh_deletes_uploaded_sstables(manager: ManagerClient):
 
     servers = await manager.servers_add(2)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await manager.disable_tablet_balancing()
 

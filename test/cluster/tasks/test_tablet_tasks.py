@@ -283,7 +283,7 @@ async def prepare_migration_test(manager: ManagerClient):
 
     await make_server()
     await manager.disable_tablet_balancing()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
     await make_server()
@@ -486,7 +486,7 @@ async def test_tablet_resize_task(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     table1 = "test1"
     table2 = "test2"
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as keyspace:
@@ -527,7 +527,7 @@ async def test_tablet_resize_list(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     table1 = "test1"
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as keyspace:
         await cql.run_async(f"CREATE TABLE {keyspace}.{table1} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
@@ -587,7 +587,7 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     table1 = "test1"
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as keyspace:
         await cql.run_async(f"CREATE TABLE {keyspace}.{table1} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")

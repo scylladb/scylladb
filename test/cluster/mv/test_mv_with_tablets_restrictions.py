@@ -194,7 +194,7 @@ async def test_add_node_in_new_rack_restriction_with_mv(manager: ManagerClient):
         {"dc": "dc1", "rack": "r2"},
         {"dc": "dc1", "rack": "r3"},
     ])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 3} AND tablets = {'enabled': true}")
     await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v int)")
@@ -238,7 +238,7 @@ async def test_remove_node_violating_rf_rack(manager: ManagerClient, op: str):
         {"dc": "dc1", "rack": "r3"},
         {"dc": "dc1", "rack": "r3"},
     ])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 3} AND tablets = {'enabled': true}")
     await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v int)")

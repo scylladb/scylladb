@@ -30,7 +30,7 @@ async def test_upgrade_to_ssl(manager: ManagerClient) -> None:
     cf = 'cf'
 
     servers = await manager.running_servers()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY) WITH tombstone_gc = {{'mode': 'immediate'}}")
 

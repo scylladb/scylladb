@@ -63,7 +63,7 @@ async def test_basic(manager: ManagerClient) -> None:
     logger.info(f"Booting initial cluster")
     servers = await manager.servers_add(servers_num=2, config=cfg, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     replication_factor = 2
     async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}") as ks:
@@ -110,7 +110,7 @@ async def test_dict_training(manager: ManagerClient) -> None:
     logger.info(f"Booting initial cluster")
     servers = await manager.servers_add(servers_num=2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     replication_factor = 2
     async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}") as ks:
@@ -172,7 +172,7 @@ async def test_external_dicts(manager: ManagerClient) -> None:
     logger.info(f"Booting initial cluster")
     servers = await manager.servers_add(servers_num=2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     replication_factor = 2
     async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}") as ks:
@@ -235,7 +235,7 @@ async def test_external_dicts_sanity(manager: ManagerClient) -> None:
     logger.info(f"Booting initial cluster")
     servers = await manager.servers_add(servers_num=2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     replication_factor = 2
     async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}") as ks:

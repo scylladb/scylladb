@@ -63,7 +63,7 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient)
             return None
         assert await wait_for(aux, time.time() + timeout)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         uses_tablets = await keyspace_has_tablets(manager, ks)
         # If the keyspace uses tablets, let's explicitly require the table to use multiple tablets.
@@ -101,6 +101,7 @@ async def test_limited_concurrency_of_writes(manager: ManagerClient):
     }, property_file = {"dc":"dc1", "rack":"rack1"})
     node2 = await manager.server_add(property_file = {"dc":"dc1", "rack":"rack2"})
 
+    await manager.get_ready_cql([node1, node2])
     cql = await manager.get_cql_exclusive(node1)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         table = f"{ks}.t"
@@ -131,7 +132,7 @@ async def test_sync_point(manager: ManagerClient):
     node_count = 3
     [node1, node2, node3] = await manager.servers_add(node_count, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([node1, node2, node3])
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         table = f"{ks}.t"
         await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
@@ -271,6 +272,7 @@ async def test_hints_consistency_during_replace(manager: ManagerClient):
     servers = await manager.servers_add(3, config={
         "error_injections_at_startup": ["decrease_hints_flush_period"]
     })
+    await manager.get_ready_cql(servers)
     cql = await manager.get_cql_exclusive(servers[0])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
@@ -312,7 +314,7 @@ async def test_draining_hints(manager: ManagerClient):
 
     s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([s1, s2, s3])
 
     await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
 
@@ -342,7 +344,7 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     """
     s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([s1, s2, s3])
     host_id2 = await manager.get_host_id(s2.server_id)
 
     await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")

@@ -31,7 +31,7 @@ async def test_replace_different_ip(manager: ManagerClient, failure_detector_tim
     replaced_server = servers[0]
     replace_cfg = ReplaceConfig(replaced_id = replaced_server.server_id, reuse_ip_addr = False, use_host_id = False)
     new_server = await manager.server_add(replace_cfg)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([new_server])
     servers = await manager.running_servers()
     all_ips = set([s.rpc_address for s in servers])
     logger.info(f"new server {new_server} started, all ips {all_ips}, "

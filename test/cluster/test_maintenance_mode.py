@@ -37,6 +37,7 @@ async def test_maintenance_mode(manager: ManagerClient):
     """
     max_rf = 3
     servers = await manager.servers_add(max_rf, auto_rack_dc='dc1')
+    await manager.get_ready_cql(servers)
     server_a = servers[0]
     host_id_a = await manager.get_host_id(server_a.server_id)
     socket_endpoint = UnixSocketEndPoint(await manager.server_get_maintenance_socket_path(server_a.server_id))

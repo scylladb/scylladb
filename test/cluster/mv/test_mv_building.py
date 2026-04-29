@@ -33,7 +33,7 @@ async def test_view_building_scheduling_group(manager: ManagerClient):
     cmdline = sum([["--logger-log-level", f"{logger}=trace"] for logger in loggers], [])
 
     server = await manager.server_add(cmdline=cmdline)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (p int, c int, PRIMARY KEY (p, c))")
@@ -88,7 +88,7 @@ async def test_start_scylla_with_view_building_disabled(manager: ManagerClient):
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_building_during_drop_index(manager: ManagerClient):
     server = await manager.server_add()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     await manager.api.enable_injection(server.ip_addr, "view_builder_consume_end_of_partition_delay", one_shot=True)
 
     await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
@@ -123,7 +123,7 @@ async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
     server = servers[0]
 
     logger.info("Populate table")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     n_partitions = 1000
     ks = 'ks'
     await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets={{'enabled':false}}")
@@ -166,7 +166,7 @@ async def test_empty_build_step_after_reshard(manager: ManagerClient):
     server = await manager.server_add(cmdline=['--smp', '1', '--logger-log-level', 'view=debug'])
     partitions = random.sample(range(1000), 129) # need more than 128 to allow the first build step to finish and save the progress
     logger.info(f"Using partitions: {partitions}")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets={{'enabled':false}}")
     await cql.run_async(f"CREATE TABLE ks.test (p int, c int, PRIMARY KEY(p,c));")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO ks.test (p, c) VALUES ({k}, {k+1});") for k in partitions])
@@ -233,7 +233,7 @@ async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
     host_id1 = await manager.get_host_id(s1.server_id)
     host_id2 = await manager.get_host_id(s2.server_id)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([s1, s2])
 
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2}")
     await cql.run_async("CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck))")

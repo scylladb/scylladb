@@ -37,7 +37,7 @@ async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: Scyll
     ], version=scylla_2025_1))
 
     logger.info("Creating tables")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     algorithms = ['Zstd', 'LZ4', 'Snappy', 'Deflate', 'LZ4WithDicts', 'ZstdWithDicts']
     initial_algorithms = ['Zstd', 'LZ4', 'Snappy', 'Deflate', 'LZ4', 'Zstd']

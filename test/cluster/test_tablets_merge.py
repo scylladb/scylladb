@@ -49,7 +49,7 @@ async def test_tablet_merge_simple(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
 
@@ -196,7 +196,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
                await manager.server_add(config=config, cmdline=cmdline),
                await manager.server_add(config=config, cmdline=cmdline)]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
 
@@ -387,7 +387,7 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
         rack = f'rack{rack_id+1}'
         servers.extend(await manager.servers_add(3, config=config, cmdline=cmdline, property_file={'dc': 'mydc', 'rack': rack}))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': 1}}")
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
     num_tables = 200 if build_mode != 'debug' else 20
@@ -459,7 +459,7 @@ async def test_missing_data(manager: ManagerClient):
 
     logger.info(f'server_id = {server.server_id}')
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     await manager.disable_tablet_balancing()
 
@@ -527,7 +527,7 @@ async def test_merge_with_drop(manager: ManagerClient):
 
     logger.info(f'server_id = {server.server_id}')
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     await manager.disable_tablet_balancing()
 

@@ -30,20 +30,21 @@ async def test_alter_dropped_tablets_keyspace(manager: ManagerClient) -> None:
     logger.info("starting a second node (the follower)")
     servers += [await manager.server_add(config=config)]
 
-    ks = await create_new_test_keyspace(manager.get_cql(), "with "
+    cql, _ = await manager.get_ready_cql(servers)
+    ks = await create_new_test_keyspace(cql, "with "
                                       "replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} and "
                                       "tablets = {'enabled': true}")
-    await manager.get_cql().run_async(f"create table {ks}.t (pk int primary key)")
+    await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
     logger.info(f"injecting wait-after-topology-coordinator-gets-event into the leader node {servers[0]}")
     injection_handler = await inject_error_one_shot(manager.api, servers[0].ip_addr,
                                                     'wait-after-topology-coordinator-gets-event')
 
     async def alter_tablets_ks_without_waiting_to_complete():
-        res = await manager.get_cql().run_async("select data_center from system.local")
+        res = await cql.run_async("select data_center from system.local")
         # ALTER tablets KS only accepts a specific DC, it rejects the generic 'replication_factor' tag
         this_dc = res[0].data_center
-        await manager.get_cql().run_async(f"alter keyspace {ks} "
+        await cql.run_async(f"alter keyspace {ks} "
                                     f"with replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}")
 
     # by creating a task this way we ensure it's immediately executed, but we won't wait until it's completed
@@ -55,8 +56,8 @@ async def test_alter_dropped_tablets_keyspace(manager: ManagerClient) -> None:
 
     logger.info(f"dropping KS from the follower node {servers[1]} so that the leader, which hangs on injected sleep, "
                 f"wakes up with the drop applied")
-    host = manager.get_cql().cluster.metadata.get_host(servers[1].ip_addr)
-    await manager.get_cql().run_async(f"drop keyspace {ks}", host=host)
+    host = cql.cluster.metadata.get_host(servers[1].ip_addr)
+    await cql.run_async(f"drop keyspace {ks}", host=host)
 
     logger.info("Waking up the leader to continue processing ALTER with KS that doesn't exist (has been just dropped)")
     await injection_handler.message()
@@ -82,10 +83,11 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerCl
     logger.info("starting a second node (the follower)")
     servers += [await manager.server_add(config=config, property_file={"dc": this_dc, "rack": "r2"})]
 
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', "
                                           f"'{this_dc}': ['r1']"
                                           "} and tablets = {'initial': 2}") as ks:
-        await manager.get_cql().run_async(f"create table {ks}.t (pk int primary key)")
+        await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
         logger.info(f"injecting wait-before-committing-rf-change-event into the leader node {servers[0]}")
         injection_handler = await inject_error_one_shot(manager.api, servers[0].ip_addr,
@@ -93,7 +95,7 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerCl
 
         async def alter_tablets_ks_without_waiting_to_complete():
             logger.info("scheduling ALTER KS to change the RF from 1 to 2")
-            await manager.get_cql().run_async(f"alter keyspace {ks} "
+            await cql.run_async(f"alter keyspace {ks} "
                                             f"with replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': ['r1','r2']}}")
 
         # by creating a task this way we ensure it's immediately executed,
@@ -107,9 +109,9 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerCl
 
         logger.info(f"creating another keyspace from the follower node {servers[1]} so that the leader, which hangs on injected sleep, "
                     f"wakes up with a changed schema")
-        host = manager.get_cql().cluster.metadata.get_host(servers[1].ip_addr)
-        with disable_schema_agreement_wait(manager.get_cql()):
-            ks2 = await create_new_test_keyspace(manager.get_cql(), "with "
+        host = cql.cluster.metadata.get_host(servers[1].ip_addr)
+        with disable_schema_agreement_wait(cql):
+            ks2 = await create_new_test_keyspace(cql, "with "
                                             "replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
                                             "and tablets = {'enabled': true}", host=host)
 
@@ -124,6 +126,6 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerCl
         assert matches
 
         # ensure that the ALTER has eventually succeeded and we changed RF from 1 to 2
-        assert get_replication(manager.get_cql(), ks)[this_dc] == ['r1', 'r2']
+        assert get_replication(cql, ks)[this_dc] == ['r1', 'r2']
 
-        await manager.get_cql().run_async(f"drop keyspace {ks2}")
+        await cql.run_async(f"drop keyspace {ks2}")

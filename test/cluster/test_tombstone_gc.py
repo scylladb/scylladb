@@ -30,8 +30,8 @@ def check_tombstone_gc_mode(cql, table, mode):
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
 async def test_default_tombstone_gc(manager: ManagerClient, rf: int, tablets: bool):
-    _ = await manager.servers_add(2, auto_rack_dc="dc1")
-    cql = manager.get_cql()
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
     tablets_enabled = "true" if tablets else "false"
     async with new_test_keyspace(manager, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
         async with new_test_table(manager, keyspace, "p int primary key, x int") as table:
@@ -42,8 +42,8 @@ async def test_default_tombstone_gc(manager: ManagerClient, rf: int, tablets: bo
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
 async def test_default_tombstone_gc_does_not_override(manager: ManagerClient, rf: int, tablets: bool):
-    _ = await manager.servers_add(2, auto_rack_dc="dc1")
-    cql = manager.get_cql()
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
     tablets_enabled = "true" if tablets else "false"
     async with new_test_keyspace(manager, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
         async with new_test_table(manager, keyspace, "p int primary key, x int", " with tombstone_gc = {'mode': 'disabled'}") as table:

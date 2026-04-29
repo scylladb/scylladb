@@ -239,7 +239,7 @@ async def test_shares_check(manager: ManagerClient):
 
     sl1 = f"sl_{unique_name()}"
     sl2 = f"sl_{unique_name()}"
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([srv])
 
     await cql.run_async(f"CREATE SERVICE LEVEL {sl1}")
     with pytest.raises(InvalidRequest, match="`shares` option can only be used when the cluster is fully upgraded to enterprise"):

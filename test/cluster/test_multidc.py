@@ -61,13 +61,15 @@ async def test_putget_2dc_with_rf(
     table_name = "test_table_name"
     columns = [Column("name", TextType), Column("value", TextType)]
     logger.info("Create two servers in different DC's")
+    servers = []
     for rack_idx, dc_idx in enumerate(nodes_list):
         s_info = await manager.server_add(
             config=CONFIG,
             property_file={"dc": f"dc{dc_idx}", "rack": f"rack{rack_idx}"},
         )
         logger.info(s_info)
-    conn = manager.get_cql()
+        servers.append(s_info)
+    conn, _ = await manager.get_ready_cql(servers)
     random_tables = RandomTables(request.node.name, manager, ks, rf)
     logger.info("Add table")
     await random_tables.add_table(ncolumns=2, columns=columns, pks=1, name=table_name)
@@ -348,13 +350,14 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     servers.append(await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"}))
     servers.append(await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"}))
     servers.append(await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"}))
+
     # Zero-token node. This rack should behave as if it didn't exist.
-    _ = await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc1", "rack": "r4"})
+    await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc1", "rack": "r4"})
 
     # Arbiter DC.
-    _ = await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc2", "rack": "r1"})
-    _ = await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc2", "rack": "r2"})
-    _ = await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc2", "rack": "r3"})
+    await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc2", "rack": "r1"})
+    await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc2", "rack": "r2"})
+    await manager.server_add(config=zero_token_cfg, property_file={"dc": "dc2", "rack": "r3"})
 
     # Only token-owning servers become CQL hosts visible to the driver, so we
     # only wait on the regular DC1 nodes here.
@@ -428,7 +431,7 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
     s3 = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r3"})
     s4 = await manager.server_add(config=cfg_false, property_file={"dc": "dc2", "rack": "r4"})
     # Note: This rack should behave as if it never existed.
-    _ = await manager.server_add(config={"join_ring": "false", "rf_rack_valid_keyspaces": "false"}, property_file={"dc": "dc1", "rack": "rzerotoken"})
+    await manager.server_add(config={"join_ring": "false", "rf_rack_valid_keyspaces": "false"}, property_file={"dc": "dc1", "rack": "rzerotoken"})
 
     # Current situation:
     # DC1: {r1, r2, r3}, DC2: {r4}
@@ -536,9 +539,9 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces_but_not_
 
     # One DC, 4 racks.
     dc = "dc1"
-    s1, _, _, _ = await manager.servers_add(4, config=cfg, auto_rack_dc=dc)
+    s1, s2, s3, s4 = await manager.servers_add(4, config=cfg, auto_rack_dc=dc)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([s1, s2, s3, s4])
     # We need to set `max_schema_agreement_wait` to 0 to speed up this test.
     assert hasattr(cql.cluster, "max_schema_agreement_wait")
     cql.cluster.max_schema_agreement_wait = 0
@@ -602,8 +605,9 @@ async def test_warn_create_and_alter_rf_rack_invalid_ks(manager: ManagerClient):
         manager.server_add(config=cfg, property_file={"dc": "dc2", "rack": "r5"}),
     ]
     await asyncio.gather(*start_node_tasks)
+    servers = await manager.running_servers()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     # We need to set `max_schema_agreement_wait` to 0 to speed up this test.
     # Without it, the test takes 50 seconds (or 16 seconds if cases run in parallel).
     # With it, the test takes about 9 seconds. All results on my local machine of course.

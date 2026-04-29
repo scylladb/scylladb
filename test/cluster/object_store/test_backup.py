@@ -60,7 +60,7 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
@@ -107,7 +107,7 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
@@ -139,7 +139,7 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
            }
     cmd = ['--logger-log-level', 'sstables_manager=debug']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
@@ -182,8 +182,9 @@ async def do_test_backup_helper(manager: ManagerClient, object_storage,
            'task_ttl_in_seconds': 300
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
-    server = (await manager.servers_add(num_servers, config=cfg, cmdline=cmd))[0]
-    cql = manager.get_cql()
+    servers = await manager.servers_add(num_servers, config=cfg, cmdline=cmd)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
     cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
@@ -269,7 +270,7 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
     cmd = ['--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug:encryption=debug:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     workdir = await manager.server_get_workdir(server.server_id)
 
     # This test is sensitive not to share the bucket with any other test
@@ -376,7 +377,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
     servers = await manager.servers_add(servers_num=3, config=config, auto_rack_dc='dc1')
 
     # Obtain the CQL interface from the manager.
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     # Create keyspace, table, and fill data
     logger.info("Creating keyspace and table, then inserting data...")
@@ -689,7 +690,7 @@ async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topo
     servers, host_ids = await create_cluster(topology, manager, logger, sstables_storage.object_storage)
 
     await manager.disable_tablet_balancing()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     num_keys = 10
     original_min_tablet_count=5
@@ -748,7 +749,7 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     print('Create keyspace')
     cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
@@ -775,7 +776,7 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
     server = await manager.server_add(config=config, cmdline=cmd)
 
     # Obtain the CQL interface from the manager.
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     scylla_path = await manager.server_get_exe(server.server_id)
 
     async with new_test_keyspace(manager,
@@ -880,7 +881,7 @@ async def test_restore_primary_replica(manager: ManagerClient, object_storage, d
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
     await manager.disable_tablet_balancing()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, replication_str) as ks:
         cql.execute(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int );")

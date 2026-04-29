@@ -37,7 +37,7 @@ async def test_mv_tablets_empty_ip(manager: ManagerClient):
         {"dc": "dc1", "rack": "r3"}
     ])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
         await cql.run_async(f"CREATE materialized view {ks}.t_view AS select pk, v from {ks}.t where v is not null primary key (v, pk)")

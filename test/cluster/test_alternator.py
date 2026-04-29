@@ -604,7 +604,7 @@ async def test_alternator_enforce_authorization_true(manager: ManagerClient):
     }
     servers = await manager.servers_add(1, config=config,
         driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')})
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     # Any requests from a non-existent user with garbage password is
     # rejected - even requests that don't need special permissions
     alternator = get_alternator(servers[0].ip_addr, 'nonexistent_user', 'garbage')
@@ -1414,8 +1414,9 @@ async def test_deferred_stream_enablement_on_tablets(manager: ManagerClient):
        attempted (must be blocked), then an increase (must succeed). After
        disabling streams, a shrinkage is attempted (must succeed).
     """
-    server = (await manager.servers_add(1, config=alternator_config))[0]
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, config=alternator_config)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
     alternator = get_alternator(server.ip_addr)
 
     async def get_table_id(ks, table_name):

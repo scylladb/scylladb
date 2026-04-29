@@ -25,7 +25,7 @@ import os
 async def test_large_create_statement(manager: ManagerClient):
     cmdline = ["--logger-log-level", "describe=trace"]
     srv = await manager.server_add(cmdline=cmdline)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([srv])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         async with new_test_table(manager, ks, "p int PRIMARY KEY") as table:
@@ -67,8 +67,8 @@ async def test_describe_cluster_sanity(manager: ManagerClient, mode: str):
     """
 
     if mode == "normal":
-        await manager.server_add()
-        cql = manager.get_cql()
+        srv = await manager.server_add()
+        cql, _ = await manager.get_ready_cql([srv])
     else:  # maintenance mode
         srv = await manager.server_add(config={"maintenance_mode": True}, connect_driver=False)
         maintenance_socket_path = await manager.server_get_maintenance_socket_path(srv.server_id)

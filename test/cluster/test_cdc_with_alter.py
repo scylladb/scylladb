@@ -26,7 +26,7 @@ async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
     """
 
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
@@ -83,7 +83,7 @@ async def test_cdc_compatible_schema(manager: ManagerClient):
     """
 
     servers = await manager.servers_add(1)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     log = await manager.server_open_log(servers[0].server_id)
 
@@ -120,8 +120,8 @@ async def test_recreate_column_too_soon(manager: ManagerClient):
         same name before the drop timestamp has passed results in a proper error
         message, preventing potential data corruption.
     """
-    await manager.servers_add(1, auto_rack_dc="dc1")
-    cql = manager.get_cql()
+    servers = await manager.servers_add(1, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int, dropped_col int) WITH cdc={{'enabled': true}}")
@@ -154,7 +154,7 @@ async def test_concurrent_writes_and_drop_column_with_cdc_preimage(manager: Mana
         Reproduces #26340.
     """
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int, dropped_col int) WITH cdc={{'enabled': true, 'preimage': 'full'}}")

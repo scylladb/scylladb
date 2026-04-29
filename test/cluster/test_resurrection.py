@@ -45,7 +45,7 @@ async def test_resurrection_while_file_streaming(manager: ManagerClient):
     s0_host_id = await manager.get_host_id(servers[0].server_id)
     s1_host_id = await manager.get_host_id(servers[1].server_id)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH gc_grace_seconds = 0;")
 

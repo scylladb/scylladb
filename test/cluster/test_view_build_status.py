@@ -237,7 +237,7 @@ async def test_view_build_status_with_replace_node(manager: ManagerClient):
     added_host_id = await manager.get_host_id(servers[-1].server_id)
 
     await manager.driver_connect(server=servers[1])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     # wait for the old node rows to be removed and new node rows to be added
     async def node_rows_replaced():

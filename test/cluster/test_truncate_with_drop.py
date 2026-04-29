@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
 async def test_truncation_on_drop(manager: ManagerClient):
-    await manager.server_add()
-    cql = manager.get_cql()
+    server = await manager.server_add()
+    cql, _ = await manager.get_ready_cql([server])
 
     # Create a keyspace
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
@@ -42,7 +42,7 @@ async def test_truncation_on_drop(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_truncation_records_pruned_on_dirty_restart(manager: ManagerClient):
     server = await manager.server_add()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     async def restart():
         await manager.server_stop(server.server_id)

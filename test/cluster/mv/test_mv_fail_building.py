@@ -20,7 +20,7 @@ from cassandra.query import SimpleStatement  # type: ignore
 async def test_mv_fail_building(manager: ManagerClient) -> None:
     node_count = 3
     servers = await manager.servers_add(node_count, auto_rack_dc="dc")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, PRIMARY KEY (key, c))")
         # Insert initial rows for building an index
@@ -51,7 +51,7 @@ async def test_mv_fail_building(manager: ManagerClient) -> None:
 async def test_mv_build_during_shutdown(manager: ManagerClient):
     server = await manager.server_add()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
 

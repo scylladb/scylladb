@@ -68,7 +68,7 @@ async def test_tablet_mv_create(manager: ManagerClient):
        Reproduces issue #16194.
     """
     servers = await manager.servers_add(1)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
@@ -85,7 +85,7 @@ async def test_tablet_mv_simple(manager: ManagerClient):
        Reproduces issue #16209.
     """
     servers = await manager.servers_add(1)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
@@ -107,7 +107,7 @@ async def test_tablet_mv_simple_6node(manager: ManagerClient):
        Reproduces #16227.
     """
     servers = await manager.servers_add(6)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk) WITH SYNCHRONOUS_UPDATES = TRUE")
@@ -135,7 +135,7 @@ async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
        Reproduces #16313.
     """
     servers = await manager.servers_add(2, config=alternator_config)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     alternator = get_alternator(servers[0].ip_addr)
     # Tell Alternator to create a table with just *one* tablet, via a
     # special tag.
@@ -205,7 +205,7 @@ async def test_tablet_si_create(manager: ManagerClient):
        Reproduces issue #16194.
     """
     servers = await manager.servers_add(1)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
@@ -219,7 +219,7 @@ async def test_tablet_lsi_create(manager: ManagerClient):
        Reproduces issue #16194.
     """
     servers = await manager.servers_add(1)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 100}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
@@ -244,7 +244,7 @@ async def test_tablet_cql_lsi(manager: ManagerClient):
        Reproduces #16371.
     """
     servers = await manager.servers_add(2)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     # Create a table with an LSI, using tablets. Use just 1 tablets,
     # which is silly in any real-world use case, but makes this test simpler
@@ -298,7 +298,7 @@ async def test_mv_tablet_split(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)")

@@ -42,11 +42,12 @@ async def test_major_compaction_consider_only_existing_data(manager: ManagerClie
     cmdline = [
         '--tablets-initial-scale-factor=1' # The test assumes 1 compaction group per shard because of injection point trap
     ]
-    server = (await manager.servers_add(1, cmdline=cmdline))[0]
+    servers = await manager.servers_add(1, cmdline=cmdline)
+    server = servers[0]
 
     logger.info("Creating table")
     cf = "test_consider_only_existing_data"
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY) WITH tombstone_gc = {{'mode': 'immediate'}}")
         await disable_autocompaction_across_keyspaces(manager, server.ip_addr, ks)
@@ -113,7 +114,7 @@ async def test_major_compaction_flush_all_tables(manager: ManagerClient, compact
 
     logger.info("Creating table")
     cf = "test_flush_all_tables"
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY)")
         await disable_autocompaction_across_keyspaces(manager, server.ip_addr, ks)
@@ -161,7 +162,7 @@ async def test_shutdown_drain_during_compaction(manager: ManagerClient):
 
     logger.info("Creating table")
     cf = "test_shutdown_drain_during_compaction"
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY);")
         await disable_autocompaction_across_keyspaces(manager, server.ip_addr, ks)
@@ -213,7 +214,7 @@ async def test_alter_compaction_strategy_during_compaction(manager: ManagerClien
     7. Verify no unexpected errors in logs
     """
     node1 = await manager.server_add(cmdline=['--logger-log-level', 'compaction=debug'])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([node1])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
         logger.info("Create table")
@@ -262,7 +263,7 @@ async def test_disable_autocompaction_during_major_compaction(manager: ManagerCl
     await disable_autocompaction_across_keyspaces(manager, server.ip_addr, "system", "system_schema")
 
     cf = "cf"
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         logger.info("Creating table")
         await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY)")

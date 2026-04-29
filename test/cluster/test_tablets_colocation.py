@@ -61,7 +61,7 @@ async def test_base_view_colocation(manager: ManagerClient):
     ]
     servers = await manager.servers_add(1, config=cfg, cmdline=cmdline)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     min_tablet_count = 8
 
@@ -108,7 +108,7 @@ async def test_move_tablet(manager: ManagerClient, move_table: str):
     servers = await manager.servers_add(2, config=cfg, cmdline=cmdline)
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         # The base and view table should be co-located on one of the nodes with a single tablet each.
@@ -189,7 +189,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=1 AND bloom_filter_fp_chance=1;")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL AND pk > 1000000 PRIMARY KEY (pk, c)")
@@ -311,7 +311,7 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
     servers = await manager.servers_add(2, config=cfg, cmdline=cmdline)
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -398,7 +398,7 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
     servers = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
@@ -440,7 +440,7 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_colocated_tables_gc_mode(manager: ManagerClient):
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     def check_tombstone_gc_mode_timeout(cql, table):
         s = list(cql.execute(f"DESC {table}"))[0].create_statement

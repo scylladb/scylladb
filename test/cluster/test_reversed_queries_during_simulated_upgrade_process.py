@@ -26,9 +26,9 @@ async def test_reversed_queries_during_upgrade(manager: ManagerClient) -> None:
     in order to test both native and legacy reversed formats.
     """
     cmdline = ["--hinted-handoff-enabled", "0"]
-    node1, _ = await manager.servers_add(2, cmdline, auto_rack_dc="dc1")
+    node1, node2 = await manager.servers_add(2, cmdline, auto_rack_dc="dc1")
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([node1, node2])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int, ck1 int, ck2 int, PRIMARY KEY (pk, ck1, ck2));")

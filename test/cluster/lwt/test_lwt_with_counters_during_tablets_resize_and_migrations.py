@@ -317,6 +317,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ManagerClien
     ]
 
     servers = await manager.servers_add(6, config=cfg, property_file=properties, cmdline=cmdline)
+    await manager.get_ready_cql(servers)
     
     async with new_test_keyspace(
         manager,

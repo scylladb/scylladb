@@ -34,7 +34,7 @@ async def test_validate_truncate_with_concurrent_writes(manager: ManagerClient):
         {"dc": "dc1", "rack": "r3"},
     ])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}}")
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int, ck int, val int, PRIMARY KEY(pk, ck));")
 

@@ -42,7 +42,7 @@ async def test_removenode_with_coordinator_restart(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'load_balancer=debug']
 
     servers = await manager.servers_add(3, cmdline=cmdline)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     ks1 = await create_keyspace(cql, 3, rf=1)
     await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
@@ -72,7 +72,7 @@ async def test_replace(manager: ManagerClient):
     config = {"rf_rack_valid_keyspaces": False}
     servers = await manager.servers_add(3, cmdline=cmdline, config=config)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     ks1 = await create_keyspace(cql, 32, rf=1)
     await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
@@ -152,7 +152,7 @@ async def test_removenode(manager: ManagerClient):
     # 4 nodes so that we can find new tablet replica for the RF=3 table on removenode
     servers = await manager.servers_add(4, cmdline=cmdline, config=config)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     # RF=1
     ks1 = await create_keyspace(cql, 32, rf=1)
@@ -222,7 +222,7 @@ async def test_removenode_with_ignored_node(manager: ManagerClient):
         {"dc": "dc1", "rack": "r3"}
     ])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     ks = await create_keyspace(cql, 32, rf=3)
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")

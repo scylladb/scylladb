@@ -35,7 +35,7 @@ async def test_add_node_in_new_rack_violating_rf_rack(manager: ManagerClient, en
         {"dc": "dc1", "rack": "r2"},
         {"dc": "dc1", "rack": "r3"},
     ])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 3} AND tablets = {'enabled': true}")
 
@@ -96,7 +96,7 @@ async def test_remove_node_violating_rf_rack(manager: ManagerClient, enforce: bo
         {"dc": "dc1", "rack": "r3"},
         {"dc": "dc1", "rack": "r3"},
     ])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 3} AND tablets = {'enabled': true}")
 
@@ -150,7 +150,7 @@ async def test_keyspace_creation_during_node_join(manager: ManagerClient, inject
         {"dc": "dc1", "rack": "r2"},
         {"dc": "dc1", "rack": "r3"},
     ])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     inj_before_bootstrap = "topology_coordinator_pause_after_accept_node"
     inj_after_bootstrap = "topology_coordinator_pause_after_updating_cdc_generation"
@@ -254,7 +254,7 @@ async def test_keyspace_creation_during_node_remove(manager: ManagerClient, op: 
         {"dc": "dc1", "rack": "r2"},
         {"dc": "dc1", "rack": "r3"},
     ])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     if op == "remove":
         inj = "topology_coordinator_pause_after_start_removenode"
@@ -330,7 +330,7 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClie
         {"dc": "dc1", "rack": "r4"},
         {"dc": "dc1", "rack": "r5"},
     ])
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     # Create keyspace with explicit rack list - only uses racks r1, r2, r4
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r4']} AND tablets = {'enabled': true}")

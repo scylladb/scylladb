@@ -794,7 +794,7 @@ async def test_repair_sigsegv_with_diff_shard_count(manager: ManagerClient, use_
     servers = await manager.servers_add(1, cmdline=cmdline0, auto_rack_dc="dc1")
     servers.append(await manager.server_add(cmdline=cmdline1, property_file={'dc': 'dc1', 'rack': 'rack2'}))
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND TABLETS = {{ 'enabled': {str(use_tablet).lower()} }}  ") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")

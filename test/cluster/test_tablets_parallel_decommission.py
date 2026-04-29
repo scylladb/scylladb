@@ -47,7 +47,7 @@ async def test_tablets_are_drained_in_parallel(manager: ManagerClient):
     ])
     await ensure_group0_leader_on(manager, servers[0])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
@@ -117,7 +117,7 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack
     await ensure_group0_leader_on(manager, servers[0])
     coord_srv = servers[0]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
@@ -176,7 +176,7 @@ async def test_decommission_can_be_canceled(manager: ManagerClient):
     await ensure_group0_leader_on(manager, servers[0])
     coord_serv = servers[0]
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                         " 'dc1': ['rack1']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
@@ -260,7 +260,7 @@ async def test_decommission_is_rejected_when_another_one_is_still_pending(manage
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                         " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
@@ -308,7 +308,7 @@ async def test_remove_is_canceled_if_there_is_node_down(manager: ManagerClient):
 
     await manager.disable_tablet_balancing()
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                         " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
@@ -330,7 +330,7 @@ async def test_decommission_start_time_is_stable(manager: ManagerClient):
     servers = await manager.servers_add(2, property_file={"dc": "dc1", "rack": "rack1"})
     await ensure_group0_leader_on(manager, servers[0])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
@@ -377,7 +377,7 @@ async def test_decommission_can_not_be_canceled_once_running(manager: ManagerCli
     servers = await manager.servers_add(2, property_file={"dc": "dc1", "rack": "rack1"})
     await ensure_group0_leader_on(manager, servers[0])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
@@ -433,7 +433,7 @@ async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: M
     ])
     await ensure_group0_leader_on(manager, servers[0])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
@@ -479,7 +479,7 @@ async def test_node_lost_during_decommission_drain(manager: ManagerClient):
     ])
     await ensure_group0_leader_on(manager, servers[0])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")

@@ -58,6 +58,7 @@ async def test_mv_tombstone_gc_not_inherited(manager):
     This behavior is not explicitly documented anywhere, but this test
     demonstrates the existing behavior.
     """
+    await manager.get_ready_cql(await manager.running_servers())
     cql = manager.cql
     async with new_test_keyspace(manager, ksdef) as keyspace:
         async with new_test_table(manager, keyspace, "p int primary key, x int", "WITH tombstone_gc = {'mode': 'immediate'}") as table:

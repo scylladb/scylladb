@@ -67,7 +67,7 @@ async def test_autoretrain_dict(manager: ManagerClient):
     ], auto_rack_dc="dc1", config=cfg)
 
     logger.info("Creating table")
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     ks_name = "test"
     cf_name = "test"
     await cql.run_async(

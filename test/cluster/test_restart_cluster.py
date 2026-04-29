@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 async def test_restart_cluster(manager: ManagerClient) -> None:
     """Test that cluster can restart fine after all nodes are stopped gracefully"""
     servers = await manager.servers_add(3)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     logger.info(f"Servers {servers}, gracefully stopping servers {[s.server_id for s in servers]} to check if all will go up")
     for s in servers:

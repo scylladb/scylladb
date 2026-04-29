@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 async def create_server_and_cqls(manager, cqls_num):
     server = await manager.server_add()
+    await manager.get_ready_cql([server])
 
     def create_cluster_connection():
         return cluster_con([server.ip_addr],

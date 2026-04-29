@@ -389,7 +389,7 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
             await manager.server_update_cmdline(server.server_id, ['--smp=4'])
             await manager.server_restart(server.server_id)
             await reconnect_driver(manager)
-            cql = manager.get_cql()
+            cql, _ = await manager.get_ready_cql([server])
 
             # We can't read the internal raft state directly, so we perform extra writes
             # which should cause raft table updates based on the loaded state after restart.
@@ -442,7 +442,7 @@ async def test_sc_persistence_with_compaction(manager: ManagerClient):
             # Restart to verify compacted SSTables are correctly readable by raft server
             await manager.server_restart(server.server_id)
             await reconnect_driver(manager)
-            cql = manager.get_cql()
+            cql, _ = await manager.get_ready_cql([server])
 
             # We can't read the internal raft state directly, so we perform extra writes
             # which should cause raft table updates based on the loaded state after restart.
@@ -480,7 +480,7 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
 
             await manager.server_start(server.server_id)
             await reconnect_driver(manager)
-            cql = manager.get_cql()
+            cql, _ = await manager.get_ready_cql([server])
 
             # We can't read the internal raft state directly, so we perform extra writes
             # which should cause raft table updates based on the loaded state after restart.

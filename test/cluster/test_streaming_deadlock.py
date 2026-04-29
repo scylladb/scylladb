@@ -35,7 +35,7 @@ async def test_streaming_deadlock_removenode(request, manager: ManagerClient):
     ]
 
     servers = await manager.servers_add(3, config=cfg, cmdline=cmdline)
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int, v text);")

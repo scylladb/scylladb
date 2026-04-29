@@ -60,8 +60,8 @@ async def insert_with_concurrency(cql, table, value_count, concurrency):
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) -> None:
     node_count = 2
-    await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update']})
-    cql = manager.get_cql()
+    servers = await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update']})
+    cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, PRIMARY KEY (key, c))")
         await insert_with_concurrency(cql, f"{ks}.tab", 200, 100)
@@ -83,7 +83,7 @@ async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) 
 @pytest.mark.parametrize("permuted", [False, True])
 async def test_base_partition_deletion_with_metrics(manager: ManagerClient, permuted):
     server = await manager.server_add()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as test_keyspace:
         async with new_test_table(manager, test_keyspace, 'p1 int, p2 int, c int, primary key ((p1,p2),c)') as table:
             # Insert into one base partition. We will delete the entire partition
@@ -132,7 +132,7 @@ async def test_base_partition_deletion_with_metrics(manager: ManagerClient, perm
 @pytest.mark.asyncio
 async def test_base_partition_deletion_in_batch_with_delete_row_with_metrics(manager: ManagerClient):
     server = await manager.server_add()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as test_keyspace:
         async with new_test_table(manager, test_keyspace, 'p int, c int, v int, primary key ((p,c),v)') as table:
             insert = cql.prepare(f'INSERT INTO {table} (p,c,v) VALUES (?,?,?)')

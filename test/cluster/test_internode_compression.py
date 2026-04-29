@@ -132,7 +132,7 @@ async def do_test_internode_compression_between_datacenters(manager: ManagerClie
     # And connect the driver.
     await manager.driver_connect(servers[0][0])
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([s for s, _ in servers])
 
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }") as ks:
         async with new_test_table(manager, ks, "key int PRIMARY KEY, val TEXT") as table:

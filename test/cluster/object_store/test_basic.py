@@ -47,7 +47,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
         server = await manager.server_add(config=cfg, property_file=property_file)
         servers.append(server)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     workdir = await manager.server_get_workdir(servers[0].server_id)
     print(f'Create keyspace (storage server listening at {object_storage.address})')
     async with new_test_keyspace(manager, keyspace_options(object_storage, rf=replication_factor)) as ks:
@@ -121,7 +121,7 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
     cmd = ['--logger-log-level', 's3=trace:http=debug:gcp_storage=trace']
     server = await manager.server_add(config=cfg, cmdline=cmd)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
     async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
@@ -164,7 +164,7 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
            'experimental_features': ['keyspace-storage-options']}
     server = await manager.server_add(config=cfg)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
     async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
@@ -203,7 +203,7 @@ async def test_misconfigured_storage(manager: ManagerClient, object_storage):
            'experimental_features': ['keyspace-storage-options']}
     server = await manager.server_add(config=cfg)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     print(f'Create keyspace (storage server listening at {object_storage.address})')
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
                                       'replication_factor': '1'})
@@ -228,7 +228,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
            'experimental_features': ['keyspace-storage-options']}
     server = await manager.server_add(config=cfg)
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     print(f'Create keyspace (storage server listening at {object_storage.address})')
 
     async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
@@ -285,7 +285,7 @@ async def test_get_object_store_endpoints(manager: ManagerClient, config_with_fu
     assert json.loads(endpoints[name]) == objconf[0]
 
     print('Check that system.config contains the object storage endpoints')
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     res = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'object_storage_endpoints';").one().value)
     assert name in res
     assert json.loads(res[name]) == objconf[0]
@@ -295,7 +295,7 @@ async def test_get_object_store_endpoints(manager: ManagerClient, config_with_fu
 async def test_create_keyspace_after_config_update(manager: ManagerClient, object_storage):
     print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
     server = await manager.server_add()
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
     endpoint = object_storage.address  
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
                                       'replication_factor': '1'})

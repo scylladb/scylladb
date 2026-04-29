@@ -69,7 +69,7 @@ async def test_row_ttl_scheduling_group(manager: ManagerClient):
     }
     servers = await manager.servers_add(3, config=config, auto_rack_dc='dc1',
         driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')})
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     # We need to run "ALTER TABLE" below to enable TTL on the table only after
     # we get the "before" CPU metrics, to ensure that we account all TTL work.
     # But we don't want the "ALTER TABLE" operation itself to be accounted as
@@ -171,7 +171,7 @@ async def test_row_ttl_multinode_expiration(manager: ManagerClient, with_down_no
         # work with one node down.
         await manager.server_stop_gracefully(servers[2].server_id) 
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers[:2] if with_down_node else servers)
 
     ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 }"
     async with new_test_keyspace(manager, ksdef) as keyspace:
@@ -300,7 +300,7 @@ async def test_row_ttl_multi_dc(manager: ManagerClient):
         for rack in range(3):
             futures.append(manager.servers_add(1, config=config, property_file={'dc': f'dc{dc+1}', 'rack': f'rack{rack+1}'}))
     servers = [x[0] for x in await asyncio.gather(*futures)]
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql(servers)
     # Setting replication_factor:3 means RF=3 for each of the two DCs.
     # (this is the so-called "auto-expansion" feature).
     ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 }"
