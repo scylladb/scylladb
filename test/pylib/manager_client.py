@@ -61,6 +61,7 @@ class ManagerClient:
         self.ccluster: Optional[CassandraCluster] = None
         self.cql: Optional[CassandraSession] = None
         self.exclusive_clusters: List[CassandraCluster] = []
+        self._get_ready_cql_was_called: bool = False
         # A client for communicating with ScyllaClusterManager (server)
         self.sock_path = sock_path
         self.client_for_asyncio_loop = {asyncio.get_running_loop(): UnixRESTClient(sock_path)}
@@ -124,8 +125,16 @@ class ManagerClient:
         self.cql = None
 
     def get_cql(self) -> CassandraSession:
-        """Precondition: driver is connected"""
+        """Precondition: get_ready_cql() has been called at least once on the
+        current driver session, ensuring the cluster topology is synchronized
+        and all nodes are ready to serve CQL.
+        """
         assert self.cql
+        assert self._get_ready_cql_was_called, (
+            "get_cql() called before get_ready_cql(); the CQL session may "
+            "route requests to nodes that have not yet completed bootstrap. "
+            "Call manager.get_ready_cql(servers) first."
+        )
         return self.cql
 
     # More robust version of get_cql, when topology changes
@@ -133,6 +142,7 @@ class ManagerClient:
     # it may fail unless we perform additional readiness checks
     async def get_ready_cql(self, servers: List[ServerInfo]) -> tuple[CassandraSession, list[Host]]:
         """Precondition: driver is connected"""
+        self._get_ready_cql_was_called = True
         cql = self.get_cql()
         await self.servers_see_each_other(servers)
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
