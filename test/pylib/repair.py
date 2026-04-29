@@ -5,14 +5,13 @@
 #
 
 from test.pylib.internal_types import ServerInfo
-from test.pylib.util import wait_for_cql_and_get_hosts, Host
+from test.pylib.util import Host
 from test.cluster.util import create_new_test_keyspace
 from test.pylib.rest_client import read_barrier
 
 from cassandra.cluster import Session as CassandraSession
 
 import asyncio
-import time
 import logging
 import json
 
@@ -75,14 +74,13 @@ async def create_table_insert_data_for_repair(manager, rf = 3 , tablets = 8, fas
         config.update({'repair_hints_batchlog_flush_cache_time_in_ms': 0})
     servers = await manager.servers_add(3, config=config, cmdline=cmdline,
                                         property_file=[{"dc": "dc1", "rack": f"r{i % rf}"} for i in range(rf)])
-    cql = manager.get_cql()
+    cql, hosts = await manager.get_ready_cql(servers)
+    logging.info(f'Got hosts={hosts}');
     ks = await create_new_test_keyspace(cql, "WITH replication = {{'class': 'NetworkTopologyStrategy', "
                   "'replication_factor': {}}} AND tablets = {{'initial': {}}};".format(rf, tablets))
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
     keys = range(nr_keys)
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    logging.info(f'Got hosts={hosts}');
     table_id = await manager.get_table_id(ks, "test")
     return (servers, cql, hosts, ks, table_id)
 
@@ -102,11 +100,10 @@ async def create_table_insert_data_for_repair_multiple_rows(manager, rf = 3 , ta
 
     servers = await manager.servers_add(3, config=config, cmdline=cmdline,
                                         property_file=[{"dc": "dc1", "rack": f"r{i % rf}"} for i in range(rf)])
-    cql = manager.get_cql()
+    cql, hosts = await manager.get_ready_cql(servers)
     ks = await create_new_test_keyspace(cql, "WITH replication = {{'class': 'NetworkTopologyStrategy', "
                   "'replication_factor': {}}} AND tablets = {{'initial': {}}};".format(rf, tablets))
     create_table_cql = f"CREATE TABLE IF NOT EXISTS {ks}.test ( pk int, ck int, data int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {{'mode':'repair'}};"
     await cql.run_async(create_table_cql)
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     table_id = await manager.get_table_id(ks, "test")
     return (servers, cql, hosts, ks, table_id)
