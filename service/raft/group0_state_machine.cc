@@ -434,6 +434,8 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
 }
 
 future<> group0_state_machine::enable_in_memory_state_machine() {
+    co_await utils::get_local_injector().inject("group0_state_machine_enable_in_memory_fail",
+            [] { return std::make_exception_ptr(std::runtime_error("injected failure in enable_in_memory_state_machine")); });
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
     if (!_in_memory_state_machine_enabled) {
         _in_memory_state_machine_enabled = true;
