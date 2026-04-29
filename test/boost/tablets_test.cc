@@ -680,6 +680,51 @@ SEASTAR_THREAD_TEST_CASE(test_siblings) {
             { tablet_id(4), std::nullopt }
         }));
     }
+
+    // Selective merge (first tablet is singleton, last tablet is a pair, has singletons and pairs in between)
+    {
+        tablet_map tmap(9);
+        tmap.set_resize_decision(locator::resize_decision{
+            locator::resize_decision::merge{ .selected_left_tablets = {tablet_id(1), tablet_id(5), tablet_id(7)} },
+            1
+        });
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(1), tablet_id(2)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(2)) == std::make_pair(tablet_id(1), tablet_id(2)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(3)) == std::make_pair(tablet_id(3), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(4)) == std::make_pair(tablet_id(4), std::nullopt));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(5)) == std::make_pair(tablet_id(5), tablet_id(6)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(6)) == std::make_pair(tablet_id(5), tablet_id(6)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(7)) == std::make_pair(tablet_id(7), tablet_id(8)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(8)) == std::make_pair(tablet_id(7), tablet_id(8)));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), std::nullopt },
+            { tablet_id(1), tablet_id(2) },
+            { tablet_id(3), std::nullopt },
+            { tablet_id(4), std::nullopt },
+            { tablet_id(5), tablet_id(6) },
+            { tablet_id(7), tablet_id(8) }
+        }));
+    }
+
+    // Selective merge (first tablet is a pair, last tablet is a singleton)
+    {
+        tablet_map tmap(5);
+        tmap.set_resize_decision(locator::resize_decision{
+            locator::resize_decision::merge{ .selected_left_tablets = {tablet_id(0), tablet_id(2)} },
+            1
+        });
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(0)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(1)) == std::make_pair(tablet_id(0), tablet_id(1)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(2)) == std::make_pair(tablet_id(2), tablet_id(3)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(3)) == std::make_pair(tablet_id(2), tablet_id(3)));
+        BOOST_REQUIRE(tmap.sibling_tablets(tablet_id(4)) == std::make_pair(tablet_id(4), std::nullopt));
+        BOOST_REQUIRE(get_siblings(tmap) == sibling_map({
+            { tablet_id(0), tablet_id(1) },
+            { tablet_id(2), tablet_id(3) },
+            { tablet_id(4), std::nullopt }
+        }));
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_invalid_colocated_tables) {

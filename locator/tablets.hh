@@ -844,8 +844,9 @@ public:
     }
 
     // Returns the pair of sibling tablets for a given tablet id.
-    // If the tablet count is odd, the last tablet does not have a sibling and
-    // the second element of the pair will be disengaged.
+    // The second element will be disengaged if the tablet does not have a
+    // sibling: either it was picked as the isolated tablet for merge, or the
+    // merge is a selective merge and the given tablet does not participate in it.
     std::pair<tablet_id, std::optional<tablet_id>> sibling_tablets(tablet_id t) const;
 
     /// Returns true iff tablet has a given replica.
