@@ -126,10 +126,10 @@ To configure using :code:`scylla.yaml` file:
 
    .. code-block:: yaml
 
-      # Example: enabling UDF and Alternator Streams features
+      # Example: enabling UDF and Strongly Consistent Tables features
       experimental_features:
          - udf
-         - alternator-streams
+         - strongly-consistent-tables
 
 3. Save the file and exit.
 4. Restart the node.
@@ -142,13 +142,13 @@ To configure using :code:`scylla.yaml` file:
    
    :code:`$ docker stop <your_node> && docker start <your_node>`
 
-Alternately, starting from ScyllaDB 3.3, you can enable features directly via command line flags the :code:`--experimental-features` flag as follows. This command line options can be repeated multiple times. For example, to enable UDF and Alternator Streams:
+Alternately, starting from ScyllaDB 3.3, you can enable features directly via command line flags the :code:`--experimental-features` flag as follows. This command line options can be repeated multiple times. For example, to enable UDF and Strongly Consistent Tables:
 
 .. code-block:: console
 
    $ docker run --name <your_node> -d scylladb/scylla \
        --experimental-features=udf \
-       --experimental-features=alternator-streams
+       --experimental-features=strongly-consistent-tables
 
 You should now be able to use the specified experimental features.
 
