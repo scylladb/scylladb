@@ -5466,10 +5466,9 @@ class scylla_compaction_tasks(gdb.Command):
         try:
             task_list = list(intrusive_list(cm['_tasks']))
         except gdb.error: # 6.2 compatibility
-            task_list = list(std_list(cm['_tasks']))
+            task_list = [seastar_shared_ptr(t).get().dereference() for t in std_list(cm['_tasks'])]
 
         for task in task_list:
-            task = seastar_shared_ptr(task).get().dereference()
             schema = schema_ptr(task['_compacting_table'].dereference()['_schema'])
             key = 'type={}, state={:5}, {}'.format(task['_type'], str(task['_state']), schema.table_name())
             task_hist.add(key)
