@@ -1557,6 +1557,26 @@ def test_system_errors(dynamodb, test_table_s, metrics):
         r = requests.post(req.url, headers=headers, data=req.body, verify=False)
         assert r.status_code == 500
 
+# Test that reads_before_write is incremented exactly once per RMW operation.
+# We especially check this for "unsafe_rmw" write isolation mode, because we
+# used to have a bug that double-counted reads_before_write in that mode.
+# We use the per-table metric in the test so the test is isolated from any
+# potential parallel workloads on other tables.
+@pytest.mark.parametrize("write_isolation", ['unsafe_rmw', 'always'])
+def test_metric_reads_before_write(dynamodb, metrics, write_isolation):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            Tags=[{'Key': 'system:write_isolation', 'Value': write_isolation}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p})
+        with check_increases_metric_exact(metrics, 'scylla_alternator_table_reads_before_write',
+                [[1, {'cf': table.name}]]):
+            table.update_item(Key={'p': p},
+                UpdateExpression='SET a = :val',
+                ConditionExpression='attribute_exists(p)',
+                ExpressionAttributeValues={':val': 'newval'})
+
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
 # shard_bounce_for_lwt, requests_blocked_memory, requests_shed
