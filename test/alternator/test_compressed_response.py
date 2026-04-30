@@ -135,6 +135,28 @@ def test_compressed_response_large(dynamodb, test_table_s, encoding):
                 # Not very precise, but check that some compression actually happened
                 assert response["DecompressedLength"] > 1.2 * response["HTTPContentLength"]
 
+# Test with a very small compressed response (which we can force only on
+# Alternator, so this is a scylla_only test). Our implementation has special
+# handling for the last 1024-byte chunk of compression, so this test exercises
+# this code path. This test also verifies that setting the configuration option
+# alternator_response_compression_threshold_in_bytes to 1 really forces
+# compression even for small responses.
+@pytest.mark.parametrize("encoding", ["gzip", "deflate"])
+def test_compressed_response_small(dynamodb, test_table_s, scylla_only, encoding):
+    p = random_string()
+    # A tiny value that will be returned compressed by GetItem.
+    small_data = 'x' * 50
+    test_table_s.put_item(Item={'p': p, 'x': small_data})
+    with client_response_decompression(dynamodb):
+        # Tell Alternator to compress even tiny responses:
+        with server_response_compression(dynamodb, compression_threshold=1):
+            with request_custom_headers(dynamodb, {"Accept-Encoding": encoding}):
+                response = test_table_s.get_item(Key={'p': p})
+                assert response['Item']['x'] == small_data
+                assert response['WasCompressed'] == encoding
+                # Sanity check - confirm the response was really small, as expected
+                assert response['DecompressedLength'] < 200
+
 # Separate test to check that compression works also for chunked responses.
 # To trigger chunked responses in Alternator, we can use the BatchGetItem with response above 100KB.
 # DynamoDB probably does not use chunked responses, so we don't require it in that case.
