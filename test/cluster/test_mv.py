@@ -35,7 +35,7 @@ async def test_mv_tombstone_gc_setting(manager):
     is not supported on a single node, which is why this test needs to
     be here and not in the single-node cqlpy.
     """
-    cql = manager.cql
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
     async with new_test_keyspace(manager, ksdef) as keyspace:
         async with new_test_table(manager, keyspace, "p int primary key, x int") as table:
             # Adding "WITH tombstone_gc = ..." In the CREATE MATERIALIZED VIEW:
@@ -58,8 +58,7 @@ async def test_mv_tombstone_gc_not_inherited(manager):
     This behavior is not explicitly documented anywhere, but this test
     demonstrates the existing behavior.
     """
-    await manager.get_ready_cql(await manager.running_servers())
-    cql = manager.cql
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
     async with new_test_keyspace(manager, ksdef) as keyspace:
         async with new_test_table(manager, keyspace, "p int primary key, x int", "WITH tombstone_gc = {'mode': 'immediate'}") as table:
             s = list(cql.execute(f"DESC {table}"))[0].create_statement

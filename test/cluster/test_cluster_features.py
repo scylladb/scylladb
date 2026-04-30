@@ -68,8 +68,7 @@ async def test_rolling_upgrade_happy_path(manager: ManagerClient) -> None:
     """
     servers = await manager.running_servers()
 
-    cql = manager.cql
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     for srv in servers:
         host = (await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60))[0]
@@ -102,7 +101,7 @@ async def test_downgrade_after_partial_upgrade(manager: ManagerClient) -> None:
     servers = await manager.running_servers()
     upgrading_servers = servers[1:] if len(servers) > 0 else []
 
-    cql = manager.cql
+    cql, _ = await manager.get_ready_cql(servers)
 
     # Upgrade
     for srv in upgrading_servers:
@@ -140,7 +139,6 @@ async def test_joining_old_node_fails(manager: ManagerClient) -> None:
     cql = await reconnect_driver(manager)
 
     # Wait until the feature is considered enabled by all nodes
-    cql = manager.cql
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     logging.info(f"Waiting until {TEST_FEATURE_NAME} is enabled on all nodes")
     await asyncio.gather(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))

@@ -343,7 +343,7 @@ async def validate_sstables_encryption(manager: ManagerClient, server: ServerInf
 async def test_alter(manager, key_provider):
     """Tests altering encrypted CF:s and verify sstable data"""
     async def restart(manager: ManagerClient, servers: list[ServerInfo], table_names: list[str]):
-        cql = manager.cql
+        cql, _ = await manager.get_ready_cql(servers)
         expected_data = [list(row._asdict().values()) 
                          for row in cql.execute(f"SELECT * FROM {table_names[0]}")]
         logger.info("expected_data=%s", expected_data)
@@ -354,7 +354,6 @@ async def test_alter(manager, key_provider):
                                                table_names[0], True,
                                                expected_data=expected_data)
         # disable encryption
-        cql = manager.cql
         cql.execute(f"ALTER TABLE {table_names[0]} with "
                     "scylla_encryption_options={'key_provider':'none'}")
         table_desc = cql.execute(f"DESC {table_names[0]}").one().create_statement

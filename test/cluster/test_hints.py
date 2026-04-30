@@ -190,7 +190,7 @@ async def test_hints_consistency_during_decommission(manager: ManagerClient):
     (server1, server2, server3) = await manager.servers_add(3, config={
         "error_injections_at_startup": ["decrease_hints_flush_period"]
     })
-    cql = manager.cql
+    cql, _ = await manager.get_ready_cql([server1, server2, server3])
 
     logger.info("Creatting a keyspace with RF=1 and a table")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = { 'enabled': false }") as ks:

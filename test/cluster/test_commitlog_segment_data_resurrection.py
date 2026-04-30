@@ -41,7 +41,7 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ManagerClient):
         "commitlog_segment_size_in_mb": 1,
         "enable_cache": False
     })
-    cql = manager.cql
+    cql, _ = await manager.get_ready_cql([server])
 
     def commitlog_path():
         return json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'commitlog_directory'").one().value)
@@ -127,6 +127,6 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ManagerClient):
 
         manager.driver_close()
         await manager.driver_connect()
-        cql = manager.cql
+        cql, _ = await manager.get_ready_cql([server])
 
         assert len(list(cql.execute(f"SELECT * FROM {tbl2} WHERE pk = {pk1}"))) == 0

@@ -16,8 +16,7 @@ pytestmark = pytest.mark.prepare_3_racks_cluster
 # Simple test of schema helper
 @pytest.mark.asyncio
 async def test_new_table(manager, random_tables):
-    cql = manager.cql
-    assert cql is not None
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
     table = await random_tables.add_table(ncolumns=5)
     # Before performing data queries, make sure that the token ring
     # has converged (we're using ring_delay = 0).
@@ -45,8 +44,7 @@ async def test_new_table(manager, random_tables):
 @pytest.mark.asyncio
 async def test_alter_verify_schema(manager, random_tables):
     """Verify table schema"""
-    cql = manager.cql
-    assert cql is not None
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
     await random_tables.add_tables(ntables=4, ncolumns=5)
     await random_tables.verify_schema()
     # Manually remove a column
@@ -58,8 +56,7 @@ async def test_alter_verify_schema(manager, random_tables):
 
 @pytest.mark.asyncio
 async def test_new_table_insert_one(manager, random_tables):
-    cql = manager.cql
-    assert cql is not None
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
     table = await random_tables.add_table(ncolumns=5)
     await table.insert_seq()
     pk_col = table.columns[0]
@@ -74,8 +71,7 @@ async def test_new_table_insert_one(manager, random_tables):
 @pytest.mark.asyncio
 async def test_drop_column(manager, random_tables):
     """Drop a random column from a table"""
-    cql = manager.cql
-    assert cql is not None
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
     table = await random_tables.add_table(ncolumns=5)
     await table.insert_seq()
     await table.drop_column()
@@ -102,8 +98,7 @@ async def test_add_index(random_tables):
 @pytest.mark.asyncio
 async def test_paged_result(manager, random_tables):
     """Test run_async with paged results"""
-    cql = manager.cql
-    assert cql is not None
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
     table = await random_tables.add_table(ncolumns=5)
     inserts = []
     nrows = 21
