@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import math
 import shlex
 import textwrap
+from bisect import insort
 from random import randint
 
 import pytest
@@ -183,6 +185,8 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Specific byte limit for failure injection (random by default)")
     parser.add_argument('--skip-internet-dependent-tests', action="store_true",
                         help="Skip tests which depend on artifacts from the internet.")
+    parser.add_argument('--keep-duplicates', action='store_true', default=False,
+                        help="Do not deduplicate test arguments.")
     parser.add_argument("--pytest-arg", action='store', type=str,
                         default=None, dest="pytest_arg",
                         help="Additional command line arguments to pass to pytest, for example ./test.py --pytest-arg=\"-v -x\"")
@@ -241,6 +245,73 @@ def parse_cmd_line() -> argparse.Namespace:
     return args
 
 
+# TODO: Remove _CollectionArgument and _deduplicate_test_args once we update
+# to pytest 9.x, which fixes argument deduplication:
+# https://github.com/pytest-dev/pytest/issues/12083
+@dataclasses.dataclass(frozen=True, order=True)
+class _CollectionArgument:
+    """Resolved collection argument for deduplication.
+
+    A version-independent subset of pytest's CollectionArgument that
+    includes the fields needed for normalization (parametrization and
+    original_index were added in pytest 9.0).
+
+    ``a in b`` means ``b`` subsumes (contains) ``a``.  Adapted from
+    pytest 9.0.3 ``_pytest.main.is_collection_argument_subsumed_by``.
+    """
+    path: pathlib.Path
+    parts: tuple[str, ...]
+    parametrization: str
+    original_index: int
+
+    def __contains__(self, other: _CollectionArgument) -> bool:
+        if self.path != other.path:
+            return not self.parts and other.path.is_relative_to(self.path)
+        if len(self.parts) > len(other.parts) or other.parts[:len(self.parts)] != self.parts:
+            return False
+        return not self.parametrization or self.parametrization == other.parametrization
+
+
+def _deduplicate_test_args(args: list[str]) -> list[str]:
+    """Remove duplicate and subsumed test arguments.
+
+    Resolves and normalizes CLI test arguments, then applies the normalization
+    algorithm from pytest 9.0.3 to remove exact duplicates and arguments whose
+    paths are contained within another argument's path.
+    For example, ``["test/cql", "test/cql/lua_test.cql"]`` becomes ``["test/cql"]``.
+    """
+    if not args:
+        return args
+    invocation_path = pathlib.Path.cwd()
+    resolved_sorted: list[_CollectionArgument] = []
+    unresolved_indices: set[int] = set()
+    for i, arg in enumerate(args):
+        # Adapted from pytest 9.0.3 _pytest.main.resolve_collection_argument.
+        base, squacket, rest = arg.partition("[")
+        strpath, *parts = base.split("::")
+        fspath = pathlib.Path(os.path.abspath(invocation_path / strpath))
+        if not fspath.exists():
+            # Keep unresolved args — let pytest report the error.
+            unresolved_indices.add(i)
+            continue
+        insort(resolved_sorted, _CollectionArgument(
+            path=fspath,
+            parts=tuple(parts),
+            parametrization=squacket + rest,
+            original_index=i,
+        ))
+
+    # Normalize: remove duplicates and subsumed arguments using an O(n log n)
+    # sort-based algorithm adapted from pytest 9.0.3.
+    normalized = resolved_sorted[:1]
+    for ca in resolved_sorted[1:]:
+        if ca not in normalized[-1]:
+            normalized.append(ca)
+
+    kept_indices = {ca.original_index for ca in normalized} | unresolved_indices
+    return [arg for i, arg in enumerate(args) if i in kept_indices]
+
+
 def run_pytest(options: argparse.Namespace) -> int:
     # When tests are executed in parallel on different hosts, we need to distinguish results from them.
     # So HOST_ID needed to not overwrite results from different hosts during Jenkins will copy to one directory.
@@ -249,7 +320,8 @@ def run_pytest(options: argparse.Namespace) -> int:
 
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
-    files_to_run = options.name or [str(TOP_SRC_DIR / 'test/')]
+    files_to_run = options.name if options.keep_duplicates else _deduplicate_test_args(options.name)
+    files_to_run = files_to_run or [str(TOP_SRC_DIR / 'test/')]
     args = [
         '--color=yes',
         f'--repeat={options.repeat}',
@@ -269,6 +341,8 @@ def run_pytest(options: argparse.Namespace) -> int:
         ])
     if options.verbose:
         args.append('-v')
+    if options.keep_duplicates:
+        args.append('--keep-duplicates')
     if options.quiet:
         args.append('--quiet')
         args.extend(['-p','no:sugar'])
