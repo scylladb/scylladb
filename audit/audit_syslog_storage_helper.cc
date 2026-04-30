@@ -98,12 +98,16 @@ future<> audit_syslog_storage_helper::stop() {
     co_return;
 }
 
-future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
+future<> audit_syslog_storage_helper::write(audit_sink_set sinks,
+                                            const audit_info* audit_info,
                                             socket_address node_ip,
                                             socket_address client_ip,
                                             std::optional<db::consistency_level> cl,
                                             const sstring& username,
                                             bool error) {
+    if (!sinks.contains(audit_sink::syslog)) {
+        co_return;
+    }
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     tm time;
     localtime_r(&now, &time);
@@ -124,10 +128,14 @@ future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
     co_await syslog_send_helper(std::move(msg).release());
 }
 
-future<> audit_syslog_storage_helper::write_login(const sstring& username,
+future<> audit_syslog_storage_helper::write_login(audit_sink_set sinks,
+                                                  const sstring& username,
                                                   socket_address node_ip,
                                                   socket_address client_ip,
                                                   bool error) {
+    if (!sinks.contains(audit_sink::syslog)) {
+        co_return;
+    }
 
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     tm time;

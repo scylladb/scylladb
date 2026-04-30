@@ -8,6 +8,7 @@
 
 #include <seastar/core/future-util.hh>
 #include "audit/audit.hh"
+#include "audit/audit_rule.hh"
 #include "db/config.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/batch_statement.hh"
@@ -28,8 +29,8 @@ namespace audit {
 
 logging::logger logger("audit");
 
-static std::set<sstring> parse_audit_modes(const sstring& data) {
-    std::set<sstring> result;
+static audit_sink_set parse_audit_sinks(const sstring& data) {
+    audit_sink_set result;
     if (!data.empty()) {
         std::vector<sstring> audit_modes;
         boost::split(audit_modes, data, boost::is_any_of(","));
@@ -41,25 +42,27 @@ static std::set<sstring> parse_audit_modes(const sstring& data) {
             if (audit_mode == "none") {
                 return {};
             }
-            if (audit_mode != "table" && audit_mode != "syslog") {
+            if (audit_mode == "table") {
+                result.set(audit_sink::table);
+            } else if (audit_mode == "syslog") {
+                result.set(audit_sink::syslog);
+            } else {
                 throw audit_exception(fmt::format("Bad configuration: invalid 'audit': {}", audit_mode));
             }
-            result.insert(std::move(audit_mode));
         }
     }
     return result;
 }
 
-static std::unique_ptr<storage_helper> create_storage_helper(const std::set<sstring>& audit_modes, cql3::query_processor& qp, service::migration_manager& mm) {
-    SCYLLA_ASSERT(!audit_modes.empty() && !audit_modes.contains("none"));
+static std::unique_ptr<storage_helper> create_storage_helper(audit_sink_set audit_sinks, cql3::query_processor& qp, service::migration_manager& mm) {
+    SCYLLA_ASSERT(audit_sinks);
 
     std::vector<std::unique_ptr<storage_helper>> helpers;
-    for (const sstring& audit_mode : audit_modes) {
-        if (audit_mode == "table") {
-            helpers.emplace_back(std::make_unique<audit_cf_storage_helper>(qp, mm));
-        } else if (audit_mode == "syslog") {
-            helpers.emplace_back(std::make_unique<audit_syslog_storage_helper>(qp, mm));
-        }
+    if (audit_sinks.contains(audit_sink::table)) {
+        helpers.emplace_back(std::make_unique<audit_cf_storage_helper>(qp, mm));
+    }
+    if (audit_sinks.contains(audit_sink::syslog)) {
+        helpers.emplace_back(std::make_unique<audit_syslog_storage_helper>(qp, mm));
     }
 
     SCYLLA_ASSERT(!helpers.empty());
@@ -142,7 +145,7 @@ static audit::audited_keyspaces_t parse_audit_keyspaces(const sstring& data) {
 audit::audit(locator::shared_token_metadata& token_metadata,
              cql3::query_processor& qp,
              service::migration_manager& mm,
-             std::set<sstring>&& audit_modes,
+             audit_sink_set audit_sinks,
              audited_keyspaces_t&& audited_keyspaces,
              audited_tables_t&& audited_tables,
              category_set&& audited_categories,
@@ -151,19 +154,20 @@ audit::audit(locator::shared_token_metadata& token_metadata,
     , _audited_keyspaces(std::move(audited_keyspaces))
     , _audited_tables(std::move(audited_tables))
     , _audited_categories(std::move(audited_categories))
+    , _audit_sinks(audit_sinks)
     , _cfg(cfg)
     , _cfg_keyspaces_observer(cfg.audit_keyspaces.observe([this] (sstring const& new_value){ update_config<audited_keyspaces_t>(new_value, parse_audit_keyspaces, _audited_keyspaces); }))
     , _cfg_tables_observer(cfg.audit_tables.observe([this] (sstring const& new_value){ update_config<audited_tables_t>(new_value, parse_audit_tables, _audited_tables); }))
     , _cfg_categories_observer(cfg.audit_categories.observe([this] (sstring const& new_value){ update_config<category_set>(new_value, parse_audit_categories, _audited_categories); }))
 {
-    _storage_helper_ptr = create_storage_helper(std::move(audit_modes), qp, mm);
+    _storage_helper_ptr = create_storage_helper(audit_sinks, qp, mm);
 }
 
 audit::~audit() = default;
 
 future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm) {
-    std::set<sstring> audit_modes = parse_audit_modes(cfg.audit());
-    if (audit_modes.empty()) {
+    audit_sink_set audit_sinks = parse_audit_sinks(cfg.audit());
+    if (!audit_sinks) {
         logger.info("Audit is disabled");
         return make_ready_future<>();
     }
@@ -177,7 +181,7 @@ future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token
     return audit_instance().start(std::ref(stm),
                                   std::ref(qp),
                                   std::ref(mm),
-                                  std::move(audit_modes),
+                                  audit_sinks,
                                   std::move(audited_keyspaces),
                                   std::move(audited_tables),
                                   std::move(audited_categories),
@@ -229,6 +233,10 @@ future<> audit::shutdown() {
 }
 
 future<> audit::log(const audit_info& audit_info, const service::client_state& client_state, std::optional<db::consistency_level> cl, bool error) {
+    auto sinks = sinks_for(audit_info);
+    if (!sinks) {
+        return make_ready_future<>();
+    }
     thread_local static sstring no_username("undefined");
     static const sstring anonymous_username("anonymous");
     const sstring& username = client_state.user() ? client_state.user()->name.value_or(anonymous_username) : no_username;
@@ -245,7 +253,7 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
             node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
             audit_info.query(), client_ip, audit_info.table(), username);
     }
-    return futurize_invoke(std::mem_fn(&storage_helper::write), _storage_helper_ptr, &audit_info, node_ip, client_ip, cl, username, error)
+    return futurize_invoke(std::mem_fn(&storage_helper::write), _storage_helper_ptr, sinks, &audit_info, node_ip, client_ip, cl, username, error)
         .handle_exception([audit_info, node_ip, client_ip, cl, username, error] (auto ep) {
             logger.error("Unexpected exception when writing log with: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {} exception {}",
                 node_ip, audit_info.category_string(), cl, error, audit_info.keyspace(),
@@ -254,7 +262,7 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
 }
 
 static future<> maybe_log(const audit_info& audit_info, const service::client_state& client_state, std::optional<db::consistency_level> cl, bool error) {
-    if(audit::audit_instance().local_is_initialized() && audit::local_audit_instance().should_log(audit_info)) {
+    if(audit::audit_instance().local_is_initialized()) {
         return audit::local_audit_instance().log(audit_info, client_state, cl, error);
     }
     return make_ready_future<>();
@@ -284,6 +292,10 @@ future<> inspect(const audit_info_alternator& ai, const service::client_state& c
 }
 
 future<> audit::log_login(const sstring& username, socket_address client_ip, bool error) noexcept {
+    auto sinks = sinks_for_login();
+    if (!sinks) {
+        return make_ready_future<>();
+    }
     socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
     if (!_storage_running) {
         on_internal_error_noexcept(logger, fmt::format("Audit login log dropped (storage not ready): node_ip {} client_ip {} username {} error {}",
@@ -294,7 +306,7 @@ future<> audit::log_login(const sstring& username, socket_address client_ip, boo
         logger.debug("Login log written: node_ip {}, client_ip {}, username {}, error {}",
             node_ip, client_ip, username, error ? "true" : "false");
     }
-    return futurize_invoke(std::mem_fn(&storage_helper::write_login), _storage_helper_ptr, username, node_ip, client_ip, error)
+    return futurize_invoke(std::mem_fn(&storage_helper::write_login), _storage_helper_ptr, sinks, username, node_ip, client_ip, error)
         .handle_exception([username, node_ip, client_ip, error] (auto ep) {
             logger.error("Unexpected exception when writing login log with: node_ip {} client_ip {} username {} error {} exception {}",
                 node_ip, client_ip, username, error, ep);
@@ -313,8 +325,33 @@ bool audit::should_log_table(std::string_view keyspace, std::string_view name) c
     return keyspace_it != _audited_tables.cend() && keyspace_it->second.find(name) != keyspace_it->second.cend();
 }
 
-bool audit::should_log(const audit_info& audit_info) const {
-    return will_log(audit_info.category(), audit_info.keyspace(), audit_info.table());
+audit_sink_set audit::sinks_for(const audit_info& audit_info) const {
+    audit_sink_set result;
+    const auto category = audit_info.category();
+    const auto& keyspace = audit_info.keyspace();
+    const auto& table = audit_info.table();
+    if (_audited_categories.contains(category)
+            && (keyspace.empty()
+                || _audited_keyspaces.find(keyspace) != _audited_keyspaces.cend()
+                || should_log_table(keyspace, table)
+                || category == statement_category::AUTH
+                || category == statement_category::ADMIN
+                || category == statement_category::DCL)) {
+        result.add(_audit_sinks);
+    }
+    return result;
+}
+
+audit_sink_set audit::sinks_for_login() const {
+    audit_sink_set result;
+    if (_audited_categories.contains(statement_category::AUTH)) {
+        result.add(_audit_sinks);
+    }
+    return result;
+}
+
+bool audit::should_log_login() const {
+    return bool(sinks_for_login());
 }
 
 bool audit::will_log(statement_category cat, std::string_view keyspace, std::string_view table) const {

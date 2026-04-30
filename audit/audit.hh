@@ -12,6 +12,7 @@
 #include "utils/observable.hh"
 #include "service/client_state.hh"
 #include "db/consistency_level_type.hh"
+#include "audit/audit_rule.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/util/log.hh>
 
@@ -129,6 +130,8 @@ private:
     audited_tables_t _audited_tables;
     category_set _audited_categories;
 
+    audit_sink_set _audit_sinks;
+
     std::unique_ptr<storage_helper> _storage_helper_ptr;
     bool _storage_running = false;
 
@@ -141,6 +144,8 @@ private:
     void update_config(const sstring & new_value, std::function<T(const sstring&)> parse_func, T& cfg_parameter);
 
     bool should_log_table(std::string_view keyspace, std::string_view name) const;
+    audit_sink_set sinks_for(const audit_info& audit_info) const;
+    audit_sink_set sinks_for_login() const;
 public:
     static seastar::sharded<audit>& audit_instance() {
         // FIXME: leaked intentionally to avoid shutdown problems, see #293
@@ -160,16 +165,15 @@ public:
     audit(locator::shared_token_metadata& stm,
           cql3::query_processor& qp,
           service::migration_manager& mm,
-          std::set<sstring>&& audit_modes,
+          audit_sink_set audit_sinks,
           audited_keyspaces_t&& audited_keyspaces,
           audited_tables_t&& audited_tables,
           category_set&& audited_categories,
           const db::config& cfg);
     ~audit();
     future<> shutdown();
-    bool should_log(const audit_info& audit_info) const;
     bool will_log(statement_category cat, std::string_view keyspace = {}, std::string_view table = {}) const;
-    bool should_log_login() const { return _audited_categories.contains(statement_category::AUTH); }
+    bool should_log_login() const;
     future<> log(const audit_info& audit_info, const service::client_state& client_state, std::optional<db::consistency_level> cl, bool error);
     future<> log_login(const sstring& username, socket_address client_ip, bool error) noexcept;
 };
