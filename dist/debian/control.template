@@ -46,20 +46,12 @@ Description: Scylla kernel tuning configuration
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
 
-Package: %{product}-node-exporter
-Architecture: any
-Replaces: scylla-enterprise-node-exporter (<< 2025.1.0~)
-Conflicts: prometheus-node-exporter
-Breaks: scylla-enterprise-node-exporter (<< 2025.1.0~)
-Description: Prometheus exporter for machine metrics
- Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
-
 Package: %{product}
 Section: metapackages
 Architecture: any
 Depends: %{product}-server (= ${binary:Version})
  , %{product}-kernel-conf (= ${binary:Version})
- , %{product}-node-exporter (= ${binary:Version})
+ , scylla-node-exporter
  , %{product}-cqlsh (= ${binary:Version})
 Replaces: scylla-enterprise (<< 2025.1.0~)
 Breaks: scylla-enterprise (<< 2025.1.0~)
@@ -93,14 +85,6 @@ Description: transitional package
 
 Package: scylla-enterprise-kernel-conf
 Depends: %{product}-kernel-conf (= ${binary:Version})
-Architecture: all
-Priority: optional
-Section: oldlibs
-Description: transitional package
- This is a transitional package. It can safely be removed.
-
-Package: scylla-enterprise-node-exporter
-Depends: %{product}-node-exporter (= ${binary:Version})
 Architecture: all
 Priority: optional
 Section: oldlibs

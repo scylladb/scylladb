@@ -11,7 +11,7 @@ Requires:       %{product}-server = %{version}-%{release}
 Requires:       %{product}-conf = %{version}-%{release}
 Requires:       %{product}-python3 = %{version}-%{release}
 Requires:       %{product}-kernel-conf = %{version}-%{release}
-Requires:       %{product}-node-exporter = %{version}-%{release}
+Requires:       scylla-node-exporter
 Requires:       %{product}-cqlsh = %{version}-%{release}
 Provides:       scylla-enterprise = %{version}-%{release}
 Obsoletes:      scylla-enterprise < 2025.1.0
@@ -32,14 +32,13 @@ Obsoletes:      scylla-enterprise < 2025.1.0
 %undefine _unique_build_ids
 %global _no_recompute_build_ids 1
 
-# rpm causes missing build-id error on node_exporter, so ignore it
 %undefine _missing_build_ids_terminate_build
 
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
 This package installs all required packages for ScyllaDB,  including
-%{product}-server, %{product}-node-exporter.
+%{product}-server.
 
 # this is needed to prevent python compilation error on CentOS (#2235)
 %if 0%{?rhel}
@@ -222,40 +221,6 @@ fi
 %ghost /etc/sysctl.d/99-scylla-perfevent.conf
 %ghost /etc/sysctl.d/99-scylla-tcp.conf
 
-
-%package node-exporter
-Group:          Applications/Databases
-Summary:        Prometheus exporter for machine metrics
-License:        ASL 2.0
-URL:            https://github.com/prometheus/node_exporter
-Provides:       scylla-enterprise-node-exporter = %{version}-%{release}
-Obsoletes:      scylla-enterprise-node-exporter < 2025.1.0
-
-%description node-exporter
-Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
-
-%post node-exporter
-if [ $1 -eq 1 ] ; then
-    /usr/bin/systemctl preset scylla-node-exporter.service ||:
-fi
-
-%preun node-exporter
-if [ $1 -eq 0 ] ; then
-    /usr/bin/systemctl --no-reload disable scylla-node-exporter.service ||:
-    /usr/bin/systemctl stop scylla-node-exporter.service ||:
-fi
-
-%postun node-exporter
-/usr/bin/systemctl daemon-reload ||:
-
-%files node-exporter
-%defattr(-,root,root)
-%config(noreplace) %{_sysconfdir}/sysconfig/scylla-node-exporter
-%{_unitdir}/scylla-node-exporter.service
-/opt/scylladb/node_exporter/node_exporter
-/opt/scylladb/node_exporter/licenses/LICENSE
-/opt/scylladb/node_exporter/licenses/NOTICE
-/etc/systemd/system/scylla-node-exporter.service.d/dependencies.conf
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>

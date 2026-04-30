@@ -98,5 +98,3 @@ rprefix=$(realpath -m "$root/$prefix")
 
 install -d -m755 "$rprefix"/libexec/.debug
 cp -r ./libexec/.debug/* "$rprefix"/libexec/.debug
-install -d -m755 "$rprefix"/node_exporter/.debug
-cp -r ./node_exporter/.debug/* "$rprefix"/node_exporter/.debug

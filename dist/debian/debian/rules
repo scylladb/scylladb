@@ -30,7 +30,6 @@ ifeq ($(product),scylla)
 	dh_installinit --no-start
 else
 	dh_installinit --no-start --name scylla-server
-	dh_installinit --no-start --name scylla-node-exporter
 endif
 	dh_installinit --no-start --name scylla-housekeeping-daily
 	dh_installinit --no-start --name scylla-housekeeping-restart

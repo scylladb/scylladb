@@ -379,44 +379,6 @@ EOS
     fi
 fi
 relocate_python3 "$rprefix"/kernel_conf dist/common/kernel_conf/scylla_tune_sched
-# scylla-node-exporter
-if ! $without_systemd; then
-    install -d -m755 "$rsystemd"
-fi
-install -d -m755 "$rsysconfdir"
-install -d -m755 "$rprefix"/node_exporter
-install -d -m755 "$rprefix"/node_exporter/licenses
-install -m755 node_exporter/node_exporter "$rprefix"/node_exporter
-install -m644 node_exporter/LICENSE "$rprefix"/node_exporter/licenses
-install -m644 node_exporter/NOTICE "$rprefix"/node_exporter/licenses
-if ! $without_systemd; then
-    install -m644 dist/common/systemd/scylla-node-exporter.service -Dt "$rsystemd"
-fi
-installconfig 644 dist/common/sysconfig/scylla-node-exporter "$rsysconfdir"
-if ! $nonroot && ! $without_systemd; then
-    install -d -m755 "$retc"/systemd/system/scylla-node-exporter.service.d
-    install -m644 dist/common/systemd/scylla-node-exporter.service.d/dependencies.conf -Dt "$retc"/systemd/system/scylla-node-exporter.service.d
-    if [ "$sysconfdir" != "/etc/sysconfig" ]; then
-        cat << EOS > "$retc"/systemd/system/scylla-node-exporter.service.d/sysconfdir.conf
-[Service]
-EnvironmentFile=
-EnvironmentFile=$sysconfdir/scylla-node-exporter
-EOS
-        chmod 644 "$retc"/systemd/system/scylla-node-exporter.service.d/sysconfdir.conf
-    fi
-elif ! $without_systemd; then
-    install -d -m755 "$rsystemd"/scylla-node-exporter.service.d
-    cat << EOS > "$rsystemd"/scylla-node-exporter.service.d/nonroot.conf
-[Service]
-EnvironmentFile=
-EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-node-exporter")
-ExecStart=
-ExecStart=$rprefix/node_exporter/node_exporter $SCYLLA_NODE_EXPORTER_ARGS
-User=
-Group=
-EOS
-    chmod 644 "$rsystemd"/scylla-node-exporter.service.d/nonroot.conf
-fi
 
 # scylla-server
 install -m755 -d "$rprefix"
@@ -632,7 +594,7 @@ relocate_python3 "$rprefix"/scripts fix_system_distributed_tables.py
 
 if $supervisor; then
     install -d -m755 `supervisor_dir $retc`
-    for service in scylla-server scylla-jmx scylla-node-exporter; do
+    for service in scylla-server scylla-jmx; do
         if [ "$service" = "scylla-server" ]; then
             program="scylla"
         else

@@ -37,8 +37,6 @@ i18n_xlat = {
 python3_dependencies = subprocess.run('./install-dependencies.sh --print-python3-runtime-packages', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
 pip_dependencies = subprocess.run('./install-dependencies.sh --print-pip-runtime-packages', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
 pip_symlinks = subprocess.run('./install-dependencies.sh --print-pip-symlinks', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
-node_exporter_filename = subprocess.run('./install-dependencies.sh --print-node-exporter-filename', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
-node_exporter_dirname = os.path.basename(node_exporter_filename).rstrip('.tar.gz')
 
 
 def get_os_ids():
@@ -2470,11 +2468,11 @@ def write_build_file(f,
         rule strip
             command = scripts/strip.sh $in
         rule package
-            command = scripts/create-relocatable-package.py --build-dir $builddir/$mode --node-exporter-dir $builddir/node_exporter --debian-dir $builddir/debian/debian $out
+            command = scripts/create-relocatable-package.py --build-dir $builddir/$mode --debian-dir $builddir/debian/debian $out
         rule stripped_package
-            command = scripts/create-relocatable-package.py --stripped --build-dir $builddir/$mode --node-exporter-dir $builddir/node_exporter --debian-dir $builddir/debian/debian $out
+            command = scripts/create-relocatable-package.py --stripped --build-dir $builddir/$mode --debian-dir $builddir/debian/debian $out
         rule debuginfo_package
-            command = dist/debuginfo/scripts/create-relocatable-package.py --build-dir $builddir/$mode --node-exporter-dir $builddir/node_exporter $out
+            command = dist/debuginfo/scripts/create-relocatable-package.py --build-dir $builddir/$mode $out
         rule rpmbuild
             command = reloc/build_rpm.sh --reloc-pkg $in --builddir $out
         rule debbuild
@@ -2881,11 +2879,11 @@ def write_build_file(f,
             include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/{mode}/patchelf'
             include_scylla_and_iotune_stripped = f'$builddir/{mode}/scylla.stripped $builddir/{mode}/iotune.stripped $builddir/{mode}/patchelf.stripped'
             include_scylla_and_iotune_debug = f'$builddir/{mode}/scylla.debug $builddir/{mode}/iotune.debug'
-        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unstripped-{scylla_version}-{scylla_release}.{arch}.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter | always\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unstripped-{scylla_version}-{scylla_release}.{arch}.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian | always\n')
         f.write(f'  mode = {mode}\n')
-        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz: stripped_package {include_scylla_and_iotune_stripped} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter.stripped | always\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz: stripped_package {include_scylla_and_iotune_stripped} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian | always\n')
         f.write(f'  mode = {mode}\n')
-        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-debuginfo-{scylla_version}-{scylla_release}.{arch}.tar.gz: debuginfo_package {include_scylla_and_iotune_debug} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter.debug | always\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-debuginfo-{scylla_version}-{scylla_release}.{arch}.tar.gz: debuginfo_package {include_scylla_and_iotune_debug} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian | always\n')
         f.write(f'  mode = {mode}\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
         f.write(f'  mode = {mode}\n')
@@ -3060,11 +3058,6 @@ def write_build_file(f,
         rule debian_files_gen
             command = ./dist/debian/debian_files_gen.py --build-dir $builddir
         build $builddir/debian/debian: debian_files_gen | always
-        rule extract_node_exporter
-            command = tar -C $builddir -xvpf {node_exporter_filename} --no-same-owner && rm -rfv $builddir/node_exporter && mv -v $builddir/{node_exporter_dirname} $builddir/node_exporter
-        build $builddir/node_exporter/node_exporter: extract_node_exporter | always
-        build $builddir/node_exporter/node_exporter.stripped: strip $builddir/node_exporter/node_exporter
-        build $builddir/node_exporter/node_exporter.debug: phony $builddir/node_exporter/node_exporter.stripped
         rule print_help
              command = ./scripts/build-help.sh
         build help: print_help | always

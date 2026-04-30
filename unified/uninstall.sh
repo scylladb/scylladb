@@ -66,7 +66,7 @@ if ! $nonroot; then
     rm -fv "$rusr"/lib/sysctl.d/99-scylla-*.conf
     rm -fv "$retc"/sysctl.d/99-scylla-tcp.conf
     rm -fv "$rusr"/bin/{scylla,iotune,scyllatop}
-    rm -fv "$rusr"/sbin/{scylla_*setup,node_exporter_install,node_health_check,scylla_ec2_check,scylla_kernel_check}
+    rm -fv "$rusr"/sbin/{scylla_*setup,node_health_check,scylla_ec2_check,scylla_kernel_check}
     find "$rusr"/lib/scylla -type l -exec rm -fv {} \;
 else
     rm -rfv "$rsystemd"/scylla-*.service.d
