@@ -105,8 +105,7 @@ def interactive_choose_swap_size():
             print(f'"{s}" is not valid number, input again')
 
 pkg_files = {
-        f'{PRODUCT}-tools': scylladir_p() / 'share/cassandra/bin/cqlsh',
-        f'{PRODUCT}-node-exporter': scylladir_p() / 'node_exporter/node_exporter'
+        f'{PRODUCT}-tools': scylladir_p() / 'share/cassandra/bin/cqlsh'
         }
 def do_verify_package(pkg):
     if is_offline():
@@ -177,7 +176,6 @@ if __name__ == '__main__':
         sys.exit(1)
 
     default_no_ntp_setup = False
-    default_no_node_exporter = False
     default_no_kernel_check = False
     default_no_raid_setup = False
     default_no_coredump_setup = False
@@ -258,9 +256,6 @@ if __name__ == '__main__':
                         help='skip IO configuration setup')
     parser.add_argument('--no-version-check', action='store_true', default=False,
                         help='skip daily version check')
-    parser.add_argument('--no-node-exporter', action='store_true',
-                        default=default_no_node_exporter,
-                        help='do not enable the node exporter')
     parser.add_argument('--no-cpuscaling-setup', action='store_true',
                         default=default_no_cpuscaling_setup,
                         help='skip cpu scaling setup')
@@ -312,7 +307,6 @@ if __name__ == '__main__':
     sysconfig_setup = not args.no_sysconfig_setup
     io_setup = args.io_setup
     version_check = not args.no_version_check
-    node_exporter = not args.no_node_exporter
     cpuscaling_setup = not args.no_cpuscaling_setup
     fstrim_setup = not args.no_fstrim_setup
     memory_setup = not args.no_memory_setup
@@ -337,8 +331,6 @@ if __name__ == '__main__':
 
         verify_package = interactive_ask_service('Do you want to verify the ScyllaDB packages are installed?', 'Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check.', verify_package)
         args.no_verify_package = not verify_package
-        if verify_package:
-            do_verify_package_and_exit(f'{PRODUCT}-node-exporter')
 
     enable_service = interactive_ask_service('Do you want the Scylla server service to automatically start when the Scylla node boots?', 'Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually.', enable_service)
     args.no_enable_service = not enable_service
@@ -492,14 +484,6 @@ if __name__ == '__main__':
         args.io_setup = 1 if io_setup else 0
         if io_setup:
             run_setup_script('IO configuration', 'scylla_io_setup')
-
-    if do_verify_package(f'{PRODUCT}-node-exporter'):
-        node_exporter = interactive_ask_service('Do you want to enable node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data', 'Yes - enable node exporter. No - skip this  step.', node_exporter)
-    args.no_node_exporter = not node_exporter
-    if node_exporter:
-        node_exporter_unit = systemd_unit('scylla-node-exporter')
-        node_exporter_unit.enable()
-        node_exporter_unit.start()
 
     if args.developer_mode:
         run_setup_script('developer mode', 'scylla_dev_mode_setup --developer-mode 1')

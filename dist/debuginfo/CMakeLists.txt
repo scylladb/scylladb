@@ -6,12 +6,10 @@ add_custom_command(
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/create-relocatable-package.py
       --build-dir ${CMAKE_BINARY_DIR}
-      --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
       ${debuginfo_pkg}
   DEPENDS
     ${CMAKE_BINARY_DIR}/scylla.debug
     ${CMAKE_BINARY_DIR}/iotune.debug
-    ${CMAKE_BINARY_DIR}/node_exporter/node_exporter.debug
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-debuginfo
   DEPENDS ${debuginfo_pkg})

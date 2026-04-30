@@ -308,29 +308,6 @@ go_arch() {
     echo ${GO_ARCH["$(arch)"]}
 }
 
-NODE_EXPORTER_VERSION=1.10.2
-declare -A NODE_EXPORTER_CHECKSUM=(
-    ["x86_64"]=c46e5b6f53948477ff3a19d97c58307394a29fe64a01905646f026ddc32cb65b
-    ["aarch64"]=de69ec8341c8068b7c8e4cfe3eb85065d24d984a3b33007f575d307d13eb89a6
-)
-NODE_EXPORTER_DIR=/opt/scylladb/dependencies
-
-node_exporter_filename() {
-    echo "node_exporter-$NODE_EXPORTER_VERSION.linux-$(go_arch).tar.gz"
-}
-
-node_exporter_fullpath() {
-    echo "$NODE_EXPORTER_DIR/$(node_exporter_filename)"
-}
-
-node_exporter_checksum() {
-    sha256sum "$(node_exporter_fullpath)" | while read -r sum _; do [[ "$sum" == "${NODE_EXPORTER_CHECKSUM["$(arch)"]}" ]]; done
-}
-
-node_exporter_url() {
-    echo "https://github.com/prometheus/node_exporter/releases/download/v$NODE_EXPORTER_VERSION/$(node_exporter_filename)"
-}
-
 MINIO_BINARIES_DIR=/usr/local/bin
 
 minio_server_url() {
@@ -343,8 +320,8 @@ minio_client_url() {
 
 minio_download_jobs() {
     cfile=$(mktemp)
-    echo $(curl -s "$(minio_server_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/minio" > $cfile
-    echo $(curl -s "$(minio_client_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/mc" >> $cfile
+    echo "$(curl -sL "$(minio_server_url).sha256sum" | cut -f1 -d' ') ${MINIO_BINARIES_DIR}/minio" > "$cfile"
+    echo "$(curl -sL "$(minio_client_url).sha256sum" | cut -f1 -d' ') ${MINIO_BINARIES_DIR}/mc" >> "$cfile"
     sha256sum -c $cfile | grep -F FAILED | sed \
         -e 's/:.*$//g' \
         -e "s#${MINIO_BINARIES_DIR}/minio#$(minio_server_url) -o ${MINIO_BINARIES_DIR}/minio#" \
@@ -358,7 +335,6 @@ print_usage() {
     echo "  --print-python3-runtime-packages Print required python3 packages for Scylla"
     echo "  --print-pip-runtime-packages Print required pip packages for Scylla"
     echo "  --print-pip-symlinks Print list of pip provided commands which need to install to /usr/bin"
-    echo "  --print-node-exporter-filename Print node_exporter filename"
     echo "  --future Install dependencies for future toolchain (Fedora rawhide based)"
     exit 1
 }
@@ -366,7 +342,6 @@ print_usage() {
 PRINT_PYTHON3=false
 PRINT_PIP=false
 PRINT_PIP_SYMLINK=false
-PRINT_NODE_EXPORTER=false
 FUTURE=false
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -380,10 +355,6 @@ while [ $# -gt 0 ]; do
             ;;
         "--print-pip-symlinks")
             PRINT_PIP_SYMLINK=true
-            shift 1
-            ;;
-        "--print-node-exporter-filename")
-            PRINT_NODE_EXPORTER=true
             shift 1
             ;;
         "--future")
@@ -412,11 +383,6 @@ fi
 
 if $PRINT_PIP_SYMLINK; then
     echo "${pip_symlinks[@]}"
-    exit 0
-fi
-
-if $PRINT_NODE_EXPORTER; then
-    node_exporter_fullpath
     exit 0
 fi
 
@@ -465,16 +431,6 @@ elif [ "$ID" = "fedora" ]; then
     done
     pip3 install --upgrade --no-cache-dir "$PIP_DEFAULT_ARGS" $pip_constrained_packages
 
-    if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
-        echo "$(node_exporter_filename) already exists, skipping download"
-    else
-        mkdir -p "$NODE_EXPORTER_DIR"
-        curl -fSL -o "$(node_exporter_fullpath)" "$(node_exporter_url)"
-        if ! node_exporter_checksum; then
-            echo "$(node_exporter_filename) download failed"
-            exit 1
-        fi
-    fi
 elif [ "$ID" = "centos" ]; then
     centos_packages+=(openssl-devel)
     dnf install -y "${centos_packages[@]}"

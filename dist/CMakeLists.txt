@@ -5,14 +5,12 @@ add_custom_command(
   COMMAND
     scripts/create-relocatable-package.py
       --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
-      --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
       --debian-dir ${CMAKE_BINARY_DIR}/debian
       ${unstripped_dist_pkg}
   DEPENDS
     ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune
     ${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf
-    ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
     ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
@@ -60,27 +58,6 @@ add_stripped("${iotune_dst}")
 
 add_stripped("${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf")
 
-find_program(TAR_COMMAND tar
-  REQUIRED)
-execute_process(
-  COMMAND
-    ${CMAKE_SOURCE_DIR}/install-dependencies.sh --print-node-exporter-filename
-  OUTPUT_VARIABLE
-    node_exporter_filename
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
-add_custom_command(
-  OUTPUT
-    ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
-  COMMAND
-    ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/node_exporter
-  COMMAND
-    ${TAR_COMMAND}
-      -C ${CMAKE_BINARY_DIR}/node_exporter
-      -xpf ${node_exporter_filename}
-      --no-same-owner
-      --strip-components=1)
-add_stripped(${CMAKE_BINARY_DIR}/node_exporter/node_exporter)
-
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/debian
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/debian/debian_files_gen.py
@@ -97,14 +74,12 @@ add_custom_command(
     ${CMAKE_SOURCE_DIR}/scripts/create-relocatable-package.py
       --stripped
       --build-dir ${CMAKE_BINARY_DIR}/$<CONFIG>
-      --node-exporter-dir ${CMAKE_BINARY_DIR}/node_exporter
       --debian-dir ${CMAKE_BINARY_DIR}/debian
       ${stripped_dist_pkg}
   DEPENDS
     ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla.stripped
     ${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf.stripped
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune.stripped
-    ${CMAKE_BINARY_DIR}/node_exporter/node_exporter.stripped
     ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-tar

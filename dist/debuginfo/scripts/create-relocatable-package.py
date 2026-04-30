@@ -34,9 +34,6 @@ ap.add_argument('dest',
                 help='Destination file (tar format)')
 ap.add_argument('--build-dir', default='build/release',
                 help='Build dir ("build/debug" or "build/release") to use')
-ap.add_argument('--node-exporter-dir', default='build/node_exporter',
-                help='the directory where node_exporter is located')
-
 args = ap.parse_args()
 
 executables_scylla = [
@@ -63,7 +60,6 @@ with tempfile.NamedTemporaryFile('w+t') as version_file:
 for exe in executables_scylla:
     basename = os.path.basename(exe)
     ar.reloc_add(f'{exe}.debug', arcname=f'libexec/.debug/{basename}.debug')
-ar.reloc_add(f'{args.node_exporter_dir}/node_exporter.debug', arcname='node_exporter/.debug/node_exporter.debug')
 ar.reloc_add('dist/debuginfo/install.sh', arcname='install.sh')
 
 # Complete the tar output, and wait for the gzip process to complete
