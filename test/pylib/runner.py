@@ -15,7 +15,7 @@ import random
 import sys
 from argparse import BooleanOptionalAction
 from collections import defaultdict
-from itertools import chain, count, product
+from itertools import chain, count
 from functools import cache, cached_property
 from pathlib import Path
 from random import randint
@@ -106,7 +106,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                           " '--logger-log-level raft=trace --default-log-level error'")
     parser.addoption('--x-log2-compaction-groups', action="store", default="0", type=int,
                      help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
-    parser.addoption('--repeat', action="store", default="1", type=int,
+    parser.addoption('--repeat', action="store", default=1, type=int,
                      help="number of times to repeat test execution")
 
     # Pass information about Scylla node from test.py to pytest.
@@ -162,9 +162,10 @@ def scylla_binary(testpy_test) -> Path:
     return testpy_test.suite.scylla_exe
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
+    run_ids = defaultdict(lambda: count(start=int(config.getoption("--run_id") or 1)))
     for item in items:
-        modify_pytest_item(item=item)
+        modify_pytest_item(item=item, run_ids=run_ids)
 
     suites_order = defaultdict(count().__next__)  # number suites in order of appearance
 
@@ -313,14 +314,15 @@ def pytest_configure(config: pytest.Config) -> None:
 
     os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)
-    repeat = int(config.getoption("--repeat"))
 
     if testpy_run_id := config.getoption("--run_id"):
-        if repeat != 1:
+        if config.getoption("--repeat") != 1:
             raise RuntimeError("Can't use --run_id and --repeat simultaneously.")
-        config.run_ids = (testpy_run_id,)
-    else:
-        config.run_ids = tuple(range(1, repeat + 1))
+
+
+class DisabledFile(pytest.File):
+    def collect(self) -> list[pytest.Item]:
+        pytest.skip("All tests in this file are disabled in requested modes according to the suite config.")
 
 
 @pytest.hookimpl(wrapper=True)
@@ -337,19 +339,16 @@ def pytest_collect_file(file_path: pathlib.Path,
                 mode for mode in build_modes
                 if not suite_config.is_test_disabled(build_mode=mode, path=file_path)
             )
-        repeats = list(product(build_modes, parent.config.run_ids))
-
-        if not repeats:
-            return []
-
-        ihook = parent.ihook
-        collectors = list(chain(collectors, chain.from_iterable(
-            ihook.pytest_collect_file(file_path=file_path, parent=parent) for _ in range(1, len(repeats))
-        )))
-        for (build_mode, run_id), collector in zip(repeats, collectors, strict=True):
-            collector.stash[BUILD_MODE] = build_mode
-            collector.stash[RUN_ID] = run_id
-            collector.stash[TEST_SUITE] = suite_config
+        if repeats := [mode for mode in build_modes for _ in range(parent.config.getoption("--repeat"))]:
+            ihook = parent.ihook
+            collectors = list(chain(collectors, chain.from_iterable(
+                ihook.pytest_collect_file(file_path=file_path, parent=parent) for _ in range(1, len(repeats))
+            )))
+            for build_mode, collector in zip(repeats, collectors, strict=True):
+                collector.stash[BUILD_MODE] = build_mode
+                collector.stash[TEST_SUITE] = suite_config
+        else:
+            collectors = [DisabledFile.from_parent(parent=parent, path=file_path)]
 
         parent.stash[REPEATING_FILES].remove(file_path)
 
@@ -423,7 +422,7 @@ class TestSuiteConfig:
 
 TEST_SUITE = pytest.StashKey[TestSuiteConfig | None]()
 
-_STASH_KEYS_TO_COPY = BUILD_MODE, RUN_ID, TEST_SUITE
+_STASH_KEYS_TO_COPY = BUILD_MODE, TEST_SUITE
 
 
 def get_params_stash(node: _pytest.nodes.Node) -> pytest.Stash | None:
@@ -433,11 +432,12 @@ def get_params_stash(node: _pytest.nodes.Node) -> pytest.Stash | None:
     return parent.stash
 
 
-def modify_pytest_item(item: pytest.Item) -> None:
+def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], count]) -> None:
     params_stash = get_params_stash(node=item)
 
     for key in _STASH_KEYS_TO_COPY:
         item.stash[key] = params_stash[key]
+    item.stash[RUN_ID] = next(run_ids[(item.stash[BUILD_MODE], item._nodeid)])
 
     suffix = f".{item.stash[BUILD_MODE]}.{item.stash[RUN_ID]}"
 
