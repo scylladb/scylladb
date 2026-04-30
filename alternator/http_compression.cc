@@ -54,14 +54,14 @@ public:
                     _output_buf = temporary_buffer<char>(compressed_buffer_size);
                 }
                 _zs.next_out = reinterpret_cast<unsigned char*>(_output_buf.get_write());
-                _zs.avail_out = compressed_buffer_size;
+                _zs.avail_out = _output_buf.size();
             }
             int e = deflate(&_zs, mode);
             if (e < Z_OK) {
                 throw api_error::internal("Error during compression of response body");
             }
             if (e == Z_STREAM_END || _zs.avail_out < compressed_buffer_size / 4) {
-                _output_buf.trim(compressed_buffer_size - _zs.avail_out);
+                _output_buf.trim(_output_buf.size() - _zs.avail_out);
                 co_await _write_func(std::move(_output_buf));
                 if (e == Z_STREAM_END) {
                     break;
