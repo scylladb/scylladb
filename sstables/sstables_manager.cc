@@ -84,6 +84,7 @@ storage_manager::object_storage_endpoint::object_storage_endpoint(db::object_sto
 
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
+    , _connections_per_shard(cfg.object_storage_connections_per_shard())
     , _config_updater(std::make_unique<config_updater_sync>(cfg, *this))
 {
     for (auto& e : cfg.object_storage_endpoints()) {
@@ -122,7 +123,7 @@ shared_ptr<sstables::object_storage_client> storage_manager::get_endpoint_client
     if (ep.client == nullptr) {
         ep.client = make_object_storage_client(ep.cfg, _object_storage_clients_memory, [&ct = container()] (std::string ep) {
             return ct.local().get_endpoint_client(ep);
-        });
+        }, _connections_per_shard);
     }
     return ep.client;
 }

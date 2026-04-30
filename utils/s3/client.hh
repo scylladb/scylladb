@@ -141,6 +141,7 @@ class client : public enable_shared_from_this<client> {
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
+    semaphore _rebalance_sem{1};
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     semaphore& _memory;
@@ -152,7 +153,9 @@ class client : public enable_shared_from_this<client> {
 
     future<> update_credentials_and_rearm();
     future<> authorize(http::request&);
-    group_client& find_or_create_client();
+    future<group_client&> find_or_create_client();
+    future<group_client&> find_or_create_client_slow();
+    future<> rebalance_connections();
 
     using error_handler = std::function<void(std::exception_ptr)>;
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
@@ -188,7 +191,7 @@ public:
     client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
-    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf = {});
+    static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);

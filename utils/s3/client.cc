@@ -10,6 +10,7 @@
 #include <exception>
 #include <initializer_list>
 #include <memory>
+#include <numeric>
 #include <regex>
 #include <stdexcept>
 #if __has_include(<rapidxml.h>)
@@ -157,13 +158,14 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{}, std::move(rs));
 }
 
-shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf) {
+shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf, unsigned connections_per_shard) {
     auto url = utils::http::parse_simple_url(ep);
     endpoint_config cfg = {
         .port = url.port,
         .use_https = url.is_https(),
         .region = std::move(region),
         .role_arn = std::move(iam_role_arn),
+        .connections_per_shard = connections_per_shard,
     };
     return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), memory, gf);
 }
@@ -269,23 +271,67 @@ void client::group_client::register_metrics(std::string class_name, std::string 
     });
 }
 
-client::group_client& client::find_or_create_client() {
+future<client::group_client&> client::find_or_create_client() {
     auto sg = current_scheduling_group();
-    auto it = _https.find(sg);
-    if (it == _https.end()) [[unlikely]] {
-        auto factory = std::make_unique<utils::http::dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
-        // Limit the maximum number of connections this group's http client
-        // may have proportional to its shares. Shares are typically in the
-        // range of 100...1000, thus resulting in 1..10 connections
-        unsigned max_connections = _cfg->max_connections.has_value() ? *_cfg->max_connections : std::max((unsigned)(sg.get_shares() / 100), 1u);
-        it = _https.emplace(std::piecewise_construct,
-            std::forward_as_tuple(sg),
-            std::forward_as_tuple(std::move(factory), max_connections)
-        ).first;
-
-        it->second.register_metrics(sg.name(), _host);
+    if (const auto it = _https.find(sg); it != _https.end()) [[likely]] {
+        return make_ready_future<client::group_client&>(it->second);
     }
-    return it->second;
+    return find_or_create_client_slow();
+}
+
+future<client::group_client&> client::find_or_create_client_slow() {
+    // Slow path: serialize creation + rebalance
+    auto sg = current_scheduling_group();
+    auto units = co_await get_units(_rebalance_sem, 1);
+    // Re-check after acquiring lock (another fiber may have created it)
+    auto it = _https.find(sg);
+    if (it != _https.end()) {
+        co_return it->second;
+    }
+
+    auto factory = std::make_unique<utils::http::dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
+    unsigned max_connections = _cfg->max_connections.value_or(1);
+    it = _https.emplace(std::piecewise_construct,
+        std::forward_as_tuple(sg),
+        std::forward_as_tuple(std::move(factory), max_connections)
+    ).first;
+    it->second.register_metrics(sg.name(), _host);
+    if (!_cfg->max_connections) {
+        co_await rebalance_connections();
+    }
+    co_return it->second;
+}
+
+future<> client::rebalance_connections() {
+    auto total_shares = std::accumulate(_https.begin(), _https.end(), 0.0f, [](float sum, const auto& entry) { return sum + entry.first.get_shares(); });
+    unsigned total_assigned = 0;
+    scheduling_group max_shares_sg;
+    float max_shares = 0;
+    unsigned max_shares_connections = 0;
+
+    for (auto& [sg, gc] : _https) {
+        unsigned max_connections = std::max(static_cast<unsigned>(_cfg->connections_per_shard * sg.get_shares() / total_shares), 1u);
+        total_assigned += max_connections;
+        if (sg.get_shares() > max_shares) {
+            max_shares = sg.get_shares();
+            max_shares_sg = sg;
+            max_shares_connections = max_connections;
+        }
+        s3l.debug("Rebalancing S3 client for scheduling group '{}' (shares={}, total_shares={}, connections_per_shard={}): max_connections={}",
+                  sg.name(),
+                  sg.get_shares(),
+                  total_shares,
+                  _cfg->connections_per_shard,
+                  max_connections);
+        co_await gc.http.set_maximum_connections(max_connections);
+    }
+
+    // Assign remainder to the group with the most shares
+    unsigned remainder;
+    if (!__builtin_sub_overflow(_cfg->connections_per_shard, total_assigned, &remainder) && remainder > 0) {
+        s3l.debug("Assigning {} remainder connections to scheduling group '{}'", remainder, max_shares_sg.name());
+        co_await _https.at(max_shares_sg).http.set_maximum_connections(max_shares_connections + remainder);
+    }
 }
 
 [[noreturn]] void map_s3_client_exception(std::exception_ptr ex) {
@@ -401,7 +447,7 @@ future<> client::make_request(http::request req,
     auto request = std::move(req);
     auto handler = wrap_handler(request, std::move(handle), expected);
     co_await authorize(request);
-    auto& gc = find_or_create_client();
+    auto& gc = co_await find_or_create_client();
 
     co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
@@ -414,11 +460,11 @@ future<> client::make_request(http::request req,
                               error_handler err_handler,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
-    auto& gc = find_or_create_client();
+    auto& gc = co_await find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    return make_request(std::move(req), std::move(handle), rs, std::move(err_handler), expected, as);
+    co_await make_request(std::move(req), std::move(handle), rs, std::move(err_handler), expected, as);
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
@@ -1311,7 +1357,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
 
                 if (auto units = try_get_units(_client->_memory, _socket_buff_size); !_is_finished && !_buffers.empty() && !units) {
-                    auto& gc = _client->find_or_create_client();
+                    auto& gc = co_await _client->find_or_create_client();
                     ++gc.downloads_blocked_on_memory;
                     co_await _bg_fiber_cv.when([this] {
                         return _is_finished || _buffers.empty() || try_get_units(_client->_memory, _socket_buff_size);

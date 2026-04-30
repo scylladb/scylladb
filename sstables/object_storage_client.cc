@@ -66,17 +66,17 @@ fmt::formatter<sstables::object_name>::format(const sstables::object_name& n, fm
     return fmt::format_to(ctx.out(), "{}", n.str());
 }
 
-static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_param& ep, semaphore& memory, std::function<shared_ptr<s3::client>(std::string)> factory) {
+static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_param& ep, semaphore& memory, std::function<shared_ptr<s3::client>(std::string)> factory, unsigned connections_per_shard) {
     auto& epc = ep.get_s3_storage();
-    return s3::client::make(epc.endpoint, epc.region, epc.iam_role_arn, memory, std::move(factory));
+    return s3::client::make(epc.endpoint, epc.region, epc.iam_role_arn, memory, std::move(factory), connections_per_shard);
 }
 
 class s3_client_wrapper : public sstables::object_storage_client {
     shared_ptr<s3::client> _client;
     shard_client_factory _cf;
 public:
-    s3_client_wrapper(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf)
-        : _client(make_s3_client(ep, memory, std::bind_front(&s3_client_wrapper::shard_client, this)))
+    s3_client_wrapper(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf, unsigned connections_per_shard)
+        : _client(make_s3_client(ep, memory, std::bind_front(&s3_client_wrapper::shard_client, this), connections_per_shard))
         , _cf(std::move(cf))
     {}
     shared_ptr<s3::client> shard_client(std::string host) const {
@@ -331,9 +331,9 @@ public:
     }
 };
 
-shared_ptr<object_storage_client> sstables::make_object_storage_client(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf) {
+shared_ptr<object_storage_client> sstables::make_object_storage_client(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf, unsigned connections_per_shard) {
     if (ep.is_s3_storage()) {
-        return seastar::make_shared<s3_client_wrapper>(ep, memory, std::move(cf));
+        return seastar::make_shared<s3_client_wrapper>(ep, memory, std::move(cf), connections_per_shard);
     }
     if (ep.is_gs_storage()) {
         return seastar::make_shared<gs_client_wrapper>(ep, memory, std::move(cf));

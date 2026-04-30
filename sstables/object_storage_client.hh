@@ -17,6 +17,7 @@
 #include <fmt/core.h>
 
 #include "utils/lister.hh"
+#include "utils/s3/creds.hh"
 
 namespace seastar {
 class abort_source;
@@ -90,7 +91,7 @@ public:
 
 using shard_client_factory = std::function<shared_ptr<object_storage_client>(std::string)>;
 
-shared_ptr<object_storage_client> make_object_storage_client(const db::object_storage_endpoint_param&, semaphore&, shard_client_factory);
+shared_ptr<object_storage_client> make_object_storage_client(const db::object_storage_endpoint_param&, semaphore&, shard_client_factory, unsigned connections_per_shard = s3::endpoint_config::default_connections_per_shard);
 
 }
 
