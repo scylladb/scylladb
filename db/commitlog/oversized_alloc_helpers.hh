@@ -22,6 +22,12 @@
 
 namespace db::commitlog_oversized_alloc {
 
+// Per-fragment entry framing both helpers must subtract from the raw
+// available bytes: the fixed-size entry header plus the marker that
+// flags the entry as a fragmented one.
+inline constexpr size_t total_entry_overhead =
+        detail::entry_overhead_size + detail::fragmented_entry_overhead_size;
+
 /**
  * Maximum number of payload bytes (user mutation bytes, excluding any
  * CRC, sector, entry, segment or descriptor framing) of an oversized
@@ -55,9 +61,10 @@ inline size_t in_buffer_fragment_payload(
         return 0;
     }
     const size_t rem2 = buf_rem - (1 + buf_rem / sector_size) * detail::sector_overhead_size;
-    const size_t entry_ovh = detail::entry_overhead_size + detail::fragmented_entry_overhead_size;
-    const size_t cap = std::min(rem2, max_mutation_size);
-    const size_t result = cap > entry_ovh ? cap - entry_ovh : 0;
+    const size_t avail_pre_overhead = std::min(rem2, max_mutation_size);
+    const size_t result = avail_pre_overhead > total_entry_overhead
+            ? avail_pre_overhead - total_entry_overhead
+            : 0;
     assert(result < buf_rem);
     return result;
 }
@@ -91,10 +98,11 @@ inline size_t post_cycle_fragment_payload(
     }
     const size_t rem2 = file_rem - (1 + file_rem / sector_size) * detail::sector_overhead_size;
     const size_t first_buffer_ovh = (file_pos == 0 ? detail::descriptor_header_size : 0) + detail::segment_overhead_size;
-    const size_t entry_ovh = detail::entry_overhead_size + detail::fragmented_entry_overhead_size;
-    const size_t fixed_ovh = first_buffer_ovh + entry_ovh;
-    const size_t cap = std::min(rem2, max_mutation_size);
-    const size_t result = cap > fixed_ovh ? cap - fixed_ovh : 0;
+    const size_t fixed_ovh = first_buffer_ovh + total_entry_overhead;
+    const size_t avail_pre_overhead = std::min(rem2, max_mutation_size);
+    const size_t result = avail_pre_overhead > fixed_ovh
+            ? avail_pre_overhead - fixed_ovh
+            : 0;
     assert(result < file_rem);
     return result;
 }
@@ -115,8 +123,7 @@ inline size_t projected_post_cycle_position(
     const size_t fixed_ovh =
         (file_pos == 0 ? detail::descriptor_header_size : 0)
         + detail::segment_overhead_size
-        + detail::entry_overhead_size
-        + detail::fragmented_entry_overhead_size;
+        + total_entry_overhead;
     const size_t used = payload_bytes + fixed_ovh;
     const size_t sector_size = alignment - detail::sector_overhead_size;
     const size_t sector_ovh = (used / sector_size) * detail::sector_overhead_size;
