@@ -12,6 +12,7 @@
 #include "audit/preprocessed_audit_rules.hh"
 #include "db/config.hh"
 #include "cql3/cql_statement.hh"
+#include "cql3/query_processor.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "storage_helper.hh"
@@ -20,6 +21,8 @@
 #include "audit_composite_storage_helper.hh"
 #include "audit.hh"
 #include "../db/config.hh"
+#include "service/migration_listener.hh"
+#include "service/migration_manager.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/trim.hpp>
@@ -29,6 +32,34 @@
 namespace audit {
 
 logging::logger logger("audit");
+
+class audit_schema_listener : public service::migration_listener::empty_listener {
+    preprocessed_audit_rules& _rules;
+
+public:
+    audit_schema_listener(preprocessed_audit_rules& rules)
+        : _rules(rules) {}
+
+    void on_create_column_family(const sstring& ks_name, const sstring& cf_name) override {
+        logger.debug("Audit: table {}.{} created, adding to known tables", ks_name, cf_name);
+        _rules.add_known_table(ks_name, cf_name);
+    }
+
+    void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
+        logger.debug("Audit: table {}.{} dropped, removing from known tables", ks_name, cf_name);
+        _rules.remove_known_table(ks_name, cf_name);
+    }
+
+    void on_create_view(const sstring& ks_name, const sstring& view_name) override {
+        logger.debug("Audit: table {}.{} created, adding to known tables", ks_name, view_name);
+        _rules.add_known_table(ks_name, view_name);
+    }
+
+    void on_drop_view(const sstring& ks_name, const sstring& view_name) override {
+        logger.debug("Audit: table {}.{} dropped, removing from known tables", ks_name, view_name);
+        _rules.remove_known_table(ks_name, view_name);
+    }
+};
 
 static audit_sink_set parse_audit_sinks(const sstring& data) {
     audit_sink_set result;
@@ -172,15 +203,27 @@ audit::audit(locator::shared_token_metadata& token_metadata,
     , _audited_categories(std::move(audited_categories))
     , _audit_sinks(audit_sinks)
     , _preprocessed_rules(std::move(audit_rules))
+    , _schema_listener(std::make_unique<audit_schema_listener>(_preprocessed_rules))
+    , _migration_notifier(mm.get_notifier())
     , _cfg(cfg)
     , _cfg_keyspaces_observer(cfg.audit_keyspaces.observe([this] (sstring const& new_value){ update_config<audited_keyspaces_t>(new_value, parse_audit_keyspaces, _audited_keyspaces); }))
     , _cfg_tables_observer(cfg.audit_tables.observe([this] (sstring const& new_value){ update_config<audited_tables_t>(new_value, parse_audit_tables, _audited_tables); }))
     , _cfg_categories_observer(cfg.audit_categories.observe([this] (sstring const& new_value){ update_config<category_set>(new_value, parse_audit_categories, _audited_categories); }))
+    , _rules_rebuild_action([this] { return rebuild_rules(); })
 {
+    _cfg_rules_observer.emplace(cfg.audit_rules.observe(_rules_rebuild_action.make_observer()));
     _storage_helper_ptr = create_storage_helper(audit_sinks, qp, mm);
 }
 
 audit::~audit() = default;
+
+future<> audit::rebuild_rules() {
+    auto new_rules = _cfg.audit_rules();
+    logger.info("Updating audit rules: {} rules configured.", new_rules.size());
+    warn_on_sink_mismatch(new_rules, _audit_sinks);
+    co_await _preprocessed_rules.refresh_rules(std::move(new_rules));
+    logger.info("Audit rules updated: {} rules configured.", _preprocessed_rules.rules().size());
+}
 
 future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm) {
     audit_sink_set audit_sinks = parse_audit_sinks(cfg.audit());
@@ -216,12 +259,14 @@ future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token
 
 future<> audit::start_storage(const db::config& cfg) {
     if (!audit_instance().local_is_initialized()) {
-        return make_ready_future<>();
+        co_return;
     }
-    return audit_instance().invoke_on_all([&cfg] (audit& local_audit) {
-        return local_audit._storage_helper_ptr->start(cfg).then([&local_audit] {
-            local_audit._storage_running = true;
-        });
+    co_await audit_instance().invoke_on_all([] (audit& local_audit) {
+        local_audit._migration_notifier.register_listener(local_audit._schema_listener.get());
+    });
+    co_await audit_instance().invoke_on_all([&cfg] (audit& local_audit) -> future<> {
+        co_await local_audit._storage_helper_ptr->start(cfg);
+        local_audit._storage_running = true;
     });
 }
 
@@ -240,7 +285,6 @@ future<> audit::stop_audit() {
         return make_ready_future<>();
     }
     return audit::audit::audit_instance().invoke_on_all([] (auto& local_audit) {
-        SCYLLA_ASSERT(!local_audit._storage_running);
         return local_audit.shutdown();
     }).then([] {
         return audit::audit::audit_instance().stop();
@@ -255,7 +299,9 @@ audit_info_ptr audit::create_audit_info(statement_category cat, const sstring& k
 }
 
 future<> audit::shutdown() {
-    return make_ready_future<>();
+    _cfg_rules_observer.reset();
+    co_await _migration_notifier.unregister_listener(_schema_listener.get());
+    co_await _rules_rebuild_action.join();
 }
 
 future<> audit::log(const audit_info& audit_info, const service::client_state& client_state, std::optional<db::consistency_level> cl, bool error) {
@@ -451,6 +497,23 @@ void audit::update_config(const sstring & new_value, std::function<T(const sstri
         fmt::join(std::views::transform(_audited_categories, category_to_string), ","),
         fmt::join(_audited_keyspaces, ","),
         fmt::join(table_entries, ","));
+}
+
+void audit::on_role_created(const sstring& role) {
+    _preprocessed_rules.add_known_role(role);
+    logger.debug("Audit: known role added: {}", role);
+}
+
+void audit::on_role_dropped(const sstring& role) {
+    _preprocessed_rules.remove_known_role(role);
+    logger.debug("Audit: known role removed: {}", role);
+}
+
+future<> audit::set_known_entities(std::unordered_set<sstring> roles,
+                                    preprocessed_audit_rules::known_table_set tables) {
+    logger.info("Audit: loading {} known roles and {} known tables into preprocessed rules cache",
+                roles.size(), tables.size());
+    co_await _preprocessed_rules.replace_known_entities(std::move(roles), std::move(tables));
 }
 
 }
