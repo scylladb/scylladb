@@ -37,6 +37,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog_extensions.hh"
+#include "db/commitlog/oversized_alloc_helpers.hh"
 #include "db/commitlog/rp_set.hh"
 #include "db/extensions.hh"
 #include "readers/combined.hh"
@@ -2409,6 +2410,140 @@ SEASTAR_TEST_CASE(test_commitlog_replay_segment_order) {
             BOOST_CHECK_GT(replayed_ids[i], replayed_ids[i - 1]);
         }
     });
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Pure-function tests for db::commitlog_oversized_alloc helpers. The
+// scenario constants below reproduce the SCYLLADB-1757 trial-diag-2.log
+// capture (8 MiB segment cap, 512/4096-byte alignments observed on XFS).
+
+namespace {
+
+constexpr size_t kMiB       = 1024 * 1024;
+constexpr size_t kAlign512  = 512;   // disk_overwrite_dma_alignment on XFS
+constexpr size_t kAlign4096 = 4096;  // disk_write_dma_alignment on XFS
+
+} // namespace
+
+BOOST_AUTO_TEST_SUITE(commitlog_oversized_alloc_helpers_test)
+
+using namespace db::commitlog_oversized_alloc;
+
+// Sanity: empty segment, post-cycle (i.e. brand new buffer) payload is well
+// under max_segment_size and the projected on-disk position respects the cap.
+BOOST_AUTO_TEST_CASE(post_cycle_payload_fits_in_segment) {
+    constexpr size_t max_seg = 8 * kMiB;
+    constexpr size_t max_mut = max_seg / 2;
+
+    for (size_t alignment : { kAlign512, kAlign4096 }) {
+        for (size_t file_pos : { size_t{0}, size_t{4 * kMiB}, max_seg - 16 * 1024 }) {
+            const size_t payload = post_cycle_fragment_payload(alignment, file_pos, max_seg, max_mut);
+            BOOST_TEST_CONTEXT("alignment=" << alignment << " file_pos=" << file_pos) {
+                BOOST_REQUIRE_GT(payload, 0u);
+                const size_t projected = projected_post_cycle_position(alignment, file_pos, payload);
+                BOOST_REQUIRE_LE(projected, max_seg);
+                // Adding one more byte must not also fit (helper is tight).
+                const size_t projected_plus_one = projected_post_cycle_position(alignment, file_pos, payload + 1);
+                BOOST_REQUIRE_GT(projected_plus_one, projected);
+            }
+        }
+    }
+}
+
+// Boundary: file_pos == max_segment_size (or beyond) leaves no room.
+BOOST_AUTO_TEST_CASE(post_cycle_at_or_past_max_returns_zero) {
+    constexpr size_t max_seg = 8 * kMiB;
+    constexpr size_t max_mut = max_seg / 2;
+
+    BOOST_CHECK_EQUAL(post_cycle_fragment_payload(kAlign512, max_seg, max_seg, max_mut), 0u);
+    BOOST_CHECK_EQUAL(post_cycle_fragment_payload(kAlign512, max_seg + 1, max_seg, max_mut), 0u);
+    // Less than one alignment of room.
+    BOOST_CHECK_EQUAL(post_cycle_fragment_payload(kAlign4096, max_seg - 100, max_seg, max_mut), 0u);
+}
+
+// Boundary: in-buffer helper returns 0 (caller falls through to post_cycle)
+// when the buffer cannot host an alignment-sized chunk.
+BOOST_AUTO_TEST_CASE(in_buffer_too_small_returns_zero) {
+    constexpr size_t max_seg = 8 * kMiB;
+    constexpr size_t max_mut = max_seg / 2;
+
+    BOOST_CHECK_EQUAL(in_buffer_fragment_payload(kAlign4096, /*buf_data_remaining=*/4096, /*pos=*/0, max_seg, max_mut), 0u);
+    BOOST_CHECK_EQUAL(in_buffer_fragment_payload(kAlign512, /*buf_data_remaining=*/512, /*pos=*/0, max_seg, max_mut), 0u);
+    // Way past max_segment_size.
+    BOOST_CHECK_EQUAL(in_buffer_fragment_payload(kAlign512, /*buf_data_remaining=*/1 << 20, /*pos=*/max_seg, max_seg, max_mut), 0u);
+}
+
+// In-buffer payload is always strictly less than buffer_data_remaining (after
+// subtracting per-sector and per-entry overhead).
+BOOST_AUTO_TEST_CASE(in_buffer_payload_is_bounded_by_buffer) {
+    constexpr size_t max_seg = 8 * kMiB;
+    constexpr size_t max_mut = max_seg / 2;
+
+    for (size_t alignment : { kAlign512, kAlign4096 }) {
+        for (size_t buf_rem : { size_t{16 * 1024}, size_t{1 * kMiB}, size_t{6 * kMiB} }) {
+            const size_t payload = in_buffer_fragment_payload(alignment, buf_rem, /*pos=*/0, max_seg, max_mut);
+            BOOST_TEST_CONTEXT("alignment=" << alignment << " buf_rem=" << buf_rem) {
+                if (payload > 0) {
+                    BOOST_CHECK_LT(payload, buf_rem);
+                }
+            }
+        }
+    }
+}
+
+// Regression test for #SCYLLADB-1757: with the production trial-diag-2.log
+// numbers (alignment=512, max_seg=8MiB, file_pos=4295168, fresh buffer), the
+// helper computed against the *correct* alignment returns a payload that fits.
+// Computing against the stale 4096 alignment returns a strictly larger payload
+// that, when written into the 512-aligned segment, would push next_position
+// past max_seg. This is precisely the assert(0) trip path.
+BOOST_AUTO_TEST_CASE(scylladb_1757_stale_alignment_overshoots) {
+    constexpr size_t max_seg = 8 * kMiB;
+    constexpr size_t max_mut = max_seg / 2;
+    constexpr size_t file_pos = 4295168; // observed in trial-diag-2.log
+
+    const size_t correct_payload = post_cycle_fragment_payload(kAlign512, file_pos, max_seg, max_mut);
+    const size_t stale_payload   = post_cycle_fragment_payload(kAlign4096, file_pos, max_seg, max_mut);
+
+    BOOST_REQUIRE_GT(correct_payload, 0u);
+    // The 4096-alignment math has less per-sector overhead and so admits MORE
+    // payload than the actual 512-alignment segment can host. This monotone
+    // gap is the crux of the bug.
+    BOOST_REQUIRE_GT(stale_payload, correct_payload);
+
+    // The correct payload fits.
+    BOOST_CHECK_LE(projected_post_cycle_position(kAlign512, file_pos, correct_payload), max_seg);
+    // The stale payload, when written into the 512-aligned segment, overshoots.
+    BOOST_CHECK_GT(projected_post_cycle_position(kAlign512, file_pos, stale_payload), max_seg);
+}
+
+// Generalise the previous test: across a grid of file positions, the
+// helper using each alignment must always produce a payload that fits when
+// fed back into the *same* alignment's projection. Stale-alignment use
+// (cross-alignment projection) is allowed to exceed; correct use must not.
+BOOST_AUTO_TEST_CASE(post_cycle_payload_fits_under_matching_alignment) {
+    constexpr size_t max_seg = 8 * kMiB;
+    constexpr size_t max_mut = max_seg / 2;
+
+    for (size_t alignment : { kAlign512, kAlign4096 }) {
+        // Sweep through file positions in alignment-sized steps; cover both
+        // the very start (descriptor header path) and positions deep into
+        // the segment.
+        for (size_t step = 0; step < 32; ++step) {
+            const size_t file_pos = step * alignment * 7919; // sparse stride
+            if (file_pos >= max_seg) {
+                continue;
+            }
+            const size_t payload = post_cycle_fragment_payload(alignment, file_pos, max_seg, max_mut);
+            if (payload == 0) {
+                continue;
+            }
+            BOOST_TEST_CONTEXT("alignment=" << alignment << " file_pos=" << file_pos) {
+                BOOST_REQUIRE_LE(projected_post_cycle_position(alignment, file_pos, payload), max_seg);
+            }
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
