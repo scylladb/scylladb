@@ -817,11 +817,11 @@ public:
     friend struct fmt::formatter<cf_mark>;
 
     // The commit log entry overhead in bytes (int: length + int: head checksum)
-    static constexpr size_t entry_overhead_size = 2 * sizeof(uint32_t);
+    static constexpr size_t entry_overhead_size = detail::entry_overhead_size;
     static constexpr size_t multi_entry_overhead_size = entry_overhead_size + sizeof(uint32_t);
-    static constexpr size_t fragmented_entry_overhead_size = 4 * sizeof(uint32_t);
-    static constexpr size_t segment_overhead_size = 2 * sizeof(uint32_t);
-    static constexpr size_t descriptor_header_size = 6 * sizeof(uint32_t);
+    static constexpr size_t fragmented_entry_overhead_size = detail::fragmented_entry_overhead_size;
+    static constexpr size_t segment_overhead_size = detail::segment_overhead_size;
+    static constexpr size_t descriptor_header_size = detail::descriptor_header_size;
     static constexpr uint32_t segment_magic = ('S'<<24) |('C'<< 16) | ('L' << 8) | 'C';
     static constexpr uint32_t multi_entry_size_magic = 0xffffffff;
     static constexpr uint32_t fragmented_entry_size_magic = 0xfffffffe;

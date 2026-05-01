@@ -22,6 +22,10 @@ namespace detail {
     using base_iterator = typename std::vector<temporary_buffer<char>>::const_iterator;
 
     static constexpr auto sector_overhead_size = sizeof(uint32_t) + sizeof(db::segment_id_type);
+    inline constexpr size_t entry_overhead_size            = 2 * sizeof(uint32_t);
+    inline constexpr size_t fragmented_entry_overhead_size = 4 * sizeof(uint32_t);
+    inline constexpr size_t segment_overhead_size          = 2 * sizeof(uint32_t);
+    inline constexpr size_t descriptor_header_size         = 6 * sizeof(uint32_t);
 
     // iterator adaptor to enable splitting normal
     // frag-buffer temporary buffer objects into 
