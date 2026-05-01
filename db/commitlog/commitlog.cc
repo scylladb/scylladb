@@ -53,6 +53,7 @@
 #include "utils/log.hh"
 #include "commitlog_entry.hh"
 #include "commitlog_extensions.hh"
+#include "oversized_alloc_helpers.hh"
 
 #include "utils/checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
@@ -1763,12 +1764,11 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                 continue;
             }
 
-            auto align = s->_alignment; 
-            auto sector_size = align - detail::sector_overhead_size;
-          
-            auto buffer = acquire_buffer(data_size, align);
+            auto initial_align = s->_alignment;
+
+            auto buffer = acquire_buffer(data_size, initial_align);
             {
-                base_ostream_type buffer_ostream = frag_ostream_type(detail::sector_split_iterator(buffer.begin(), buffer.end(), align, 0), buffer.size_bytes());
+                base_ostream_type buffer_ostream = frag_ostream_type(detail::sector_split_iterator(buffer.begin(), buffer.end(), initial_align, 0), buffer.size_bytes());
                 writer.write(*s, buffer_ostream, i);
             }
             auto strm = buffer.get_istream();
@@ -1781,35 +1781,31 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                     co_await s->close();
                     s = co_await get_segment();
                 }
-                // bytes not counting overhead                
-                auto buf_rem = std::min(max_size - s->position(), s->_buffer_ostream.size());
+                // SCYLLADB-1757: re-read alignment from the *current* segment
+                // every iteration. Recycled segments use disk_write_dma_alignment
+                // (e.g. 4096), freshly preallocated segments use
+                // disk_overwrite_dma_alignment (e.g. 512). Capturing this once
+                // before the loop made the avail math diverge from the actual
+                // segment after a get_segment() reacquire.
+                const auto align = s->_alignment;
 
-                size_t avail;
-                if (buf_rem > align) {
-                    auto rem2 = buf_rem - (1 + buf_rem/sector_size) * detail::sector_overhead_size;
-                    avail = std::min(rem2, max_mutation_size)
-                        - segment::entry_overhead_size
-                        - segment::fragmented_entry_overhead_size
-                        ;
-                    assert(avail < buf_rem);
-                } else {
+                size_t avail = commitlog_oversized_alloc::in_buffer_fragment_payload(
+                        align, s->_buffer_ostream.size(), s->position(),
+                        max_size, max_mutation_size);
+
+                if (avail == 0) {
+                    // In-buffer math has nothing to give: cycle and try the
+                    // freshly-emptied buffer / next segment's file tail.
                     co_await s->cycle();
                     auto pos = s->position();
-                    auto max = std::max<size_t>(pos, max_file_size);
-                    auto file_rem = max - pos;
 
-                    if (file_rem < align) {
+                    avail = commitlog_oversized_alloc::post_cycle_fragment_payload(
+                            align, pos, max_file_size, max_mutation_size);
+
+                    if (avail == 0) {
                         co_await s->close();
                         continue;
                     }
-
-                    auto rem2 = file_rem - (1 + file_rem/sector_size) * detail::sector_overhead_size;
-                    avail = std::min(rem2, max_mutation_size) 
-                        - segment::entry_overhead_size
-                        - segment::fragmented_entry_overhead_size
-                        - (pos == 0 ? segment::descriptor_header_size : 0)
-                        - segment::segment_overhead_size
-                        ;
                 }
                 if (!seg_ptr) {
                     seg_ptr = s;
