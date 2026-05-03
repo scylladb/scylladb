@@ -6219,7 +6219,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
         auto& raft_server = _group0->group0_server();
         auto group0_holder = _group0->hold_group0_gate();
         // do barrier to make sure we always see the latest topology
+        rtlogger.info("topology cmd rpc {} index={}: starting read_barrier, term={}", cmd.cmd, cmd_index, term);
         co_await raft_server.read_barrier(&_group0_as);
+        rtlogger.info("topology cmd rpc {} index={}: read_barrier completed", cmd.cmd, cmd_index);
         if (raft_server.get_current_term() != term) {
            // Return an error since the command is from outdated leader
            co_return result;
