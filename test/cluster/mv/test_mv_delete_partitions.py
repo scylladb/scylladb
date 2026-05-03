@@ -11,6 +11,7 @@ import time
 import logging
 from test.pylib.util import wait_for_view
 from test.cluster.util import new_test_keyspace, new_test_table, new_materialized_view
+from cassandra.cluster import NoHostAvailable  # type: ignore
 from cassandra.cqltypes import Int32Type
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,23 @@ async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) 
         await wait_for_view(cql, "mv_cf_view", node_count)
 
         logger.info(f"Deleting all rows from partition with key 0")
-        await cql.run_async(f"DELETE FROM {ks}.tab WHERE key = 0", timeout=300)
+        # In debug mode, the view update backlog may still be elevated when
+        # the DELETE is attempted, causing the coordinator to reject it with
+        # "View update backlog is too high". Retry on this specific error with
+        # exponential backoff to allow the backlog to drain.
+        delay = 0.5
+        for attempt in range(15):
+            try:
+                await cql.run_async(f"DELETE FROM {ks}.tab WHERE key = 0", timeout=300)
+                break
+            except NoHostAvailable as e:
+                if not any("View update backlog is too high" in str(err) for err in e.errors.values()):
+                    raise
+                if attempt == 14:
+                    raise
+                logger.info(f"View update backlog too high, retrying in {delay:.1f}s (attempt {attempt + 1}/15)")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 5.0)
 
 # Test deleting a large partition when there is a view with the same partition
 # key, and verify that view updates metrics is increased by exactly 1. Deleting
