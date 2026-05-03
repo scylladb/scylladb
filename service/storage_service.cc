@@ -6035,10 +6035,12 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 version, current_version)));
                     }
 
+                    rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: waiting for stale token metadata versions to be released", version);
                     co_await ss._shared_token_metadata.stale_versions_in_use();
+                    rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
                     co_await get_topology_session_manager().drain_closing_sessions();
 
-                    rtlogger.info("raft_topology_cmd::barrier_and_drain done");
+                    rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: done", version);
                 });
 
                 co_await utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail", [this] (auto& handler) -> future<> {
