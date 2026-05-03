@@ -917,7 +917,14 @@ async def main() -> None:
 if __name__ == "__main__":
     # We keep the working directory of the script in the directory where the script is placed,
     # that is: ${scylla_repository}/pgo.
-    os.chdir(os.path.dirname(os.path.realpath(__file__)))
+    pgo_dir = os.path.dirname(os.path.realpath(__file__))
+    os.chdir(pgo_dir)
+
+    # Add the repository root to PYTHONPATH so that subprocess invocations of
+    # exec_cql.py (and similar scripts) can import from test.pylib.
+    repo_root = os.path.dirname(pgo_dir)
+    pythonpath = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = f"{repo_root}:{pythonpath}" if pythonpath else repo_root
 
     logging.getLogger().setLevel(logging.NOTSET)
 
