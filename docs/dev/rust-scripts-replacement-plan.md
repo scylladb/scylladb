@@ -1,5 +1,34 @@
 # Replace Python Scripts with Rust Binaries
 
+## Motivation: Why Replace Python with Rust
+
+### Problem
+
+ScyllaDB production nodes currently require a Python 3 runtime solely to run ~25 admin/setup scripts. This creates several concrete problems:
+
+1. **Path to dropping vendored Python entirely** — We currently ship a full Python interpreter on every production node. Once these scripts, `cqlsh` (#29523), and Seastar's Python scripts are all migrated, we can stop vendoring Python altogether.
+
+2. **Supply-chain surface area** — Six PyPI packages (`pyudev`, `psutil`, `distro`, `PyYAML`, `traceback_with_variables`, `setuptools`) must be vendored or installed on every production node. Each is an attack vector and a version-compatibility liability.
+
+3. **Startup-path fragility** — `scylla_prepare` runs as `ExecStartPre` in the systemd unit. A broken Python environment (missing module, wrong version, virtualenv corruption) prevents ScyllaDB from starting at all, with an unhelpful traceback as the only clue.
+
+### Why Rust Specifically
+
+- **Zero runtime dependencies** — A statically-linked binary needs nothing on the target node. No interpreter, no virtualenv, no pip.
+- **Compile-time correctness** — The category of bugs exemplified by `scylla_ntp_setup`'s undefined `confpath` variable (two code paths) cannot exist in Rust. Static typing catches these at compile time, not in production.
+- **Cargo ecosystem** — `serde_yaml`, `nix`, `clap` cover 100% of what the Python scripts need from `PyYAML`, `psutil`/`os`, and `argparse`, with the same or better ergonomics.
+- **Already in the build** — ScyllaDB already builds Rust code (`cqlsh-rs`, Seastar dependencies). The toolchain is present; adding a Cargo workspace is incremental.
+- **Debuggability as a first-class feature** — Every Rust binary gets `--verbose`, `--dry-run`, `--diagnose`, and crash context dumps for free via a shared lib crate. This is the "major improvement" over a same-thing-in-different-language port.
+
+### What This Is NOT
+
+- Not a rewrite of `perftune.py` (out of scope — separate discussion)
+- Not a rewrite of `cqlsh` (tracked in #29523)
+- Not adding new features — CLI flags, exit codes, and output format remain identical
+- Not removing Python from the build system — only from production runtime, and only after all other components (`cqlsh`, Seastar scripts) are also migrated off Python
+
+---
+
 ## TL;DR
 
 > **Quick Summary**: Replace all ~25 Python scripts in `dist/common/scripts/` with Rust binaries via a Cargo workspace, eliminating the Python runtime dependency from production nodes while delivering a major improvement in debuggability, error UX, testability, and maintainability.
