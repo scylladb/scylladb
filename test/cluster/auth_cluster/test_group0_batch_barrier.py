@@ -69,7 +69,10 @@ async def test_create_role_mixed_cluster(manager: ManagerClient,
     new_host = next(h for h in hosts if h.address == new_server[0].ip_addr)
 
     role = "r" + unique_name()
-    await cql.run_async(f"CREATE ROLE {role}", host=new_host)
+    # Use IF NOT EXISTS to work around the Python driver bug where connection
+    # pool renewal after concurrent node bootstraps can cause the statement
+    # to be executed twice (scylladb/python-driver#317).
+    await cql.run_async(f"CREATE ROLE IF NOT EXISTS {role}", host=new_host)
 
     deadline = time.time() + 180
     for host in hosts:
