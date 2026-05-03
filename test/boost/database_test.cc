@@ -30,6 +30,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/key_utils.hh"
+#include "test/lib/eventually.hh"
 
 #include "replica/database.hh"
 #include "utils/assert.hh"
@@ -2327,8 +2328,17 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
 
         e.execute_cql(format("INSERT INTO {}.{} (pk, ck, v) VALUES (1, 2, 2)", ks_name, tbl_name)).get();
 
-        // One successful read, so the auth cache is populated.
-        e.execute_cql(format("SELECT * FROM {}.{} WHERE pk = 1", ks_name, tbl_name)).get();
+        // Before starting the test's read loop, we perform a warmup read once.
+        // This first read might perform some one-time initialization that uses
+        // exceptions internally. We need all these exceptions to happen once,
+        // here, so that the real test below can validate that no exceptions at
+        // all are thrown during the test itself.
+        // We configured read_timeout to the 10ms, and on very loaded systems
+        // the read sometimes doesn't finish in 10ms (see SCYLLADB-1774),
+        // so we retry this warmup read until it succeeds.
+        eventually([&] {
+            e.execute_cql(format("SELECT * FROM {}.{} WHERE pk = 1", ks_name, tbl_name)).get();
+        });
 
         auto get_cxx_exceptions = [&e] {
             return e.db().map_reduce0([] (replica::database&) { return engine().cxx_exceptions(); }, 0, std::plus<size_t>()).get();
