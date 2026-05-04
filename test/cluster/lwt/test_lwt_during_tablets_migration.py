@@ -118,6 +118,7 @@ async def test_multi_column_lwt_during_migration(manager: ManagerClient, scale_t
     }
 
     servers = await manager.servers_add(6, config=cfg)
+    await manager.get_ready_cql(servers)
     await manager.disable_tablet_balancing()
 
     rf_max = len(servers) - 1

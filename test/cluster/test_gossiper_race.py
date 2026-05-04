@@ -28,6 +28,7 @@ async def test_gossiper_race_on_decommission(manager: ManagerClient):
 
     # Create cluster with more nodes to increase gossip traffic
     servers = await manager.servers_add(3, cmdline=cmdline)
+    await manager.get_ready_cql(servers)
 
     coordinator = await get_coordinator_host(manager=manager)
     coordinator_log = await manager.server_open_log(server_id=coordinator.server_id)

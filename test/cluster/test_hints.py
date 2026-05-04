@@ -399,6 +399,7 @@ async def test_hint_to_pending(manager: ManagerClient):
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r1"},
     ])
+    await manager.get_ready_cql(servers)
     cql = await manager.get_cql_exclusive(servers[0])
     await manager.disable_tablet_balancing()
 
@@ -458,6 +459,7 @@ async def test_hint_to_leaving_when_reducing_rf(manager: ManagerClient):
         {"dc": "dc1", "rack": "r2"},
         {"dc": "dc1", "rack": "r3"},
     ], cmdline=cmdline)
+    await manager.get_ready_cql(servers)
     cql = await manager.get_cql_exclusive(servers[0])
     await manager.disable_tablet_balancing()
 

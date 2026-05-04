@@ -369,7 +369,7 @@ async def test_proxy_protocol_shard_aware(proxy_server):
     # The test harness runs with --smp 2 by default
     num_shards = 2
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     fake_src_addr = "203.0.113.43"
     base_port = 10000
@@ -477,7 +477,7 @@ async def test_proxy_protocol_port_preserved_in_system_clients(proxy_server):
         await do_cql_handshake(reader, writer)
 
         # Now query system.clients using the driver to see our connection
-        cql = manager.get_cql()
+        cql, _ = await manager.get_ready_cql([server])
         rows = await wait_for_results(
             cql,
             'SELECT address, port FROM system.clients',
@@ -538,7 +538,7 @@ async def test_proxy_protocol_ssl_shard_aware(proxy_server):
     # The test harness runs with --smp 2 by default
     num_shards = 2
 
-    cql = manager.get_cql()
+    cql, _ = await manager.get_ready_cql([server])
 
     fake_src_addr = "203.0.113.51"
     base_port = 20000
@@ -693,7 +693,7 @@ async def test_proxy_protocol_ssl_port_preserved(proxy_server):
             ssl_sock.recv(4096)
 
         # Now query system.clients using the driver to see our connection
-        cql = manager.get_cql()
+        cql, _ = await manager.get_ready_cql([server])
         rows = await wait_for_results(
             cql,
             'SELECT address, port, ssl_enabled FROM system.clients',

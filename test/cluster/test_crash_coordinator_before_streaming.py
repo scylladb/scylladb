@@ -48,6 +48,7 @@ async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detect
         '--logger-log-level', 'raft_topology=trace',
     ]
     nodes = [await manager.server_add(config=config, cmdline=cmdline) for _ in range(5)]
+    await manager.get_ready_cql(nodes)
     coordinators_ids = await get_coordinator_host_ids(manager)
     assert len(coordinators_ids) == 1, "At least 1 coordinator id should be found"
 

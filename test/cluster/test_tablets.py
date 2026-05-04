@@ -2327,6 +2327,7 @@ async def test_disabling_balancing_preempts_balancer(manager: ManagerClient):
     coord_srv = servers[0]
     await manager.api.enable_injection(coord_srv.ip_addr, "tablet_allocator_shuffle", one_shot=False)
     await manager.api.enable_injection(coord_srv.ip_addr, "tablet_keep_repairing", one_shot=False)
+    await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy'}}") as ks:
         cql, _ = await manager.get_ready_cql(servers)

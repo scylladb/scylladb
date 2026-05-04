@@ -666,6 +666,7 @@ async def test_incremental_repair_tablet_time_metrics(manager: ManagerClient):
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_incremental_repair_finishes_when_tablet_skips_end_repair_stage(manager):
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
+    await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
@@ -692,6 +693,7 @@ async def test_incremental_repair_finishes_when_tablet_skips_end_repair_stage(ma
 async def test_incremental_repair_rejoin_do_tablet_operation(manager):
     cmdline = ['--logger-log-level', 'raft_topology=debug']
     servers = await manager.servers_add(3, auto_rack_dc="dc1", cmdline=cmdline)
+    await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
@@ -740,6 +742,7 @@ async def test_incremental_repair_rejoin_do_tablet_operation(manager):
 async def test_incremental_retry_end_repair_stage(manager):
     config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     servers = await manager.servers_add(3, auto_rack_dc="dc1", config=config)
+    await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:

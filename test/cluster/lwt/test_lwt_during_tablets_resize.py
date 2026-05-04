@@ -161,6 +161,7 @@ async def test_multi_column_lwt_during_split_merge(manager: ManagerClient, scale
         '--logger-log-level', 'paxos=trace'
     ]
     servers = await manager.servers_add(6, config=cfg, cmdline=cmdline, property_file=properties)
+    await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(
         manager,

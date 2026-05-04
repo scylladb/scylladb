@@ -1311,6 +1311,7 @@ async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
         '--logger-log-level', 'paxos=trace'
     ]
     server = await manager.server_add(config=config, cmdline=cmdline)
+    await manager.get_ready_cql([server])
     alternator = get_alternator(server.ip_addr)
 
     await manager.disable_tablet_balancing()
