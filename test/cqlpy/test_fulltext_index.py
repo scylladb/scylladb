@@ -230,3 +230,72 @@ def test_create_fulltext_index_requires_tablets(cql, this_dc):
         with new_test_table(cql, ks, 'p int primary key, content text') as table:
             with pytest.raises(InvalidRequest, match="Creating a fulltext index requires the base table's keyspace to use tablets"):
                 cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+
+
+def test_create_fulltext_index_after_enable_then_disable_cdc(cql, test_keyspace):
+    """Reproducer for SCYLLADB-2005"""
+    schema = "pk int primary key, content text"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Enable CDC, then disable it again.
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': True}}")
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': False}}")
+        # CDC is now off. Creating a fulltext index should succeed - it will
+        # auto-enable CDC just as it would on a table that never had CDC set.
+        cql.execute(f"CREATE CUSTOM INDEX v_idx ON {table} (content) USING 'fulltext_index'")
+
+
+def test_create_fulltext_index_cdc_low_ttl_fails(cql, test_keyspace):
+    """Fulltext index creation must fail when CDC TTL is below the 24-hour minimum."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema, " WITH cdc = {'enabled': true, 'ttl': 1}") as table:
+        with pytest.raises(InvalidRequest, match="CDC's TTL must be at least"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+
+
+def test_create_fulltext_index_cdc_bad_delta_mode_fails(cql, test_keyspace):
+    """Fulltext index creation must fail when CDC delta mode is not 'full' and postimage is off."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema, " WITH cdc = {'enabled': true, 'delta': 'keys'}") as table:
+        with pytest.raises(InvalidRequest, match="delta mode must be set to 'full' or postimage must be enabled"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+
+
+def test_create_fulltext_index_cdc_postimage(cql, test_keyspace):
+    """Fulltext index creation should succeed when postimage is enabled even with non-full delta mode."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema, " WITH cdc = {'enabled': true, 'delta': 'keys', 'postimage': true}") as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+
+
+def test_create_fulltext_index_cdc_full_delta(cql, test_keyspace):
+    """Fulltext index creation should succeed with CDC delta mode set to 'full'."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema, " WITH cdc = {'enabled': true, 'delta': 'full'}") as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+
+
+def test_drop_fulltext_index(cql, test_keyspace):
+    """DROP INDEX on a fulltext index should succeed."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(content) USING 'fulltext_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+
+
+def test_cannot_disable_cdc_with_fulltext_index(cql, test_keyspace):
+    """ALTER TABLE to disable CDC must fail when a fulltext index exists on the table."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="Cannot disable CDC when Full-Text Search is enabled"):
+            cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': false}}")
+
+
+def test_alter_cdc_low_ttl_with_fulltext_index_fails(cql, test_keyspace):
+    """ALTER TABLE to set CDC TTL below the 24-hour minimum must fail when a fulltext index exists."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="CDC's TTL must be at least"):
+            cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': true, 'ttl': 1}}")
