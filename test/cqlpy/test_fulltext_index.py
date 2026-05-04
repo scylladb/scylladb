@@ -299,3 +299,86 @@ def test_alter_cdc_low_ttl_with_fulltext_index_fails(cql, test_keyspace):
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
         with pytest.raises(InvalidRequest, match="CDC's TTL must be at least"):
             cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': true, 'ttl': 1}}")
+
+
+# --- Duplicate index name tests for viewless indexes (issue #26672) ---
+# Fulltext indexes have no backing materialized view, so `has_schema()` check cannot detect name collisions.
+
+def test_no_duplicate_named_fulltext_index(cql, test_keyspace):
+    """Creating a fulltext index with the same name twice must fail."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX idx1 ON {table}(content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="already exists"):
+            cql.execute(f"CREATE CUSTOM INDEX idx1 ON {table}(content) USING 'fulltext_index'")
+
+
+def test_no_duplicate_unnamed_fulltext_index(cql, test_keyspace):
+    """Creating two unnamed fulltext indexes on the same column must fail."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="duplicate of existing index"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+
+
+def test_no_duplicate_unnamed_fulltext_index_with_if_not_exists(cql, test_keyspace):
+    """IF NOT EXISTS on unnamed fulltext index should silently succeed without creating a duplicate."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        ks, cf = table.split(".")
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ON {table}(content) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ON {table}(content) USING 'fulltext_index'")
+        rows = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf}'"))
+        assert len(rows) == 1
+
+
+def test_no_duplicate_named_fulltext_index_with_if_not_exists(cql, test_keyspace):
+    """IF NOT EXISTS on named fulltext index should silently succeed without creating a duplicate."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        ks, cf = table.split(".")
+        idx = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS {idx} ON {table}(content) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS {idx} ON {table}(content) USING 'fulltext_index'")
+        rows = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf}'"))
+        assert len(rows) == 1
+        assert rows[0].index_name == idx
+
+
+def test_fulltext_index_if_not_exists_cross_table(cql, test_keyspace):
+    """IF NOT EXISTS with the same index name on a different table in the same keyspace should silently succeed without creating a second index."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table1:
+        with new_test_table(cql, test_keyspace, schema) as table2:
+            ks, cf1 = table1.split(".")
+            _, cf2 = table2.split(".")
+            idx = unique_name()
+            cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS {idx} ON {table1}(content) USING 'fulltext_index'")
+            # The query below succeeds although silently does not create a new index.
+            # This is because the IF NOT EXISTS check looks for an existing index with the same name
+            # within the whole keyspace, not just the same table.
+            # Issue: VECTOR-641
+            cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS {idx} ON {table2}(content) USING 'fulltext_index'")
+            rows1 = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf1}'"))
+            rows2 = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf2}'"))
+            assert len(rows1) == 1
+            assert rows1[0].index_name == idx
+            assert len(rows2) == 0
+
+
+def test_fulltext_index_if_not_exists_cross_column(cql, test_keyspace):
+    """IF NOT EXISTS with the same index name on a different column of the same table should silently succeed without creating a second index."""
+    schema = 'p int primary key, c1 text, c2 text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        ks, cf = table.split(".")
+        idx = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS {idx} ON {table}(c1) USING 'fulltext_index'")
+        # The query below succeeds although silently does not create a new index.
+        # This is because the IF NOT EXISTS check looks for an existing index with the same name
+        # within the table, not just the same column.
+        # Issue: VECTOR-641
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS {idx} ON {table}(c2) USING 'fulltext_index'")
+        rows = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf}'"))
+        assert len(rows) == 1
+        assert rows[0].index_name == idx
