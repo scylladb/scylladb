@@ -19,6 +19,7 @@ import struct
 import time
 
 from test.pylib.manager_client import ManagerClient
+from test.pylib.internal_types import ServerUpState
 from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
@@ -318,9 +319,13 @@ PROXY_SERVER_CONFIG = {
 async def proxy_server(manager: ManagerClient):
     """
     Fixture that creates a server with all proxy protocol ports enabled.
+    Waits for SERVING state to ensure proxy protocol ports are ready.
     Returns a tuple of (server, manager).
     """
-    server = await manager.server_add(config=PROXY_SERVER_CONFIG)
+    server = await manager.server_add(
+        config=PROXY_SERVER_CONFIG,
+        expected_server_up_state=ServerUpState.SERVING,
+    )
     yield (server, manager)
 
 
