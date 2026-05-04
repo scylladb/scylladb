@@ -9,6 +9,7 @@
 
 #include "cql3/statements/property_definitions.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "table_helper.hh"
@@ -152,9 +153,15 @@ future<> table_helper::insert(cql3::query_processor& qp, service::migration_mana
             break;
         }
     }
+    // Pin a strong ref locally: while we suspend in execute(), a concurrent
+    // insert() on this shard may reset _insert_stmt to nullptr if the
+    // prepared_statements_cache entry gets invalidated, freeing the object.
+    auto stmt = _insert_stmt;
     auto opts = opt_maker();
     opts.prepare(_prepared_stmt->bound_names);
-    co_await _insert_stmt->execute(qp, qs, opts, std::nullopt);
+    co_await utils::get_local_injector().inject("table_helper_insert_before_execute",
+            utils::wait_for_message(std::chrono::seconds{30}));
+    co_await stmt->execute(qp, qs, opts, std::nullopt);
 }
 
 future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,

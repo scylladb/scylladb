@@ -143,6 +143,7 @@ class error_injection {
     struct injection_shared_data {
         size_t received_message_count{0};
         size_t shared_read_message_count{0};
+        size_t waiter_count{0};
         condition_variable received_message_cv;
         error_injection_parameters parameters;
         sstring injection_name;
@@ -216,6 +217,8 @@ public:
             }) : optimized_optional<abort_source::subscription>{};
 
             try {
+                ++_shared_data->waiter_count;
+                auto dec = defer([this] () noexcept { --_shared_data->waiter_count; });
                 co_await _shared_data->received_message_cv.wait(timeout, [&] {
                     if (as) {
                         as->check();
@@ -363,6 +366,17 @@ public:
     bool is_enabled(const std::string_view& injection_name) const {
         auto data = get_data(injection_name);
         return data && !data->is_ongoing_oneshot();
+    }
+
+    // \brief Returns the number of handlers of the named injection that are
+    // currently suspended in wait_for_message().
+    //
+    // Intended for tests that need to synchronize with one or more fibers
+    // parked on an injection.
+    // \param name error injection name to check
+    size_t waiters(const std::string_view& injection_name) const {
+        auto data = get_data(injection_name);
+        return data ? data->shared_data->waiter_count : 0;
     }
 
     // \brief Enter into error injection if it's enabled
@@ -621,6 +635,10 @@ class error_injection<false> {
 public:
     bool is_enabled(const std::string_view& name) const {
         return false;
+    }
+
+    size_t waiters(const std::string_view& name) const {
+        return 0;
     }
 
     bool enter(const std::string_view& name) const {
