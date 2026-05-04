@@ -1898,7 +1898,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting system distributed keyspace");
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy), cfg->check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)).get();
-            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
+            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [&db] {
+                db.invoke_on_all([] (replica::database& db) {
+                    db.unplug_sstables_registry();
+                }).get();
                 sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
             });
 

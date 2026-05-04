@@ -75,7 +75,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
 
         # Check that the ownership table is populated properly
         tid = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'").one()
-        res = cql.execute("SELECT * FROM system.sstables;")
+        res = cql.execute(SimpleStatement("SELECT * FROM system_distributed.sstables;", consistency_level=ConsistencyLevel.ONE))
         for row in res:
             assert row.table_id == tid.id, \
                 f'Unexpected entry table_id in registry: {row.table_id}'
@@ -106,7 +106,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
         print('Drop table')
         cql.execute(f"DROP TABLE {ks}.test;")
         # Check that the ownership table is de-populated
-        res = cql.execute("SELECT * FROM system.sstables;")
+        res = cql.execute(SimpleStatement("SELECT * FROM system_distributed.sstables;", consistency_level=ConsistencyLevel.ONE))
         rows = "\n".join(f"{row.table_id} {row.status}" for row in res)
         assert not rows, 'Unexpected entries in registry'
 
@@ -132,13 +132,13 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
 
         await manager.api.flush_keyspace(server.ip_addr, ks)
         # Mark the sstables as "removing" to simulate the problem
-        res = cql.execute("SELECT * FROM system.sstables;")
+        res = cql.execute(SimpleStatement("SELECT * FROM system_distributed.sstables;", consistency_level=ConsistencyLevel.ONE))
         for row in res:
             sstable_entries.append((row.table_id, row.node_owner, row.generation))
         print(f'Found entries: {[ str(ent[2]) for ent in sstable_entries ]}')
         for table_id, node_owner, gen in sstable_entries:
-            cql.execute("UPDATE system.sstables SET status = 'removing'"
-                         f" WHERE table_id = {table_id} AND node_owner = {node_owner} AND generation = {gen};")
+            cql.execute(SimpleStatement("UPDATE system_distributed.sstables SET status = 'removing'"
+                         f" WHERE table_id = {table_id} AND node_owner = {node_owner} AND generation = {gen};", consistency_level=ConsistencyLevel.ONE))
 
         print('Restart scylla')
         await manager.server_restart(server.server_id)
@@ -179,11 +179,11 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
 
         await manager.api.flush_keyspace(server.ip_addr, ks)
         # Move the sstables into "quarantine"
-        res = cql.execute("SELECT * FROM system.sstables;")
+        res = cql.execute(SimpleStatement("SELECT * FROM system_distributed.sstables;", consistency_level=ConsistencyLevel.ONE))
         assert len(list(res)) > 0, 'No entries in registry'
         for row in res:
-            cql.execute("UPDATE system.sstables SET state = 'quarantine'"
-                         f" WHERE table_id = {row.table_id} AND node_owner = {row.node_owner} AND generation = {row.generation};")
+            cql.execute(SimpleStatement("UPDATE system_distributed.sstables SET state = 'quarantine'"
+                         f" WHERE table_id = {row.table_id} AND node_owner = {row.node_owner} AND generation = {row.generation};", consistency_level=ConsistencyLevel.ONE))
 
         print('Restart scylla')
         await manager.server_restart(server.server_id)
@@ -250,7 +250,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
         await flush
 
         print(f'Check the sstables table')
-        res = cql.execute("SELECT * FROM system.sstables;")
+        res = cql.execute(SimpleStatement("SELECT * FROM system_distributed.sstables;", consistency_level=ConsistencyLevel.ONE))
         ssts = "\n".join(f"{row.table_id} {row.generation} {row.status}" for row in res)
         print(f'sstables:\n{ssts}')
 
@@ -298,7 +298,7 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
     server = await manager.server_add()
     cql = manager.get_cql()
-    endpoint = object_storage.address  
+    endpoint = object_storage.address
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
                                       'replication_factor': '1'})
     storage_opts = format_tuples(type=f'{object_storage.type}',
@@ -518,7 +518,7 @@ async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, objec
         # entry, leaving a stale "creating" entry for the partial SSTable.
         table_id = await manager.get_table_id(ks, "test")
         registry = await cql.run_async(
-            f"SELECT status FROM system.sstables WHERE owner = {table_id}")
+            f"SELECT status FROM system_distributed.sstables WHERE table_id = {table_id} ALLOW FILTERING")
         stale = [r for r in registry if r.status != "sealed"]
         assert not stale, (
             f"Found stale registry entries after migration: "

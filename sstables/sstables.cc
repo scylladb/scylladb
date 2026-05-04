@@ -4352,7 +4352,7 @@ public:
         co_await _sst->_storage->unlink_component(*_sst, _type);
         if (_is_object_storage) {
             co_await _sst->manager().sstables_registry().delete_entry(
-                    _sst->get_schema()->id(), _sst->generation());
+                    _sst->get_schema()->id(), _sst->manager().get_local_host_id(), _sst->generation());
         }
     }
 };

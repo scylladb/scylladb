@@ -22,7 +22,6 @@
 #include "db_clock.hh"
 #include "mutation_query.hh"
 #include "system_keyspace_view_types.hh"
-#include "sstables/sstables_registry.hh"
 #include <seastar/core/sharded.hh>
 #include "cdc/generation_id.hh"
 #include "cdc/generation.hh"
@@ -35,12 +34,6 @@
 namespace netw {
     class shared_dict;
 };
-
-namespace sstables {
-    struct entry_descriptor;
-    class generation_type;
-    enum class sstable_state;
-}
 
 namespace service {
 
@@ -201,7 +194,6 @@ public:
     static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
     static constexpr auto TOPOLOGY = "topology";
     static constexpr auto TOPOLOGY_REQUESTS = "topology_requests";
-    static constexpr auto SSTABLES_REGISTRY = "sstables";
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
     static constexpr auto CDC_STREAMS_STATE = "cdc_streams_state";
     static constexpr auto CDC_STREAMS_HISTORY = "cdc_streams_history";
@@ -257,7 +249,6 @@ public:
     static schema_ptr broadcast_kv_store();
     static schema_ptr topology();
     static schema_ptr topology_requests();
-    static schema_ptr sstables_registry();
     static schema_ptr cdc_generations_v3();
     static schema_ptr cdc_streams_state();
     static schema_ptr cdc_streams_history();
@@ -668,13 +659,6 @@ public:
     future<std::optional<mutation>> get_view_builder_version_mutation();
     future<mutation> make_view_builder_version_mutation(api::timestamp_type ts, view_builder_version_t version);
     future<view_builder_version_t> get_view_builder_version();
-
-    future<> sstables_registry_create_entry(table_id tid, locator::host_id node_owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc);
-    future<> sstables_registry_update_entry_status(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstring status);
-    future<> sstables_registry_update_entry_state(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstables::sstable_state state);
-    future<> sstables_registry_delete_entry(table_id tid, locator::host_id node_owner, sstables::generation_type gen);
-    using sstable_registry_entry_consumer = sstables::sstables_registry::entry_consumer;
-    future<> sstables_registry_list(table_id tid, locator::host_id node_owner, sstable_registry_entry_consumer consumer);
 
     future<std::optional<sstring>> load_group0_upgrade_state();
     future<> save_group0_upgrade_state(sstring);

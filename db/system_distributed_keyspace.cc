@@ -13,6 +13,7 @@
 #include "replica/database.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
+#include "sstables/sstables.hh"
 #include "schema/schema_builder.hh"
 #include "timeout_config.hh"
 #include "types/types.hh"
@@ -128,6 +129,24 @@ schema_ptr snapshot_sstables() {
     return schema;
 }
 
+schema_ptr sstables_registry() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SSTABLES_REGISTRY);
+        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::SSTABLES_REGISTRY, std::make_optional(id))
+                .with_column("table_id", uuid_type, column_kind::partition_key)
+                .with_column("node_owner", uuid_type, column_kind::partition_key)
+                .with_column("generation", timeuuid_type, column_kind::clustering_key)
+                .with_column("status", utf8_type)
+                .with_column("state", utf8_type)
+                .with_column("version", utf8_type)
+                .with_column("format", utf8_type)
+                .set_comment("SSTables ownership table")
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 // This is the set of tables which this node ensures to exist in the cluster.
 // It does that by announcing the creation of these schemas on initialization
 // of the `system_distributed_keyspace` service (see `start()`), unless it first
@@ -139,16 +158,24 @@ schema_ptr snapshot_sstables() {
 // with previous versions of Scylla (needed during upgrades), but since they are not listed here,
 // they won't be created in new clusters.
 static std::vector<schema_ptr> ensured_tables(bool with_sstables_registry) {
-    return {
+    auto r = std::vector<schema_ptr>{
         view_build_status(),
         cdc_desc(),
         cdc_timestamps(),
         snapshot_sstables(),
     };
+    if (with_sstables_registry) {
+        r.push_back(sstables_registry());
+    }
+    return r;
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables(bool with_sstables_registry) {
-    return {view_build_status(), cdc_desc(), cdc_timestamps(), snapshot_sstables()};
+    auto r = std::vector<schema_ptr>{view_build_status(), cdc_desc(), cdc_timestamps(), snapshot_sstables()};
+    if (with_sstables_registry) {
+        r.push_back(sstables_registry());
+    }
+    return r;
 }
 
 system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& qp, service::migration_manager& mm, service::storage_proxy& sp, bool with_sstables_registry)
@@ -513,4 +540,58 @@ future<> system_distributed_keyspace::update_sstable_download_status(sstring sna
                                   cql3::query_processor::cache_internal::no);
 }
 
-} // namespace db
+
+db::consistency_level system_distributed_keyspace::sstables_registry_write_cl() const {
+    auto n = _sp.get_token_metadata_ptr()->count_normal_token_owners();
+    return n > 1 ? db::consistency_level::EACH_QUORUM : db::consistency_level::ONE;
+}
+
+future<> system_distributed_keyspace::sstables_registry_create_entry(table_id tid, locator::host_id node_owner, sstring status, sstables::sstable_state state, sstables::entry_descriptor desc) {
+    static const auto req = format("INSERT INTO {}.{} (table_id, node_owner, generation, status, state, version, format) VALUES (?, ?, ?, ?, ?, ?, ?)", NAME, SSTABLES_REGISTRY);
+    dlogger.trace("Inserting {}.{}.{} into {}", tid, node_owner, desc.generation, SSTABLES_REGISTRY);
+    co_await _qp.execute_internal(req, sstables_registry_write_cl(), internal_distributed_query_state(),
+            { tid.id, node_owner.uuid(), data_value(desc.generation), status, sstring(sstables::state_to_dir(state)), fmt::to_string(desc.version), fmt::to_string(desc.format) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<> system_distributed_keyspace::sstables_registry_update_entry_status(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstring status) {
+    static const auto req = format("UPDATE {}.{} SET status = ? WHERE table_id = ? AND node_owner = ? AND generation = ?", NAME, SSTABLES_REGISTRY);
+    dlogger.trace("Updating {}.{}.{} -> status={} in {}", tid, node_owner, gen, status, SSTABLES_REGISTRY);
+    co_await _qp.execute_internal(req, sstables_registry_write_cl(), internal_distributed_query_state(),
+            { status, tid.id, node_owner.uuid(), data_value(gen) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<> system_distributed_keyspace::sstables_registry_update_entry_state(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstables::sstable_state state) {
+    static const auto req = format("UPDATE {}.{} SET state = ? WHERE table_id = ? AND node_owner = ? AND generation = ?", NAME, SSTABLES_REGISTRY);
+    dlogger.trace("Updating {}.{}.{} -> state={} in {}", tid, node_owner, gen, sstables::state_to_dir(state), SSTABLES_REGISTRY);
+    co_await _qp.execute_internal(req, sstables_registry_write_cl(), internal_distributed_query_state(),
+            { sstring(sstables::state_to_dir(state)), tid.id, node_owner.uuid(), data_value(gen) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<> system_distributed_keyspace::sstables_registry_delete_entry(table_id tid, locator::host_id node_owner, sstables::generation_type gen) {
+    static const auto req = format("DELETE FROM {}.{} WHERE table_id = ? AND node_owner = ? AND generation = ?", NAME, SSTABLES_REGISTRY);
+    dlogger.trace("Removing {}.{}.{} from {}", tid, node_owner, gen, SSTABLES_REGISTRY);
+    co_await _qp.execute_internal(req, sstables_registry_write_cl(), internal_distributed_query_state(),
+            { tid.id, node_owner.uuid(), data_value(gen) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<> system_distributed_keyspace::sstables_registry_list(table_id tid, locator::host_id node_owner, sstable_registry_entry_consumer consumer) {
+    static const auto req = format("SELECT status, state, generation, version, format FROM {}.{} WHERE table_id = ? AND node_owner = ?", NAME, SSTABLES_REGISTRY);
+    dlogger.trace("Listing {}.{} entries from {}", tid, node_owner, SSTABLES_REGISTRY);
+    auto read_cl = _sp.get_token_metadata_ptr()->count_normal_token_owners() > 1 ? db::consistency_level::LOCAL_QUORUM : db::consistency_level::ONE;
+    co_await _qp.query_internal(req, read_cl, { tid.id, node_owner.uuid() }, 1000,
+            [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+        auto status = row.get_as<sstring>("status");
+        auto state = row.get_as<sstring>("state");
+        auto gen = row.get_as<utils::UUID>("generation");
+        auto version = sstables::version_from_string(row.get_as<sstring>("version"));
+        auto format = sstables::format_from_string(row.get_as<sstring>("format"));
+        co_await consumer(std::move(status), sstables::state_from_dir(state), sstables::entry_descriptor(sstables::generation_type(gen), version, format, sstables::component_type::TOC));
+        co_return stop_iteration::no;
+    }, internal_distributed_query_state());
+}
+
+}

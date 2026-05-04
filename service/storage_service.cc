@@ -38,6 +38,7 @@
 #include "locator/snitch_base.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "db/system_distributed_keyspace_sstables_registry.hh"
 #include "db/consistency_level.hh"
 #include <seastar/core/when_all.hh>
 #include "service/tablet_allocator.hh"
@@ -1509,7 +1510,12 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
 
 future<> storage_service::start_sys_dist_ks() const {
     slogger.info("starting system distributed keyspace shards");
-    return _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+    co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+    if (_sys_dist_ks.local().has_sstables_registry()) {
+        co_await _db.invoke_on_all([this] (replica::database& db) {
+            db.plug_sstables_registry(std::make_unique<db::system_distributed_keyspace_sstables_registry>(_sys_dist_ks.local()));
+        });
+    }
 }
 
 future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
