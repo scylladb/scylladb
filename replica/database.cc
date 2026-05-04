@@ -26,7 +26,6 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/try_future.hh>
 #include "db/system_keyspace.hh"
-#include "db/system_keyspace_sstables_registry.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
@@ -3553,14 +3552,20 @@ void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
     _compaction_manager.plug_system_keyspace(sys_ks);
     _large_data_handler->plug_system_keyspace(sys_ks);
     _corrupt_data_handler->plug_system_keyspace(sys_ks);
-    _user_sstables_manager->plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(sys_ks));
 }
 
 future<> database::unplug_system_keyspace() noexcept {
-    _user_sstables_manager->unplug_sstables_registry();
     co_await _compaction_manager.unplug_system_keyspace();
     co_await _large_data_handler->unplug_system_keyspace();
     co_await _corrupt_data_handler->unplug_system_keyspace();
+}
+
+void database::plug_sstables_registry(std::unique_ptr<sstables::sstables_registry> registry) noexcept {
+    _user_sstables_manager->plug_sstables_registry(std::move(registry));
+}
+
+void database::unplug_sstables_registry() noexcept {
+    _user_sstables_manager->unplug_sstables_registry();
 }
 
 void database::plug_view_update_generator(db::view::view_update_generator& generator) noexcept {

@@ -122,6 +122,7 @@ enum class sstable_state;
 class sstable;
 class storage_manager;
 class sstables_manager;
+class sstables_registry;
 class sstable_set;
 class directory_semaphore;
 struct sstable_files_snapshot;
@@ -1778,6 +1779,9 @@ public:
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
     future<> unplug_system_keyspace() noexcept;
+
+    void plug_sstables_registry(std::unique_ptr<sstables::sstables_registry> registry) noexcept;
+    void unplug_sstables_registry() noexcept;
 
     void plug_view_update_generator(db::view::view_update_generator& generator) noexcept;
     void unplug_view_update_generator() noexcept;

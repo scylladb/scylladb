@@ -25,6 +25,7 @@
 #include "locator/tablets.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
+#include "db/system_keyspace_sstables_registry.hh"
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
@@ -3744,6 +3745,7 @@ system_keyspace::system_keyspace(
     , _cache(std::make_unique<local_cache>())
 {
     _db.plug_system_keyspace(*this);
+    _db.plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(*this));
 }
 
 system_keyspace::~system_keyspace() {
@@ -3752,6 +3754,7 @@ system_keyspace::~system_keyspace() {
 future<> system_keyspace::shutdown() {
     if (!_shutdown) {
         _shutdown = true;
+        _db.unplug_sstables_registry();
         co_await _db.unplug_system_keyspace();
     }
 }
