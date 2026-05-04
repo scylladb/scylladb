@@ -1427,6 +1427,7 @@ utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(View in)
 }
 template utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(managed_bytes_view in);
 template utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(fragmented_temporary_buffer::view in);
+template utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(single_fragmented_view in);
 
 template <FragmentedView View>
 std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in) {
@@ -1445,6 +1446,7 @@ std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(V
 }
 template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(managed_bytes_view in);
 template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(fragmented_temporary_buffer::view in);
+template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(single_fragmented_view in);
 
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {

@@ -1441,17 +1441,17 @@ static managed_bytes reserialize_value(View value_bytes,
 
     if (type.is_vector()) {
         const vector_type_impl& vtype = dynamic_cast<const vector_type_impl&>(type);
-        std::vector<managed_bytes> elements = vtype.split_fragmented(value_bytes);
-
         const auto& elements_type = vtype.get_elements_type()->without_reversed();
 
-        if (elements_type.bound_value_needs_to_be_reserialized()) {
-            for (size_t i = 0; i < elements.size(); i++) {
-                elements[i] = reserialize_value(managed_bytes_view(elements[i]), elements_type);
+        return with_simplified(value_bytes, [&] (FragmentedView auto view) -> managed_bytes {
+            auto element_views = vtype.split_fragmented_view(view);
+            std::vector<managed_bytes> elements;
+            elements.reserve(element_views.size());
+            for (auto& ev : element_views) {
+                elements.push_back(reserialize_value(ev, elements_type));
             }
-        }
-
-        return vector_type_impl::build_value_fragmented(std::move(elements), elements_type.value_length_if_fixed());
+            return vector_type_impl::build_value_fragmented(std::move(elements), elements_type.value_length_if_fixed());
+        });
     }
     on_internal_error(expr_logger,
         fmt::format("Reserializing type that shouldn't need reserialization: {}", type.name()));
