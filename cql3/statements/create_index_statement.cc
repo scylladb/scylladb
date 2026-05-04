@@ -171,6 +171,13 @@ static bool is_vector_index(const index_options_map& options) {
     return class_it != options.end() && is_vector_capable_class(class_it->second);
 }
 
+// Returns true if the custom class name refers to an index that does not
+// create a backing materialized view (e.g., vector_index, fulltext_index).
+static bool is_viewless_custom_class(const sstring& class_name) {
+    auto factory = secondary_index::secondary_index_manager::get_custom_class_factory(class_name);
+    return factory && !(*factory)()->view_should_exist();
+}
+
 view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im,
         const data_dictionary::database& db) const
 {
@@ -321,13 +328,14 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
     _idx_properties->validate();
 
 
-    const bool is_vector_index = _idx_properties->custom_class && is_vector_capable_class(*_idx_properties->custom_class);
+    const bool is_viewless_index = _idx_properties->custom_class && is_viewless_custom_class(*_idx_properties->custom_class);
     const bool uses_view_properties = _view_properties.properties()->count() > 0
             || _view_properties.use_compact_storage()
             || _view_properties.defined_ordering().size() > 0;
 
-    if (is_vector_index && uses_view_properties) {
-        throw exceptions::invalid_request_exception("You cannot use view properties with a vector index");
+    if (is_viewless_index && uses_view_properties) {
+        throw exceptions::invalid_request_exception(
+            format("You cannot use view properties with a {}", *_idx_properties->custom_class));
     }
 
     const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(qp.db().extensions());
@@ -679,8 +687,8 @@ create_index_statement::build_index_schema(data_dictionary::database db, locator
     }
     auto index = make_index_metadata(targets, accepted_name, kind, index_options);
     auto existing_index = schema->find_index_noname(index);
-    bool is_vector = _idx_properties->custom_class && _idx_properties->custom_class == "vector_index";
-    // For vector indexes:
+    bool is_viewless = _idx_properties->custom_class && is_viewless_custom_class(*_idx_properties->custom_class);
+    // For viewless indexes:
     // - unnamed ones are blocked by the duplicate check on the same column;
     // - named ones are only checked for name uniqueness — allowing multiple named indexes on the same column.
     // For all other indexes:
@@ -689,9 +697,9 @@ create_index_statement::build_index_schema(data_dictionary::database db, locator
     // Name uniqueness without IF NOT EXISTS is enforced before.
     // The name check here handles IF NOT EXISTS when the index with same name
     // exists in the same keyspace (on the same or different table) - needed because
-    // vector indexes have no backing view table, so the `has_schema()` check
+    // viewless indexes have no backing view table, so the `has_schema()` check
     // below cannot catch this case (issue #26672).
-    bool duplicate = (is_vector && !_index_name.empty())
+    bool duplicate = (is_viewless && !_index_name.empty())
         ? db.existing_index_names(keyspace()).contains(_index_name)
         : existing_index.has_value();
     if (duplicate) {
