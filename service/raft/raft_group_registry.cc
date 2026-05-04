@@ -18,6 +18,7 @@
 #include "idl/raft_util.dist.hh"
 #include "utils/composite_abort_source.hh"
 #include "utils/error_injection.hh"
+#include "utils/on_internal_error.hh"
 #include <seastar/core/shared_future.hh>
 
 #include <chrono>
@@ -288,7 +289,7 @@ const raft::server_id& raft_group_registry::get_my_raft_id() {
 
 seastar::future<> raft_group_registry::stop() {
     if (_servers.size() > 0) {
-        on_internal_error(rslog, format("stop(): server for group {} is not destroyed", _servers.begin()->first));
+        utils::on_internal_error(format("stop(): server for group {} is not destroyed", _servers.begin()->first));
     }
     co_await uninit_rpc_verbs();
     _direct_fd_subscription.reset();
