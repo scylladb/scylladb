@@ -526,8 +526,8 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
 }
 
 SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_abort) {
-    const auto preemptive_abort_factor = 0.5f;
-    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost,
+    const auto preemptive_abort_factor = 1.0f;
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 2 * replica::new_reader_base_cost,
             100, utils::updateable_value(std::numeric_limits<uint32_t>::max()), utils::updateable_value(std::numeric_limits<uint32_t>::max()),
             utils::updateable_value<uint32_t>(1), utils::updateable_value<float>(preemptive_abort_factor));
     auto stop_sem = deferred_stop(semaphore);
@@ -535,26 +535,26 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_abort) {
     {
         BOOST_REQUIRE(semaphore.get_stats().total_reads_shed_due_to_overload == 0);
 
-        auto timeout = db::timeout_clock::now() + 500ms;
+        auto timeout = db::timeout_clock::now() + 60min;
 
         reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, timeout, {}).get();
 
         auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, timeout, {});
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
-
-        // The permits are rejected when the remaining time is less than half of its timeout when arrived to the semaphore.
-        // Hence, sleep 300ms to reject the permits in the waitlist during admission.
-        seastar::sleep(300ms).get();
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 1);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, 0);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_count_resources, 1);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_memory_resources, 0);
+        BOOST_REQUIRE_EQUAL(semaphore.available_resources().memory, replica::new_reader_base_cost);
 
         permit1 = {};
-        const auto futures_failed = eventually_true([&] { return permit2_fut.failed(); });
-        BOOST_CHECK(futures_failed);
-        BOOST_CHECK_THROW(std::rethrow_exception(permit2_fut.get_exception()), semaphore_aborted);
+        BOOST_REQUIRE(eventually_true([&] { return permit2_fut.available(); }));
+        BOOST_REQUIRE_THROW(permit2_fut.get(), semaphore_aborted);
         BOOST_CHECK(semaphore.get_stats().total_reads_shed_due_to_overload > 0);
     }
 
     // All units should have been deposited back.
-    REQUIRE_EVENTUALLY_EQUAL<ssize_t>([&] { return semaphore.available_resources().memory; }, replica::new_reader_base_cost);
+    REQUIRE_EVENTUALLY_EQUAL<ssize_t>([&] { return semaphore.available_resources().memory; }, 2 * replica::new_reader_base_cost);
 }
 
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
