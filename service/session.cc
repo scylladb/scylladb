@@ -58,18 +58,22 @@ void session_manager::initiate_close_of_sessions_except(const std::unordered_set
 }
 
 future<> session_manager::drain_closing_sessions() {
+    slogger.info("drain_closing_sessions: waiting for lock");
     auto lock = co_await get_units(_session_drain_sem, 1);
+    auto n = std::distance(_closing_sessions.begin(), _closing_sessions.end());
+    slogger.info("drain_closing_sessions: acquired lock, {} sessions to drain", n);
     auto i = _closing_sessions.begin();
     while (i != _closing_sessions.end()) {
         session& s = *i;
         ++i;
         auto id = s.id();
-        slogger.debug("draining session {}", id);
+        slogger.info("drain_closing_sessions: waiting for session {} to close", id);
         co_await s.close();
         if (_sessions.erase(id)) {
-            slogger.debug("session {} closed", id);
+            slogger.info("drain_closing_sessions: session {} closed", id);
         }
     }
+    slogger.info("drain_closing_sessions: done");
 }
 
 } // namespace service
