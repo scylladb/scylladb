@@ -958,3 +958,471 @@ def test_batch_prepared_auth_cache_bypass(cql, test_keyspace):
                 # happens and this succeeds.
                 with pytest.raises(Unauthorized):
                     user_session.execute(user_prepared, [42, "hacked"])
+
+# ============================================================================
+# UDF permission tests (migrated from scylla-dtest auth_roles_test.py DTEST-12)
+# These test the authorization system around user-defined functions and
+# aggregates using Lua UDFs.
+# ============================================================================
+
+def lua_plus_one():
+    return "(input int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return input + 1'"
+
+def lua_state_function():
+    return "(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return (a or 0) + b'"
+
+# Test that the creator of a UDF/UDA is automatically granted all permissions on it.
+# NOTE: In Cassandra, the creator automatically gets all permissions (ALTER, DROP,
+# AUTHORIZE, EXECUTE) on functions they create. Scylla currently does NOT auto-grant
+# permissions on created functions (only on keyspaces and tables).
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13747",
+    reason="Scylla does not auto-grant permissions on created functions (unlike Cassandra)",
+)
+def test_udf_creator_granted_all_permissions(cql, test_keyspace, scylla_only):
+    with new_user(cql) as mike:
+        grant(cql, 'CREATE', 'ALL KEYSPACES', mike)
+        grant(cql, 'CREATE', 'ALL ROLES', mike)
+        grant(cql, 'CREATE', 'ALL FUNCTIONS', mike)
+        with new_session(cql, mike) as mike_session:
+            ks = unique_name()
+            mike_session.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class':'NetworkTopologyStrategy', 'replication_factor':1}}")
+            try:
+                mike_session.execute(f"CREATE TABLE {ks}.t1 (k int PRIMARY KEY, v int)")
+                mike_session.execute(f"CREATE FUNCTION {ks}.state_func_1(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return (a or 0) + b'")
+                ensure_updated_permissions(cql)
+                mike_session.execute(f"CREATE AGGREGATE {ks}.simple_agg_1(int) SFUNC state_func_1 STYPE int INITCOND 0")
+
+                ensure_updated_permissions(cql)
+                # The creator should have all applicable permissions on the function and aggregate
+                perms = {(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")}
+                func_resource = f"<function {ks}.state_func_1(int, int)>"
+                agg_resource = f"<function {ks}.simple_agg_1(int)>"
+                for resource in [func_resource, agg_resource]:
+                    for perm in ['ALTER', 'DROP', 'AUTHORIZE', 'EXECUTE']:
+                        assert (mike, resource, perm) in perms, f"Missing {perm} on {resource}"
+            finally:
+                mike_session.execute(f"DROP KEYSPACE IF EXISTS {ks}")
+
+# Test GRANT/REVOKE of EXECUTE on specific functions, all functions in keyspace, and all functions
+# Test that GRANT and REVOKE are idempotent for UDF permissions
+def test_udf_grant_revoke_are_idempotent(cql, test_keyspace, scylla_only):
+    with new_function(cql, test_keyspace, lua_plus_one(), args="int") as plus_one:
+        func_resource = f'FUNCTION {test_keyspace}.{plus_one}(int)'
+        with new_user(cql) as mike:
+            grant(cql, 'EXECUTE', func_resource, mike)
+            grant(cql, 'EXECUTE', func_resource, mike)
+            ensure_updated_permissions(cql)
+            perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+            assert perms.count((mike, f"<function {test_keyspace}.{plus_one}(int)>", "EXECUTE")) == 1
+
+            revoke(cql, 'EXECUTE', func_resource, mike)
+            ensure_updated_permissions(cql)
+            assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
+            # revoking again should not error
+            revoke(cql, 'EXECUTE', func_resource, mike)
+            ensure_updated_permissions(cql)
+            assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
+
+# Test function resource permission hierarchy: function < keyspace < global
+def test_udf_function_resource_hierarchy_permissions(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES (1, 1)")
+        with new_function(cql, test_keyspace, lua_plus_one(), args="int") as func_one:
+            func_two_name = unique_name()
+            cql.execute(f"CREATE FUNCTION {test_keyspace}.{func_two_name} (input int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return input + 1'")
+            try:
+                with new_user(cql) as mike:
+                    grant(cql, 'SELECT', table, mike)
+                    with new_session(cql, mike) as mike_session:
+                        select_one = f"SELECT k, v, {test_keyspace}.{func_one}(v) FROM {table} WHERE k = 1"
+                        select_two = f"SELECT k, v, {test_keyspace}.{func_two_name}(v) FROM {table} WHERE k = 1"
+
+                        # grant EXECUTE on only func_one
+                        grant(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{func_one}(int)', mike)
+                        ensure_updated_permissions(cql)
+                        assert list(mike_session.execute(select_one))[0][2] == 2
+                        with pytest.raises(Unauthorized):
+                            mike_session.execute(select_two)
+
+                        # grant on all functions in keyspace enables both
+                        grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+                        ensure_updated_permissions(cql)
+                        assert list(mike_session.execute(select_one))[0][2] == 2
+                        assert list(mike_session.execute(select_two))[0][2] == 2
+
+                        # revoke keyspace-level, function-specific still works
+                        revoke(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+                        ensure_updated_permissions(cql)
+                        assert list(mike_session.execute(select_one))[0][2] == 2
+                        with pytest.raises(Unauthorized):
+                            mike_session.execute(select_two)
+            finally:
+                cql.execute(f"DROP FUNCTION IF EXISTS {test_keyspace}.{func_two_name}(int)")
+
+# Test UDF permission validation: CREATE, ALTER, DROP, AUTHORIZE, EXECUTE
+def test_udf_permissions_validation(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, v int") as table:
+        with new_function(cql, test_keyspace, lua_plus_one(), args="int") as plus_one:
+            with new_user(cql) as mike:
+                with new_session(cql, mike) as mike_session:
+                    func_resource = f'FUNCTION {test_keyspace}.{plus_one}(int)'
+
+                    # Can't replace without ALTER (Scylla also requires CREATE)
+                    replace_cql = f"CREATE OR REPLACE FUNCTION {test_keyspace}.{plus_one} (input int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return input + 1'"
+                    with pytest.raises(Unauthorized):
+                        mike_session.execute(replace_cql)
+                    grant(cql, 'ALTER', func_resource, mike)
+                    grant(cql, 'CREATE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+                    ensure_updated_permissions(cql)
+                    mike_session.execute(replace_cql)
+
+                    # Can't grant EXECUTE without AUTHORIZE
+                    role1 = unique_name()
+                    cql.execute(f"CREATE ROLE {role1}")
+                    try:
+                        grant(cql, 'EXECUTE', func_resource, mike)
+                        ensure_updated_permissions(cql)
+                        with pytest.raises(Unauthorized):
+                            mike_session.execute(f"GRANT EXECUTE ON {func_resource} TO {role1}")
+                        grant(cql, 'AUTHORIZE', func_resource, mike)
+                        ensure_updated_permissions(cql)
+                        mike_session.execute(f"GRANT EXECUTE ON {func_resource} TO {role1}")
+
+                        # Can't revoke without AUTHORIZE
+                        revoke(cql, 'AUTHORIZE', func_resource, mike)
+                        ensure_updated_permissions(cql)
+                        with pytest.raises(Unauthorized):
+                            mike_session.execute(f"REVOKE EXECUTE ON {func_resource} FROM {role1}")
+                        grant(cql, 'AUTHORIZE', func_resource, mike)
+                        ensure_updated_permissions(cql)
+                        mike_session.execute(f"REVOKE EXECUTE ON {func_resource} FROM {role1}")
+                    finally:
+                        cql.execute(f"DROP ROLE IF EXISTS {role1}")
+
+                    # Can't drop without DROP
+                    revoke(cql, 'DROP', func_resource, mike)
+                    ensure_updated_permissions(cql)
+                    with pytest.raises(Unauthorized):
+                        mike_session.execute(f"DROP FUNCTION {test_keyspace}.{plus_one}(int)")
+                    grant(cql, 'DROP', func_resource, mike)
+                    ensure_updated_permissions(cql)
+                    mike_session.execute(f"DROP FUNCTION {test_keyspace}.{plus_one}(int)")
+
+                    # DROP IF EXISTS on non-existent is silent
+                    mike_session.execute(f"DROP FUNCTION IF EXISTS {test_keyspace}.no_such_function(int, int)")
+
+                    # DROP on non-existent raises error
+                    with pytest.raises(InvalidRequest):
+                        mike_session.execute(f"DROP FUNCTION {test_keyspace}.no_such_function(int, int)")
+
+                    # Can't create without CREATE on all functions in keyspace
+                    # First revoke CREATE that was granted earlier for CREATE OR REPLACE
+                    revoke(cql, 'CREATE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+                    ensure_updated_permissions(cql)
+                    create_cql = f"CREATE FUNCTION {test_keyspace}.{plus_one} (input int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return input + 1'"
+                    with pytest.raises(Unauthorized):
+                        mike_session.execute(create_cql)
+                    grant(cql, 'CREATE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+                    ensure_updated_permissions(cql)
+                    mike_session.execute(create_cql)
+
+# Test that DROP ROLE cleans up UDF permissions
+def test_drop_role_cleans_up_udf_permissions(cql, test_keyspace, scylla_only):
+    with new_function(cql, test_keyspace, lua_plus_one(), args="int") as plus_one:
+        mike = unique_name()
+        cql.execute(f"CREATE ROLE {mike} WITH PASSWORD = '{mike}' AND LOGIN = true")
+        try:
+            grant(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{plus_one}(int)', mike)
+            grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+            grant(cql, 'EXECUTE', 'ALL FUNCTIONS', mike)
+
+            ensure_updated_permissions(cql)
+            perms = list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))
+            assert len(perms) == 3
+
+            # drop and recreate
+            cql.execute(f"DROP ROLE {mike}")
+            cql.execute(f"CREATE ROLE {mike} WITH PASSWORD = '{mike}' AND LOGIN = true")
+            ensure_updated_permissions(cql)
+            assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
+        finally:
+            cql.execute(f"DROP ROLE IF EXISTS {mike}")
+
+# Test that DROP FUNCTION and DROP KEYSPACE clean up permissions
+def test_drop_function_and_keyspace_cleans_up_udf_permissions(cql, scylla_only):
+    ks = unique_name()
+    cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class':'NetworkTopologyStrategy', 'replication_factor':1}}")
+    try:
+        cql.execute(f"CREATE TABLE {ks}.t1 (k int PRIMARY KEY, v int)")
+        cql.execute(f"CREATE FUNCTION {ks}.plus_one (input int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return input + 1'")
+        with new_user(cql) as mike:
+            grant(cql, 'EXECUTE', f'FUNCTION {ks}.plus_one(int)', mike)
+            grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {ks}', mike)
+
+            ensure_updated_permissions(cql)
+            perms = list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))
+            assert len(perms) == 2
+
+            # drop the function
+            cql.execute(f"DROP FUNCTION {ks}.plus_one")
+            ensure_updated_permissions(cql)
+            perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+            assert (mike, f"<all functions in {ks}>", "EXECUTE") in perms
+            assert len(perms) == 1
+
+            # drop the keyspace
+            cql.execute(f"DROP KEYSPACE {ks}")
+            ensure_updated_permissions(cql)
+            assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
+    except Exception:
+        cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
+        raise
+
+# Test UDF permissions with overloaded functions
+def test_udf_with_overloads_permissions(cql, test_keyspace, scylla_only):
+    with new_function(cql, test_keyspace, "(input int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return input + 1'", args="int") as plus_one:
+        # Create overload with double
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.{plus_one} (input double) CALLED ON NULL INPUT RETURNS double LANGUAGE lua AS 'return input + 1'")
+        int_resource = f'FUNCTION {test_keyspace}.{plus_one}(int)'
+        dbl_resource = f'FUNCTION {test_keyspace}.{plus_one}(double)'
+        try:
+            with new_user(cql) as mike:
+                grant(cql, 'EXECUTE', int_resource, mike)
+                ensure_updated_permissions(cql)
+                perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+                assert (mike, f"<function {test_keyspace}.{plus_one}(int)>", "EXECUTE") in perms
+
+                grant(cql, 'EXECUTE', dbl_resource, mike)
+                ensure_updated_permissions(cql)
+                perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+                assert (mike, f"<function {test_keyspace}.{plus_one}(int)>", "EXECUTE") in perms
+                assert (mike, f"<function {test_keyspace}.{plus_one}(double)>", "EXECUTE") in perms
+
+                # revoke one overload
+                revoke(cql, 'EXECUTE', dbl_resource, mike)
+                ensure_updated_permissions(cql)
+                perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+                assert (mike, f"<function {test_keyspace}.{plus_one}(int)>", "EXECUTE") in perms
+                assert (mike, f"<function {test_keyspace}.{plus_one}(double)>", "EXECUTE") not in perms
+
+                # drop function with no perms - perms for other overload unaffected
+                cql.execute(f"DROP FUNCTION {test_keyspace}.{plus_one}(double)")
+                ensure_updated_permissions(cql)
+                perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+                assert (mike, f"<function {test_keyspace}.{plus_one}(int)>", "EXECUTE") in perms
+        except Exception:
+            cql.execute(f"DROP FUNCTION IF EXISTS {test_keyspace}.{plus_one}(double)")
+            raise
+
+# Test that DROP KEYSPACE cleans up function-level permissions
+# Scylla currently does not clean up function-level permissions when dropping a keyspace
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/13820",
+    reason="Scylla does not clean up function-level permissions on DROP KEYSPACE",
+)
+def test_drop_keyspace_cleans_up_function_level_permissions(cql, scylla_only):
+    ks = unique_name()
+    cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class':'NetworkTopologyStrategy', 'replication_factor':1}}")
+    try:
+        cql.execute(f"CREATE FUNCTION {ks}.plus_one (input int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return input + 1'")
+        with new_user(cql) as mike:
+            grant(cql, 'EXECUTE', f'FUNCTION {ks}.plus_one(int)', mike)
+            ensure_updated_permissions(cql)
+            perms = list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))
+            assert len(perms) == 1
+
+            cql.execute(f"DROP KEYSPACE {ks}")
+            ensure_updated_permissions(cql)
+            assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
+    except Exception:
+        cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
+        raise
+
+# Test EXECUTE permission is required to use UDF in WHERE clause
+# Scylla does not support UDF calls in WHERE clauses
+@pytest.mark.skip_not_implemented(reason="Scylla does not support UDF calls in WHERE clauses")
+def test_udf_permissions_in_select_where_clause(cql, test_keyspace, scylla_only):
+    _verify_udf_execute_permission(cql, test_keyspace,
+        lambda table, func: f"SELECT k, v FROM {table} WHERE k = {test_keyspace}.{func}(0)")
+
+# Test EXECUTE permission is required to use UDF in INSERT
+# Scylla does not support UDF calls in INSERT values
+@pytest.mark.skip_not_implemented(reason="Scylla does not support UDF calls in INSERT/UPDATE/DELETE contexts")
+def test_udf_permissions_in_insert(cql, test_keyspace, scylla_only):
+    _verify_udf_execute_permission(cql, test_keyspace,
+        lambda table, func: f"INSERT INTO {table} (k, v) VALUES (1, {test_keyspace}.{func}(1))")
+
+# Test EXECUTE permission is required to use UDF in UPDATE
+# Scylla does not support UDF calls in UPDATE/DELETE contexts
+@pytest.mark.skip_not_implemented(reason="Scylla does not support UDF calls in INSERT/UPDATE/DELETE contexts")
+def test_udf_permissions_in_update(cql, test_keyspace, scylla_only):
+    _verify_udf_execute_permission(cql, test_keyspace,
+        lambda table, func: f"UPDATE {table} SET v = {test_keyspace}.{func}(2) WHERE k = {test_keyspace}.{func}(0)")
+
+# Test EXECUTE permission is required to use UDF in DELETE
+# Scylla does not support UDF calls in DELETE WHERE
+@pytest.mark.skip_not_implemented(reason="Scylla does not support UDF calls in INSERT/UPDATE/DELETE contexts")
+def test_udf_permissions_in_delete(cql, test_keyspace, scylla_only):
+    _verify_udf_execute_permission(cql, test_keyspace,
+        lambda table, func: f"DELETE FROM {table} WHERE k = {test_keyspace}.{func}(0)")
+
+def _verify_udf_execute_permission(cql, test_keyspace, make_cql):
+    """Helper: verifies that EXECUTE permission is required to use a UDF in a DML statement."""
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES (1, 1)")
+        with new_function(cql, test_keyspace, lua_plus_one(), args="int") as plus_one:
+            with new_user(cql) as mike:
+                grant(cql, 'ALL PERMISSIONS', table, mike)
+                ensure_updated_permissions(cql)
+                with new_session(cql, mike) as mike_session:
+                    stmt = make_cql(table, plus_one)
+                    with pytest.raises(Unauthorized):
+                        mike_session.execute(stmt)
+
+                    grant(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{plus_one}(int)', mike)
+                    ensure_updated_permissions(cql)
+                    mike_session.execute(stmt)
+
+# Test that UDF EXECUTE permission is inherited through role hierarchy
+def test_inheritance_of_udf_permissions(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES (1, 1)")
+        with new_function(cql, test_keyspace, lua_plus_one(), args="int") as plus_one:
+            role_name = unique_name()
+            cql.execute(f"CREATE ROLE {role_name}")
+            try:
+                grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', role_name)
+                with new_user(cql) as mike:
+                    grant(cql, 'SELECT', table, mike)
+                    ensure_updated_permissions(cql)
+                    with new_session(cql, mike) as mike_session:
+                        select = f"SELECT k, v, {test_keyspace}.{plus_one}(v) FROM {table} WHERE k = 1"
+                        with pytest.raises(Unauthorized):
+                            mike_session.execute(select)
+
+                        # Grant role to mike - should inherit EXECUTE
+                        cql.execute(f"GRANT {role_name} TO {mike}")
+                        ensure_updated_permissions(cql)
+                        eventually_authorized(lambda: mike_session.execute(select))
+                        result = mike_session.execute(select)
+                        assert list(result)[0][2] == 2
+            finally:
+                cql.execute(f"DROP ROLE IF EXISTS {role_name}")
+
+# Test that EXECUTE permissions on state/final functions are needed to create and use aggregates
+def test_aggregate_function_permissions(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES (1, 1)")
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES (2, 2)")
+        state_func = unique_name()
+        final_func = unique_name()
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.{state_func} (a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return (a or 0) + b'")
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.{final_func} (a int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a'")
+        agg_name = None
+        try:
+            with new_user(cql) as mike:
+                grant(cql, 'CREATE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+                grant(cql, 'ALL PERMISSIONS', table, mike)
+                ensure_updated_permissions(cql)
+                with new_session(cql, mike) as mike_session:
+                    agg_name = unique_name()
+                    create_agg = f"CREATE AGGREGATE {test_keyspace}.{agg_name}(int) SFUNC {state_func} STYPE int FINALFUNC {final_func} INITCOND 0"
+
+                    # Can't create aggregate without EXECUTE on state function
+                    with pytest.raises(Unauthorized):
+                        mike_session.execute(create_agg)
+                    grant(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{state_func}(int, int)', mike)
+                    ensure_updated_permissions(cql)
+
+                    # Still can't without EXECUTE on final function
+                    with pytest.raises(Unauthorized):
+                        mike_session.execute(create_agg)
+                    grant(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{final_func}(int)', mike)
+                    ensure_updated_permissions(cql)
+
+                    mike_session.execute(create_agg)
+
+                    # Grant EXECUTE on the aggregate itself so that subsequent
+                    # checks isolate the effect of component-function permissions
+                    grant(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{agg_name}(int)', mike)
+                    ensure_updated_permissions(cql)
+
+                    # Verify aggregate works when all component perms are present
+                    execute_agg = f"SELECT {test_keyspace}.{agg_name}(v) FROM {table}"
+                    result = list(mike_session.execute(execute_agg))
+                    assert result[0][0] == 3
+
+                    # Revoke EXECUTE on component functions - can't use aggregate
+                    revoke(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{state_func}(int, int)', mike)
+                    revoke(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{final_func}(int)', mike)
+                    ensure_updated_permissions(cql)
+
+                    with pytest.raises(Unauthorized):
+                        mike_session.execute(execute_agg)
+
+                    # Grant back state func - still fails (need final func too)
+                    grant(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{state_func}(int, int)', mike)
+                    ensure_updated_permissions(cql)
+                    with pytest.raises(Unauthorized):
+                        mike_session.execute(execute_agg)
+
+                    # Grant final func - now works again
+                    grant(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{final_func}(int)', mike)
+                    ensure_updated_permissions(cql)
+                    result = list(mike_session.execute(execute_agg))
+                    assert result[0][0] == 3
+        finally:
+            if agg_name:
+                cql.execute(f"DROP AGGREGATE IF EXISTS {test_keyspace}.{agg_name}")
+            cql.execute(f"DROP FUNCTION IF EXISTS {test_keyspace}.{final_func}(int)")
+            cql.execute(f"DROP FUNCTION IF EXISTS {test_keyspace}.{state_func}(int, int)")
+
+# Test filter granted permissions by resource type including functions
+def test_filter_granted_permissions_by_resource_type_functions(cql, test_keyspace, scylla_only):
+    with new_function(cql, test_keyspace, lua_state_function(), args="int, int") as state_func:
+        agg_name = unique_name()
+        cql.execute(f"CREATE AGGREGATE {test_keyspace}.{agg_name}(int) SFUNC {state_func} STYPE int")
+        try:
+            with new_user(cql) as mike:
+                # GRANT ALL ON ALL FUNCTIONS
+                grant(cql, 'ALL', 'ALL FUNCTIONS', mike)
+                ensure_updated_permissions(cql)
+                perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+                for perm in ['CREATE', 'ALTER', 'DROP', 'AUTHORIZE', 'EXECUTE']:
+                    assert (mike, "<all functions>", perm) in perms
+                revoke(cql, 'ALL', 'ALL FUNCTIONS', mike)
+                ensure_updated_permissions(cql)
+                assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
+
+                # GRANT ALL ON ALL FUNCTIONS IN KEYSPACE
+                grant(cql, 'ALL', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+                ensure_updated_permissions(cql)
+                perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+                for perm in ['CREATE', 'ALTER', 'DROP', 'AUTHORIZE', 'EXECUTE']:
+                    assert (mike, f"<all functions in {test_keyspace}>", perm) in perms
+                revoke(cql, 'ALL', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+                ensure_updated_permissions(cql)
+                assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
+
+                # GRANT ALL ON specific function
+                grant(cql, 'ALL', f'FUNCTION {test_keyspace}.{state_func}(int, int)', mike)
+                ensure_updated_permissions(cql)
+                perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+                for perm in ['ALTER', 'DROP', 'AUTHORIZE', 'EXECUTE']:
+                    assert (mike, f"<function {test_keyspace}.{state_func}(int, int)>", perm) in perms
+                revoke(cql, 'ALL', f'FUNCTION {test_keyspace}.{state_func}(int, int)', mike)
+                ensure_updated_permissions(cql)
+                assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
+
+                # GRANT ALL ON aggregate
+                grant(cql, 'ALL', f'FUNCTION {test_keyspace}.{agg_name}(int)', mike)
+                ensure_updated_permissions(cql)
+                perms = [(str(r.role), str(r.resource), str(r.permission)) for r in cql.execute(f"LIST ALL PERMISSIONS OF {mike}")]
+                for perm in ['ALTER', 'DROP', 'AUTHORIZE', 'EXECUTE']:
+                    assert (mike, f"<function {test_keyspace}.{agg_name}(int)>", perm) in perms
+                revoke(cql, 'ALL', f'FUNCTION {test_keyspace}.{agg_name}(int)', mike)
+                ensure_updated_permissions(cql)
+                assert len(list(cql.execute(f"LIST ALL PERMISSIONS OF {mike}"))) == 0
+        finally:
+            cql.execute(f"DROP AGGREGATE IF EXISTS {test_keyspace}.{agg_name}")
