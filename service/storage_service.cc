@@ -6205,7 +6205,15 @@ future<> storage_service::local_topology_barrier() {
         }
 
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: waiting for stale token metadata versions to be released", version);
-        co_await ss._shared_token_metadata.stale_versions_in_use();
+        {
+            seastar::timer<lowres_clock> warn_timer([&ss, version] {
+                rtlogger.warn("raft_topology_cmd::barrier_and_drain version {}: still waiting for stale versions, "
+                              "stale versions (version: use_count): {}",
+                              version, ss._shared_token_metadata.describe_stale_versions());
+            });
+            warn_timer.arm_periodic(std::chrono::minutes(5));
+            co_await ss._shared_token_metadata.stale_versions_in_use();
+        }
         rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
         co_await get_topology_session_manager().drain_closing_sessions();
 

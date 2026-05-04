@@ -95,6 +95,10 @@ public:
         return _id;
     }
 
+    size_t gate_count() const {
+        return _gate.get_count();
+    }
+
     /// Post-condition of successfully resolved future: There are no guards alive for this session, and
     /// and it's impossible to create more such guards later.
     /// Can be called concurrently.
