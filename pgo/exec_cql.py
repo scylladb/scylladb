@@ -16,7 +16,6 @@ Usage:
 import argparse, os, sys
 from typing import Sequence
 
-from test.pylib.driver_utils import safe_driver_shutdown
 
 def read_statements(path: str) -> list[tuple[int, str]]:
     stms: list[tuple[int, str]] = []
@@ -58,7 +57,7 @@ def exec_statements(statements: list[tuple[int, str]], socket_path: str, timeout
                 print(f"ERROR executing statement from file line {lineno}: {s}\n{e}", file=sys.stderr)
                 return 1
     finally:
-        safe_driver_shutdown(cluster)
+        cluster.shutdown()
     return 0
 
 def main(argv: Sequence[str]) -> int:
