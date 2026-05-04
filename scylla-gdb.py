@@ -1328,8 +1328,14 @@ class interval_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
         self.val = val['_interval']
 
-    def inspect_bound(self, bound_opt):
-        bound = std_optional(bound_opt)
+    def inspect_bound(self, bound_name):
+        if f'_{bound_name}_exists' in self.val:
+            if not self.val[f'_{bound_name}_exists']:
+                return False, False, None
+
+            return True, bool(self.val[f'_{bound_name}_inclusive']), self.val[f'_{bound_name}_value']
+
+        bound = std_optional(self.val[f'_{bound_name}'])
         if not bound:
             return False, False, None
 
@@ -1338,8 +1344,8 @@ class interval_printer(gdb.printing.PrettyPrinter):
         return True, bool(bound['_inclusive']), bound['_value']
 
     def to_string(self):
-        has_start, start_inclusive, start_value = self.inspect_bound(self.val['_start'])
-        has_end, end_inclusive, end_value = self.inspect_bound(self.val['_end'])
+        has_start, start_inclusive, start_value = self.inspect_bound('start')
+        has_end, end_inclusive, end_value = self.inspect_bound('end')
 
         if self.val['_singular']:
             return '{{{}}}'.format(str(start_value))
