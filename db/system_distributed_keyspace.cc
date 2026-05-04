@@ -138,7 +138,7 @@ schema_ptr snapshot_sstables() {
 // does not ensure to exist. Such definitions exist most likely for backward compatibility
 // with previous versions of Scylla (needed during upgrades), but since they are not listed here,
 // they won't be created in new clusters.
-static std::vector<schema_ptr> ensured_tables() {
+static std::vector<schema_ptr> ensured_tables(bool with_sstables_registry) {
     return {
         view_build_status(),
         cdc_desc(),
@@ -147,14 +147,15 @@ static std::vector<schema_ptr> ensured_tables() {
     };
 }
 
-std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
+std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables(bool with_sstables_registry) {
     return {view_build_status(), cdc_desc(), cdc_timestamps(), snapshot_sstables()};
 }
 
-system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& qp, service::migration_manager& mm, service::storage_proxy& sp)
+system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& qp, service::migration_manager& mm, service::storage_proxy& sp, bool with_sstables_registry)
         : _qp(qp)
         , _mm(mm)
-        , _sp(sp) {
+        , _sp(sp)
+        , _with_sstables_registry(with_sstables_registry) {
 }
 
 future<> system_distributed_keyspace::create_tables(std::vector<schema_ptr> tables) {
@@ -194,7 +195,7 @@ future<> system_distributed_keyspace::create_tables(std::vector<schema_ptr> tabl
 
         // Get mutations for creating tables.
         auto num_keyspace_mutations = mutations.size();
-        co_await coroutine::parallel_for_each(ensured_tables(),
+        co_await coroutine::parallel_for_each(ensured_tables(_with_sstables_registry),
                 [this, &mutations, db, ts, ksm] (auto&& table) -> future<> {
             if (!db.has_schema(table->ks_name(), table->cf_name())) {
                 co_return co_await service::prepare_new_column_family_announcement(mutations, _sp, *ksm, std::move(table), ts);
@@ -226,7 +227,7 @@ future<> system_distributed_keyspace::start() {
         co_return;
     }
 
-    co_await create_tables(ensured_tables());
+    co_await create_tables(ensured_tables(_with_sstables_registry));
 }
 
 future<> system_distributed_keyspace::stop() {

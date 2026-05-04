@@ -82,14 +82,14 @@ private:
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
     service::storage_proxy& _sp;
+    bool _with_sstables_registry;
 
     bool _started = false;
     bool _forced_cdc_timestamps_schema_sync = false;
 
 public:
-    static std::vector<schema_ptr> all_distributed_tables();
-
-    system_distributed_keyspace(cql3::query_processor&, service::migration_manager&, service::storage_proxy&);
+    static std::vector<schema_ptr> all_distributed_tables(bool with_sstables_registry);
+    system_distributed_keyspace(cql3::query_processor&, service::migration_manager&, service::storage_proxy&, bool with_sstables_registry);
 
     future<> start();
     future<> stop();

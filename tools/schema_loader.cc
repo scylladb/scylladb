@@ -666,7 +666,7 @@ schema_ptr load_system_schema(const db::config& cfg, std::string_view keyspace, 
     std::unordered_map<std::string_view, std::vector<schema_ptr>> schemas{
         {db::schema_tables::NAME, db::schema_tables::all_tables(db::schema_features::full())},
         {db::system_keyspace::NAME, db::system_keyspace::all_tables(cfg)},
-        {db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::all_distributed_tables()},
+        {db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::all_distributed_tables(cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS))},
     };
     auto ks_it = schemas.find(keyspace);
     if (ks_it == schemas.end()) {

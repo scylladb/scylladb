@@ -959,7 +959,7 @@ private:
 
             auto compression_dict_updated_callback = [] (std::string_view) { return make_ready_future<>(); };
 
-            _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy)).get();
+            _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy), false).get();
 
             _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(b), std::ref(abort_sources)).get();
             auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [this] {
