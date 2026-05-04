@@ -12,7 +12,7 @@
 
 import pytest
 import re
-from .util import new_test_table, unique_name
+from .util import new_test_table, new_test_keyspace, unique_name
 from cassandra.protocol import InvalidRequest
 
 # Fulltext search is not allowed in tables using vnodes, so all tests in this file need tablets
@@ -222,3 +222,11 @@ def test_fulltext_index_in_system_schema(cql, test_keyspace):
         options = rows[0].options
         assert options['class_name'] == 'fulltext_index'
         assert options.get('analyzer') == 'standard'
+
+
+def test_create_fulltext_index_requires_tablets(cql, this_dc):
+    """Fulltext index creation must fail when the keyspace does not use tablets."""
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': false}") as ks:
+        with new_test_table(cql, ks, 'p int primary key, content text') as table:
+            with pytest.raises(InvalidRequest, match="Creating a fulltext index requires the base table's keyspace to use tablets"):
+                cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
