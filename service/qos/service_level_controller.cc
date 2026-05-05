@@ -26,6 +26,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
 #include "service_level_controller.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_service.hh"
 #include "service/topology_state_machine.hh"

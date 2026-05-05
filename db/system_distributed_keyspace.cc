@@ -96,6 +96,20 @@ schema_ptr cdc_timestamps() {
 
 static const sstring CDC_TIMESTAMPS_KEY = "timestamps";
 
+schema_ptr service_levels() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
+        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS, std::make_optional(id))
+                .with_column("service_level", utf8_type, column_kind::partition_key)
+                .with_column("timeout", duration_type)
+                .with_column("workload_type", utf8_type)
+                .with_column("shares", int32_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 schema_ptr snapshot_sstables() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES);
@@ -143,12 +157,13 @@ static std::vector<schema_ptr> ensured_tables() {
         view_build_status(),
         cdc_desc(),
         cdc_timestamps(),
+        service_levels(),
         snapshot_sstables(),
     };
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
-    return {view_build_status(), cdc_desc(), cdc_timestamps(), snapshot_sstables()};
+    return {view_build_status(), cdc_desc(), cdc_timestamps(), service_levels(), snapshot_sstables()};
 }
 
 system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& qp, service::migration_manager& mm, service::storage_proxy& sp)

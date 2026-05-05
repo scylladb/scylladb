@@ -55,6 +55,7 @@ public:
     static constexpr auto NAME = "system_distributed";
 
     static constexpr auto VIEW_BUILD_STATUS = "view_build_status";
+    static constexpr auto SERVICE_LEVELS = "service_levels";
 
     /* This table is used by CDC clients to learn about available CDC streams. */
     static constexpr auto CDC_DESC_V2 = "cdc_streams_descriptions_v2";
