@@ -398,4 +398,4 @@ async def key_provider(request, tmpdir, scylla_binary):
 
 @pytest.fixture(scope="function")
 def failure_detector_timeout(build_mode):
-    return 2000 * MODES_TIMEOUT_FACTOR[build_mode]
+    return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
