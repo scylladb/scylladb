@@ -1268,7 +1268,7 @@ class ScyllaCluster:
                          seeds: Optional[List[IPAddress]] = None,
                          server_encryption: str = "none",
                          expected_error: Optional[str] = None,
-                         expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED) -> ServerInfo:
+                         expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
@@ -2026,7 +2026,7 @@ class ScyllaClusterManager:
             seeds=data.get("seeds"),
             server_encryption=data.get("server_encryption", "none"),
             expected_error=data.get("expected_error"),
-            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_ALTERNATOR_QUERIED")),
+            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "SERVING")),
         )
         return s_info.as_dict()
 

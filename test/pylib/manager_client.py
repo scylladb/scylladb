@@ -540,7 +540,7 @@ class ManagerClient:
                          seeds: Optional[List[IPAddress]] = None,
                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT,
                          server_encryption: str = "none",
-                         expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED,
+                         expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                          connect_driver: bool = True) -> ServerInfo:
         """Add a new server"""
         if expected_error is not None:
