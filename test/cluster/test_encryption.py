@@ -17,6 +17,7 @@ import json
 import uuid
 
 from test.pylib.manager_client import ManagerClient, ServerInfo
+from test.pylib.object_storage import format_tuples
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
 
@@ -43,11 +44,15 @@ def workdir():
     with tempfile.TemporaryDirectory() as tmp_dir:
         yield tmp_dir
 
-async def test_file_streaming_respects_encryption(manager: ManagerClient, workdir):
+async def test_file_streaming_respects_encryption(manager: ManagerClient, storage, workdir):
     # pylint: disable=missing-function-docstring
     cfg = {
         'tablets_mode_for_new_keyspaces': 'enabled',
     }
+
+    if storage:
+        cfg['object_storage_endpoints'] = storage.create_endpoint_conf()
+        cfg['experimental_features'] = ['keyspace-storage-options']
 
     cmdline = ['--smp=1']
     servers = []
@@ -56,7 +61,13 @@ async def test_file_streaming_respects_encryption(manager: ManagerClient, workdi
 
     cql = manager.cql
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    cql.execute("CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    ks_cmd = "CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
+    if storage:
+        storage = format_tuples(type=storage.type,
+                                endpoint=storage.address,
+                                bucket=storage.bucket_name)
+        ks_cmd += f" AND STORAGE = {storage}"
+    cql.execute(ks_cmd)
     cql.execute(f"""CREATE TABLE ks.t(pk text primary key) WITH scylla_encryption_options = {{
         'cipher_algorithm' : 'AES/ECB/PKCS5Padding',
         'secret_key_strength' : 128,
