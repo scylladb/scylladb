@@ -763,17 +763,19 @@ class ScyllaServer:
             contact_points=[self.rpc_address]
         connected = False
         cql_queried = False
+        cluster_kwargs = dict(
+            execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+            contact_points=contact_points,
+            protocol_version=4,  # This is the latest version Scylla supports
+            control_connection_timeout=self.TOPOLOGY_TIMEOUT,
+            auth_provider=self.auth_provider,
+        )
         try:
             # In a cluster setup, it's possible that the CQL
             # here is directed to a node different from the initial contact
             # point, so make sure we execute the checks strictly via
             # this connection
-            with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                         contact_points=contact_points,
-                         # This is the latest version Scylla supports
-                         protocol_version=4,
-                         control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                         auth_provider=self.auth_provider) as cluster:
+            with Cluster(**cluster_kwargs) as cluster:
                 with cluster.connect() as session:
                     connected = True
                     # See the comment above about `auth::standard_role_manager`. We execute
@@ -782,11 +784,7 @@ class ScyllaServer:
                     # Only create the persistent control connection once; re-creating it on
                     # every successful CQL check would leak driver connections.
                     if self.control_connection is None:
-                        self.control_cluster = Cluster(execution_profiles=
-                                                            {EXEC_PROFILE_DEFAULT: profile},
-                                                       contact_points=contact_points,
-                                                       control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                                                       auth_provider=self.auth_provider)
+                        self.control_cluster = Cluster(**cluster_kwargs)
                         self.control_connection = self.control_cluster.connect()
                     cql_queried = True
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
