@@ -114,6 +114,7 @@ public:
     segment_manager& operator=(const segment_manager&) = delete;
 
     future<> do_recovery(replica::database&);
+    future<> do_recovery_for_test();
 
     future<> start();
     future<> stop();
@@ -138,7 +139,7 @@ public:
 
     future<> await_pending_writes();
 
-    future<utils::chunked_vector<segment_snapshot>> make_snapshot(compaction_group& cg);
+    future<utils::chunked_vector<segment_snapshot>> make_snapshot(logstor_group& cg);
 
     // Create an output stream to write a segment (for receiving from remote node)
     // Allocates a new local segment and returns an output stream for writing to the segment.
