@@ -69,6 +69,7 @@
 #include "vector_search/vector_store_client.hh"
 #include <cstdio>
 #include <seastar/core/file.hh>
+#include <stdexcept>
 #include <unistd.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -221,6 +222,32 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
         auto ep = std::current_exception();
         startlog.error("Could not read configuration file {}: {}", file, ep);
         std::rethrow_exception(ep);
+    }
+}
+
+static void
+self_heal_service_levels_version(db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as) {
+    static constexpr unsigned max_attempts = 10;
+    for (unsigned attempt = 1; attempt <= max_attempts; ++attempt) {
+        try {
+            auto guard = group0_client.start_operation(as).get();
+            auto service_levels_version = sys_ks.get_service_levels_version().get();
+            service::release_guard(std::move(guard));
+            if (service_levels_version && *service_levels_version == 2) {
+                startlog.info("Service levels version marker was already self-healed to v2.");
+                return;
+            }
+
+            auto nodes_count = qp.db().real_database().get_token_metadata().get_normal_token_owners().size();
+            qos::service_level_controller::migrate_to_v2(nodes_count, sys_ks, qp, group0_client, as).get();
+            startlog.info("Self-healed service levels version marker to v2.");
+            return;
+        } catch (...) {
+            if (attempt == max_attempts) {
+                std::throw_with_nested(std::runtime_error(format("Failed to self-heal service levels version marker after {} attempts", max_attempts)));
+            }
+            startlog.info("Concurrent group0 operation while self-healing service levels version marker, retrying ({}/{}).", attempt, max_attempts);
+        }
     }
 }
 
@@ -1463,6 +1490,29 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             sys_ks.local().build_bootstrap_info().get();
 
+            bool should_self_heal_service_levels_version = false;
+            if (sys_ks.local().bootstrap_complete()) {
+                const auto group0_upgrade_state = sys_ks.local().load_group0_upgrade_state().get();
+                const bool recovery_mode = group0_upgrade_state == "recovery";
+                // Before raft topology is done this branch still supports legacy v1/v1.5 metadata.
+                // After raft topology is done, state must either already be v2 or be moved there
+                // by the raft migration/self-heal paths below.
+                const bool group0_upgrade_done = group0_upgrade_state == "use_post_raft_procedures";
+
+                const bool raft_topology_done = group0_upgrade_done
+                        && sys_ks.local().load_topology_state({}).get().upgrade_state == service::topology::upgrade_state_type::done;
+            
+                auto service_levels_version = sys_ks.local().get_service_levels_version().get();
+                if (!recovery_mode && raft_topology_done && (!service_levels_version || *service_levels_version != 2)
+                        && !utils::get_local_injector().enter("skip_service_levels_v2_initialization")) {
+                    should_self_heal_service_levels_version = true;
+                    startlog.warn(
+                            "Cluster is using raft topology but service levels are still marked as version {}. "
+                            "Startup will continue and the service levels version marker will be self-healed after group0 starts.",
+                            service_levels_version ? format("{}", *service_levels_version) : "unset");
+                }
+            }
+
             const auto listen_address = utils::resolve(cfg->listen_address, family).get();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
 
@@ -2264,6 +2314,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
             stop_signal.ready(false);
 
+            if (should_self_heal_service_levels_version) {
+                checkpoint(stop_signal, "self-healing service levels version");
+                self_heal_service_levels_version(sys_ks.local(), qp.local(), group0_client, stop_signal.as_local_abort_source());
+            }
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");

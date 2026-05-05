@@ -1493,14 +1493,17 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
     auto enable_features_mutation = builder.build();
     insert_join_request_mutations.push_back(std::move(enable_features_mutation));
 
-    auto sl_status_mutation = co_await _sys_ks.local().make_service_levels_version_mutation(2, write_timestamp);
+    auto skip_service_levels_v2_initialization = utils::get_local_injector().enter("skip_service_levels_v2_initialization");
+    auto sl_status_mutation = co_await _sys_ks.local().make_service_levels_version_mutation(skip_service_levels_v2_initialization ? 1 : 2, write_timestamp);
     insert_join_request_mutations.emplace_back(std::move(sl_status_mutation));
 
     insert_join_request_mutations.emplace_back(co_await _sys_ks.local().make_auth_version_mutation(write_timestamp, db::system_keyspace::auth_version_t::v2));
 
-    auto sl_driver_mutations = co_await qos::service_level_controller::get_create_driver_service_level_mutations(_sys_ks.local(), write_timestamp);
-    for (auto& m : sl_driver_mutations) {
-        insert_join_request_mutations.emplace_back(m);
+    if (!skip_service_levels_v2_initialization) {
+        auto sl_driver_mutations = co_await qos::service_level_controller::get_create_driver_service_level_mutations(_sys_ks.local(), write_timestamp);
+        for (auto& m : sl_driver_mutations) {
+            insert_join_request_mutations.emplace_back(m);
+        }
     }
 
     if (!utils::get_local_injector().is_enabled("skip_vb_v2_version_mut")) {
