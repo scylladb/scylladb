@@ -204,7 +204,7 @@ future<> write_buffer::close() {
     }
 }
 
-future<log_location_with_holder> write_buffer::write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder) {
+future<log_location_with_holder> write_buffer::write(log_record_writer writer, write_target target) {
     auto append_result = _raw.append(writer);
 
     auto record_location = [record_header_offset = append_result.record_header_offset, total_size = append_result.total_size] (log_location base_location) {
@@ -219,8 +219,7 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, c
         _records_copy.push_back(record_in_buffer {
             .writer = std::move(writer),
             .loc = _written.get_shared_future().then(record_location),
-            .cg = cg,
-            .cg_holder = std::move(cg_holder)
+            .target = std::move(target)
         });
     }
 
@@ -326,7 +325,7 @@ future<> buffered_writer::stop() {
     logstor_logger.info("Write buffer stopped");
 }
 
-future<log_location_with_holder> buffered_writer::write(log_record record, db::timeout_clock::time_point timeout, compaction_group* cg, seastar::gate::holder cg_holder) {
+future<log_location_with_holder> buffered_writer::write(log_record record, db::timeout_clock::time_point timeout, write_target target) {
     auto holder = _async_gate.hold();
 
     log_record_writer writer(std::move(record));
@@ -362,7 +361,7 @@ future<log_location_with_holder> buffered_writer::write(log_record record, db::t
         }
     }
 
-    auto fut = head_buf().write(std::move(writer), cg, std::move(cg_holder));
+    auto fut = head_buf().write(std::move(writer), std::move(target));
 
     // Wake the consumer: there is now data at the tail.
     _tail_can_advance.broadcast();
