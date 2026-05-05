@@ -214,7 +214,7 @@ future<> write_buffer::close() {
     }
 }
 
-future<log_location_with_holder> write_buffer::write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder) {
+future<log_location_with_holder> write_buffer::write(log_record_writer writer, write_target target) {
     auto append_result = _raw.append(writer);
 
     auto record_location = [record_header_offset = append_result.record_header_offset, total_size = append_result.total_size] (log_location base_location) {
@@ -229,8 +229,7 @@ future<log_location_with_holder> write_buffer::write(log_record_writer writer, c
         _records_copy.push_back(record_in_buffer {
             .writer = std::move(writer),
             .loc = _written.get_shared_future().then(record_location),
-            .cg = cg,
-            .cg_holder = std::move(cg_holder)
+            .target = std::move(target)
         });
     }
 
@@ -378,13 +377,13 @@ bool buffered_writer::maybe_advance_head() noexcept {
     return true;
 }
 
-std::optional<future<log_location_with_holder>> buffered_writer::append_to_head_buffer(log_record_writer& writer, compaction_group* cg, seastar::gate::holder cg_holder) {
+std::optional<future<log_location_with_holder>> buffered_writer::append_to_head_buffer(log_record_writer& writer, write_target target) {
     if (!head_buf().can_fit(writer) && !maybe_advance_head()) {
         return std::nullopt;
     }
 
     bool was_empty = !head_buf().has_data();
-    auto persisted = head_buf().write(std::move(writer), cg, std::move(cg_holder));
+    auto persisted = head_buf().write(std::move(writer), std::move(target));
     if (was_empty) {
         arm_head_flush_timer();
         _consumer_progress_cv.signal();
@@ -464,7 +463,7 @@ future<bool> buffered_writer::drain_queued_writes() {
         on_queued_write_removed(request);
         removed_queued_writes = true;
         try {
-            auto persisted = append_to_head_buffer(request.writer, request.cg, std::move(request.cg_holder)).value();
+            auto persisted = append_to_head_buffer(request.writer, std::move(request.target)).value();
             request.accepted_pr.set_value(buffered_write_result{request.persisted_pr.get_future()});
             std::move(persisted).forward_to(std::move(request.persisted_pr));
         } catch (...) {
@@ -563,7 +562,7 @@ future<> buffered_writer::flush() {
     });
 }
 
-future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer writer, db::timeout_clock::time_point timeout, compaction_group* cg, seastar::gate::holder cg_holder) {
+future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target) {
     auto holder = _async_gate.hold();
 
     if (writer.size() > head_buf().max_record_size()) {
@@ -573,7 +572,7 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
     // fast path - if there are no queued writes and there is space in the current head buffer or the next, advance the
     // head buffer if needed and write to it.
     if (_queued_writes.empty()) {
-        if (auto persisted = append_to_head_buffer(writer, cg, std::move(cg_holder))) {
+        if (auto persisted = append_to_head_buffer(writer, std::move(target))) {
             co_return buffered_write_result{std::move(*persisted)};
         }
     }
@@ -586,7 +585,7 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
 
     const bool queue_was_empty = _queued_writes.empty();
     const auto write_size = writer.size();
-    queued_write request(std::move(writer), cg, std::move(cg_holder), timeout, _next_queued_write_id++, write_size);
+    queued_write request(std::move(writer), std::move(target), timeout, _next_queued_write_id++, write_size);
     auto accepted = request.accepted_pr.get_future();
     _queued_write_bytes += write_size;
     _queued_writes.push_back(std::move(request), timeout);
@@ -596,8 +595,8 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
     co_return co_await std::move(accepted);
 }
 
-future<log_location_with_holder> buffered_writer::write(log_record_writer writer, db::timeout_clock::time_point timeout, compaction_group* cg, seastar::gate::holder cg_holder) {
-    auto result = co_await write_to_buffer(std::move(writer), timeout, cg, std::move(cg_holder));
+future<log_location_with_holder> buffered_writer::write(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target) {
+    auto result = co_await write_to_buffer(std::move(writer), timeout, std::move(target));
     co_return co_await std::move(result.persisted);
 }
 
