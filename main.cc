@@ -2216,8 +2216,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             if (cfg->maintenance_mode()) {
-                checkpoint(stop_signal, "entering maintenance mode");
-
                 // Notify maintenance auth service that maintenance mode is starting
                 maintenance_auth_service.invoke_on_all([](auth::service& svc) {
                     auth::set_maintenance_mode(svc);
@@ -2225,6 +2223,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }).get();
 
                 start_cql(*cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
+
+                // Notify after the maintenance CQL server is listening, so that
+                // clients can connect as soon as they receive this notification.
+                checkpoint(stop_signal, "entering maintenance mode");
 
                 ss.local().start_maintenance_mode().get();
 
