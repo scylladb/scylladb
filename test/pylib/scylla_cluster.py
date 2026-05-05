@@ -873,7 +873,7 @@ class ScyllaServer:
         if self.serving_signal.done():
             self._received_serving = self.serving_signal.result()
             self.serving_signal = None
-        return False
+        return self._received_serving
 
     async def try_get_host_id(self, api: ScyllaRESTAPIClient) -> Optional[HostID]:
         """Try to get the host id (also tests Scylla REST API is serving)"""
