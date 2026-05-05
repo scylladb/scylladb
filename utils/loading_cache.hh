@@ -65,8 +65,9 @@ struct do_nothing_loading_cache_stats {
 /// The values are going to be evicted from the cache if they are not accessed during the "expiration" period or haven't
 /// been reloaded even once during the same period.
 ///
-/// If "expiration" is set to zero - the caching is going to be disabled and get_XXX(...) is going to call the "loader" callback
-/// every time in order to get the requested value.
+/// If "expiration" is set to zero - the caching is going to be disabled and get(...) is going to call the "loader" callback
+/// every time in order to get the requested value. insert(...) is going to be a no-op in this mode. get_ptr(...) is not
+/// safe to call when caching is disabled (it asserts) since it returns a handle into the cache.
 ///
 /// \note In order to avoid the eviction of cached entries due to "aging" of the contained value the user has to choose
 /// the "expiration" to be at least ("refresh" + "max load latency"). This way the value is going to stay in the cache and is going to be
@@ -351,6 +352,24 @@ public:
     future<value_ptr> get_ptr(const Key& k) {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "");
         return get_ptr(k, _load);
+    }
+
+    /// \brief Insert a value into the cache, loading it via \p load if not already present.
+    ///
+    /// Equivalent to get_ptr(k, load).discard_result() when caching is enabled,
+    /// but is a no-op when caching is disabled (i.e. the cache was constructed
+    /// with expiry == 0). Use this when you only want the side effect of
+    /// populating the cache and don't need a handle to the cached value.
+    ///
+    /// Unlike get_ptr(), it is safe to call this on a cache configured with
+    /// caching disabled.
+    template <typename LoadFunc>
+    requires std::is_invocable_r_v<future<value_type>, LoadFunc, const key_type&>
+    future<> insert(const Key& k, LoadFunc&& load) {
+        if (!caching_enabled()) {
+            return make_ready_future<>();
+        }
+        return get_ptr(k, std::forward<LoadFunc>(load)).discard_result();
     }
 
     future<Tp> get(const Key& k) {
