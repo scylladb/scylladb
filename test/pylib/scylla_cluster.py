@@ -835,8 +835,9 @@ class ScyllaServer:
                         loop.call_soon_threadsafe(f.set_result, True)
                         return
                     if 'STATUS=entering maintenance mode' in message:
-                        logger.debug("Receive sd_notify 'entering maintenance mode'")
-                        break
+                        logger.debug("Received sd_notify 'entering maintenance mode' message")
+                        loop.call_soon_threadsafe(f.set_result, True)
+                        return
                 except socket.timeout:
                     pass
                 except Exception as e:
@@ -972,8 +973,11 @@ class ScyllaServer:
                 if server_up_state == ServerUpState.PROCESS_STARTED:
                     server_up_state = ServerUpState.HOST_ID_QUERIED
                 server_up_state = await self.get_cql_alternator_up_state() or server_up_state
-                # Check for SERVING state (sd_notify "serving" message)
-                if server_up_state >= ServerUpState.CQL_ALTERNATOR_QUERIED and self.check_serving_notification():
+                # Check for SERVING state via sd_notify. This is authoritative: Scylla sends
+                # STATUS=serving once all configured listeners are ready, and
+                # STATUS=entering maintenance mode once the maintenance socket is ready.
+                # Both mean the server is fully started and we don't need to wait further.
+                if self.check_serving_notification():
                     server_up_state = ServerUpState.SERVING
                 if server_up_state >= expected_server_up_state:
                     if expected_error is not None:
