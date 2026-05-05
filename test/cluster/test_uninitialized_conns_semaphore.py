@@ -9,7 +9,6 @@ import asyncio
 import pytest
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.internal_types import ServerUpState
 
 CQL_PORT = 9042
 SHARD_AWARE_PORT = 19042
@@ -23,7 +22,7 @@ async def test_uninitialized_conns_sempahore_one(manager: ManagerClient):
         "native_transport_port": CQL_PORT,
         "native_shard_aware_transport_port": SHARD_AWARE_PORT,
     }
-    server = await manager.server_add(config=config, expected_server_up_state=ServerUpState.SERVING)
+    server = await manager.server_add(config=config)
     cql, _ = await manager.get_ready_cql([server])
 
     await cql.run_async("SELECT release_version FROM system.local")
