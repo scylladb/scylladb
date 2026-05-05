@@ -389,7 +389,7 @@ class ManagerClient:
                            seeds: list[IPAddress] | None = None,
                            timeout: float | None = None,
                            connect_driver: bool = True,
-                           expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED,
+                           expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None,
                            auth_provider: dict[str, str] | None = None) -> None:
