@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 import pytest
 import shutil
 import logging
@@ -11,6 +12,7 @@ from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
+from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import reconnect_driver
 from test.pylib.object_storage import format_tuples, keyspace_options
 from test.cqlpy.rest_api import scylla_inject_error
@@ -355,3 +357,82 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     rows = {r.name: r.value for r in cql.execute(f'SELECT * FROM random_ks.test;')}
     assert rows == {'test_key': 123, 'after_reconfig': 456}, f'Unexpected table content: {rows}'
 
+
+@pytest.mark.asyncio
+async def test_tablet_migration_with_encryption(manager: ManagerClient, s3_server, tmp_path):
+    """Verify that tablet migration works correctly with encrypted SSTables on S3 storage.
+
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-1704
+
+    sstable_stream_sink_impl::load_metadata() used file_exists() on a local path to check
+    for the Scylla metadata component. For S3-backed storage this always returned false,
+    causing each streamed SSTable component to get a different encryption key. When the
+    SSTable was later read back, decryption with the wrong key produced garbage, leading
+    to OOM crashes.
+
+    The fix uses _sst->_storage->exists() which works for all storage backends.
+    """
+    d = tmp_path / "system_keys"
+    d.mkdir()
+
+    objconf = s3_server.create_endpoint_conf()
+    cfg = {
+        'enable_user_defined_functions': False,
+        'object_storage_endpoints': objconf,
+        'experimental_features': ['keyspace-storage-options'],
+        'system_key_directory': str(d),
+        'user_info_encryption': {'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory'},
+    }
+
+    cmdline = ['--smp=1']
+    servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
+    await manager.disable_tablet_balancing()
+
+    servers.append(await manager.server_add(config=cfg, cmdline=cmdline))
+
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    storage_opts = format_tuples(type='S3', endpoint=s3_server.address, bucket=s3_server.bucket_name)
+    ks = 'test_enc_migration_ks'
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', "
+                        f"'replication_factor': 1}} AND tablets = {{'initial': 1}} AND STORAGE = {storage_opts}")
+
+    try:
+        await cql.run_async(f"""CREATE TABLE {ks}.t (pk int PRIMARY KEY, v text)
+            WITH scylla_encryption_options = {{
+                'cipher_algorithm': 'AES/ECB/PKCS5Padding',
+                'secret_key_strength': 128,
+                'key_provider': 'LocalFileSystemKeyProviderFactory',
+                'secret_key_file': '{d}/data_encryption_key'
+            }}""")
+
+        # Insert enough data to produce a non-trivial SSTable
+        for i in range(100):
+            await cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({i}, 'value_{i}')")
+
+        # Flush to ensure data is written as an SSTable to S3
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+        # Verify data before migration
+        rows_before = {r.pk: r.v for r in cql.execute(f"SELECT pk, v FROM {ks}.t")}
+        assert len(rows_before) == 100, f"Expected 100 rows before migration, got {len(rows_before)}"
+
+        # Move the tablet to the other server
+        tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 't')
+        host_ids = await asyncio.gather(*[manager.get_host_id(s.server_id) for s in servers])
+        src_host, src_shard = tablet_replicas[0].replicas[0]
+        dst_host = host_ids[1] if src_host == host_ids[0] else host_ids[0]
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "t",
+                                      src_host, src_shard, dst_host, 0,
+                                      tablet_replicas[0].last_token)
+
+        # Verify data after migration - this would fail with the bug because
+        # SSTable components on S3 would be encrypted with different keys
+        rows_after = {r.pk: r.v for r in cql.execute(f"SELECT pk, v FROM {ks}.t")}
+        assert rows_after == rows_before, (
+            f"Data mismatch after tablet migration. "
+            f"Before: {len(rows_before)} rows, After: {len(rows_after)} rows"
+        )
+    finally:
+        await cql.run_async(f"DROP KEYSPACE IF EXISTS {ks}")
