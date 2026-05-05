@@ -393,8 +393,16 @@ class ManagerClient:
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None,
                            auth_provider: dict[str, str] | None = None) -> None:
-        """Start specified server and optionally wait for it to learn of other servers.
+        """Start specified server.
 
+        When expected_error is None, waits until Scylla reports that all
+        configured listeners (including any non-default ports) are ready
+        (ServerUpState.SERVING). Pass a lower expected_server_up_state to
+        return earlier. When expected_error is set, no readiness wait is
+        performed. When connect_driver=False, the effective wait state is
+        capped at HOST_ID_QUERIED regardless of expected_server_up_state.
+
+        Optionally waits for it to learn of other servers (wait_others).
         Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
         if provided.
 
@@ -542,7 +550,14 @@ class ManagerClient:
                          server_encryption: str = "none",
                          expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                          connect_driver: bool = True) -> ServerInfo:
-        """Add a new server"""
+        """Add a new server.
+
+        When start=True and expected_error is None, waits until Scylla reports
+        that all configured listeners (including any non-default ports) are ready
+        (ServerUpState.SERVING). Pass a lower expected_server_up_state to return
+        earlier. When start=False or expected_error is set, no readiness wait is
+        performed. When connect_driver=False, the effective wait state is capped
+        at HOST_ID_QUERIED regardless of expected_server_up_state."""
         if expected_error is not None:
             self.ignore_log_patterns.append(re.escape(expected_error))
 
@@ -600,6 +615,12 @@ class ManagerClient:
                           server_encryption: str = "none",
                           auto_rack_dc: Optional[str] = None) -> List[ServerInfo]:
         """Add new servers concurrently.
+
+        When start=True and expected_error is None, waits until Scylla reports
+        that all configured listeners (including any non-default ports) are ready
+        (ServerUpState.SERVING). When start=False or expected_error is set, no
+        readiness wait is performed.
+
         This function can be called only if the cluster uses consistent topology changes, which support
         concurrent bootstraps. If your test does not fulfill this condition and you want to add multiple
         servers, you should use multiple server_add calls."""
