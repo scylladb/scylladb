@@ -28,9 +28,14 @@
 
 namespace replica {
 
-class compaction_group;
-
 namespace logstor {
+
+class logstor_group;
+
+struct write_target {
+    logstor_group* cg = nullptr;
+    seastar::gate::holder cg_holder;
+};
 
 // Writer for log records that handles serialization and size computation
 class log_record_writer {
@@ -212,8 +217,7 @@ class write_buffer {
     struct record_in_buffer {
         log_record_writer writer;
         future<log_location> loc;
-        compaction_group* cg;
-        seastar::gate::holder cg_holder;
+        write_target target;
     };
 
     std::vector<record_in_buffer> _records_copy;
@@ -258,11 +262,7 @@ public:
     // Returns a future that will be resolved with the log location once flushed and a gate holder
     // that keeps the write buffer open. The gate should be held for index updates after the write
     // is done.
-    future<log_location_with_holder> write(log_record_writer, compaction_group*, seastar::gate::holder cg_holder);
-
-    future<log_location_with_holder> write(log_record_writer writer) {
-        return write(std::move(writer), nullptr, {});
-    }
+    future<log_location_with_holder> write(log_record_writer, write_target target = {});
 
     // Complete all tracked writes with their locations when the buffer is flushed to base_location
     future<> complete_writes(log_location base_location);
@@ -345,16 +345,14 @@ class buffered_writer {
         seastar::promise<buffered_write_result> accepted_pr; // written to buffer
         seastar::promise<log_location_with_holder> persisted_pr; // written to a segment
         log_record_writer writer;
-        compaction_group* cg;
-        seastar::gate::holder cg_holder;
+        write_target target;
         db::timeout_clock::time_point timeout;
         uint64_t id;
         size_t write_size;
 
-        queued_write(log_record_writer writer, compaction_group* cg, seastar::gate::holder cg_holder, db::timeout_clock::time_point timeout, uint64_t id, size_t write_size)
+        queued_write(log_record_writer writer, write_target target, db::timeout_clock::time_point timeout, uint64_t id, size_t write_size)
             : writer(std::move(writer))
-            , cg(cg)
-            , cg_holder(std::move(cg_holder))
+            , target(std::move(target))
             , timeout(timeout)
             , id(id)
             , write_size(write_size) {
@@ -419,7 +417,7 @@ class buffered_writer {
     bool should_rotate_head_for_flush() const noexcept;
     bool maybe_advance_head() noexcept;
 
-    std::optional<future<log_location_with_holder>> append_to_head_buffer(log_record_writer&, compaction_group*, seastar::gate::holder);
+    std::optional<future<log_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target);
 
     bool try_dispatch_next_buffer();
     future<> run_dispatched_write(size_t idx);
@@ -448,8 +446,8 @@ public:
     future<> stop();
     future<> flush();
 
-    future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
-    future<log_location_with_holder> write(log_record_writer, db::timeout_clock::time_point timeout, compaction_group* cg = nullptr, seastar::gate::holder cg_holder = {});
+    future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {});
+    future<log_location_with_holder> write(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {});
 
     size_t queued_write_count() const noexcept { return _queued_writes.size(); }
 
