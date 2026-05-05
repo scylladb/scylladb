@@ -185,6 +185,9 @@ future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& r
         static const sstring q = format("SELECT role, name, value FROM {}.{} WHERE role = ?", db::system_keyspace::NAME, ROLE_ATTRIBUTES_CF);
         auto rs = co_await fetch(q);
         for (const auto& r : *rs) {
+            if (!r.has("value")) {
+                continue;
+            }
             rec->attributes[r.get_as<sstring>("name")] =
                     r.get_as<sstring>("value");
             co_await coroutine::maybe_yield();
