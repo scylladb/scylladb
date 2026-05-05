@@ -236,33 +236,60 @@ void client::group_client::register_metrics(std::string class_name, std::string 
     namespace sm = seastar::metrics;
     auto ep_label = sm::label("endpoint")(host);
     auto sg_label = sm::label("class")(class_name);
-    metrics.add_group("s3", {
-        sm::make_gauge("nr_connections", [this] { return http.connections_nr(); },
-                sm::description("Total number of connections"), {ep_label, sg_label}),
-        sm::make_gauge("nr_active_connections", [this] { return http.connections_nr() - http.idle_connections_nr(); },
-                sm::description("Total number of connections with running requests"), {ep_label, sg_label}),
-        sm::make_counter("total_new_connections", [this] { return http.total_new_connections_nr(); },
-                sm::description("Total number of new connections created so far"), {ep_label, sg_label}),
-        sm::make_counter("total_read_requests", [this] { return read_stats.ops; },
-                sm::description("Total number of object read requests"), {ep_label, sg_label}),
-        sm::make_counter("total_write_requests", [this] { return write_stats.ops; },
-                sm::description("Total number of object write requests"), {ep_label, sg_label}),
-        sm::make_counter("total_read_bytes", [this] { return read_stats.bytes; },
-                sm::description("Total number of bytes read from objects"), {ep_label, sg_label}),
-        sm::make_counter("total_write_bytes", [this] { return write_stats.bytes; },
-                sm::description("Total number of bytes written to objects"), {ep_label, sg_label}),
-        sm::make_counter("total_read_latency_sec", [this] { return read_stats.duration.count(); },
-                sm::description("Total time spent reading data from objects"), {ep_label, sg_label}),
-        sm::make_counter("total_write_latency_sec", [this] { return write_stats.duration.count(); },
-                sm::description("Total time spend writing data to objects"), {ep_label, sg_label}),
-        sm::make_counter("total_read_prefetch_bytes", [this] { return prefetch_bytes; },
-                sm::description("Total number of bytes requested from object"), {ep_label, sg_label}),
-         sm::make_counter("downloads_blocked_on_memory",
-                          [this] { return downloads_blocked_on_memory; },
-                          sm::description("Counts the number of times S3 client downloads were delayed due to insufficient memory availability"),
-                          {ep_label, sg_label})
+    auto method_label = sm::label("method");
 
-    });
+    std::vector<sm::metric_definition> defs;
+
+    defs.emplace_back(sm::make_gauge("nr_connections", [this] { return http.connections_nr(); },
+            sm::description("Total number of connections"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_gauge("nr_active_connections", [this] { return http.connections_nr() - http.idle_connections_nr(); },
+            sm::description("Total number of connections with running requests"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_counter("total_new_connections", [this] { return http.total_new_connections_nr(); },
+            sm::description("Total number of new connections created so far"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_counter("total_read_requests", [this] { return stats[httpd::GET].ops; },
+            sm::description("Total number of object read requests"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_counter("total_write_requests",
+            [this] { return stats[httpd::PUT].ops; },
+            sm::description("Total number of object write requests"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_counter("total_read_bytes", [this] { return stats[httpd::GET].bytes; },
+            sm::description("Total number of bytes read from objects"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_counter("total_write_bytes",
+            [this] { return stats[httpd::PUT].bytes; },
+            sm::description("Total number of bytes written to objects"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_counter("total_read_latency_sec", [this] { return stats[httpd::GET].duration.count(); },
+            sm::description("Total time spent reading data from objects"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_counter("total_write_latency_sec",
+            [this] { return stats[httpd::PUT].duration.count(); },
+            sm::description("Total time spent writing data to objects"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_counter("total_read_prefetch_bytes", [this] { return prefetch_bytes; },
+            sm::description("Total number of bytes requested from object"), {ep_label, sg_label}));
+    defs.emplace_back(sm::make_counter("downloads_blocked_on_memory",
+                      [this] { return downloads_blocked_on_memory; },
+                      sm::description("Counts the number of times S3 client downloads were delayed due to insufficient memory availability"),
+                      {ep_label, sg_label}));
+
+    // Per HTTP method metrics
+    for (size_t i = 0; i < http_method_count; ++i) {
+        auto method = static_cast<httpd::operation_type>(i);
+        auto method_name = httpd::type2str(method);
+        auto lower_method_name = method_name;
+        std::ranges::transform(method_name, lower_method_name.begin(), ::tolower);
+        auto ml = method_label(method_name);
+        defs.emplace_back(sm::make_counter(format("total_{}_requests", lower_method_name),
+                [this, method] { return stats[method].ops; },
+                sm::description(format("Total number of HTTP {} requests", method_name)), {ep_label, sg_label, ml}));
+        defs.emplace_back(sm::make_counter(format("total_{}_bytes", lower_method_name),
+                [this, method] { return stats[method].bytes; },
+                sm::description(format("Total number of bytes transferred via HTTP {}", method_name)), {ep_label, sg_label, ml}));
+        defs.emplace_back(sm::make_counter(format("total_{}_latency_sec", lower_method_name),
+                [this, method] { return stats[method].duration.count(); },
+                sm::description(format("Total time in seconds spent in HTTP {} requests", method_name)), {ep_label, sg_label, ml}));
+        defs.emplace_back(sm::make_counter(format("total_{}_retries", lower_method_name),
+                [this, method] { return stats[method].retries; },
+                sm::description(format("Total number of HTTP {} retries", method_name)), {ep_label, sg_label, ml}));
+    }
+
+    metrics.add_group("s3", defs);
 }
 
 client::group_client& client::find_or_create_client() {
@@ -327,8 +354,13 @@ client::group_client& client::find_or_create_client() {
 
 http::experimental::client::reply_handler client::wrap_handler(http::request& request,
                                                                http::experimental::client::reply_handler handler,
-                                                               std::optional<http::reply::status_type> expected) {
-    return [this, &request, expected, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) -> future<> {
+                                                               std::optional<http::reply::status_type> expected,
+                                                               io_stats& stats) {
+    return [this, &request, expected, handler = std::move(handler), &stats, first_attempt = true](const http::reply& rep, input_stream<char>&& in) mutable -> future<> {
+        if (!first_attempt) {
+            ++stats.retries;
+        }
+        first_attempt = false;
         auto _in = std::move(in);
         auto status_class = seastar::http::reply::classify_status(rep._status);
         std::optional<aws_error> possible_error;
@@ -395,9 +427,12 @@ future<> client::make_request(http::request req,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
     auto request = std::move(req);
-    auto handler = wrap_handler(request, std::move(handle), expected);
+    auto method = httpd::str2type(request._method);
     co_await authorize(request);
     auto& gc = find_or_create_client();
+    auto& method_stats = gc.stats[method];
+    ++method_stats.ops;
+    auto handler = wrap_handler(request, std::move(handle), expected, method_stats);
 
     co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
@@ -601,7 +636,7 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
             }
             return make_ready_future<consumption_result<char>>(continue_consuming());
         }).then([&gc, &off, start] {
-            gc.read_stats.update(off, s3_clock::now() - start);
+            gc.stats[httpd::GET].update(off, s3_clock::now() - start);
         });
     }, expected, as);
     ret->trim(off);
@@ -628,7 +663,7 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf, sea
         }
     });
     co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
-        gc.write_stats.update(len, s3_clock::now() - start);
+        gc.stats[httpd::PUT].update(len, s3_clock::now() - start);
         return ignore_reply(rep, std::move(in));
     }, http::reply::status_type::ok, as);
 }
@@ -654,7 +689,7 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
         }
     });
     co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
-        gc.write_stats.update(len, s3_clock::now() - start);
+        gc.stats[httpd::PUT].update(len, s3_clock::now() - start);
         return ignore_reply(rep, std::move(in));
     }, http::reply::status_type::ok, as);
 }
@@ -973,7 +1008,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         auto etag = rep.get_header("ETag");
         s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
         _part_etags[part_number] = std::move(etag);
-        gc.write_stats.update(size, s3_clock::now() - start);
+        gc.stats[httpd::PUT].update(size, s3_clock::now() - start);
         return make_ready_future<>();
     }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
@@ -1296,8 +1331,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
                         }
-                        gc.read_stats.ops++;
-                        gc.read_stats.duration += s3_clock::now() - start;
+                        gc.stats[httpd::GET].duration += s3_clock::now() - start;
                         gc.prefetch_bytes += pf_length;
                         if (_range == s3::full_range && !reply.get_header("Content-Range").empty()) {
                             auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
@@ -1324,7 +1358,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 break;
                             }
                             auto buff_size = buf.size();
-                            gc.read_stats.bytes += buff_size;
+                            gc.stats[httpd::GET].bytes += buff_size;
                             _range += buff_size;
                             _buffers_size += buff_size;
                             if (buff_size == 0 && _range.length() == 0) {
@@ -1571,7 +1605,7 @@ class client::do_upload_file : private multipart_upload {
             auto etag = reply.get_header("ETag");
             s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
             _part_etags[part_number] = std::move(etag);
-            gc.write_stats.update(part_size, s3_clock::now() - start);
+            gc.stats[httpd::PUT].update(part_size, s3_clock::now() - start);
             return make_ready_future();
         }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
             s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
@@ -1619,7 +1653,7 @@ class client::do_upload_file : private multipart_upload {
             return copy_to(std::move(input), std::move(output), _transmit_size, progress);
         });
         co_await _client->make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
-            gc.write_stats.update(len, s3_clock::now() - start);
+            gc.stats[httpd::PUT].update(len, s3_clock::now() - start);
             return ignore_reply(rep, std::move(in));
         }, http::reply::status_type::ok, _as);
     }

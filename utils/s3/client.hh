@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <array>
 #include <seastar/core/file.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -16,6 +17,7 @@
 #include <seastar/core/queue.hh>
 #include <seastar/core/units.hh>
 #include <seastar/http/client.hh>
+#include <seastar/http/common.hh>
 #include <filesystem>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
@@ -119,21 +121,34 @@ class client : public enable_shared_from_this<client> {
     aws::aws_credentials_provider_chain _creds_provider_chain;
     seastar::gate _config_update_gate;
 
+    static constexpr size_t http_method_count = static_cast<size_t>(httpd::operation_type::NUM_OPERATION);
+
     struct io_stats {
         uint64_t ops = 0;
         uint64_t bytes = 0;
+        uint64_t retries = 0;
         std::chrono::duration<double> duration = std::chrono::duration<double>(0);
 
         void update(uint64_t len, std::chrono::duration<double> lat) {
-            ops++;
             bytes += len;
             duration += lat;
         }
     };
+
+    struct s3_io_stats {
+        std::array<io_stats, http_method_count> _methods{};
+
+        io_stats& operator[](httpd::operation_type method) {
+            return _methods[static_cast<size_t>(method)];
+        }
+        const io_stats& operator[](httpd::operation_type method) const {
+            return _methods[static_cast<size_t>(method)];
+        }
+    };
+
     struct group_client {
         seastar::http::experimental::client http;
-        io_stats read_stats;
-        io_stats write_stats;
+        s3_io_stats stats;
         uint64_t prefetch_bytes = 0;
         uint64_t downloads_blocked_on_memory = 0;
         seastar::metrics::metric_groups metrics;
@@ -159,7 +174,8 @@ class client : public enable_shared_from_this<client> {
 
     http::experimental::client::reply_handler wrap_handler(http::request& request,
                                                            http::experimental::client::reply_handler handler,
-                                                           std::optional<http::reply::status_type> expected);
+                                                           std::optional<http::reply::status_type> expected,
+                                                           io_stats& stats);
 
     future<> make_request(http::request req,
                           http::experimental::client::reply_handler handle = ignore_reply,
