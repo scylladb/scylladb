@@ -176,7 +176,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
     vs.start_background_tasks();
 
     // Wait for the DNS resolution to fail
-    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+    BOOST_CHECK(co_await repeat_until([&vs, &as]() -> future<bool> {
         auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.empty();
     }));
@@ -184,7 +184,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
     fail_dns_resolution = false;
 
     // Wait for the DNS resolution to succeed
-    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+    BOOST_CHECK(co_await repeat_until([&vs, &as]() -> future<bool> {
         auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.size() == 1;
     }));
@@ -196,7 +196,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
 
     // Wait for the DNS resolution to fail again.
     // Trigger is called inside the loop to mitigate SCYLLADB-1794.
-    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+    BOOST_CHECK(co_await repeat_until([&vs, &as]() -> future<bool> {
         vector_store_client_tester::trigger_dns_resolver(vs);
         auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.empty();
@@ -207,7 +207,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
     fail_dns_resolution = false;
 
     // Wait for the DNS resolution to succeed
-    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+    BOOST_CHECK(co_await repeat_until([&vs, &as]() -> future<bool> {
         auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.size() == 1;
     }));
