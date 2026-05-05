@@ -835,18 +835,18 @@ class ScyllaServer:
                     message = data.decode('utf-8', errors='replace')
                     if 'STATUS=serving' in message:
                         logger.debug("Received sd_notify 'serving' message")
-                        loop.call_soon_threadsafe(f.set_result, True)
+                        loop.call_soon_threadsafe(lambda: f.done() or f.set_result(True))
                         return
                     if 'STATUS=entering maintenance mode' in message:
                         logger.debug("Received sd_notify 'entering maintenance mode' message")
-                        loop.call_soon_threadsafe(f.set_result, True)
+                        loop.call_soon_threadsafe(lambda: f.done() or f.set_result(True))
                         return
                 except socket.timeout:
                     pass
                 except Exception as e:
                     logger.debug("Error reading from notify socket: %s", e)
                     break
-            loop.call_soon_threadsafe(f.set_result, False)
+            loop.call_soon_threadsafe(lambda: f.done() or f.set_result(False))
 
         self.serving_signal = loop.create_future()
         t = threading.Thread(target=poll_status, args=[self.notify_socket, self.serving_signal, self.logger], daemon=True)
