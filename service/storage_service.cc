@@ -4494,10 +4494,20 @@ future<> storage_service::local_topology_barrier() {
                              version, current_version)));
         }
 
-        co_await ss._shared_token_metadata.stale_versions_in_use();
+        rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: waiting for stale token metadata versions to be released", version);
+        {
+            seastar::timer<lowres_clock> warn_timer([&ss, version] {
+                rtlogger.warn("raft_topology_cmd::barrier_and_drain version {}: still waiting for stale versions, "
+                              "stale versions (version: use_count): {}",
+                              version, ss._shared_token_metadata.describe_stale_versions());
+            });
+            warn_timer.arm_periodic(std::chrono::minutes(5));
+            co_await ss._shared_token_metadata.stale_versions_in_use();
+        }
+        rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: stale versions released, draining closing sessions", version);
         co_await get_topology_session_manager().drain_closing_sessions();
 
-        rtlogger.info("raft_topology_cmd::barrier_and_drain done");
+        rtlogger.info("raft_topology_cmd::barrier_and_drain version {}: done", version);
     });
 }
 
@@ -4509,7 +4519,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
         auto& raft_server = _group0->group0_server();
         auto group0_holder = _group0->hold_group0_gate();
         // do barrier to make sure we always see the latest topology
+        rtlogger.info("topology cmd rpc {} index={}: starting read_barrier, term={}", cmd.cmd, cmd_index, term);
         co_await raft_server.read_barrier(&_group0_as);
+        rtlogger.info("topology cmd rpc {} index={}: read_barrier completed", cmd.cmd, cmd_index);
         if (raft_server.get_current_term() != term) {
            // Return an error since the command is from outdated leader
            co_return result;

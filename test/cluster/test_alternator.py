@@ -1379,7 +1379,7 @@ async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
     # The next barrier must be for the write_both_read_new, we need a guarantee
     # that the src_shard observed it
     logger.info("Waiting for the next barrier")
-    await log.wait_for(re.escape(f"[shard {src_shard}: gms] raft_topology - raft_topology_cmd::barrier_and_drain done"),
+    await log.wait_for(f"\\[shard {src_shard}: gms\\] raft_topology - raft_topology_cmd::barrier_and_drain.*done",
                        from_mark=m)
 
     # Now we have a guarantee that a new barrier succeeded on the src_shard,

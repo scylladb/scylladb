@@ -961,7 +961,7 @@ async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout
         logger.info("Wait for the global barrier to start draining on shard0")
         await log0.wait_for("\\[shard 0: gms\\] raft_topology - Got raft_topology_cmd::barrier_and_drain", from_mark=m)
         # Just to confirm that the guard still holds the erm
-        matches = await log0.grep("\\[shard 0: gms\\] raft_topology - raft_topology_cmd::barrier_and_drain done", from_mark=m)
+        matches = await log0.grep("\\[shard 0: gms\\] raft_topology - raft_topology_cmd::barrier_and_drain.*done", from_mark=m)
         assert len(matches) == 0
 
         # Before the fix, the tablet migration global barrier did not wait for the LWT operation.
