@@ -193,12 +193,11 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
     BOOST_CHECK_EQUAL(print_addr(addrs1[0]), "127.0.0.1");
 
     fail_dns_resolution = true;
-    // Trigger DNS resolver to check for address changes
-    // Resolver will not re-check automatically after successful resolution
-    vector_store_client_tester::trigger_dns_resolver(vs);
 
-    // Wait for the DNS resolution to fail again
+    // Wait for the DNS resolution to fail again.
+    // Trigger is called inside the loop to mitigate SCYLLADB-1794.
     BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+        vector_store_client_tester::trigger_dns_resolver(vs);
         auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.empty();
     }));
