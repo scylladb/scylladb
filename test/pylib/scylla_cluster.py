@@ -558,7 +558,7 @@ class ScyllaServer:
     async def install_and_start(self,
                                 api: ScyllaRESTAPIClient,
                                 expected_error: Optional[str] = None,
-                                expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED) -> None:
+                                expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> None:
         """Setup and start this server."""
 
         await self.install()
@@ -899,7 +899,7 @@ class ScyllaServer:
     async def start(self,
                     api: ScyllaRESTAPIClient,
                     expected_error: Optional[str] = None,
-                    expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED,
+                    expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                     cmdline_options_override: list[str] | None = None,
                     append_env_override: dict[str, str] | None = None) -> None:
         """Start an installed server.
