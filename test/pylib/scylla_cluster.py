@@ -779,12 +779,15 @@ class ScyllaServer:
                     # See the comment above about `auth::standard_role_manager`. We execute
                     # a 'real' query to ensure that the auth service has finished initializing.
                     session.execute("SELECT key FROM system.local where key = 'local'")
-                    self.control_cluster = Cluster(execution_profiles=
-                                                        {EXEC_PROFILE_DEFAULT: profile},
-                                                   contact_points=contact_points,
-                                                   control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                                                   auth_provider=self.auth_provider)
-                    self.control_connection = self.control_cluster.connect()
+                    # Only create the persistent control connection once; re-creating it on
+                    # every successful CQL check would leak driver connections.
+                    if self.control_connection is None:
+                        self.control_cluster = Cluster(execution_profiles=
+                                                            {EXEC_PROFILE_DEFAULT: profile},
+                                                       contact_points=contact_points,
+                                                       control_connection_timeout=self.TOPOLOGY_TIMEOUT,
+                                                       auth_provider=self.auth_provider)
+                        self.control_connection = self.control_cluster.connect()
                     cql_queried = True
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
             self.logger.debug("Exception when checking if CQL is up: %s", exc)
@@ -972,7 +975,11 @@ class ScyllaServer:
             if await self.try_get_host_id(api):
                 if server_up_state == ServerUpState.PROCESS_STARTED:
                     server_up_state = ServerUpState.HOST_ID_QUERIED
-                server_up_state = await self.get_cql_alternator_up_state() or server_up_state
+                # Only poll CQL/Alternator until they are known to be up.
+                # Once CQL_ALTERNATOR_QUERIED is reached, skip the poll to avoid
+                # repeatedly recreating driver connections while waiting for sd_notify.
+                if server_up_state < ServerUpState.CQL_ALTERNATOR_QUERIED:
+                    server_up_state = await self.get_cql_alternator_up_state() or server_up_state
                 # Check for SERVING state via sd_notify. This is authoritative: Scylla sends
                 # STATUS=serving once all configured listeners are ready, and
                 # STATUS=entering maintenance mode once the maintenance socket is ready.
