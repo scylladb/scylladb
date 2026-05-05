@@ -39,7 +39,6 @@ public:
         std::unordered_set<role_name_t> members;
         sstring salted_hash;
         std::unordered_map<sstring, sstring> attributes;
-        std::unordered_map<sstring, permission_set> permissions;
         version_tag_t version; // used for seamless cache reloads
     };
 
