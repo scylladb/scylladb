@@ -740,6 +740,80 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
     return make_ready_future();
 }
 
+future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as) {
+    //TODO:
+    //Now we trust the administrator to not make changes to service levels during the migration.
+    //Ideally, during the migration we should set migration data accessor(on all nodes, on all shards) that allows to read but forbids writes
+    using namespace std::chrono_literals;
+
+    auto schema = qp.db().find_schema(db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::SERVICE_LEVELS);
+
+    const auto t = 5min;
+    const timeout_config tc{t, t, t, t, t, t, t};
+    service::client_state cs(::service::client_state::internal_tag{}, tc);
+    service::query_state qs(cs, empty_service_permit());
+
+    // `system_distributed` keyspace has RF=3 and we need to scan it with CL=ALL
+    // To support migration on cluster with 1 or 2 nodes, set appropriate CL
+    auto cl = db::consistency_level::ALL;
+    if (nodes_count == 1) {
+        cl = db::consistency_level::ONE;
+    } else if (nodes_count == 2) {
+        cl = db::consistency_level::TWO;
+    }
+
+    auto rows = co_await qp.execute_internal(
+        format("SELECT * FROM {}.{}", db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::SERVICE_LEVELS),
+        cl,
+        qs,
+        {},
+        cql3::query_processor::cache_internal::no);
+
+    auto col_names = schema->all_columns() | std::views::transform([] (const auto& col) {return col.name_as_cql_string(); }) | std::ranges::to<std::vector<sstring>>();
+    auto col_names_str = fmt::to_string(fmt::join(col_names, ", "));
+    sstring val_binders_str = "?";
+    for (size_t i = 1; i < col_names.size(); ++i) {
+        val_binders_str += ", ?";
+    }
+
+    auto guard = co_await group0_client.start_operation(as);
+
+    utils::chunked_vector<mutation> migration_muts;
+    for (const auto& row: *rows) {
+        std::vector<data_value_or_unset> values;
+        for (const auto& col: schema->all_columns()) {
+            if (row.has(col.name_as_text())) {
+                values.push_back(col.type->deserialize(row.get_blob_unfragmented(col.name_as_text())));
+            } else {
+                values.push_back(unset_value{});
+            }
+        }
+
+        auto muts = co_await qp.get_mutations_internal(
+            seastar::format("INSERT INTO {}.{} ({}) VALUES ({})",
+                db::system_keyspace::NAME,
+                db::system_keyspace::SERVICE_LEVELS_V2,
+                col_names_str,
+                val_binders_str),
+            qos_query_state(),
+            guard.write_timestamp(),
+            std::move(values));
+        if (muts.size() != 1) {
+            on_internal_error(sl_logger, format("expecting single insert mutation, got {}", muts.size()));
+        }
+        migration_muts.push_back(std::move(muts[0]));
+    }
+
+    auto status_mut = co_await sys_ks.make_service_levels_version_mutation(2, guard.write_timestamp());
+    migration_muts.push_back(std::move(status_mut));
+
+    service::write_mutations change {
+        .mutations{migration_muts.begin(), migration_muts.end()},
+    };
+    auto group0_cmd = group0_client.prepare_command(change, guard, "migrate service levels to v2");
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as);
+}
+
 future<> service_level_controller::do_remove_service_level(sstring name, bool remove_static) {
     auto service_level_it = _service_levels_db.find(name);
     if (service_level_it != _service_levels_db.end()) {
