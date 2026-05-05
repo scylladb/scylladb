@@ -1112,8 +1112,7 @@ future<> gossiper::failure_detector_loop_for_node(locator::host_id host_id, gene
         diff = now - last;
         if (!failed) {
             last = now;
-        }
-        if (diff > max_duration) {
+        } else if (diff > max_duration) {
             logger.info("failure_detector_loop: Mark node {}/{} as DOWN", host_id, node);
             co_await container().invoke_on(0, [host_id] (gms::gossiper& g) {
                 return g.convict(host_id);
