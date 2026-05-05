@@ -741,12 +741,11 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
 }
 
 future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as) {
-    //TODO:
-    //Now we trust the administrator to not make changes to service levels during the migration.
-    //Ideally, during the migration we should set migration data accessor(on all nodes, on all shards) that allows to read but forbids writes
+    static constexpr auto SERVICE_LEVELS = "service_levels";
+    static constexpr auto SYSTEM_DISTRIBUTED_KEYSPACE = "system_distributed";
     using namespace std::chrono_literals;
 
-    auto schema = qp.db().find_schema(db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::SERVICE_LEVELS);
+    auto schema = qp.db().find_schema(SYSTEM_DISTRIBUTED_KEYSPACE, SERVICE_LEVELS);
 
     const auto t = 5min;
     const timeout_config tc{t, t, t, t, t, t, t};
@@ -763,7 +762,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
     }
 
     auto rows = co_await qp.execute_internal(
-        format("SELECT * FROM {}.{}", db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::SERVICE_LEVELS),
+        format("SELECT * FROM {}.{}", SYSTEM_DISTRIBUTED_KEYSPACE, SERVICE_LEVELS),
         cl,
         qs,
         {},

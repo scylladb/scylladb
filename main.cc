@@ -67,6 +67,7 @@
 #include "vector_search/vector_store_client.hh"
 #include <cstdio>
 #include <seastar/core/file.hh>
+#include <stdexcept>
 #include <unistd.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -218,6 +219,33 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
         auto ep = std::current_exception();
         startlog.error("Could not read configuration file {}: {}", file, ep);
         std::rethrow_exception(ep);
+    }
+}
+
+static void
+self_heal_service_levels_version(db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as) {
+    static constexpr unsigned max_attempts = 10;
+    for (unsigned attempt = 1; attempt <= max_attempts; ++attempt) {
+        try {
+            auto guard = group0_client.start_operation(as).get();
+            auto service_levels_version = sys_ks.get_service_levels_version().get();
+            service::release_guard(std::move(guard));
+            if (service_levels_version && *service_levels_version == 2) {
+                startlog.info("Service levels version marker was already self-healed to v2.");
+                return;
+            }
+
+            auto nodes_count = qp.db().real_database().get_token_metadata().get_normal_token_owners().size();
+            qos::service_level_controller::migrate_to_v2(nodes_count, sys_ks, qp, group0_client, as).get();
+            group0_client.send_group0_read_barrier_to_live_members().get();
+            startlog.info("Self-healed service levels version marker to v2.");
+            return;
+        } catch (...) {
+            if (attempt == max_attempts) {
+                std::throw_with_nested(std::runtime_error(format("Failed to self-heal service levels version marker after {} attempts", max_attempts)));
+            }
+            startlog.info("Concurrent group0 operation while self-healing service levels version marker, retrying ({}/{}).", attempt, max_attempts);
+        }
     }
 }
 
@@ -1511,6 +1539,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             sys_ks.local().build_bootstrap_info().get();
 
+            bool should_self_heal_service_levels_version = false;
             if (sys_ks.local().bootstrap_complete()) {
                 // Check as early as possible if the cluster is fully upgraded to use Raft, since if it's not, then this node cannot be started with the current version.
                 if (sys_ks.local().load_group0_upgrade_state().get() != "use_post_raft_procedures") {
@@ -1518,7 +1547,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         " a node of a cluster that is not using Raft yet. This is no longer supported. Please first complete the upgrade of the cluster to use Raft");
                 }
 
-                if (sys_ks.local().load_topology_upgrade_state().get() != "done") {
+                const bool raft_topology_done = sys_ks.local().load_topology_upgrade_state().get() == "done";
+                if (!raft_topology_done) {
                     throw std::runtime_error(
                         "Cannot start - cluster is not yet upgraded to use raft topology and this version does not support legacy topology operations. "
                         "If you are trying to upgrade the node then first upgrade the cluster to use raft topology.");
@@ -1529,10 +1559,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         "Cannot start - cluster is not yet upgraded to use auth v2 and this version does not support legacy auth. "
                         "If you are trying to upgrade the node then first upgrade the cluster to use auth v2.");
                 }
-                if (sys_ks.local().get_service_levels_version().get() != 2) {
-                    throw std::runtime_error(
-                        "Cannot start - cluster is not yet upgraded to use service levels v2 and this version does not support legacy service levels. "
-                        "If you are trying to upgrade the node then first upgrade the cluster to use service levels v2.");
+                auto service_levels_version = sys_ks.local().get_service_levels_version().get();
+                if (raft_topology_done && (!service_levels_version || *service_levels_version != 2)) {
+                    should_self_heal_service_levels_version = true;
+                    startlog.warn(
+                            "Cluster is using raft topology but service levels are still marked as version {}. "
+                            "Startup will continue and the service levels version marker will be self-healed after group0 starts.",
+                            service_levels_version ? format("{}", *service_levels_version) : "unset");
                 }
                 if (sys_ks.local().get_view_builder_version().get() != db::system_keyspace::view_builder_version_t::v2) {
                     throw std::runtime_error(
@@ -2339,6 +2372,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);
             }).get();
             stop_signal.ready(false);
+
+            if (should_self_heal_service_levels_version) {
+                checkpoint(stop_signal, "self-healing service levels version");
+                self_heal_service_levels_version(sys_ks.local(), qp.local(), group0_client, stop_signal.as_local_abort_source());
+            }
 
             if (cfg->maintenance_socket() != "ignore") {
                 // Enable role operations now that node joined the cluster
