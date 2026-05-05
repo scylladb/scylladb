@@ -823,4 +823,42 @@ SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
     }, small_cache_config);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_loading_cache_insert) {
+    using namespace std::chrono;
+    loader loader;
+    loading_cache_for_test<int, sstring> loading_cache(num_loaders, 1h, testlog);
+    auto stop_cache = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+    // insert() must populate the cache and invoke the loader exactly once.
+    loading_cache.insert(0, loader.get()).get();
+    BOOST_REQUIRE_EQUAL(loader.load_count(), 1);
+    BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+    auto vp = loading_cache.find(0);
+    BOOST_REQUIRE(vp != nullptr);
+    BOOST_REQUIRE_EQUAL(*vp, test_string);
+
+    // A second insert() for the same key must not re-invoke the loader.
+    loading_cache.insert(0, loader.get()).get();
+    BOOST_REQUIRE_EQUAL(loader.load_count(), 1);
+    BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
+}
+
+// Regression test for SCYLLADB-1699: insert() on a cache constructed with
+// expiry == 0 (caching disabled) must be a no-op rather than asserting in
+// loading_cache::get_ptr().
+SEASTAR_THREAD_TEST_CASE(test_loading_cache_insert_caching_disabled) {
+    using namespace std::chrono;
+    loader loader;
+    loading_cache_for_test<int, sstring> loading_cache(num_loaders, 0ms, testlog);
+    auto stop_cache = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+    auto f = loading_cache.insert(0, loader.get());
+    loading_cache.insert(0, loader.get()).get();
+
+    // The loader must not have been invoked and the cache must remain empty.
+    BOOST_REQUIRE_EQUAL(loader.load_count(), 0);
+    BOOST_REQUIRE_EQUAL(loading_cache.size(), 0);
+    BOOST_REQUIRE(loading_cache.find(0) == nullptr);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
