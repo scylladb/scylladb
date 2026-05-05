@@ -4281,8 +4281,7 @@ public:
     {}
 private:
     future<> load_metadata() const {
-        auto metafile = _sst->filename(sstables::component_type::Scylla);
-        if (!co_await file_exists(fmt::to_string(metafile))) {
+        if (!co_await _sst->_storage->exists(*_sst, component_type::Scylla)) {
             // for compatibility with streaming a non-scylla table (no scylla component)
             co_return;
         }
