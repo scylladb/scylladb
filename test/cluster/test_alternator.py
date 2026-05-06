@@ -420,7 +420,7 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
     # server" error).
     # Without this trick, this test will take 2 minutes of wait to finish.
     for server in await manager.starting_servers():
-        await manager.server_stop(server.server_id)
+        await manager.server_stop(server.server_id, convict=False)
     try:
         await task
     except Exception as e:

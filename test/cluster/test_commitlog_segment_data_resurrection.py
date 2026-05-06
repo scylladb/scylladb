@@ -121,7 +121,7 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ManagerClient):
         logger.debug(f"The following segments were removed: {removed_segments}")
 
         logger.debug("Kill + restart the node")
-        await manager.server_stop(server.server_id)
+        await manager.server_stop(server.server_id, convict=False)
         await manager.server_start(server.server_id)
 
         manager.driver_close()

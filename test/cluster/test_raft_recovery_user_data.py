@@ -97,7 +97,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     await asyncio.sleep(1)
 
     logging.info(f'Killing {dead_servers}')
-    await gather_safely(*(manager.server_stop(server_id=srv.server_id) for srv in dead_servers))
+    await gather_safely(*(manager.server_stop(server_id=srv.server_id, convict=False) for srv in dead_servers))
 
     logging.info('Checking that group 0 has no majority')
     with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out"):

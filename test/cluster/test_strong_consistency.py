@@ -500,7 +500,7 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
             # Collect raft state and log entry counts before crash
             state_before_crash = await collect_all_raft_state(cql, hosts[0])
 
-            await manager.server_stop(server.server_id)
+            await manager.server_stop(server.server_id, convict=False)
 
             await manager.server_start(server.server_id)
             await reconnect_driver(manager)

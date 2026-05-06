@@ -1630,7 +1630,7 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
     logger.info("Migration done")
 
     logger.info("Stop node1 and copy the sstables from node2")
-    await manager.server_stop(servers[0].server_id)
+    await manager.server_stop(servers[0].server_id, convict=False)
     for src_path in glob.glob(os.path.join(node1_table_dir, sstable_filename_glob)):
         dst_path = os.path.join(node0_table_dir, os.path.basename(src_path))
         shutil.copy(src_path, dst_path)

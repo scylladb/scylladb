@@ -503,7 +503,7 @@ class ScyllaNode:
         if gently:
             self.cluster.manager.server_stop_gracefully(server_id=self.server_id)
         else:
-            self.cluster.manager.server_stop(server_id=self.server_id)
+            self.cluster.manager.server_stop(server_id=self.server_id, convict=False)
 
         if wait or wait_other_notice:
             self.wait_until_stopped(wait_seconds=wait_seconds, marks=marks, dump_core=gently)

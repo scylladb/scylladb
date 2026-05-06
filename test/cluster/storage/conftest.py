@@ -95,4 +95,4 @@ async def space_limited_servers(manager: ManagerClient, volumes_factory: Callabl
             yield servers
         finally:
             # Stop servers to be able to unmount volumes
-            await gather_safely(*(manager.server_stop(server.server_id) for server in servers))
+            await gather_safely(*(manager.server_stop(server.server_id, convict=False) for server in servers))

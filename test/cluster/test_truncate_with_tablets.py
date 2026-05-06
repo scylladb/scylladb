@@ -200,7 +200,7 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
         trunc_future = cql.run_async(f'TRUNCATE TABLE {ks}.test', host=trunc_host)
         # Wait for the topology coordinator to crash
         await raft_leader_log.wait_for('truncate_crash_after_session_clear hit, killing the node')
-        await manager.server_stop(raft_leader.server_id)
+        await manager.server_stop(raft_leader.server_id, convict=False)
         # Restart the crashed node
         await manager.server_start(raft_leader.server_id)
         # Wait for truncate to complete

@@ -642,4 +642,4 @@ async def test_background_merge_deadlock(manager: ManagerClient):
 
     await wait_for(finished_merge, time.time() + 120)
 
-    await manager.server_stop(servers[0].server_id)
+    await manager.server_stop(servers[0].server_id, convict=False)

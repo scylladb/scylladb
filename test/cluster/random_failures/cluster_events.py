@@ -672,7 +672,7 @@ async def kill_non_coordinator_node(manager: ManagerClient,
     yield
 
     LOGGER.info("Kill a non-coordinator node")
-    await manager.server_stop(server_id=(await get_non_coordinator_host(manager=manager)).server_id)
+    await manager.server_stop(server_id=(await get_non_coordinator_host(manager=manager)).server_id, convict=False)
 
     LOGGER.info("Sleep for 2 seconds")
     await asyncio.sleep(2)

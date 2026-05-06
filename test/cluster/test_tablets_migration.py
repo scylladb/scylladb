@@ -541,7 +541,7 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
         await log.wait_for("Waiting after tablet cleanup", from_mark=mark, timeout=60)
 
         # Restart the leaving replica (src_server)
-        await manager.server_stop(src_server.server_id)
+        await manager.server_stop(src_server.server_id, convict=False)
         await manager.server_start(src_server.server_id)
         await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 30)
 

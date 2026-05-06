@@ -27,7 +27,7 @@ async def test_different_group0_ids(manager: ManagerClient):
 
     id_b = await manager.get_host_id(scylla_b.server_id)
 
-    await manager.server_stop(scylla_b.server_id)
+    await manager.server_stop(scylla_b.server_id, convict=False)
     await manager.server_start(scylla_b.server_id, seeds=[scylla_a.ip_addr])
 
     # Since scylla_a and scylla_b have different group0 IDs and didn't join each other,
