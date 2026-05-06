@@ -60,8 +60,8 @@ async def insert_with_concurrency(cql, table, value_count, concurrency):
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) -> None:
     node_count = 2
-    await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update']})
-    cql = manager.get_cql()
+    servers = await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update', 'update_backlog_immediately']})
+    cql, hosts = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, PRIMARY KEY (key, c))")
         await insert_with_concurrency(cql, f"{ks}.tab", 200, 100)
@@ -71,8 +71,13 @@ async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) 
 
         await wait_for_view(cql, "mv_cf_view", node_count)
 
+        # The view building process elevates the view update backlog, potentially above the limit.
+        # When the view is build it should drop back down to 0 but this information may not reach
+        # the coordinator before the delete, so we perform an additional write on the same host before
+        # the delete - the current view update backlog will be propagated along the write response.
+        await cql.run_async(f"INSERT INTO {ks}.tab (key, c) VALUES (0, 999)", host=hosts[0], timeout=300)
         logger.info(f"Deleting all rows from partition with key 0")
-        await cql.run_async(f"DELETE FROM {ks}.tab WHERE key = 0", timeout=300)
+        await cql.run_async(f"DELETE FROM {ks}.tab WHERE key = 0", host=hosts[0], timeout=300)
 
 # Test deleting a large partition when there is a view with the same partition
 # key, and verify that view updates metrics is increased by exactly 1. Deleting
