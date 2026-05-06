@@ -415,7 +415,7 @@ An empty list is allowed, and it's equivalent to numeric replication factor of 0
 .. code-block:: cql
 
   ALTER KEYSPACE Excelsior
-   WITH replication = { 'class' : 'NetworkTopologyStrategy', dc2' : []};
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc2' : []};
 
 
 Altering from a rack list to a numeric replication factor is not supported.
