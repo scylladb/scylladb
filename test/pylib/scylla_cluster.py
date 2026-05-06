@@ -1188,6 +1188,8 @@ class ScyllaCluster:
         # Starting servers that were already asked to stop. They remain in self.starting until the stop path or add_server()
         # finishes the state transition, but add_server() must treat them as cancelled immediately.
         self.stopping_starting: Dict[ServerNum, ScyllaServer] = {}
+        # add_server() paths still using a server object after a stop request removed it from self.starting.
+        self.starting_done: Dict[ServerNum, asyncio.Event] = {}
         # The first IP assigned to a server added to the cluster.
         self.initial_seed: Optional[IPAddress] = None
         # cluster is started (but it might not have running servers)
@@ -1220,6 +1222,7 @@ class ScyllaCluster:
         self.is_dirty = True
         self.logger.info("Uninstalling cluster %s", self)
         await self.stop()
+        await self._wait_for_starting_done()
         await gather_safely(*(srv.uninstall() for srv in self.stopped.values()))
         # Close API client to release connector resources
         if self.api is not None:
@@ -1247,6 +1250,10 @@ class ScyllaCluster:
             self.starting.pop(server.server_id)
         if self.stopping_starting.get(server.server_id) is server:
             self.stopping_starting.pop(server.server_id)
+
+    async def _wait_for_starting_done(self) -> None:
+        while self.starting_done:
+            await gather_safely(*(event.wait() for event in list(self.starting_done.values())))
 
     async def _stop_servers(self, gracefully: bool) -> None:
         """Stop all servers with live or potentially live processes."""
@@ -1369,6 +1376,7 @@ class ScyllaCluster:
         )
 
         server = None
+        starting_done: asyncio.Event | None = None
 
         async def handle_join_failure():
             if not replace_cfg or not replace_cfg.reuse_ip_addr:
@@ -1379,48 +1387,56 @@ class ScyllaCluster:
                 self.stopped[server.server_id] = server
 
         try:
-            server = self.create_server(params)
-            self.starting[server.server_id] = server
-            self.logger.info("Cluster %s adding server...", self)
-            if start:
-                def check_still_starting() -> None:
-                    if not self._is_still_starting(server):
-                        raise RuntimeError(f"Server {server.server_id} was stopped while it was being added")
-
-                await server.install_and_start(self.api, expected_error, expected_server_up_state, before_start=check_still_starting)
-            else:
-                await server.install()
-        except BaseException as exc:
-            if server is not None:
-                self._remove_starting(server)
-            workdir = '<unknown>' if server is None else server.workdir.name
-            self.logger.error("Failed to start Scylla server at host %s in %s: %s",
-                          ip_addr, workdir, str(exc))
-            await handle_join_failure()
-            raise
-
-        assert server is not None
-
-        if not self._is_still_starting(server):
-            self._remove_starting(server)
             try:
-                await server.stop()
-            finally:
+                server = self.create_server(params)
+                starting_done = asyncio.Event()
+                self.starting_done[server.server_id] = starting_done
+                self.starting[server.server_id] = server
+                self.logger.info("Cluster %s adding server...", self)
+                if start:
+                    def check_still_starting() -> None:
+                        if not self._is_still_starting(server):
+                            raise RuntimeError(f"Server {server.server_id} was stopped while it was being added")
+
+                    await server.install_and_start(self.api, expected_error, expected_server_up_state, before_start=check_still_starting)
+                else:
+                    await server.install()
+            except BaseException as exc:
+                if server is not None:
+                    self._remove_starting(server)
+                workdir = '<unknown>' if server is None else server.workdir.name
+                self.logger.error("Failed to start Scylla server at host %s in %s: %s",
+                              ip_addr, workdir, str(exc))
                 await handle_join_failure()
-            raise RuntimeError(f"Server {server.server_id} was stopped while it was being added")
+                raise
 
-        self._remove_starting(server)
+            assert server is not None
 
-        if expected_error:
-            await handle_join_failure()
-        else:
-            if start:
-                self.running[server.server_id] = server
+            if not self._is_still_starting(server):
+                self._remove_starting(server)
+                try:
+                    await server.stop()
+                finally:
+                    await handle_join_failure()
+                raise RuntimeError(f"Server {server.server_id} was stopped while it was being added")
+
+            self._remove_starting(server)
+
+            if expected_error:
+                await handle_join_failure()
             else:
-                self.stopped[server.server_id] = server
-            self.logger.info("Cluster %s added %s", self, server)
+                if start:
+                    self.running[server.server_id] = server
+                else:
+                    self.stopped[server.server_id] = server
+                self.logger.info("Cluster %s added %s", self, server)
 
-        return server.server_info()
+            return server.server_info()
+        finally:
+            if server is not None and starting_done is not None:
+                if self.starting_done.get(server.server_id) is starting_done:
+                    self.starting_done.pop(server.server_id)
+                starting_done.set()
 
     async def add_servers(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,

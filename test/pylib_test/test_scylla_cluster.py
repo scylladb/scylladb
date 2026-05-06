@@ -46,6 +46,10 @@ class SlowInstallingServer:
         self.first_stop_started = asyncio.Event()
         self.second_stop_started = asyncio.Event()
         self.finish_stop = asyncio.Event()
+        self.stop_finished = asyncio.Event()
+        self.uninstall_started = asyncio.Event()
+        self.install_finished = False
+        self.uninstalled_before_install_finished = False
         self.started = False
         self.stop_calls = 0
         self.stop_gracefully_calls = 0
@@ -53,6 +57,7 @@ class SlowInstallingServer:
     async def install(self) -> None:
         self.install_started.set()
         await self.finish_install.wait()
+        self.install_finished = True
 
     async def install_and_start(self, api, expected_error=None, expected_server_up_state=None, before_start=None) -> None:
         await self.install()
@@ -79,10 +84,15 @@ class SlowInstallingServer:
                 self.second_stop_started.set()
             await self.finish_stop.wait()
         self.started = False
+        self.stop_finished.set()
 
     async def stop_gracefully(self) -> None:
         self.stop_gracefully_calls += 1
         self.started = False
+
+    async def uninstall(self) -> None:
+        self.uninstall_started.set()
+        self.uninstalled_before_install_finished = not self.install_finished
 
     def server_info(self) -> ServerInfo:
         return ServerInfo(self.server_id, self.ip_addr, self.rpc_address, self.datacenter, self.rack, 0)
@@ -263,5 +273,36 @@ async def test_stop_cancels_starting_server_before_stop_finishes(stop_action: st
     assert not cluster.running
     assert not cluster.starting
     assert cluster.stopped[server.server_id] is server
+    assert not cluster.leased_ips
+    assert host_registry.released_hosts == [Host(server.ip_addr)]
+
+
+@pytest.mark.asyncio
+async def test_cluster_uninstall_waits_for_cancelled_starting_server_to_finish_adding() -> None:
+    """Regression test for uninstall racing with a stopped add_server() still inside install()."""
+    cluster, host_registry, created_servers = make_cluster()
+    add_task, server = await start_adding_server(cluster, created_servers)
+    server.block_stop_until_released = True
+
+    uninstall_task = asyncio.create_task(cluster.uninstall())
+    await server.first_stop_started.wait()
+    server.finish_stop.set()
+    await server.stop_finished.wait()
+
+    for _ in range(10):
+        if server.uninstall_started.is_set():
+            break
+        await asyncio.sleep(0)
+    assert not server.uninstall_started.is_set()
+
+    server.finish_install.set()
+    with pytest.raises(RuntimeError, match="stopped while it was being added"):
+        await add_task
+    await uninstall_task
+
+    assert server.uninstall_started.is_set()
+    assert not server.uninstalled_before_install_finished
+    assert not cluster.running
+    assert not cluster.starting
     assert not cluster.leased_ips
     assert host_registry.released_hosts == [Host(server.ip_addr)]
