@@ -1180,6 +1180,9 @@ class ScyllaCluster:
         self.servers = ChainMap(self.running, self.stopped)
         self.removed: Set[ServerNum] = set()                    # removed servers (might be running)
         self.starting: Dict[ServerNum, ScyllaServer] = {}       # servers starting right now, not yet running (and not included in "servers").
+        # Starting servers that were already asked to stop. They remain in self.starting until the stop path or add_server()
+        # finishes the state transition, but add_server() must treat them as cancelled immediately.
+        self.stopping_starting: Dict[ServerNum, ScyllaServer] = {}
         # The first IP assigned to a server added to the cluster.
         self.initial_seed: Optional[IPAddress] = None
         # cluster is started (but it might not have running servers)
@@ -1225,10 +1228,20 @@ class ScyllaCluster:
         Call this function only if the cluster is stopped and will not be started again."""
         assert not self.running
         assert not self.starting
+        assert not self.stopping_starting
         self.logger.info("Cluster %s releases ips %s", self, self.leased_ips)
         while self.leased_ips:
             ip = self.leased_ips.pop()
             await self.host_registry.release_host(Host(ip))
+
+    def _is_still_starting(self, server: ScyllaServer) -> bool:
+        return self.starting.get(server.server_id) is server and self.stopping_starting.get(server.server_id) is not server
+
+    def _remove_starting(self, server: ScyllaServer) -> None:
+        if self.starting.get(server.server_id) is server:
+            self.starting.pop(server.server_id)
+        if self.stopping_starting.get(server.server_id) is server:
+            self.stopping_starting.pop(server.server_id)
 
     async def _stop_servers(self, gracefully: bool) -> None:
         """Stop all servers with live or potentially live processes."""
@@ -1236,10 +1249,20 @@ class ScyllaCluster:
             running = list(self.running.items())
             starting = list(self.starting.items())
 
-            if gracefully:
-                await gather_safely(*(server.stop_gracefully() for _, server in itertools.chain(running, starting)))
-            else:
-                await gather_safely(*(server.stop() for _, server in itertools.chain(running, starting)))
+            for server_id, server in starting:
+                if self.starting.get(server_id) is server:
+                    self.stopping_starting[server_id] = server
+
+            try:
+                if gracefully:
+                    await gather_safely(*(server.stop_gracefully() for _, server in itertools.chain(running, starting)))
+                else:
+                    await gather_safely(*(server.stop() for _, server in itertools.chain(running, starting)))
+            except BaseException:
+                for server_id, server in starting:
+                    if self.stopping_starting.get(server_id) is server:
+                        self.stopping_starting.pop(server_id)
+                raise
 
             for server_id, server in running:
                 if self.running.get(server_id) is server:
@@ -1247,6 +1270,8 @@ class ScyllaCluster:
             for server_id, server in starting:
                 if self.starting.get(server_id) is server:
                     self.stopped[server_id] = self.starting.pop(server_id)
+                if self.stopping_starting.get(server_id) is server:
+                    self.stopping_starting.pop(server_id)
 
     async def stop(self) -> None:
         """Stop all running or starting servers ASAP"""
@@ -1354,7 +1379,7 @@ class ScyllaCluster:
             self.logger.info("Cluster %s adding server...", self)
             if start:
                 def check_still_starting() -> None:
-                    if self.starting.get(server.server_id) is not server:
+                    if not self._is_still_starting(server):
                         raise RuntimeError(f"Server {server.server_id} was stopped while it was being added")
 
                 await server.install_and_start(self.api, expected_error, expected_server_up_state, before_start=check_still_starting)
@@ -1362,7 +1387,7 @@ class ScyllaCluster:
                 await server.install()
         except BaseException as exc:
             if server is not None:
-                self.starting.pop(server.server_id, None)
+                self._remove_starting(server)
             workdir = '<unknown>' if server is None else server.workdir.name
             self.logger.error("Failed to start Scylla server at host %s in %s: %s",
                           ip_addr, workdir, str(exc))
@@ -1371,14 +1396,15 @@ class ScyllaCluster:
 
         assert server is not None
 
-        if self.starting.get(server.server_id) is not server:
+        if not self._is_still_starting(server):
+            self._remove_starting(server)
             try:
                 await server.stop()
             finally:
                 await handle_join_failure()
             raise RuntimeError(f"Server {server.server_id} was stopped while it was being added")
 
-        self.starting.pop(server.server_id)
+        self._remove_starting(server)
 
         if expected_error:
             await handle_join_failure()
@@ -1519,18 +1545,26 @@ class ScyllaCluster:
             server = self.running[server_id]
         else:
             server = self.starting[server_id]
+            self.stopping_starting[server_id] = server
         # Remove the server from `running` only after we successfully stop it.
         # Stopping may fail and if we removed it from `running` now it might leak.
-        if gracefully:
-            await server.stop_gracefully()
-        else:
-            await server.stop()
+        try:
+            if gracefully:
+                await server.stop_gracefully()
+            else:
+                await server.stop()
+        except BaseException:
+            if self.stopping_starting.get(server_id) is server:
+                self.stopping_starting.pop(server_id)
+            raise
         if server_id in self.running:
             self.running.pop(server_id)
             self.stopped[server_id] = server
         else:
             if self.starting.get(server_id) is server:
                 self.stopped[server_id] = self.starting.pop(server_id)
+            if self.stopping_starting.get(server_id) is server:
+                self.stopping_starting.pop(server_id)
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
         """Mark server as removed."""
