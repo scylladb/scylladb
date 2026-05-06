@@ -376,7 +376,7 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
                                         },
                                         auto_rack_dc='dc1',
                                         version=scylla_2025_1)
-    (cql, hosts) = await manager.get_ready_cql(servers)
+    (cql, _) = await manager.get_ready_cql(servers)
 
     logger.info("Create a test keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
@@ -429,13 +429,7 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
             # so the LWT workload doesn’t fail if the driver suddenly sees all nodes as “down”.
             if s == servers[-1]:
                 logger.info("Wait all nodes are up")
-                async def all_hosts_are_alive():
-                    for h in hosts:
-                        if not h.is_up:
-                            logger.info(f"Host {h} is down, continue waiting")
-                            return None
-                    return True
-                await wait_for(all_hosts_are_alive, deadline=time.time() + 60, period=0.1)
+                await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
             logger.info(f"Upgrading {s.server_id}")
             await manager.server_change_version(s.server_id, scylla_binary)
             await manager.server_sees_others(s.server_id, 2, interval=60.0)
