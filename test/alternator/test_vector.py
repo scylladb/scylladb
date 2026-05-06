@@ -923,6 +923,9 @@ def test_putitem_vectorindex_updatetable(vs):
 # global queries on it, not filtering to a specific partition, may get
 # results from other tests - so such tests will need to create their own
 # table instead of using this shared one.
+# If vector store is configured, we wait for the vector index to become
+# active before yielding the table, so tests that use this fixture can
+# read from it immediately.
 @pytest.fixture(scope="module")
 def table_vs(vs):
     with new_test_table(vs,
@@ -932,6 +935,8 @@ def table_vs(vs):
                 {'IndexName': 'vind',
                  'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}
             ]) as table:
+        if vector_store_configured(table):
+            wait_for_vector_index_active(table, 'vind')
         yield table
 
 # Test that a Query with a VectorSearch parameter without an IndexName
@@ -1107,7 +1112,7 @@ def vector_store_configured(table_vs):
 # It is assumed that if Scylla is configured to use the vector store, then
 # the reverse is also true - the vector store is configured to use Scylla,
 # so we can check the end-to-end functionality.
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def needs_vector_store(table_vs):
     if not vector_store_configured(table_vs):
         skip_env('Vector Store is not configured (run with --vs)')
