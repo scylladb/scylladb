@@ -1017,11 +1017,11 @@ For example:
 
     CREATE TABLE customer_data (
         cust_id uuid,
-        cust_first-name text,
-        cust_last-name text,
+        "cust_first-name" text,
+        "cust_last-name" text,
         cust_phone text,
-        cust_get-sms text,
-        PRIMARY KEY (customer_id)
+        "cust_get-sms" text,
+        PRIMARY KEY (cust_id)
     ) WITH cdc = { 'enabled' : 'true', 'preimage' : 'true' };
 
 .. _cql-caching-options:
