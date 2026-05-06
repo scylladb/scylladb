@@ -554,18 +554,21 @@ class ScyllaNode:
 
     def stress(self, stress_options: list[str], **kwargs):
         """
-        Run `cassandra-stress` against this node.
+        Run `cassandra-stress` against this node via a nested container.
         This method does not do any result parsing.
 
         :param stress_options: List of options to pass to `cassandra-stress`.
         :param kwargs: Additional arguments to pass to `subprocess.Popen()`.
         :return: Named tuple with `stdout`, `stderr`, and `rc` (return code).
         """
+        from test.pylib.nested_container import CASSANDRA_STRESS_IMAGE, _runtime
 
-        cmd_args = ["cassandra-stress"] + stress_options
+        cs_args = list(stress_options)
+        if not any(opt in cs_args for opt in ("-d", "-node", "-cloudconf")):
+            cs_args.extend(["-node", self.address()])
 
-        if not any(opt in cmd_args for opt in ("-d", "-node", "-cloudconf")):
-            cmd_args.extend(["-node", self.address()])
+        cmd_args = [_runtime(), 'run', '--rm', '--network', 'host',
+                    CASSANDRA_STRESS_IMAGE] + cs_args
 
         p = subprocess.Popen(
             cmd_args,

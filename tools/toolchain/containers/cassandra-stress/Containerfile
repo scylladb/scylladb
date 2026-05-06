@@ -1,0 +1,7 @@
+FROM registry.fedoraproject.org/fedora:43
+
+RUN dnf install -y java-openjdk-headless snappy \
+    && dnf install --no-gpgchecks -y https://github.com/scylladb/cassandra-stress/releases/download/v3.18.1/cassandra-stress-java21-3.18.1-1.noarch.rpm \
+    && dnf clean all
+
+ENTRYPOINT ["cassandra-stress"]

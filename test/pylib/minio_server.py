@@ -24,6 +24,10 @@ import socket
 import string
 import yaml
 from io import BufferedWriter
+from test.pylib.nested_container import (
+    MINIO_IMAGE, ensure_image, run_container, kill_container, rm_container,
+    mc_in_container, _runtime
+)
 
 class MinioServer:
     ENV_ADDRESS = 'S3_SERVER_ADDRESS_FOR_TEST'
@@ -36,7 +40,6 @@ class MinioServer:
     log_file: BufferedWriter
 
     def __init__(self, tempdir_base, address, logger):
-        self.srv_exe = shutil.which('minio')
         self.address = address
         self.port = None
         self.tempdir_base = pathlib.Path(tempdir_base)
@@ -45,6 +48,7 @@ class MinioServer:
         self.rootdir = self.tempdir / 'minio_root'
         self.mcdir = self.tempdir / 'mc'
         self.logger = logger
+        self.container_name: Optional[str] = None
         self.cmd: Optional[Process] = None
         self.default_user = 'minioadmin'
         self.default_pass = 'minioadmin'
@@ -76,14 +80,13 @@ class MinioServer:
     async def mc(self, *args, ignore_failure=False, timeout=0):
         retry_until: float = time.time() + timeout
         retry_step: float = 0.1
-        cmd = ['mc',
-               '--debug',
-               '--config-dir', self.mcdir]
-        cmd.extend(args)
 
         while True:
             try:
-                subprocess.check_call(cmd, stdout=self.log_file, stderr=self.log_file)
+                mc_in_container(MINIO_IMAGE, ['--debug'] + list(args),
+                                config_dir=str(self.mcdir),
+                                container_name=self.container_name,
+                                stdout=self.log_file, stderr=self.log_file)
             except subprocess.CalledProcessError:
                 if ignore_failure:
                     self.log_to_file('ignoring')
@@ -166,24 +169,28 @@ class MinioServer:
         return [endpoint]
 
     async def _run_server(self, port):
-        self.logger.info(f'Starting minio server at {self.address}:{port}')
+        self.logger.info(f'Starting minio server container at {self.address}:{port}')
+        self.container_name = f'minio-test-{port}'
+
+        # Remove any stale container with the same name
+        rm_container(self.container_name)
+
         cmd = await asyncio.create_subprocess_exec(
-            self.srv_exe,
-            *[ 'server', '--address', f'{self.address}:{port}', self.rootdir ],
+            _runtime(), 'run', '--rm',
+            '--name', self.container_name,
+            '--network', 'host',
+            '-e', 'MINIO_BROWSER=off',
+            '-e', 'MINIO_FS_OSYNC=off',
+            '-v', f'{self.rootdir}:/data',
+            MINIO_IMAGE,
+            'server', '--address', f'{self.address}:{port}', '/data',
             preexec_fn=os.setsid,
             stderr=self.log_file,
             stdout=self.log_file,
-            env={
-                **os.environ,
-                'MINIO_BROWSER': 'off',
-                'MINIO_FS_OSYNC': 'off',
-            },
         )
         timeout = time.time() + 30
         while time.time() < timeout:
             if cmd.returncode is not None:
-                # the minio server exits before it starts to server. maybe the
-                # port is used by another server?
                 self.logger.info('minio exited with %s', cmd.returncode)
                 raise RuntimeError("Failed to start minio server")
             if self.check_server(port):
@@ -227,9 +234,12 @@ class MinioServer:
         print('\n'.join(msgs))
 
     async def start(self):
-        if self.srv_exe is None:
-            self.logger.error("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
-            return
+        from test import TOP_SRC_DIR
+        containerfile_dir = str(TOP_SRC_DIR / 'tools' / 'toolchain' / 'containers' / 'minio')
+        try:
+            ensure_image(MINIO_IMAGE, containerfile_dir=containerfile_dir)
+        except Exception as e:
+            raise RuntimeError(f"Minio container image not available: {e}") from e
 
         self.log_file = self.log_filename.open("wb")
         os.mkdir(self.rootdir)
@@ -244,8 +254,7 @@ class MinioServer:
             else:
                 break
         else:
-            self.logger.error("Failed to start Minio server")
-            return
+            raise RuntimeError("Failed to start Minio server after all retries")
 
         self._set_environ()
 
@@ -259,25 +268,30 @@ class MinioServer:
             await self.mc('admin', 'user', 'add', alias, self.access_key, self.secret_key)
             self.log_to_file(f'Configuring bucket {self.bucket_name}')
             await self.mc('mb', f'{alias}/{self.bucket_name}')
-            with tempfile.NamedTemporaryFile(mode='w', encoding='UTF-8', suffix='.json') as policy_file:
-                json.dump(self._bucket_policy(), policy_file, indent=2)
-                policy_file.flush()
-                await self.mc('admin', 'policy', 'create', alias, 'test-policy', policy_file.name)
+            # Write policy file into the container's mounted volume so it's
+            # accessible from inside the container at /data/
+            policy_path = pathlib.Path(self.rootdir) / 'policy.json'
+            policy_path.write_text(json.dumps(self._bucket_policy(), indent=2), encoding='UTF-8')
+            try:
+                await self.mc('admin', 'policy', 'create', alias, 'test-policy', '/data/policy.json')
+            finally:
+                policy_path.unlink(missing_ok=True)
             await self.mc('admin', 'policy', 'attach', alias, 'test-policy', '--user', self.access_key)
 
         except Exception as e:
             self.logger.error(f'MC failed: {e}')
             await self.stop()
+            raise RuntimeError(f"Failed to configure Minio server: {e}") from e
 
     async def stop(self):
-        self.logger.info('Killing minio server')
+        self.logger.info('Killing minio server container')
         if not self.cmd:
             return
 
-        # so the test's process environment is not polluted by a test case
-        # which launches the MinioServer by itself.
         self._unset_environ()
         try:
+            if self.container_name:
+                kill_container(self.container_name)
             self.cmd.kill()
         except ProcessLookupError:
             pass
@@ -286,6 +300,7 @@ class MinioServer:
         finally:
             self.logger.info('Killed minio server')
             self.cmd = None
+            self.container_name = None
             shutil.rmtree(self.tempdir)
 
 

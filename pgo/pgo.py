@@ -550,9 +550,11 @@ async def with_cluster(executable: PathLike, workdir: PathLike, cpusets: Optiona
 # cassandra-stress utilities
 
 def cs_command(cmd: list[str], n: int, node: str, cl: str, pop: Optional[str] = None, warmup: bool = False, rate: str = "threads=200", schema: Optional[str] = None) -> list[str]:
-    """Strings together a cassandra-stress command from given options."""
-    return [
-        "cassandra-stress",
+    """Strings together a cassandra-stress command from given options.
+    Runs cassandra-stress inside a nested container via podman.
+    """
+    from test.pylib.nested_container import CASSANDRA_STRESS_IMAGE, _runtime
+    cs_args = [
         *cmd,
         f"n={n}",
         f"cl={cl}",
@@ -563,6 +565,8 @@ def cs_command(cmd: list[str], n: int, node: str, cl: str, pop: Optional[str] = 
         "-rate", rate,
     ] + (["-schema", schema] if schema else []) + [
     ]
+    return [_runtime(), 'run', '--rm', '--network', 'host',
+            CASSANDRA_STRESS_IMAGE] + cs_args
 
 async def cs(run_kwargs: dict[str, Any] = {}, **params: Any) -> Process:
     """Runs a cassandra-stress process.

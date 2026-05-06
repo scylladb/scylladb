@@ -1,0 +1,17 @@
+FROM registry.fedoraproject.org/fedora:43
+
+ARG TARGETARCH
+
+RUN arch=$(uname -m) && \
+    case "$arch" in \
+        x86_64) goarch=amd64 ;; \
+        aarch64) goarch=arm64 ;; \
+        *) echo "Unsupported architecture: $arch" && exit 1 ;; \
+    esac && \
+    curl -fSL -o /usr/local/bin/minio "https://dl.minio.io/server/minio/release/linux-${goarch}/minio" && \
+    curl -fSL -o /usr/local/bin/mc "https://dl.min.io/client/mc/release/linux-${goarch}/mc" && \
+    chmod +x /usr/local/bin/minio /usr/local/bin/mc
+
+EXPOSE 9000
+ENTRYPOINT ["minio"]
+CMD ["server", "/data"]
