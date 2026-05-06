@@ -558,14 +558,16 @@ class ScyllaServer:
     async def install_and_start(self,
                                 api: ScyllaRESTAPIClient,
                                 expected_error: Optional[str] = None,
-                                expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED) -> None:
+                                expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED,
+                                before_start: Callable[[], None] | None = None) -> None:
         """Setup and start this server."""
 
         await self.install()
 
-        self.logger.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
-
         try:
+            if before_start is not None:
+                before_start()
+            self.logger.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
             await self.start(api, expected_error, expected_server_up_state)
         except:
             await self.stop()
@@ -1351,7 +1353,11 @@ class ScyllaCluster:
             self.starting[server.server_id] = server
             self.logger.info("Cluster %s adding server...", self)
             if start:
-                await server.install_and_start(self.api, expected_error, expected_server_up_state)
+                def check_still_starting() -> None:
+                    if self.starting.get(server.server_id) is not server:
+                        raise RuntimeError(f"Server {server.server_id} was stopped while it was being added")
+
+                await server.install_and_start(self.api, expected_error, expected_server_up_state, before_start=check_still_starting)
             else:
                 await server.install()
         except BaseException as exc:
@@ -1513,7 +1519,8 @@ class ScyllaCluster:
             self.running.pop(server_id)
             self.stopped[server_id] = server
         else:
-            self.starting.pop(server_id, None)
+            if self.starting.get(server_id) is server:
+                self.stopped[server_id] = self.starting.pop(server_id)
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
         """Mark server as removed."""
