@@ -10,7 +10,7 @@ from collections import defaultdict
 from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.protocol import ConfigurationException
 
-from test.pylib.manager_client import ManagerClient
+from test.pylib.manager_client import ManagerClient, ServerUpState
 from test.cluster.conftest import cluster_con
 from test.cluster.util import create_new_test_keyspace, get_replication, get_replica_count
 
@@ -33,7 +33,12 @@ async def test_create_keyspace_with_default_replication_factor(manager: ManagerC
     server = await manager.server_add(config=normal_cfg, property_file=get_pf("dc1", "r1"))
 
     logging.info("Adding dc1/rz rack server as zero-token")
-    await manager.server_add(config=zero_token_cfg, property_file=get_pf("dc1", "rz"))
+    await manager.server_add(
+        config=zero_token_cfg,
+        property_file=get_pf("dc1", "rz"),
+        expected_server_up_state=ServerUpState.CQL_ALTERNATOR_CONNECTED,
+        connect_driver=True,
+    )
 
     logging.info("Adding dc1/r2 rack server")
     await manager.server_add(config=normal_cfg, property_file=get_pf("dc1", "r2"))
@@ -59,10 +64,20 @@ async def test_create_keyspace_with_default_replication_factor(manager: ManagerC
 
     if rf_rack_valid_keyspaces == False:
         logging.info("Adding dc3/rz1 rack server as zero-token")
-        await manager.server_add(config=zero_token_cfg, property_file=get_pf("dc3", "rz"))
+        await manager.server_add(
+            config=zero_token_cfg,
+            property_file=get_pf("dc3", "rz"),
+            expected_server_up_state=ServerUpState.CQL_ALTERNATOR_CONNECTED,
+            connect_driver=True,
+        )
 
         logging.info("Adding dc3/rz2 rack server as zero-token")
-        await manager.server_add(config=zero_token_cfg, property_file=get_pf("dc3", "r2"))
+        await manager.server_add(
+            config=zero_token_cfg,
+            property_file=get_pf("dc3", "r2"),
+            expected_server_up_state=ServerUpState.CQL_ALTERNATOR_CONNECTED,
+            connect_driver=True,
+        )
 
     def verify_rf(cql, ks_name: str):
         rep = get_replication(cql, ks_name)
