@@ -13,7 +13,7 @@ import time
 import random
 
 from test.pylib.manager_client import ManagerClient, ServerInfo
-from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace
+from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, create_new_test_table
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_all
 from cassandra.cluster import ConsistencyLevel
@@ -61,9 +61,9 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
     cql = manager.get_cql()
-    cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        ks_table = await create_new_test_table(manager, ks, "name text primary key, value text")
+        cf = ks_table.split('.')[1]
         await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
         snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
         assert len(files) > 0
@@ -108,9 +108,9 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
     cql = manager.get_cql()
-    cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        ks_table = await create_new_test_table(manager, ks, "name text primary key, value text")
+        cf = ks_table.split('.')[1]
         await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
         backup_snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
         assert len(files) > 0
@@ -140,9 +140,9 @@ async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient,
     cmd = ['--logger-log-level', 'sstables_manager=debug']
     server = await manager.server_add(config=cfg, cmdline=cmd)
     cql = manager.get_cql()
-    cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        ks_table = await create_new_test_table(manager, ks, "name text primary key, value text")
+        cf = ks_table.split('.')[1]
         await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
         snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
 
@@ -184,9 +184,9 @@ async def do_test_backup_helper(manager: ManagerClient, object_storage,
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = (await manager.servers_add(num_servers, config=cfg, cmdline=cmd))[0]
     cql = manager.get_cql()
-    cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        ks_table = await create_new_test_table(manager, ks, "name text primary key, value text")
+        cf = ks_table.split('.')[1]
         await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
         snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
 
@@ -274,9 +274,9 @@ async def test_simple_backup_and_restore(manager: ManagerClient, object_storage,
 
     # This test is sensitive not to share the bucket with any other test
     # that can run in parallel, so generate some unique name for the snapshot
-    cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        ks_table = await create_new_test_table(manager, ks, "name text primary key, value text")
+        cf = ks_table.split('.')[1]
         await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');") for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
         snap_name, toc_names = await take_snapshot_on_one_server(ks, server, manager, logger)
 
@@ -381,11 +381,10 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
     # Create keyspace, table, and fill data
     logger.info("Creating keyspace and table, then inserting data...")
 
-    table = 'test_cf'
     async with new_test_keyspace(manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as keyspace:
-        create_table_query = f"CREATE TABLE {keyspace}.{table} (name text PRIMARY KEY, value text);"
-        await cql.run_async(create_table_query)
+        ks_table = await create_new_test_table(manager, keyspace, "name text PRIMARY KEY, value text")
+        table = ks_table.split('.')[1]
 
         insert_stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (name, value) VALUES (?, ?)")
         insert_stmt.consistency_level = ConsistencyLevel.ALL
@@ -699,18 +698,19 @@ async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topo
     restored_min_tablet_counts = [original_min_tablet_count] if (build_mode == 'debug' or sstables_storage.object_storage is None) else [2, original_min_tablet_count, 10]
     
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {original_min_tablet_count}}};")
-        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        ks_table = await create_new_test_table(manager, ks, "pk text primary key, value int", f" WITH tablets = {{'min_tablet_count': {original_min_tablet_count}}}")
+        cf = ks_table.split('.')[1]
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
         insert_stmt.consistency_level = ConsistencyLevel.ALL
         await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
 
         # validate replicas assertions hold on fresh dataset
-        await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+        await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, cf)
 
         snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
-        prefix = f'test/{snap_name}'
+        prefix = f'{cf}/{snap_name}'
 
-        await sstables_storage.save(manager, servers, snap_name, prefix, ks, 'test', logger)
+        await sstables_storage.save(manager, servers, snap_name, prefix, ks, cf, logger)
 
     for scope, pro, restored_min_tablet_count in itertools.product(scopes, pros, restored_min_tablet_counts):
         if scope == 'node' and pro == True:
@@ -723,16 +723,17 @@ async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topo
             continue
 
         async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
-            await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {restored_min_tablet_count}}};")
+            ks_table = await create_new_test_table(manager, ks, "pk text primary key, value int", f" WITH tablets = {{'min_tablet_count': {restored_min_tablet_count}}}")
+            cf = ks_table.split('.')[1]
 
             log_marks = await mark_all_logs(manager, servers)
 
             logger.info(f'Loading {servers=} with {sstables=} scope={scope}')
             sstables_per_server = distribute_sstables(sstables, servers, topology, scope)
-            await sstables_storage.restore(manager, sstables_per_server, prefix, ks, 'test', scope, pro, logger)
+            await sstables_storage.restore(manager, sstables_per_server, prefix, ks, cf, scope, pro, logger)
             if pro:
-                await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', 'all', timeout=600)
-            await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+                await manager.api.tablet_repair(servers[0].ip_addr, ks, cf, 'all', timeout=600)
+            await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, cf)
             if restored_min_tablet_count == original_min_tablet_count:
                 await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
@@ -748,11 +749,10 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
     server = await manager.server_add(config=cfg, cmdline=cmd)
-    cql = manager.get_cql()
     print('Create keyspace')
-    cf = 'test_cf'
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        ks_table = await create_new_test_table(manager, ks, "name text primary key, value text")
+        cf = ks_table.split('.')[1]
         sstable_name = 'me-3gou_0fvw_4r94g2h8nw60b8ly4c-big-TOC.txt'
         tid = await manager.api.restore(server.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, 'no_such_prefix', [sstable_name])
         status = await manager.api.wait_task(server.ip_addr, tid)
@@ -780,12 +780,8 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
 
     async with new_test_keyspace(manager,
                                  "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:
-        table = 'test_cf'
-        create_table_query = (
-            f"CREATE TABLE {keyspace}.{table} (name text PRIMARY KEY, value text) "
-            f"WITH tablets = {{'min_tablet_count': '16'}};"
-        )
-        cql.execute(create_table_query)
+        ks_table = await create_new_test_table(manager, keyspace, "name text PRIMARY KEY, value text", " WITH tablets = {'min_tablet_count': 16}")
+        table = ks_table.split('.')[1]
 
         expected_rows = 0
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -873,7 +869,6 @@ async def test_restore_primary_replica(manager: ManagerClient, object_storage, d
             scope = "all"
         expected_replicas = 1
 
-    cf = 'cf'
     keys = range(256)
     replication_str = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}"
 
@@ -883,7 +878,8 @@ async def test_restore_primary_replica(manager: ManagerClient, object_storage, d
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, replication_str) as ks:
-        cql.execute(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int );")
+        ks_table = await create_new_test_table(manager, ks, "pk text primary key, value int")
+        cf = ks_table.split('.')[1]
         stmt = cql.prepare(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES (?, ?)")
         stmt.consistency_level = ConsistencyLevel.ALL
         await asyncio.gather(*(cql.run_async(stmt, (str(k), k)) for k in keys))
@@ -897,7 +893,7 @@ async def test_restore_primary_replica(manager: ManagerClient, object_storage, d
         await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger) for s in servers))
 
     async with new_test_keyspace(manager, replication_str) as ks:
-        cql.execute(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int );")
+        await create_new_test_table(manager, ks, "pk text primary key, value int", table_name=cf)
 
         await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables[s], scope, True, prefix, object_storage) for s in servers))
 
