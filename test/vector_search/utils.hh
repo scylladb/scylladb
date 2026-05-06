@@ -16,9 +16,24 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/net/api.hh>
+#include <seastar/testing/test_case.hh>
 #include <seastar/util/tmp_file.hh>
 #include <functional>
 #include <chrono>
+
+// Wrapper for SEASTAR_TEST_CASE that catches std::exception and fails with the exception message.
+// This is useful for tests that use co_await and want to catch exceptions that are thrown
+// by the coroutine, which would otherwise be silently swallowed.
+#define SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(name, ...)        \
+    static seastar::future<> name##_impl();                         \
+    SEASTAR_TEST_CASE(name __VA_OPT__(,) __VA_ARGS__) {            \
+        try {                                                       \
+            co_await name##_impl();                                 \
+        } catch (const std::exception& e) {                         \
+            BOOST_FAIL(e.what());                                   \
+        }                                                           \
+    }                                                               \
+    static seastar::future<> name##_impl()
 
 namespace test::vector_search {
 

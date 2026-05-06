@@ -107,7 +107,7 @@ struct print_log_value<std::vector<float>> {
 };
 }
 
-SEASTAR_TEST_CASE(index_option_quantization_valid_values) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(index_option_quantization_valid_values) {
     std::vector<sstring> supported_quantizations = {"f32", "f16", "bf16", "i8", "b1", "F32", "F16", "BF16", "I8", "B1"};
     for (const auto& quantization : supported_quantizations) {
         co_await do_with_cql_env(
@@ -121,7 +121,7 @@ SEASTAR_TEST_CASE(index_option_quantization_valid_values) {
     }
 }
 
-SEASTAR_TEST_CASE(index_option_quantization_invalid_value) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(index_option_quantization_invalid_value) {
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "cf");
@@ -133,7 +133,7 @@ SEASTAR_TEST_CASE(index_option_quantization_invalid_value) {
             make_config());
 }
 
-SEASTAR_TEST_CASE(index_option_oversampling_valid_values) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(index_option_oversampling_valid_values) {
     std::vector<sstring> valid_factors = {"1.0", "50.5", "100.0", "10", "1e1", "1000000e-4", "0x10", "  10  "};
     for (const auto& factor : valid_factors) {
         co_await do_with_cql_env(
@@ -147,7 +147,7 @@ SEASTAR_TEST_CASE(index_option_oversampling_valid_values) {
     }
 }
 
-SEASTAR_TEST_CASE(index_option_oversampling_invalid_values) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(index_option_oversampling_invalid_values) {
     std::vector<sstring> invalid_factors = {"0.9", "100.1", "0", "-5", "abc", "   ", "NaN", "inf"};
     for (const auto& factor : invalid_factors) {
         co_await do_with_cql_env(
@@ -163,7 +163,7 @@ SEASTAR_TEST_CASE(index_option_oversampling_invalid_values) {
     }
 }
 
-SEASTAR_TEST_CASE(index_option_rescoring_valid_values) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(index_option_rescoring_valid_values) {
     std::vector<sstring> valid_rescoring = {"true", "false", "True", "False", "TRUE", "FALSE"};
     for (const auto& rescoring : valid_rescoring) {
         co_await do_with_cql_env(
@@ -177,7 +177,7 @@ SEASTAR_TEST_CASE(index_option_rescoring_valid_values) {
     }
 }
 
-SEASTAR_TEST_CASE(index_option_rescoring_invalid_value) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(index_option_rescoring_invalid_value) {
     std::vector<sstring> invalid_rescoring = {"invalid_value", "0", "1", " true", "false "};
     for (const auto& rescoring : invalid_rescoring) {
         co_await do_with_cql_env(
@@ -193,7 +193,7 @@ SEASTAR_TEST_CASE(index_option_rescoring_invalid_value) {
     }
 }
 
-SEASTAR_TEST_CASE(oversampling_multiplies_limit_for_vector_store_query) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(oversampling_multiplies_limit_for_vector_store_query) {
     auto server = co_await make_vs_mock_server();
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
@@ -214,7 +214,7 @@ SEASTAR_TEST_CASE(oversampling_multiplies_limit_for_vector_store_query) {
             }));
 }
 
-SEASTAR_TEST_CASE(oversampled_vector_store_results_are_limited_to_cql_limit) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(oversampled_vector_store_results_are_limited_to_cql_limit) {
     auto server = co_await make_vs_mock_server();
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
@@ -244,7 +244,7 @@ SEASTAR_TEST_CASE(oversampled_vector_store_results_are_limited_to_cql_limit) {
             }));
 }
 
-SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(result_returned_by_vector_store_is_rescored) {
 
     for (const auto& params : test_data) {
         auto server = co_await make_vs_mock_server();
@@ -277,7 +277,7 @@ SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored) {
     }
 }
 
-SEASTAR_TEST_CASE(f32_quantization_disables_rescoring) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(f32_quantization_disables_rescoring) {
 
     auto server = co_await make_vs_mock_server();
     co_await do_with_cql_env(
@@ -308,7 +308,7 @@ SEASTAR_TEST_CASE(f32_quantization_disables_rescoring) {
             }));
 }
 
-SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(similarity_function_returns_correctly_rescored_results) {
     // This is a dedicated test that uses a similarity function in the SELECT clause.
     // We want to keep two tests, one with and one without (see `result_returned_by_vector_store_is_rescored`)
     // a similarity function in the SELECT clause, to ensure both code paths are covered.
@@ -337,9 +337,11 @@ SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results) {
                         BOOST_CHECK_EQUAL(rows.size(), 2);
                         BOOST_CHECK_EQUAL(rms->rs().result_set().get_metadata().column_count(), 2);
                         BOOST_CHECK_EQUAL(get_id_col_value(rows.at(0)), 1);
-                        BOOST_CHECK(is_similarity_eq(get_similarity_col_value(rows.at(0)), params.expected_similarity[0]));
+                        BOOST_CHECK_MESSAGE(is_similarity_eq(get_similarity_col_value(rows.at(0)), params.expected_similarity[0]),
+                                "Similarity mismatch for row 0: got " << get_similarity_col_value(rows.at(0)) << ", expected " << params.expected_similarity[0]);
                         BOOST_CHECK_EQUAL(get_id_col_value(rows.at(1)), 2);
-                        BOOST_CHECK(is_similarity_eq(get_similarity_col_value(rows.at(1)), params.expected_similarity[1]));
+                        BOOST_CHECK_MESSAGE(is_similarity_eq(get_similarity_col_value(rows.at(1)), params.expected_similarity[1]),
+                                "Similarity mismatch for row 1: got " << get_similarity_col_value(rows.at(1)) << ", expected " << params.expected_similarity[1]);
                     }
                 },
                 make_config(format("http://server.node:{}", server->port())))
@@ -349,7 +351,7 @@ SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results) {
     }
 }
 
-SEASTAR_TEST_CASE(wildcard_select_is_correctly_rescored) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(wildcard_select_is_correctly_rescored) {
     // Another case with slightly different path of processing is "SELECT * ...".
 
     for (const auto& params : test_data) {
@@ -385,7 +387,7 @@ SEASTAR_TEST_CASE(wildcard_select_is_correctly_rescored) {
     }
 }
 
-SEASTAR_TEST_CASE(select_similarity_function_other_than_ann_ordering) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(select_similarity_function_other_than_ann_ordering) {
     // Another tricky case with similarity column with argument different from ANN ordering vector.
     // Especially if we use prepared statement and the difference is only seen at execution time.
     const auto& params = test_data[0];
@@ -414,9 +416,11 @@ SEASTAR_TEST_CASE(select_similarity_function_other_than_ann_ordering) {
                 BOOST_CHECK_EQUAL(rows.size(), 2);
                 BOOST_CHECK_EQUAL(rms->rs().result_set().get_metadata().column_count(), 2);
                 BOOST_CHECK_EQUAL(get_id_col_value(rows.at(0)), 1);
-                BOOST_CHECK(is_similarity_eq(get_similarity_col_value(rows.at(0)), params.expected_similarity[1]));
+                BOOST_CHECK_MESSAGE(is_similarity_eq(get_similarity_col_value(rows.at(0)), params.expected_similarity[1]),
+                        "Similarity mismatch for row 0: got " << get_similarity_col_value(rows.at(0)) << ", expected " << params.expected_similarity[1]);
                 BOOST_CHECK_EQUAL(get_id_col_value(rows.at(1)), 2);
-                BOOST_CHECK(is_similarity_eq(get_similarity_col_value(rows.at(1)), params.expected_similarity[0]));
+                BOOST_CHECK_MESSAGE(is_similarity_eq(get_similarity_col_value(rows.at(1)), params.expected_similarity[0]),
+                        "Similarity mismatch for row 1: got " << get_similarity_col_value(rows.at(1)) << ", expected " << params.expected_similarity[0]);
             },
             make_config(format("http://server.node:{}", server->port())))
             .finally(seastar::coroutine::lambda([&] -> future<> {
@@ -426,7 +430,7 @@ SEASTAR_TEST_CASE(select_similarity_function_other_than_ann_ordering) {
 
 // Rescoring does not filter out NULL embeddings yet, but they should be sorted as last.
 // So this test is expected to report error on result set size, but passes if the first element is correct.
-SEASTAR_TEST_CASE(no_nulls_in_rescored_results, *boost::unit_test::expected_failures(3)) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(no_nulls_in_rescored_results, *boost::unit_test::expected_failures(3)) {
 
     for (const auto& params : test_data) {
         auto server = co_await make_vs_mock_server();
@@ -462,7 +466,7 @@ SEASTAR_TEST_CASE(no_nulls_in_rescored_results, *boost::unit_test::expected_fail
 }
 
 // Reproducer for SCYLLADB-456
-SEASTAR_TEST_CASE(rescoring_with_zerovector_query) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(rescoring_with_zerovector_query) {
     for (const auto& params : test_data) {
         auto server = co_await make_vs_mock_server();
         co_await do_with_cql_env(
@@ -478,16 +482,12 @@ SEASTAR_TEST_CASE(rescoring_with_zerovector_query) {
                     })"});
 
                     // For cosine similarity the ANN vector query would fail as `similarity_cosine` function did not support zero vectors.
-                    try {
-                        auto msg = co_await env.execute_cql("SELECT id FROM ks.cf ORDER BY embedding ANN OF [0, 0] LIMIT 3;");
+                    auto msg = co_await env.execute_cql("SELECT id FROM ks.cf ORDER BY embedding ANN OF [0, 0] LIMIT 3;");
 
-                        auto rms = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-                        BOOST_REQUIRE(rms);
-                        const auto& rows = rms->rs().result_set().rows();
-                        BOOST_REQUIRE_EQUAL(rows.size(), 3);
-                    } catch (const std::exception& e) {
-                        BOOST_FAIL(e.what());
-                    }
+                    auto rms = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+                    BOOST_REQUIRE(rms);
+                    const auto& rows = rms->rs().result_set().rows();
+                    BOOST_REQUIRE_EQUAL(rows.size(), 3);
                 },
                 make_config(format("http://server.node:{}", server->port())))
                 .finally(seastar::coroutine::lambda([&] -> future<> {

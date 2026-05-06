@@ -14,6 +14,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "utils/rjson.hh"
+#include "utils.hh"
 #include "vector_search/filter.hh"
 
 BOOST_AUTO_TEST_SUITE(filter_test)
@@ -58,7 +59,7 @@ sstring get_restrictions_json(const restrictions::statement_restrictions& restr,
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(to_json_empty_restrictions) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_empty_restrictions) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -70,7 +71,7 @@ SEASTAR_TEST_CASE(to_json_empty_restrictions) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_with_allow_filtering) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_with_allow_filtering) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -82,7 +83,7 @@ SEASTAR_TEST_CASE(to_json_with_allow_filtering) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_single_column_eq) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_single_column_eq) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -94,7 +95,7 @@ SEASTAR_TEST_CASE(to_json_single_column_eq) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_single_column_lt) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_single_column_lt) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -106,7 +107,7 @@ SEASTAR_TEST_CASE(to_json_single_column_lt) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_single_column_gt) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_single_column_gt) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -118,7 +119,7 @@ SEASTAR_TEST_CASE(to_json_single_column_gt) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_single_column_lte) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_single_column_lte) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -130,7 +131,7 @@ SEASTAR_TEST_CASE(to_json_single_column_lte) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_single_column_gte) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_single_column_gte) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -142,7 +143,7 @@ SEASTAR_TEST_CASE(to_json_single_column_gte) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_single_column_in) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_single_column_in) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -154,7 +155,7 @@ SEASTAR_TEST_CASE(to_json_single_column_in) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_string_value) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_string_value) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk text, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -166,7 +167,7 @@ SEASTAR_TEST_CASE(to_json_string_value) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_multi_column_eq) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_multi_column_eq) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
@@ -178,7 +179,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_eq) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_multi_column_lt) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_multi_column_lt) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
@@ -190,7 +191,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_lt) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_multi_column_gt) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_multi_column_gt) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
@@ -202,7 +203,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_gt) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_multi_column_lte) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_multi_column_lte) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
@@ -214,7 +215,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_lte) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_multi_column_gte) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_multi_column_gte) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
@@ -226,7 +227,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_gte) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_multi_column_in) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_multi_column_in) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
@@ -238,7 +239,7 @@ SEASTAR_TEST_CASE(to_json_multi_column_in) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_multiple_restrictions) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_multiple_restrictions) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -250,7 +251,7 @@ SEASTAR_TEST_CASE(to_json_multiple_restrictions) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_with_boolean_value) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_with_boolean_value) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck boolean, v vector<float, 3>, primary key(pk, ck))");
 
@@ -262,7 +263,7 @@ SEASTAR_TEST_CASE(to_json_with_boolean_value) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_bind_marker_partition_key) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_bind_marker_partition_key) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -278,7 +279,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_partition_key) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_bind_marker_clustering_key) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_bind_marker_clustering_key) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -296,7 +297,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_clustering_key) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_bind_marker_different_values) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_bind_marker_different_values) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -317,7 +318,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_different_values) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_bind_marker_string_value) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_bind_marker_string_value) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk text, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -333,7 +334,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_string_value) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_mixed_literals_and_bind_markers) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_mixed_literals_and_bind_markers) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -349,7 +350,7 @@ SEASTAR_TEST_CASE(to_json_mixed_literals_and_bind_markers) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_bind_marker_in_list) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_bind_marker_in_list) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -368,7 +369,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_in_list) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_bind_marker_multi_column) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_bind_marker_multi_column) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck1 int, ck2 int, v vector<float, 3>, primary key(pk, ck1, ck2))");
 
@@ -387,7 +388,7 @@ SEASTAR_TEST_CASE(to_json_bind_marker_multi_column) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_no_bind_markers_uses_cache) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_no_bind_markers_uses_cache) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -407,7 +408,7 @@ SEASTAR_TEST_CASE(to_json_no_bind_markers_uses_cache) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_nonprimary_key_eq) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_nonprimary_key_eq) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, r int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -419,7 +420,7 @@ SEASTAR_TEST_CASE(to_json_nonprimary_key_eq) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_nonprimary_key_range) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_nonprimary_key_range) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, r int, v vector<float, 3>, primary key(pk, ck))");
 
@@ -431,7 +432,7 @@ SEASTAR_TEST_CASE(to_json_nonprimary_key_range) {
     });
 }
 
-SEASTAR_TEST_CASE(to_json_nonprimary_key_bind_marker) {
+SEASTAR_TEST_CASE_WITH_EXCEPTION_HANDLING(to_json_nonprimary_key_bind_marker) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, r int, v vector<float, 3>, primary key(pk, ck))");
 
