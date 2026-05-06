@@ -355,7 +355,7 @@ async def test_localnodes_down_normal_node(manager: ManagerClient):
     # be down, the gossiper on the first node will soon realize it is down,
     # but still consider it in a "normal" state - "DN" (down and normal).
     # We then want to check that "/localnodes" handles this state correctly.
-    await manager.server_stop(servers[1].server_id)
+    await manager.server_stop(servers[1].server_id, convict=True)
     # After that, "/localnodes" should no longer return the second node.
     # It might take a short while until the first node learns what happened
     # to the second, so we may need to retry for a while.

@@ -47,7 +47,7 @@ async def test_removenode_with_coordinator_restart(manager: ManagerClient):
     await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
 
     logger.info('Stopping a node to be removed')
-    await manager.server_stop(servers[2].server_id)
+    await manager.server_stop(servers[2].server_id, convict=True)
 
     logger.info('Restarting leader')
     raft_leader_host_id = await get_topology_coordinator(manager)
@@ -195,7 +195,7 @@ async def test_removenode(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     logger.info('Removing a node')
-    await manager.server_stop(servers[0].server_id)
+    await manager.server_stop(servers[0].server_id, convict=True)
     await manager.remove_node(servers[1].server_id, servers[0].server_id)
     servers = servers[1:]
 
@@ -243,8 +243,8 @@ async def test_removenode_with_ignored_node(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     logger.info('Removing a node with another node down')
-    await manager.server_stop(servers[0].server_id) # removed
-    await manager.server_stop(servers[1].server_id) # ignored
+    await manager.server_stop(servers[0].server_id, convict=True) # removed
+    await manager.server_stop(servers[1].server_id, convict=True) # ignored
     await manager.remove_node(servers[2].server_id, servers[0].server_id, [servers[1].ip_addr])
 
     await manager.others_not_see_server(servers[1].ip_addr)

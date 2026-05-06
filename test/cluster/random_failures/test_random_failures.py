@@ -177,7 +177,7 @@ async def test_random_failures(manager: ManagerClient,
             )
         if matches := await coordinator_log.grep(coordinator_log_pattern):
             LOGGER.info("Found following message in the coordinator's log:\n\t%s", matches[-1][0])
-            await manager.server_stop(server_id=s_info.server_id)
+            await manager.server_stop(server_id=s_info.server_id, convict=True)
 
     BANNED_NOTIFICATION = "received notification of being banned from the cluster from"
     STARTUP_FAILED_PATTERN = f"init - Startup failed:|{BANNED_NOTIFICATION}"
@@ -218,7 +218,7 @@ async def test_random_failures(manager: ManagerClient,
         if s_info in await manager.running_servers():
             LOGGER.info("The new node is dead.  Check if it failed to startup.")
             assert await server_log.grep(STARTUP_FAILED_PATTERN)
-            await manager.server_stop(server_id=s_info.server_id)  # remove the node from the list of running servers
+            await manager.server_stop(server_id=s_info.server_id, convict=True)  # remove the node from the list of running servers
 
         LOGGER.info("Try to remove the dead new node from the cluster.")
         with suppress(Exception):

@@ -23,7 +23,7 @@ async def test_gossiper_endpoints(manager: ManagerClient) -> None:
 
     down_server_index = 1
     down_server_ip = servers_ips[down_server_index]
-    await manager.server_stop(servers[down_server_index].server_id)
+    await manager.server_stop(servers[down_server_index].server_id, convict=True)
     for ip in servers_ips:
         if ip != down_server_ip:
             await manager.server_not_sees_other_server(ip, down_server_ip)

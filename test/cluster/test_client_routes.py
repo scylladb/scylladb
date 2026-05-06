@@ -61,7 +61,7 @@ async def test_client_routes(request, manager: ManagerClient):
     running_servers = await manager.running_servers()
     server_to_stop = running_servers[0]
     running_server = running_servers[1]
-    await manager.server_stop(server_to_stop.server_id)
+    await manager.server_stop(server_to_stop.server_id, convict=True)
     await manager.remove_node(running_server.server_id, server_to_stop.server_id)
     await wait_for_expected_client_routes_size(cql, num_servers)
 

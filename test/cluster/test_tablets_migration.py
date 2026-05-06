@@ -117,14 +117,14 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage, failure_detector_timeout):
+async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
         skip_env('Failing destination during cleanup is pointless')
     if fail_stage == 'cleanup_target' and fail_replica == 'source':
         skip_env('Failing source during target cleanup is pointless')
 
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled', 'failure_detector_timeout_in_ms': failure_detector_timeout}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     host_ids = []
     servers = []
 
@@ -243,7 +243,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
                     return
 
                 logger.info(f"Stop {self.replica} {host_ids[self.fail_idx]}")
-                await manager.server_stop(servers[self.fail_idx].server_id)
+                await manager.server_stop(servers[self.fail_idx].server_id, convict=True)
                 logger.info(f"Remove {self.replica} {host_ids[self.fail_idx]} via {host_ids[via]}")
                 await manager.remove_node(servers[via].server_id, servers[self.fail_idx].server_id)
                 logger.info(f"Done with {self.replica} {host_ids[self.fail_idx]}")

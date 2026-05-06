@@ -1711,7 +1711,7 @@ async def test_excludenode(manager: ManagerClient):
         with pytest.raises(Exception, match=".* does not belong to this cluster"):
             await manager.api.exclude_node(live_node.ip_addr, hosts=[str(uuid.uuid4())])
 
-        await manager.server_stop(node_to_remove.server_id)
+        await manager.server_stop(node_to_remove.server_id, convict=True)
         await manager.others_not_see_server(node_to_remove.ip_addr)
         await manager.api.exclude_node(live_node.ip_addr, hosts=[await manager.get_host_id(node_to_remove.server_id)])
 
@@ -1750,7 +1750,7 @@ async def test_excludenode_shrink_rf(manager: ManagerClient):
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         # Stop the only node in dc2
-        await manager.server_stop(dc2_server.server_id)
+        await manager.server_stop(dc2_server.server_id, convict=True)
         await manager.others_not_see_server(dc2_server.ip_addr)
 
         # Mark the dc2 node as excluded
@@ -2366,7 +2366,7 @@ async def test_multi_rf_increase_auto_abort_excluded_node(request: pytest.Fixtur
             assert t.replicas[0][0] == dc1_host_id
 
         # Stop dc2/rack1 node and mark it as excluded
-        await manager.server_stop(dc2_rack1_server.server_id)
+        await manager.server_stop(dc2_rack1_server.server_id, convict=True)
         await manager.others_not_see_server(dc2_rack1_server.ip_addr)
         await manager.api.exclude_node(dc1_server.ip_addr, hosts=[await manager.get_host_id(dc2_rack1_server.server_id)])
 
@@ -2419,7 +2419,7 @@ async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, ma
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
 
         # Stop dc2/rack1 node but do NOT exclude it
-        await manager.server_stop(dc2_rack1_server.server_id)
+        await manager.server_stop(dc2_rack1_server.server_id, convict=True)
         await manager.others_not_see_server(dc2_rack1_server.ip_addr)
 
         # ALTER KEYSPACE to add replicas in dc2 (rack1 and rack2).

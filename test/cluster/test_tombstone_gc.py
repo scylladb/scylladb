@@ -215,7 +215,7 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
                 "SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
 
             # Kill one server.
-            await manager.server_stop(down_server.server_id)
+            await manager.server_stop(down_server.server_id, convict=True)
             servers.pop()
 
             await alter_system_schema(keyspace)

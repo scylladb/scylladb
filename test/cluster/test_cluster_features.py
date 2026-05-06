@@ -198,7 +198,7 @@ async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerC
         assert TEST_FEATURE_NAME not in await get_enabled_features(cql, host)
 
     # Remove the last node
-    await manager.server_stop(servers[-1].server_id)
+    await manager.server_stop(servers[-1].server_id, convict=True)
     await manager.remove_node(servers[0].server_id, servers[-1].server_id)
 
     # The feature should eventually become enabled
