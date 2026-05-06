@@ -4242,10 +4242,10 @@ public:
             }
         }
 
-        // For size based balancing, only excluded nodes are allowed to have incomplete tablet stats
+        // Only excluded nodes are allowed to have incomplete tablet stats
         for (auto& [host, node] : nodes) {
             if (!_load_sketch->has_complete_data(host)) {
-                if (!_force_capacity_based_balancing && node.drained && node.node->is_excluded()) {
+                if (node.drained && node.node->is_excluded()) {
                     _load_sketch->ignore_incomplete_data(host);
                 } else {
                     lblogger.info("Cannot balance because node {} (or more) has incomplete tablet stats", host);
