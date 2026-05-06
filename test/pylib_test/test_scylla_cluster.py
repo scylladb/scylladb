@@ -38,6 +38,9 @@ class SlowInstallingServer:
         self.workdir = pathlib.Path(f"server-{server_id}")
         self.install_started = asyncio.Event()
         self.finish_install = asyncio.Event()
+        self.pause_after_before_start = False
+        self.before_start_checked = asyncio.Event()
+        self.continue_after_before_start = asyncio.Event()
         self.started = False
         self.stop_calls = 0
         self.stop_gracefully_calls = 0
@@ -51,6 +54,9 @@ class SlowInstallingServer:
         try:
             if before_start is not None:
                 before_start()
+            self.before_start_checked.set()
+            if self.pause_after_before_start:
+                await self.continue_after_before_start.wait()
             self.started = True
         except BaseException:
             await self.stop()
@@ -58,9 +64,11 @@ class SlowInstallingServer:
 
     async def stop(self) -> None:
         self.stop_calls += 1
+        self.started = False
 
     async def stop_gracefully(self) -> None:
         self.stop_gracefully_calls += 1
+        self.started = False
 
     def server_info(self) -> ServerInfo:
         return ServerInfo(self.server_id, self.ip_addr, self.rpc_address, self.datacenter, self.rack, 0)
@@ -101,6 +109,52 @@ async def test_cluster_stop_cancels_server_still_installing(stop_method: str) ->
     assert not cluster.starting
 
     server.finish_install.set()
+    with pytest.raises(RuntimeError, match="stopped while it was being added"):
+        await add_task
+
+    assert not server.started
+    assert not cluster.running
+    assert not cluster.starting
+    assert cluster.stopped[server.server_id] is server
+    assert not cluster.leased_ips
+    assert host_registry.released_hosts == [Host(server.ip_addr)]
+
+
+@pytest.mark.asyncio
+async def test_cluster_stop_cancels_server_still_installing_before_cluster_is_running() -> None:
+    """Regression test for cleanup racing with initial cluster startup before is_running is set."""
+    cluster, host_registry, created_servers = make_cluster()
+    cluster.is_running = False
+    add_task, server = await start_adding_server(cluster, created_servers)
+
+    await cluster.stop()
+    assert not cluster.starting
+
+    server.finish_install.set()
+    with pytest.raises(RuntimeError, match="stopped while it was being added"):
+        await add_task
+
+    assert not server.started
+    assert not cluster.running
+    assert not cluster.starting
+    assert cluster.stopped[server.server_id] is server
+    assert not cluster.leased_ips
+    assert host_registry.released_hosts == [Host(server.ip_addr)]
+
+
+@pytest.mark.asyncio
+async def test_cluster_stop_after_start_check_still_prevents_server_from_running() -> None:
+    """Regression test for stop landing after add_server() checks starting, but before start completes."""
+    cluster, host_registry, created_servers = make_cluster()
+    add_task, server = await start_adding_server(cluster, created_servers)
+    server.pause_after_before_start = True
+
+    server.finish_install.set()
+    await server.before_start_checked.wait()
+    await cluster.stop()
+    assert not cluster.starting
+
+    server.continue_after_before_start.set()
     with pytest.raises(RuntimeError, match="stopped while it was being added"):
         await add_task
 

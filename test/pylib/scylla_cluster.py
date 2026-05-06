@@ -1254,7 +1254,7 @@ class ScyllaCluster:
         # (from exit artifacts), which leads to issues (#15755). A more elegant solution would be
         # to prevent that instead of using a lock here.
         async with self.stop_lock:
-            if self.is_running:
+            if self.is_running or self.running or self.starting:
                 self.is_running = False
                 self.logger.info("Cluster %s stopping", self)
                 self.is_dirty = True
@@ -1262,7 +1262,7 @@ class ScyllaCluster:
 
     async def stop_gracefully(self) -> None:
         """Stop all running or starting servers in a clean way"""
-        if self.is_running:
+        if self.is_running or self.running or self.starting:
             self.is_running = False
             self.logger.info("Cluster %s stopping gracefully", self)
             self.is_dirty = True
@@ -1361,14 +1361,24 @@ class ScyllaCluster:
             else:
                 await server.install()
         except BaseException as exc:
+            if server is not None:
+                self.starting.pop(server.server_id, None)
             workdir = '<unknown>' if server is None else server.workdir.name
             self.logger.error("Failed to start Scylla server at host %s in %s: %s",
                           ip_addr, workdir, str(exc))
             await handle_join_failure()
             raise
-        finally:
-            if server is not None:
-                self.starting.pop(server.server_id, None)
+
+        assert server is not None
+
+        if self.starting.get(server.server_id) is not server:
+            try:
+                await server.stop()
+            finally:
+                await handle_join_failure()
+            raise RuntimeError(f"Server {server.server_id} was stopped while it was being added")
+
+        self.starting.pop(server.server_id)
 
         if expected_error:
             await handle_join_failure()
