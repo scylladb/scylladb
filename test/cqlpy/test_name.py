@@ -174,3 +174,20 @@ def test_column_name_500(cql, test_keyspace):
         pass
 
 # TODO: add tests for the allowed characters in a table name
+
+# Test that column names containing hyphens work when double-quoted.
+# Hyphens are not valid in unquoted identifiers (the '-' is parsed as
+# subtraction), but double-quoted identifiers can contain any character.
+def test_column_name_with_hyphen(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            'p int PRIMARY KEY, "my-col" text, "first-name" text') as tbl:
+        cql.execute(f'INSERT INTO {tbl} (p, "my-col", "first-name") VALUES (1, \'val\', \'Alice\')')
+        row = cql.execute(f'SELECT p, "my-col", "first-name" FROM {tbl} WHERE p = 1').one()
+        assert row.my_col == 'val'
+        assert row.first_name == 'Alice'
+
+# Test that unquoted column names with hyphens are rejected
+def test_column_name_unquoted_hyphen_rejected(cql, test_keyspace):
+    from cassandra.protocol import SyntaxException
+    with pytest.raises(SyntaxException):
+        cql.execute(f'CREATE TABLE {test_keyspace}.{unique_name()} (p int PRIMARY KEY, my-col text)')
