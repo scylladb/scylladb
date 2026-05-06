@@ -1376,11 +1376,12 @@ def test_query_vector_cdc_lwt(vs, needs_vector_store):
 # Similar to test_query_vector_cdc, this test also that a vector search Query
 # find data inserted after the index was created. But this test adds a twist:
 # before creating the index, we insert a malformed value for the vector
-# attribute (a string). We check that this malformed is ignored by the initial
-# prefill scan, but should not prevent a later write with a well-formed vector
-# from being indexed and returned by queries.
+# attribute (a string or wrong-length vector). We check that this malformed
+# value is ignored by the initial prefill scan, but should not prevent a later
+# write with a well-formed vector from being indexed and returned by queries.
+@pytest.mark.parametrize('use_update_item', [False, True], ids=['put_item', 'update_item'])
 @pytest.mark.parametrize('malformed', ['garbage', [1,2]], ids=['string','wrong_length'])
-def test_query_vector_cdc_malformed_prefill(vs, needs_vector_store, malformed):
+def test_query_vector_cdc_malformed_prefill(vs, needs_vector_store, malformed, use_update_item):
     with new_test_table(vs,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
@@ -1403,7 +1404,12 @@ def test_query_vector_cdc_malformed_prefill(vs, needs_vector_store, malformed):
         assert len(result['Items']) == 1 and result['Items'][0]['p'] == p2
         # Now replace the value of p1 by a properly formed vector. It should
         # be eventually picked up by CDC and indexed by the vector index:
-        table.put_item(Item={'p': p1, 'v': [1, Decimal("0.1"), 0]})
+        if use_update_item:
+            table.update_item(Key={'p': p1},
+                UpdateExpression='SET v = :v',
+                ExpressionAttributeValues={':v': [1, Decimal("0.1"), 0]})
+        else:
+            table.put_item(Item={'p': p1, 'v': [1, Decimal("0.1"), 0]})
         deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
         while True:
             result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]},
@@ -1645,6 +1651,18 @@ def test_batchwriteitem_vectorindex_bad_vector(table_vs):
         with table_vs.batch_writer() as batch:
             batch.put_item(Item={'p': p, 'v': [1, Decimal('1e100'), 3]})
 
+# If one item in the batch is valid and another is invalid, the entire
+# batch should be rejected and neither item should be inserted:
+def test_batchwriteitem_vectorindex_bad_and_good(table_vs):
+    p_good = random_string()
+    p_bad = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        with table_vs.batch_writer() as batch:
+            batch.put_item(Item={'p': p_good, 'v': [1, 2, 3]})
+            batch.put_item(Item={'p': p_bad,  'v': 'not a list'})
+    assert 'Item' not in table_vs.get_item(Key={'p': p_good}, ConsistentRead=True)
+    assert 'Item' not in table_vs.get_item(Key={'p': p_bad},  ConsistentRead=True)
+
 # Test that DeleteItem removes the item from the vector index.
 # Two variants are tested via parametrize:
 # - without clustering key (no_ck): deleting the only item in a partition
@@ -1700,6 +1718,115 @@ def test_deleteitem_vectorindex(vs, needs_vector_store, with_ck):
             if time.monotonic() > deadline:
                 pytest.fail('Timed out waiting for deleted item to disappear from vector index')
             time.sleep(0.1)
+
+# Test that PutItem or UpdateItem on an existing item replaces its vector in
+# the index: the old vector is removed and the new one is indexed. Two items
+# are inserted so we can verify the ordering changes after the replace.
+@pytest.mark.parametrize('use_update_item', [False, True], ids=['put_item', 'update_item'])
+def test_replace_vector_vectorindex(vs, needs_vector_store, use_update_item):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p1 = random_string()
+        p2 = random_string()
+        # Insert two different items and index them.
+        table.put_item(Item={'p': p1, 'v': [1, 0, 0]})
+        table.put_item(Item={'p': p2, 'v': [0, 1, 0]})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        # Initially, search [1, 0, 0] returns p1 first, p2 second.
+        result = table.query(IndexName='vind',
+                             VectorSearch={'QueryVector': [1, 0, 0]},
+                             Limit=2)
+        assert [item['p'] for item in result['Items']] == [p1, p2]
+        # Replace p1's vector with [-1, 0, 0] (opposite direction, now farthest
+        # from [1, 0, 0]), using either PutItem or UpdateItem.
+        if use_update_item:
+            table.update_item(Key={'p': p1},
+                UpdateExpression='SET v = :v',
+                ExpressionAttributeValues={':v': [-1, 0, 0]})
+        else:
+            table.put_item(Item={'p': p1, 'v': [-1, 0, 0]})
+        # Wait until the index reflects the change: p2 should now come before p1
+        # in a search for [1, 0, 0].
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(IndexName='vind',
+                                 VectorSearch={'QueryVector': [1, 0, 0]},
+                                 Limit=2)
+            got = [item['p'] for item in result.get('Items', [])]
+            if got == [p2, p1]:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail(f'Timed out waiting for index to reflect replaced vector; last order: {got}')
+            time.sleep(0.1)
+
+# Test that UpdateItem modifying non-vector attributes does not affect the
+# vector index: the item remains discoverable by its unchanged vector, and
+# its updated attributes are returned with Select='ALL_ATTRIBUTES'.
+def test_updateitem_nonvector_vectorindex(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': [1, 0, 0], 'x': 'before'})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        # UpdateItem to change a non-vector attribute.
+        table.update_item(Key={'p': p},
+            UpdateExpression='SET x = :newx',
+            ExpressionAttributeValues={':newx': 'after'})
+        # The item should still be findable by its vector, which didn't change.
+        # Select='ALL_ATTRIBUTES' fetches the full item from the base table (x
+        # is not projected), so the updated x should be visible immediately
+        # without any delay (note that actually, the item is read with eventual
+        # consistency so there can be a delay, on on our single-node setup there
+        # won't be any consistency delay).
+        result = table.query(IndexName='vind',
+                             VectorSearch={'QueryVector': [1, 0, 0]},
+                             Select='ALL_ATTRIBUTES',
+                             Limit=1)
+        assert result['Items'] == [{'p': p, 'v': [1, 0, 0], 'x': 'after'}]
+
+# Test that UpdateItem removing the vector attribute (but not the item itself)
+# causes the item to be removed from the vector index. The item should still
+# exist in the base table (readable via GetItem), but must no longer appear
+# in vector search results.
+def test_updateitem_remove_vector_vectorindex(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': [1, 0, 0], 'x': 'hello'})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(IndexName='vind',
+                             VectorSearch={'QueryVector': [1, 0, 0]},
+                             Limit=1)
+        # Verify the item was indexed
+        assert result['Items'] == [{'p': p}]
+        # Remove only the vector attribute, leaving the rest of the item intact.
+        table.update_item(Key={'p': p}, UpdateExpression='REMOVE v')
+        # The item must eventually disappear from the vector index.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(IndexName='vind',
+                                 VectorSearch={'QueryVector': [1, 0, 0]},
+                                 Limit=1)
+            if not result['Items']:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for item to disappear from vector index after vector attribute removal')
+            time.sleep(0.1)
+        # The item itself must still exist in the base table, just without 'v'.
+        result = table.get_item(Key={'p': p}, ConsistentRead=True)
+        assert result['Item'] == {'p': p, 'x': 'hello'}
 
 # Test vector index with Alternator TTL together. A table is created without
 # TTL enabled, data is inserted with expiration time set to the past (but
@@ -2808,6 +2935,55 @@ def test_query_vectorsearch_return_similarity_dot_product_overflow2(vs, needs_ve
         assert scores[1] == pytest.approx(0.5, abs=1e-5)
         # The highly dissimilar item's score should be large and negative.
         assert scores[2] < -BIG
+
+# In virtually all the tests above, we used vectors of dimension 3 as an
+# example. But dimensions up to MAX_VECTOR_DIMENSION are allowed, so let's
+# have at least one test that actually uses MAX_VECTOR_DIMENSION to check
+# that it works end-to-end - indexing (via either prefill or CDC) and
+# querying.
+@pytest.mark.parametrize('via_cdc', [False, True], ids=['prefill', 'cdc'])
+def test_query_vector_max_dimension(vs, needs_vector_store, via_cdc):
+    dim = MAX_VECTOR_DIMENSION
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            **({} if not via_cdc else
+               {'VectorIndexes': [{'IndexName': 'vind',
+                                   'VectorAttribute': {'AttributeName': 'v',
+                                                       'Dimensions': dim}}]}
+            )) as table:
+        if via_cdc:
+            # The index was already created in new_test_table above. Wait for
+            # it to become ACTIVE so that subsequent writes are picked up via
+            # CDC rather than prefill.
+            wait_for_vector_index_active(table, 'vind')
+        # Build a query vector: all zeros except the first element which is 1.
+        # The item we insert has exactly this vector, so it is the nearest
+        # neighbor of the query.
+        query_vec = Vector([1.0] + [0.0] * (dim - 1))
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': query_vec})
+        if not via_cdc:
+            # For the prefill case the index is created after the data, so
+            # we create it now and wait for the prefill scan to complete.
+            table.update(VectorIndexUpdates=[{'Create':
+                {'IndexName': 'vind',
+                 'VectorAttribute': {'AttributeName': 'v', 'Dimensions': dim}}}])
+            wait_for_vector_index_active(table, 'vind')
+        # Retry the query until the item appears in the results.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': query_vec},
+                Limit=1,
+            )
+            if result.get('Items') and result['Items'][0]['p'] == p:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail(f'Timed out waiting for MAX_VECTOR_DIMENSION={dim} item to appear via '
+                            f'{"CDC" if via_cdc else "prefill"}')
+            time.sleep(0.1)
 
 ##############################################################################
 # CONTINUE HERE - MAKE A DECISION! PRE-FILTERING:
