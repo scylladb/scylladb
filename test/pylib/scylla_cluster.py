@@ -568,7 +568,7 @@ class ScyllaServer:
             if before_start is not None:
                 before_start()
             self.logger.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
-            await self.start(api, expected_error, expected_server_up_state)
+            await self.start(api, expected_error, expected_server_up_state, before_start=before_start)
         except:
             await self.stop()
             raise
@@ -902,7 +902,8 @@ class ScyllaServer:
                     expected_error: Optional[str] = None,
                     expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED,
                     cmdline_options_override: list[str] | None = None,
-                    append_env_override: dict[str, str] | None = None) -> None:
+                    append_env_override: dict[str, str] | None = None,
+                    before_start: Callable[[], None] | None = None) -> None:
         """Start an installed server.
 
         Use `cmdline_options_override` and `append_env_override` instead of `self.cmdline_options` and
@@ -917,6 +918,10 @@ class ScyllaServer:
         env.update(self.append_env if append_env_override is None else append_env_override)
         env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={TOP_SRC_DIR / "ubsan-suppressions.supp"}'
         env['ASAN_OPTIONS'] = f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'
+
+        if before_start is not None:
+            # Close the window between install_and_start()'s pre-start check and spawning the process.
+            before_start()
 
         # Set up socket for receiving sd_notify messages from Scylla
         self._setup_notify_socket()
