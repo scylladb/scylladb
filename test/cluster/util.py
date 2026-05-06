@@ -488,7 +488,7 @@ async def new_test_keyspace(manager: ManagerClient, opts, host=None):
         await manager.get_cql().run_async("DROP KEYSPACE IF EXISTS " + keyspace, host=host)
 
 previously_used_table_names = []
-async def create_new_test_table(manager: ManagerClient, keyspace, schema, extra="", host=None, reuse_tables=True):
+async def create_new_test_table(manager: ManagerClient, keyspace, schema, extra="", host=None, reuse_tables=True, table_name=None):
     """
     A utility function for creating a new temporary table with a given schema.
     Because Scylla becomes slower when a huge number of uniquely-named tables
@@ -497,12 +497,13 @@ async def create_new_test_table(manager: ManagerClient, keyspace, schema, extra=
     reuse one of these names when possible.
     """
     global previously_used_table_names
-    if reuse_tables:
-        if not previously_used_table_names:
-            previously_used_table_names.append(unique_name())
-        table_name = previously_used_table_names.pop()
-    else:
-        table_name = unique_name()
+    if not table_name:
+        if reuse_tables:
+            if not previously_used_table_names:
+                previously_used_table_names.append(unique_name())
+            table_name = previously_used_table_names.pop()
+        else:
+            table_name = unique_name()
     table = keyspace + "." + table_name
     await manager.get_cql().run_async(f"CREATE TABLE IF NOT EXISTS " + table + "(" + schema + ")" + extra, host=host)
     return table
