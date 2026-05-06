@@ -24,7 +24,8 @@ For example:
 
     INSERT INTO NerdMovies (movie, director, main_actor, year)
           VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005)
-          USING TTL 86400 IF NOT EXISTS;
+          IF NOT EXISTS
+          USING TTL 86400;
 
 The ``INSERT`` statement writes one or more columns for a given row in a table. Note that since a row is identified by
 its ``PRIMARY KEY``, at least the columns composing it must be specified. The list of columns to insert to must be
