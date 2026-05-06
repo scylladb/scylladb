@@ -85,6 +85,7 @@ schema_ptr make_tablets_schema() {
             .with_column("resize_seq_number", long_type, column_kind::static_column)
             .with_column("isolated_tablet_for_merge", long_type, column_kind::static_column)
             .with_column("selected_tablets_for_merge", list_type_impl::get_instance(long_type, false), column_kind::static_column)
+            .with_column("target_pow2_tablet_count", long_type, column_kind::static_column)
             .with_column("repair_time", timestamp_type)
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
@@ -298,6 +299,10 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
         if (config) {
             m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(*config), ts);
         }
+    }
+
+    if (tablets.target_pow2_tablet_count() > 0) {
+        m.set_static_cell("target_pow2_tablet_count", data_value(int64_t(tablets.target_pow2_tablet_count())), ts);
     }
 
     tablet_id tid = tablets.first_tablet();
@@ -977,6 +982,13 @@ struct tablet_metadata_builder {
             if (row.has("repair_scheduler_config")) {
                 auto config = deserialize_repair_scheduler_config(row.get_view("repair_scheduler_config"));
                 current->map.set_repair_scheduler_config(std::move(config));
+            }
+
+            if (row.has("target_pow2_tablet_count")) {
+                auto count = row.get_as<int64_t>("target_pow2_tablet_count");
+                if (count > 0) {
+                    current->map.set_target_pow2_tablet_count(size_t(count));
+                }
             }
         }
 
