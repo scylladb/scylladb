@@ -504,7 +504,7 @@ async def create_new_test_table(manager: ManagerClient, keyspace, schema, extra=
     else:
         table_name = unique_name()
     table = keyspace + "." + table_name
-    await manager.get_cql().run_async("CREATE TABLE " + table + "(" + schema + ")" + extra, host=host)
+    await manager.get_cql().run_async(f"CREATE TABLE IF NOT EXISTS " + table + "(" + schema + ")" + extra, host=host)
     return table
 
 @asynccontextmanager
@@ -518,7 +518,7 @@ async def new_test_table(manager: ManagerClient, keyspace, schema, extra="", hos
     try:
         yield table
     finally:
-        await manager.get_cql().run_async("DROP TABLE " + table, host=host)
+        await manager.get_cql().run_async("DROP TABLE IF EXISTS " + table, host=host)
         if reuse_tables:
             table_name = table.split('.')[1]
             previously_used_table_names.append(table_name)
