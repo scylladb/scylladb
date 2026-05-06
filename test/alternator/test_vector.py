@@ -41,13 +41,13 @@ boto3.dynamodb.types.DYNAMODB_CONTEXT = decimal.Context(prec=100)
 # Users can use exactly the same code to get vector search support in boto3,
 # but the more "official" way would be to modify botocore's JSON configuration
 # file, botocore/data/dynamodb/2012-08-10/service-2.json.
-@pytest.fixture(scope="module")
-def vs(new_dynamodb_session, dynamodb):
-    if is_aws(dynamodb):
-        skip_env('Scylla-only: vector search extensions not available on DynamoDB')
-    resource = new_dynamodb_session()
-    client = resource.meta.client
-    # Patch the client to support the new APIs:
+
+# add_vs_to_client() is a context manager that modifies the given boto3
+# client to accept the new vector-search parameters in requests and responses,
+# and also monkey-patches the TypeSerializer/TypeDeserializer so that the
+# Vector type is serialized as FLOAT32VECTOR. The patches are restored on exit.
+@contextmanager
+def add_vs_to_client(client):
     # All the new parameter "shapes" that we will use below for the
     # new parameters of the different operations:
     new_shapes = {
@@ -197,13 +197,23 @@ def vs(new_dynamodb_session, dynamodb):
             return {'FLOAT32VECTOR': list(value)}
         return _orig_serialize(self, value)
     boto3.dynamodb.types.TypeSerializer.serialize = _serialize_with_vector
+    _had_deserialize = hasattr(boto3.dynamodb.types.TypeDeserializer, '_deserialize_float32vector')
     boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector = lambda self, value: Vector(value)
+    try:
+        yield
+    finally:
+        boto3.dynamodb.types.TypeSerializer.serialize = _orig_serialize
+        if not _had_deserialize:
+            del boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector
 
-    yield resource
 
-    # Restore the original serialize method and remove the deserializer patch.
-    boto3.dynamodb.types.TypeSerializer.serialize = _orig_serialize
-    del boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector
+@pytest.fixture(scope="module")
+def vs(new_dynamodb_session, dynamodb):
+    if is_aws(dynamodb):
+        skip_env('Scylla-only: vector search extensions not available on DynamoDB')
+    resource = new_dynamodb_session()
+    with add_vs_to_client(resource.meta.client):
+        yield resource
 
 # Use the Vector(list) type for test values that are meant to be stored as
 # optimized vectors (array of floats instead of JSON list of numbers).
