@@ -259,7 +259,7 @@ async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
     # will be retrying to send a request to it.
     ignore_gossiper_err = "view_building_coordinator_ignore_gossiper"
     await manager.api.enable_injection(s1.ip_addr, ignore_gossiper_err, one_shot=False)
-    await manager.server_stop(s2.server_id)
+    await manager.server_stop(s2.server_id, convict=False)
 
     start = time.time()
 

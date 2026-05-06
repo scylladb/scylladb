@@ -66,7 +66,7 @@ async def test_raft_recovery_entry_loss(manager: ManagerClient):
             "SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
 
     logging.info(f'Stopping {live_servers[0].server_id} to keep its group 0 state in v1')
-    await manager.server_stop(live_servers[0].server_id)
+    await manager.server_stop(live_servers[0].server_id, convict=False)
 
     logging.info('Creating keyspace ks1, moving the group 0 state to v2')
     await cql.run_async(
@@ -77,7 +77,7 @@ async def test_raft_recovery_entry_loss(manager: ManagerClient):
     await read_barrier(manager.api, get_host_api_address(host))
 
     logging.info(f'Stopping {live_servers[1].server_id} to keep its group 0 state in v2')
-    await manager.server_stop(live_servers[1].server_id)
+    await manager.server_stop(live_servers[1].server_id, convict=False)
 
     logging.info('Creating keyspace ks2, moving the group 0 state to v3')
     await cql.run_async(
