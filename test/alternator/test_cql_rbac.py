@@ -510,6 +510,7 @@ def new_named_table_unauthorized(dynamodb, tabname, **kwargs):
         # table 
         dynamodb.meta.client.get_waiter('table_exists').wait(TableName=tabname)
         dynamodb.meta.client.delete_table(TableName=tabname)
+        raise
 
 
 # When a role is allowed to CreateTable, the role is automatically granted
