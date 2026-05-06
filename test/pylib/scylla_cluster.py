@@ -1170,7 +1170,7 @@ class ScyllaCluster:
         self.name = str(uuid.uuid1())
         self.replicas = replicas
         self.create_server = create_server
-        # Every ScyllaServer is in one of self.running, self.stopped.
+        # Every ScyllaServer is in one of self.running, self.stopped, self.starting.
         # These dicts are disjoint.
         # A server ID present in self.removed may be either in self.running or in self.stopped.
         self.running: Dict[ServerNum, ScyllaServer] = {}        # started servers
@@ -1222,13 +1222,32 @@ class ScyllaCluster:
         """Release all IPs leased from the host registry by this cluster.
         Call this function only if the cluster is stopped and will not be started again."""
         assert not self.running
+        assert not self.starting
         self.logger.info("Cluster %s releases ips %s", self, self.leased_ips)
         while self.leased_ips:
             ip = self.leased_ips.pop()
             await self.host_registry.release_host(Host(ip))
 
+    async def _stop_servers(self, gracefully: bool) -> None:
+        """Stop all servers with live or potentially live processes."""
+        while self.running or self.starting:
+            running = list(self.running.items())
+            starting = list(self.starting.items())
+
+            if gracefully:
+                await gather_safely(*(server.stop_gracefully() for _, server in itertools.chain(running, starting)))
+            else:
+                await gather_safely(*(server.stop() for _, server in itertools.chain(running, starting)))
+
+            for server_id, server in running:
+                if self.running.get(server_id) is server:
+                    self.stopped[server_id] = self.running.pop(server_id)
+            for server_id, server in starting:
+                if self.starting.get(server_id) is server:
+                    self.stopped[server_id] = self.starting.pop(server_id)
+
     async def stop(self) -> None:
-        """Stop all running servers ASAP"""
+        """Stop all running or starting servers ASAP"""
         # FIXME: the lock is necessary because test.py calls `stop()` and `uninstall()` concurrently
         # (from exit artifacts), which leads to issues (#15755). A more elegant solution would be
         # to prevent that instead of using a lock here.
@@ -1237,21 +1256,15 @@ class ScyllaCluster:
                 self.is_running = False
                 self.logger.info("Cluster %s stopping", self)
                 self.is_dirty = True
-                # If self.running is empty, no-op
-                await gather_safely(*(server.stop() for server in self.running.values()))
-                self.stopped.update(self.running)
-                self.running.clear()
+                await self._stop_servers(gracefully=False)
 
     async def stop_gracefully(self) -> None:
-        """Stop all running servers in a clean way"""
+        """Stop all running or starting servers in a clean way"""
         if self.is_running:
             self.is_running = False
             self.logger.info("Cluster %s stopping gracefully", self)
             self.is_dirty = True
-            # If self.running is empty, no-op
-            await gather_safely(*(server.stop_gracefully() for server in self.running.values()))
-            self.stopped.update(self.running)
-            self.running.clear()
+            await self._stop_servers(gracefully=True)
 
     def _seeds(self) -> List[IPAddress]:
         # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
@@ -1327,9 +1340,11 @@ class ScyllaCluster:
 
         async def handle_join_failure():
             if not replace_cfg or not replace_cfg.reuse_ip_addr:
-                self.leased_ips.remove(ip_addr)
-                await self.host_registry.release_host(Host(ip_addr))
-            self.stopped[server.server_id] = server
+                if ip_addr in self.leased_ips:
+                    self.leased_ips.remove(ip_addr)
+                    await self.host_registry.release_host(Host(ip_addr))
+            if server is not None:
+                self.stopped[server.server_id] = server
 
         try:
             server = self.create_server(params)
@@ -1339,14 +1354,15 @@ class ScyllaCluster:
                 await server.install_and_start(self.api, expected_error, expected_server_up_state)
             else:
                 await server.install()
-        except Exception as exc:
+        except BaseException as exc:
             workdir = '<unknown>' if server is None else server.workdir.name
             self.logger.error("Failed to start Scylla server at host %s in %s: %s",
                           ip_addr, workdir, str(exc))
             await handle_join_failure()
             raise
         finally:
-            del self.starting[server.server_id]
+            if server is not None:
+                self.starting.pop(server.server_id, None)
 
         if expected_error:
             await handle_join_failure()
@@ -1497,7 +1513,7 @@ class ScyllaCluster:
             self.running.pop(server_id)
             self.stopped[server_id] = server
         else:
-            self.starting.pop(server_id)
+            self.starting.pop(server_id, None)
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
         """Mark server as removed."""
