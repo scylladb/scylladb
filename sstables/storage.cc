@@ -808,8 +808,14 @@ s3_storage::make_source(sstable& sst, component_type type, file f, uint64_t offs
     if (offset == 0) {
         co_return co_await object_storage_base::make_source(sst, type, std::move(f), offset, len, std::move(options));
     }
-    co_return make_file_data_source(
-        co_await maybe_wrap_file(sst, type, open_flags::ro, _client->make_readable_file(make_object_name(sst, type), abort_source())), offset, len, std::move(options));
+    // Reuse the file passed in by the caller. Its underlying file_impl
+    // (s3::client::readable_file) already had its stats populated at
+    // sstable open time via update_info_for_opened_data, so reads from
+    // it skip the per-query HEAD that a freshly-constructed readable_file
+    // would otherwise issue. The file is already wrapped with the
+    // configured file_io_extensions (applied at open_component time), so
+    // no further wrapping is needed.
+    co_return make_file_data_source(std::move(f), offset, len, std::move(options));
 }
 
 future<data_sink> object_storage_base::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
