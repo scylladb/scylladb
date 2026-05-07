@@ -116,3 +116,14 @@ def test_repair_task_progress(cql, this_dc, rest_api, test_keyspace_vnodes):
                     for child_status in get_children(status_tree, status["id"]):
                         assert child_status["progress_completed"] == child_status["progress_total"], "Incorrect task progress"
     drain_module_tasks(rest_api, module_name)
+
+# Reproducer for https://scylladb.atlassian.net/browse/CUSTOMER-358
+# Repairing with identical start and end tokens must be rejected,
+# otherwise it wraps around the full token ring causing a full repair.
+def test_repair_same_start_end_token_rejected(cql, this_dc, rest_api, test_keyspace_vnodes):
+    keyspace = test_keyspace_vnodes
+    token = "1558831538804957103"
+    resp = rest_api.send("POST", f"storage_service/repair_async/{keyspace}",
+                         {"startToken": token, "endToken": token})
+    assert resp.status_code == 400, f"Expected 400 but got {resp.status_code}"
+    assert "Start and end tokens must be different" in resp.text

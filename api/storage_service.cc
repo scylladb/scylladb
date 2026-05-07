@@ -353,6 +353,15 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair, s
             }
         }
 
+        // Reject repair requests where start and end tokens are the same,
+        // as this would be interpreted as a wrapping range covering the
+        // entire token ring, resulting in a full repair (see CUSTOMER-358).
+        auto st_it = options_map.find("startToken");
+        auto et_it = options_map.find("endToken");
+        if (st_it != options_map.end() && et_it != options_map.end() && st_it->second == et_it->second) {
+            throw httpd::bad_param_exception("Start and end tokens must be different");
+        }
+
         // The repair process is asynchronous: repair_start only starts it and
         // returns immediately, not waiting for the repair to finish. The user
         // then has other mechanisms to track the ongoing repair's progress,
