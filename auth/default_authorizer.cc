@@ -76,7 +76,11 @@ default_authorizer::authorize(const role_or_anonymous& maybe_role, const resourc
     if (results->empty()) {
         co_return permissions::NONE;
     }
-    co_return permissions::from_strings(results->one().get_set<sstring>(PERMISSIONS_NAME));
+    const auto& row = results->one();
+    if (!row.has(PERMISSIONS_NAME)) {
+        co_return permissions::NONE;
+    }
+    co_return permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
 }
 
 future<>

@@ -185,21 +185,11 @@ future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& r
         static const sstring q = format("SELECT role, name, value FROM {}.{} WHERE role = ?", db::system_keyspace::NAME, ROLE_ATTRIBUTES_CF);
         auto rs = co_await fetch(q);
         for (const auto& r : *rs) {
+            if (!r.has("value")) {
+                continue;
+            }
             rec->attributes[r.get_as<sstring>("name")] =
                     r.get_as<sstring>("value");
-            co_await coroutine::maybe_yield();
-        }
-    }
-    // permissions
-    {
-        static const sstring q = format("SELECT role, resource, permissions FROM {}.{} WHERE role = ?", db::system_keyspace::NAME, PERMISSIONS_CF);
-        auto rs = co_await fetch(q);
-        for (const auto& r : *rs) {
-            auto resource = r.get_as<sstring>("resource");
-            auto perms_strings = r.get_set<sstring>("permissions");
-            std::unordered_set<sstring> perms_set(perms_strings.begin(), perms_strings.end());
-            auto pset = permissions::from_strings(perms_set);
-            rec->permissions[std::move(resource)] = std::move(pset);
             co_await coroutine::maybe_yield();
         }
     }

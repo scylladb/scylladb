@@ -44,7 +44,6 @@ public:
         std::unordered_set<role_name_t> members;
         sstring salted_hash;
         std::unordered_map<sstring, sstring, sstring_hash, sstring_eq> attributes;
-        std::unordered_map<sstring, permission_set, sstring_hash, sstring_eq> permissions;
     private:
         friend cache;
         // cached permissions include effects of role's inheritance
