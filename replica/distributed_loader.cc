@@ -477,42 +477,42 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
 
         dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options());
 
-        using md = table_populator::migration_direction;
-        auto& tablet_metadata = db.local().get_shared_token_metadata().get()->tablets();
-        auto direction = [&]() {
-            if (ks.uses_tablets()) { return md::none; }
-            if (cf.uses_tablets()) { return md::forward; }
-            if (tablet_metadata.has_tablet_map(uuid) && storage_mode == service::intended_storage_mode::vnodes) { return md::rollback; }
-            return md::none;
-        }();
-        if (direction != md::none) {
-            dblog.info("Keyspace {}: CF {} is in vnodes-to-tablets migration mode (direction: {})", ks_name, cfname, direction == md::forward ? "forward" : "rollback");
-        }
-
-        auto metadata = table_populator(gtable, db, ks_name, cfname, direction);
-        std::exception_ptr ex;
-
-        try {
-            co_await metadata.start();
-        } catch (...) {
-            std::exception_ptr eptr = std::current_exception();
-            std::string msg =
-                format("Exception while populating keyspace '{}' with column family '{}' from '{}': {}",
-                        ks_name, cfname, cf.get_storage_options(), eptr);
-            dblog.error("{}", msg);
-            try {
-                std::rethrow_exception(eptr);
-            } catch (compaction::compaction_stopped_exception& e) {
-                // swallow compaction stopped exception, to allow clean shutdown.
-            } catch (...) {
-                ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
+            using md = table_populator::migration_direction;
+            auto& tablet_metadata = db.local().get_shared_token_metadata().get()->tablets();
+            auto direction = [&]() {
+                if (ks.uses_tablets()) { return md::none; }
+                if (cf.uses_tablets()) { return md::forward; }
+                if (tablet_metadata.has_tablet_map(uuid) && storage_mode == service::intended_storage_mode::vnodes) { return md::rollback; }
+                return md::none;
+            }();
+            if (direction != md::none) {
+                dblog.info("Keyspace {}: CF {} is in vnodes-to-tablets migration mode (direction: {})", ks_name, cfname, direction == md::forward ? "forward" : "rollback");
             }
-        }
 
-        co_await metadata.stop();
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
+            auto metadata = table_populator(gtable, db, ks_name, cfname, direction);
+            std::exception_ptr ex;
+
+            try {
+                co_await metadata.start();
+            } catch (...) {
+                std::exception_ptr eptr = std::current_exception();
+                std::string msg =
+                    format("Exception while populating keyspace '{}' with column family '{}' from '{}': {}",
+                            ks_name, cfname, cf.get_storage_options(), eptr);
+                dblog.error("{}", msg);
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (compaction::compaction_stopped_exception& e) {
+                    // swallow compaction stopped exception, to allow clean shutdown.
+                } catch (...) {
+                    ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
+                }
+            }
+
+            co_await metadata.stop();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
 
         // system tables are made writable through sys_ks::mark_writable
         if (!is_system_keyspace(ks_name)) {
