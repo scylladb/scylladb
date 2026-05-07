@@ -129,6 +129,10 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         token_metadata_ptr tm)
 {
     const auto my_id = to_server_id(tm->get_my_id());
+    const auto this_replica = locator::tablet_replica{
+        .host = tm->get_my_id(),
+        .shard = this_shard_id(),
+    };
 
 
     auto* commitlog = _db.commitlog();
@@ -149,14 +153,27 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     if (!snapshot.id) {
         const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
         const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
+        const auto* trinfo = tablet_map.get_tablet_transition_info(tablet.tablet);
 
+        const bool joining_replica = trinfo
+            && locator::contains(trinfo->next, this_replica)
+            && !locator::contains(tablet_info.replicas, this_replica);
+
+        // for joining nodes use an empty configuration.
+        // for now set nontrivial_snapshot to true because snapshot transfer is not implemented yet.
         raft::configuration configuration;
-        configuration.current.reserve(tablet_info.replicas.size());
-        for (const auto& r: tablet_info.replicas) {
-            configuration.current.emplace(raft::server_address{to_server_id(r.host), {}},
-                raft::is_voter::yes);
+        bool nontrivial_snapshot = true;
+
+        if (!joining_replica) {
+            configuration.current.reserve(tablet_info.replicas.size());
+            for (const auto& r: tablet_info.replicas) {
+                configuration.current.emplace(raft::server_address{to_server_id(r.host), {}},
+                    raft::is_voter::yes);
+            }
+            nontrivial_snapshot = true;
         }
-        co_await storage->bootstrap(std::move(configuration), false);
+
+        co_await storage->bootstrap(std::move(configuration), nontrivial_snapshot);
     }
 
     auto& persistence_ref = *storage;
