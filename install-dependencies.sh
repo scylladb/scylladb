@@ -180,7 +180,7 @@ fedora_python3_packages=(
 
 # an associative array from packages to constrains
 declare -A pip_packages=(
-    [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
+    [scylla-driver]="==3.29.7"
     [geomet]=""
     [traceback-with-variables]=""
     [scylla-api-client]=""
