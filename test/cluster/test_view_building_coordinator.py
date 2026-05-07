@@ -1018,3 +1018,121 @@ async def test_all_good_on_node_restart(manager: ManagerClient):
     log = await manager.server_open_log(servers[0].server_id)
     warnings = await log.grep(expr="view_building_state_observer failed with")
     assert len(warnings) == 0, f"Found view building state observer warnings: {warnings}"
+<<<<<<< HEAD
+||||||| parent of b887f8cb2b (test/cluster/test_view_building_coordinator: migrate test from dtest)
+
+# Reproduces SCYLLADB-657
+#
+# Test that view building does not trigger tombstone_warn_threshold warnings.
+# Uses a high tablet count (2048) to create many tasks, which produces many
+# tombstones when tasks are cleaned up. Verifies no warnings appear in logs.
+@pytest.mark.asyncio
+async def test_tombstone_warn_threshold(manager: ManagerClient):
+    node_count = 1
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true, 'initial': 2048}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+        await populate_base_table(cql, ks, "tab")
+
+        await pause_view_build_coordinator(manager)
+
+        logs = await asyncio.gather(*(manager.server_open_log(s.server_id) for s in servers))
+        marks = await asyncio.gather(*(l.mark() for l in logs))
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view1 AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+        await unpause_view_build_coordinator(manager)
+        await wait_for_view(cql, 'mv_cf_view1', node_count)
+        await check_view_contents(cql, ks, "tab", "mv_cf_view1")
+
+        matches = await asyncio.gather(*(l.grep("system.view_building_tasks.*tombstone_warn_threshold", from_mark=m) for (l, m) in zip(logs, marks)))
+        for server_matches in matches:
+            assert len(server_matches) == 0
+=======
+
+# Reproduces SCYLLADB-657
+#
+# Test that view building does not trigger tombstone_warn_threshold warnings.
+# Uses a high tablet count (2048) to create many tasks, which produces many
+# tombstones when tasks are cleaned up. Verifies no warnings appear in logs.
+@pytest.mark.asyncio
+async def test_tombstone_warn_threshold(manager: ManagerClient):
+    node_count = 1
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true, 'initial': 2048}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+        await populate_base_table(cql, ks, "tab")
+
+        await pause_view_build_coordinator(manager)
+
+        logs = await asyncio.gather(*(manager.server_open_log(s.server_id) for s in servers))
+        marks = await asyncio.gather(*(l.mark() for l in logs))
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view1 AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+        await unpause_view_build_coordinator(manager)
+        await wait_for_view(cql, 'mv_cf_view1', node_count)
+        await check_view_contents(cql, ks, "tab", "mv_cf_view1")
+
+        matches = await asyncio.gather(*(l.grep("system.view_building_tasks.*tombstone_warn_threshold", from_mark=m) for (l, m) in zip(logs, marks)))
+        for server_matches in matches:
+            assert len(server_matches) == 0
+
+# Test that in presence of view update hints, view building will not be marked as finished
+# Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_do_not_finish_view_building_with_hints(manager: ManagerClient):
+    node_count = 3
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, config={
+        "hinted_handoff_enabled": False,
+        "shadow_round_ms": 1000,
+    }, auto_rack_dc="dc1")
+    cql, _ = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+        await populate_base_table(cql, ks, "tab")
+
+        marks = await mark_all_servers(manager)
+        await pause_view_building_tasks(manager)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
+
+        # Stop two nodes while view building is paused
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await manager.server_stop_gracefully(servers[2].server_id)
+
+        # Unpause view building on the remaining node - it should not finish
+        # because it cannot replicate view updates to the down nodes.
+        await manager.api.message_injection(servers[0].ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK)
+        await manager.api.disable_injection(servers[0].ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK)
+
+        # Verifying view building does not finish while nodes are down
+        result = await cql.run_async(SimpleStatement(f"SELECT * FROM system_distributed.view_build_status WHERE keyspace_name = '{ks}' AND view_name = 'mv_cf_view'",
+            consistency_level=ConsistencyLevel.ONE))
+        for row in result:
+            assert row.status != 'SUCCESS', "View building should not finish while nodes are down"
+
+        # Restart the stopped nodes
+        await manager.server_start(servers[1].server_id)
+        await manager.server_start(servers[2].server_id)
+
+        # Wait for the view to be built and verify its content
+        await wait_for_view(cql, 'mv_cf_view', node_count)
+        await check_view_contents(cql, ks, "tab", "mv_cf_view")
+>>>>>>> b887f8cb2b (test/cluster/test_view_building_coordinator: migrate test from dtest)
