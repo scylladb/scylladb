@@ -4624,7 +4624,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         sstables::shared_sstable sst;
         replica::enable_backlog_tracker enable_backlog_tracker;
     };
-    std::vector<removed_sstable> remove;
+    std::unordered_map<size_t, std::vector<removed_sstable>> per_cg_remove;
 
     _stats.pending_sstable_deletions++;
     auto undo_stats = defer([this] {
@@ -4633,7 +4633,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
 
     auto permit = co_await get_sstable_list_permit();
 
-    co_await _cache.invalidate(row_cache::external_updater([this, &rp, &remove, truncated_at] {
+    co_await _cache.invalidate(row_cache::external_updater([this, &rp, &per_cg_remove, truncated_at] {
         // FIXME: the following isn't exception safe.
         for_each_compaction_group([&] (compaction_group& cg) {
 
@@ -4648,7 +4648,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
                         if (p->originated_on_this_node().value_or(false) && p->get_stats_metadata().position.shard_id() == this_shard_id()) {
                             rp = std::max(p->get_stats_metadata().position, rp);
                         }
-                        remove.emplace_back(removed_sstable{cg, p, enable_backlog_tracker});
+                        per_cg_remove[cg.group_id()].emplace_back(removed_sstable{cg, p, enable_backlog_tracker});
                         return;
                     }
                     pruned->insert(p);
@@ -4665,16 +4665,19 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     }));
     rebuild_statistics();
 
-    std::vector<sstables::shared_sstable> del;
-    del.reserve(remove.size());
-    for (auto& r : remove) {
-        if (r.enable_backlog_tracker) {
-            remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
+    co_await coroutine::parallel_for_each(per_cg_remove, [&] (auto& entry) {
+        auto& removed = entry.second;
+        std::vector<sstables::shared_sstable> del;
+        del.reserve(removed.size());
+        for (auto& r : removed) {
+            if (r.enable_backlog_tracker) {
+                remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
+            }
+            erase_sstable_cleanup_state(r.sst);
+            del.emplace_back(std::move(r.sst));
         }
-        erase_sstable_cleanup_state(r.sst);
-        del.emplace_back(r.sst);
-    };
-    co_await delete_sstables_atomically(permit, std::move(del));
+        return delete_sstables_atomically(permit, std::move(del));
+    });
     co_return rp;
 }
 
