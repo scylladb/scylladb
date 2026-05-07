@@ -554,10 +554,7 @@ class TestWideRows(Tester):
 
     @pytest.mark.single_node
     def test_wide_rows(self):
-        self.write_wide_rows()
-
-    def write_wide_rows(self, version=None):
-        session = self.prepare_cluster(version=version, options_dict={"compaction_large_partition_warning_threshold_mb": 1, "compaction_large_row_warning_threshold_mb": 1})
+        session = self.prepare_cluster(options_dict={"compaction_large_partition_warning_threshold_mb": 1, "compaction_large_row_warning_threshold_mb": 1})
         # Simple timeline:  user -> {date: value, ...}
         logger.debug("Create Table....")
         session.execute("CREATE TABLE user_events (userid text, event timestamp, value text, PRIMARY KEY (userid, event)) WITH %s" % self.compaction_option)
