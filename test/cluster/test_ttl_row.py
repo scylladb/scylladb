@@ -22,6 +22,7 @@ from cassandra.protocol import InvalidRequest
 from cassandra.auth import PlainTextAuthProvider
 
 from test.pylib.manager_client import ManagerClient
+from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, new_test_table
 
 async def get_cpu_metrics(manager: ManagerClient):
@@ -96,15 +97,23 @@ async def test_row_ttl_scheduling_group(manager: ManagerClient):
             stmt = cql.prepare(f'INSERT INTO {table} (p, e) VALUES (?, ?)')
             stmt.consistency_level = ConsistencyLevel.ALL
             ms_streaming_before_write, ms_statement_before_write, items_deleted_before_write = await get_cpu_metrics(manager)
-            await asyncio.gather(*[cql.run_async(stmt, [p, e]) for p in range(N)])
+            async def write_rows():
+                await asyncio.gather(*[cql.run_async(stmt, [p, e]) for p in range(N)])
+            await write_rows()
 
-            ms_streaming_before, ms_statement_before, items_deleted_before = await get_cpu_metrics(manager)
             # Sanity check: the normal user writes that we did above did some
             # work in the statement scheduling group. This check shows that our
             # test is measuring the right schedling group - and when below
             # see TTL doing 0 work in the same scheduling group, it proves it
             # really doesn't work in the same scheduling group as user writes.
-            assert ms_statement_before_write < ms_statement_before
+            async def wait_for_statement_sg_work():
+                ms_streaming_before, ms_statement_before, items_deleted_before = await get_cpu_metrics(manager)
+                if ms_statement_before_write < ms_statement_before:
+                    return (ms_streaming_before, ms_statement_before, items_deleted_before)
+                await write_rows()
+                return None
+            ms_streaming_before, ms_statement_before, items_deleted_before = await wait_for(
+                wait_for_statement_sg_work, time.time() + 30)
 
             # Only now, after getting the metrics, enable TTL, so the
             # expiration scanner is guaranteed to run after this point.
