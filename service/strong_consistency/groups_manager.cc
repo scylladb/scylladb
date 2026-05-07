@@ -150,6 +150,10 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         token_metadata_ptr tm)
 {
     const auto my_id = to_server_id(tm->get_my_id());
+    const auto this_replica = locator::tablet_replica{
+        .host = tm->get_my_id(),
+        .shard = this_shard_id(),
+    };
 
 
     auto* commitlog = _db.commitlog();
@@ -170,14 +174,21 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     if (!snapshot.id) {
         const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
         const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
+        const auto* trinfo = tablet_map.get_tablet_transition_info(tablet.tablet);
+        const bool is_joining_replica = trinfo && !locator::contains(tablet_info.replicas, this_replica);
 
-        raft::configuration configuration;
-        configuration.current.reserve(tablet_info.replicas.size());
-        for (const auto& r: tablet_info.replicas) {
-            configuration.current.emplace(raft::server_address{to_server_id(r.host), {}},
-                raft::is_voter::yes);
+        if (is_joining_replica) {
+            raft::configuration configuration;
+            co_await storage->bootstrap(std::move(configuration), false);
+        } else {
+            raft::configuration configuration;
+            configuration.current.reserve(tablet_info.replicas.size());
+            for (const auto& r: tablet_info.replicas) {
+                configuration.current.emplace(raft::server_address{to_server_id(r.host), {}},
+                    raft::is_voter::yes);
+            }
+            co_await storage->bootstrap(std::move(configuration), false);
         }
-        co_await storage->bootstrap(std::move(configuration), false);
     }
 
     auto& persistence_ref = *storage;
