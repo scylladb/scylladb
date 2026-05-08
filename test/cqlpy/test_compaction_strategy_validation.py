@@ -57,6 +57,19 @@ def test_incremental_compaction_strategy_options(cql, table1, scylla_only):
     assert_throws(cql, table1, r"space_amplification_goal value \(2.2\) must be greater than 1.0 and less than or equal to 2.0", "ALTER TABLE %s WITH compaction = { 'class' : 'IncrementalCompactionStrategy', 'space_amplification_goal' : 2.2 }")
     assert_throws(cql, table1, r"min_threshold value \(1\) must be bigger or equal to 2", "ALTER TABLE %s WITH compaction = { 'class' : 'IncrementalCompactionStrategy', 'min_threshold' : 1 }")
 
+# Reproducer for https://github.com/scylladb/scylladb/issues/SCYLLADB-1353
+# When compaction is disabled via 'enabled': 'false', DESCRIBE should still
+# show the actual compaction strategy class, not NullCompactionStrategy.
+def test_describe_shows_real_strategy_when_disabled(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int PRIMARY KEY, b int",
+                        "WITH compaction = {'class': 'LeveledCompactionStrategy', 'sstable_size_in_mb': '160'}") as table:
+        # Disable compaction
+        cql.execute(f"ALTER TABLE {table} WITH compaction = {{'class': 'LeveledCompactionStrategy', 'sstable_size_in_mb': '160', 'enabled': 'false'}}")
+        # DESCRIBE should show LeveledCompactionStrategy, not NullCompactionStrategy
+        desc = cql.execute(f"DESCRIBE TABLE {table}").one().create_statement
+        assert 'LeveledCompactionStrategy' in desc, f"Expected LeveledCompactionStrategy in DESCRIBE output but got: {desc}"
+        assert 'NullCompactionStrategy' not in desc, f"NullCompactionStrategy should not appear in DESCRIBE output but got: {desc}"
+
 def test_not_allowed_options(cql, table1):
     def scylla_error(**kwargs):
         template = "Invalid compaction strategy options {{{}}} for chosen strategy type"
