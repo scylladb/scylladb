@@ -11,7 +11,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_tablet_count, get_base_table, get_tablet_replicas
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 import asyncio
 import logging
@@ -39,10 +39,10 @@ async def test_create_cdc_with_tablets(manager: ManagerClient, with_alter: bool)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
         if with_alter:
-            await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+            await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", table_name="test")
             await cql.run_async(f"ALTER TABLE {ks}.test WITH cdc={{'enabled': true}}")
         else:
-            await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+            await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name="test")
 
         rows = await cql.run_async("SELECT * FROM system.cdc_streams_state")
         assert len(rows) == 2
@@ -76,13 +76,13 @@ async def test_drop_table_and_drop_keyspace_removes_cdc_streams(manager: Manager
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks1:
-        await cql.run_async(f"CREATE TABLE {ks1}.test1 (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+        await create_new_test_table(manager, ks1, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name="test1")
         rows = await cql.run_async("SELECT * FROM system.cdc_streams_state")
         assert len(rows) == 2
         rows = await cql.run_async("SELECT * FROM system.cdc_streams_history")
         assert len(rows) == 0
 
-        await cql.run_async(f"CREATE TABLE {ks1}.test2 (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+        await create_new_test_table(manager, ks1, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name="test2")
         rows = await cql.run_async("SELECT * FROM system.cdc_streams_state")
         assert len(rows) == 4
 
@@ -91,7 +91,7 @@ async def test_drop_table_and_drop_keyspace_removes_cdc_streams(manager: Manager
         assert len(rows) == 2
 
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks2:
-            await cql.run_async(f"CREATE TABLE {ks2}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+            await create_new_test_table(manager, ks2, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name="test")
             rows = await cql.run_async("SELECT * FROM system.cdc_streams_state")
             assert len(rows) == 4
 
@@ -110,7 +110,7 @@ async def test_drop_and_recreate_cdc(manager: ManagerClient):
     await manager.servers_add(1)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name="test1")
         await cql.run_async(f"ALTER TABLE {ks}.test1 WITH cdc={{'enabled': false}}")
 
         # The CDC table still exists and streams are still present
@@ -180,7 +180,7 @@ async def test_cdc_virtual_tables(manager: ManagerClient):
         assert [] == await cql.run_async("SELECT * FROM system.cdc_timestamps")
         assert [] == await cql.run_async("SELECT * FROM system.cdc_streams")
 
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name="test")
         log_table_id = await manager.get_table_id(ks, "test_scylla_cdc_log")
 
         await validate_virtual_tables(manager, servers, cql, log_table_id, ks, 'test')
@@ -218,7 +218,7 @@ async def test_cdc_virtual_tables_with_multiple_cdc_tables(manager: ManagerClien
     N = 3
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
         for i in range(N):
-            await cql.run_async(f"CREATE TABLE {ks}.test{i} (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+            await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name=f"test{i}")
 
         log_table_id = [await manager.get_table_id(ks, f"test{i}_scylla_cdc_log") for i in range(N)]
 
@@ -255,7 +255,7 @@ async def test_cdc_stream_split_and_merge_basic(manager: ManagerClient):
     servers = await manager.servers_add(1, config=cfg)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}} AND tablets = {{'min_tablet_count': 2}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}} AND tablets = {{'min_tablet_count': 2}}", table_name="test")
 
         async def assert_streams_are_synchronized_with_tablets():
             tablet_count = await get_tablet_count(manager, servers[0], ks, 'test_scylla_cdc_log')
@@ -319,7 +319,7 @@ async def test_cdc_colocation(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 16}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name="test")
 
         # Insert diverse test data to ensure distribution across both nodes
         test_data = {}
@@ -380,7 +380,7 @@ async def test_cdc_stream_garbage_collection(manager: ManagerClient):
     servers = await manager.servers_add(1, config=cfg)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true, 'ttl': 3600}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true, 'ttl': 3600}}", table_name="test")
 
         rows = await cql.run_async(f"SELECT toUnixTimestamp(timestamp) as ts FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='test'")
         assert len(rows) == 1

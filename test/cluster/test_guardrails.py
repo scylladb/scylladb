@@ -15,7 +15,7 @@ from cassandra.query import SimpleStatement
 from test.pylib.async_cql import _wrap_future
 from test.pylib.manager_client import ManagerClient, wait_for_cql_and_get_hosts
 from test.pylib.util import unique_name
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ async def test_write_cl_default(manager: ManagerClient):
     cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+        table = await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", table_name="t")
 
         all_cls = [ConsistencyLevel.ANY, ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE,
                 ConsistencyLevel.TWO, ConsistencyLevel.THREE, ConsistencyLevel.QUORUM,

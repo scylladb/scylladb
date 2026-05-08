@@ -10,7 +10,7 @@ from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts
 import pytest
 from cassandra.protocol import WriteTimeout
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 
 @pytest.mark.asyncio
@@ -22,8 +22,7 @@ async def test_cas_semaphore(manager):
     host = await wait_for_cql_and_get_hosts(manager.cql, {servers[0]}, time.time() + 60)
 
     async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        table = f"{ks}.test"
-        await manager.cql.run_async(f"CREATE TABLE {table} (a int PRIMARY KEY, b int)")
+        table = await create_new_test_table(manager, ks, "a int PRIMARY KEY, b int", table_name="test")
 
         async with inject_error(manager.api, servers[0].ip_addr, 'cas_timeout_after_lock'):
             res = [manager.cql.run_async(f"INSERT INTO {table} (a) VALUES (0) IF NOT EXISTS", host=host[0]) for r in range(10)]

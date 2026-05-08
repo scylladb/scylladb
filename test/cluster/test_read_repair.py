@@ -18,7 +18,7 @@ from cassandra.pool import Host  # type: ignore
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -207,8 +207,7 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
     # contents. These assumptions are not held with tablets, which
     # distribute data among sstables differently than vnodes.
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = { 'enabled': true }") as ks:
-        table_schema = f"CREATE TABLE {ks}.tbl ({data_class.get_column_spec()}) WITH speculative_retry = 'NONE'"
-        cql.execute(table_schema)
+        await create_new_test_table(manager, ks, f"{data_class.get_column_spec()}", extra=" WITH speculative_retry = 'NONE'", table_name="tbl")
 
         total_rows = 100
         max_live_rows = 8
@@ -322,7 +321,7 @@ async def test_read_repair_with_trace_logging(request, manager):
     await wait_for_cql_and_get_hosts(cql, srvs, time.time() + 60)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk bigint, ck bigint, c int, PRIMARY KEY (pk, ck));")
+        await create_new_test_table(manager, ks, "pk bigint, ck bigint, c int, PRIMARY KEY (pk, ck)", table_name="t")
 
         await cql.run_async(f"INSERT INTO {ks}.t (pk, ck, c) VALUES (0, 0, 0)")
 

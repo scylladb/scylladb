@@ -10,7 +10,7 @@ import logging
 import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
-from test.cluster.util import new_test_keyspace, reconnect_driver, wait_for_cql_and_get_hosts
+from test.cluster.util import new_test_keyspace, reconnect_driver, wait_for_cql_and_get_hosts, create_new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> N
     cql, hosts = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key, c))")
+        await create_new_test_table(manager, ks, "key int, c int, v int, PRIMARY KEY (key, c)", table_name="tab")
 
         await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "storage_proxy_fail_remove_from_batchlog", one_shot=False) for s in servers])
 
@@ -98,7 +98,7 @@ async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> No
     cql, hosts = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key, c))")
+        await create_new_test_table(manager, ks, "key int, c int, v int, PRIMARY KEY (key, c)", table_name="tab")
 
         await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "storage_proxy_fail_remove_from_batchlog", one_shot=False) for s in servers])
 
@@ -160,7 +160,7 @@ async def test_batchlog_replay_includes_cdc(manager: ManagerClient) -> None:
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
         # Create table with CDC enabled
-        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key, c)) WITH cdc = {{'enabled': true}}")
+        await create_new_test_table(manager, ks, "key int, c int, v int, PRIMARY KEY (key, c)", extra=f" WITH cdc = {{'enabled': true}}", table_name="tab")
 
         # Enable error injection to make the batch fail after writing to batchlog
         await manager.api.enable_injection(servers[0].ip_addr, "storage_proxy_fail_remove_from_batchlog", one_shot=False)
@@ -252,7 +252,7 @@ async def test_drop_mutations_for_dropped_table(manager: ManagerClient) -> None:
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.my_table (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+        await create_new_test_table(manager, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)", table_name="my_table")
 
         # Make sure the mutations stay in the batchlog.
         await enable_injection("storage_proxy_fail_remove_from_batchlog")
@@ -351,7 +351,7 @@ async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, rep
         return True if batchlog_row_count == 0 else None
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.my_table (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': '1'}} AND compaction = {{ 'class' : 'NullCompactionStrategy' }}")
+        await create_new_test_table(manager, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)", extra=f" WITH tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': '1'}} AND compaction = {{ 'class' : 'NullCompactionStrategy' }}", table_name="my_table")
 
         await cql.run_async(f"BEGIN BATCH INSERT INTO {ks}.my_table (pk, ck, v) VALUES (0,0,0);"
                                 f"INSERT INTO {ks}.my_table (pk, ck, v) VALUES (1,1,1); APPLY BATCH")

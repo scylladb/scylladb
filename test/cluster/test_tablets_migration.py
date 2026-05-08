@@ -12,7 +12,7 @@ from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.skip_types import skip_env
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
 from test.pylib.util import start_writes
-from test.cluster.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for
+from test.cluster.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for, create_new_test_table
 import time
 import pytest
 import logging
@@ -56,7 +56,7 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
@@ -144,7 +144,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
@@ -293,7 +293,7 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
         await make_server()
 
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({1}, {1});")
@@ -441,7 +441,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=" WITH tablets = {'min_tablet_count': 8}", table_name="test")
 
         total_keys = 10
         for pk in range(total_keys):
@@ -517,7 +517,7 @@ async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=" WITH tablets = {'min_tablet_count': 8}", table_name="test")
 
         total_keys = 10
         for pk in range(total_keys):

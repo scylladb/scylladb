@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace, get_topology_version
+from test.cluster.util import new_test_keyspace, get_topology_version, create_new_test_table
 from cassandra import WriteFailure
 import pytest
 import logging
@@ -97,7 +97,7 @@ async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         logger.info("Create table my_test_table")
-        await cql.run_async(f"CREATE TABLE {ks}.my_test_table (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="my_test_table")
 
         # Have a bootstrapping node hang in write_both_read_new
         logger.info("Add third node")

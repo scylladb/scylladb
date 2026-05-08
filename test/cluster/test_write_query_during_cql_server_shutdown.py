@@ -12,7 +12,7 @@ from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 from test.cluster.test_tablets2 import inject_error_on
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
 
@@ -44,7 +44,7 @@ async def test_write_query_during_cql_server_shutdown(request: pytest.FixtureReq
     cql, hosts = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
+        await create_new_test_table(manager, ks, "pk int primary key, v int", table_name="t")
 
         await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 

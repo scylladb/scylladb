@@ -16,7 +16,7 @@ from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import new_test_keyspace, reconnect_driver, create_new_test_table
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
 logger = logging.getLogger(__name__)
@@ -182,7 +182,7 @@ async def test_migration(manager: ManagerClient):
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
         # Create the table with minor compaction disabled to ensure that Scylla
         # won't delete SSTables while we're checking them.
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH compaction = {{'class': 'IncrementalCompactionStrategy', 'enabled': false}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=f" WITH compaction = {{'class': 'IncrementalCompactionStrategy', 'enabled': false}}", table_name="test")
 
         logger.info("Populating table in batches, flushing after each batch to produce multiple SSTables")
         stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
@@ -325,7 +325,7 @@ async def test_migration_rollback(manager: ManagerClient):
 
     logger.info("Creating keyspace and table with vnodes")
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH compaction = {{'class': 'IncrementalCompactionStrategy', 'enabled': false}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=f" WITH compaction = {{'class': 'IncrementalCompactionStrategy', 'enabled': false}}", table_name="test")
 
         logger.info("Populating table in batches, flushing after each batch to produce multiple SSTables")
         stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
@@ -448,7 +448,7 @@ async def test_migration_multinode(manager: ManagerClient):
 
     logger.info(f"Creating keyspace and table with vnodes (RF={num_nodes})")
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {num_nodes}}} AND tablets = {{'enabled': false}}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         logger.info(f"Populating table with {num_keys} rows at CL=QUORUM")
         insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
@@ -599,7 +599,7 @@ async def test_migration_finalize_without_migration(manager: ManagerClient):
     server, cql = await setup_single_node(manager)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks_vnodes:
-        await cql.run_async(f"CREATE TABLE {ks_vnodes}.t (pk int PRIMARY KEY)")
+        await create_new_test_table(manager, ks_vnodes, "pk int PRIMARY KEY", table_name="t")
         with pytest.raises(HTTPError, match="does not have a tablet map"):
             await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks_vnodes)
 
@@ -619,12 +619,12 @@ async def test_migration_overlapping_migrations(manager: ManagerClient):
     server, cql = await setup_single_node(manager)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks1:
-        await cql.run_async(f"CREATE TABLE {ks1}.t (pk int PRIMARY KEY)")
+        await create_new_test_table(manager, ks1, "pk int PRIMARY KEY", table_name="t")
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks1)
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
 
         async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks2:
-            await cql.run_async(f"CREATE TABLE {ks2}.t (pk int PRIMARY KEY)")
+            await create_new_test_table(manager, ks2, "pk int PRIMARY KEY", table_name="t")
             with pytest.raises(HTTPError, match="Another migration is in progress"):
                 await manager.api.create_vnode_tablet_migration(server.ip_addr, ks2)
 
@@ -640,7 +640,7 @@ async def test_migration_finalize_before_upgrade(manager: ManagerClient):
     server, cql = await setup_single_node(manager)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="t")
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
 
@@ -659,7 +659,7 @@ async def test_migration_task_not_abortable(manager: ManagerClient):
     server, cql = await setup_single_node(manager)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="t")
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
 
         tm = TaskManagerClient(manager.api)
@@ -690,7 +690,7 @@ async def test_migration_wait_task(manager: ManagerClient):
     server, cql = await setup_single_node(manager)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="t")
 
         tm = TaskManagerClient(manager.api)
 
@@ -762,8 +762,8 @@ async def test_migration_multiple_keyspaces(manager: ManagerClient):
     logger.info("Creating two vnode keyspaces with tables")
     async with new_test_keyspace(manager, ks_opts) as ks1:
         async with new_test_keyspace(manager, ks_opts) as ks2:
-            await cql.run_async(f"CREATE TABLE {ks1}.t (pk int PRIMARY KEY, c int)")
-            await cql.run_async(f"CREATE TABLE {ks2}.t (pk int PRIMARY KEY, c int)")
+            await create_new_test_table(manager, ks1, "pk int PRIMARY KEY, c int", table_name="t")
+            await create_new_test_table(manager, ks2, "pk int PRIMARY KEY, c int", table_name="t")
 
             logger.info("Preparing both keyspaces for migration (creating tablet maps)")
             await manager.api.create_vnode_tablet_migration(server.ip_addr, ks1)

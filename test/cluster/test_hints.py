@@ -20,7 +20,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, wait_for
 
 from test.cqlpy import nodetool
-from test.cluster.util import get_topology_coordinator, find_server_by_host_id, keyspace_has_tablets, new_test_keyspace, new_test_table
+from test.cluster.util import create_new_test_table, get_topology_coordinator, find_server_by_host_id, keyspace_has_tablets, new_test_keyspace, new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -103,8 +103,7 @@ async def test_limited_concurrency_of_writes(manager: ManagerClient):
 
     cql = await manager.get_cql_exclusive(node1)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
-        table = f"{ks}.t"
-        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
+        table = await create_new_test_table(manager, ks, "pk int primary key, v int", table_name="t")
 
         await manager.server_stop_gracefully(node2.server_id)
 
@@ -133,8 +132,7 @@ async def test_sync_point(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        table = f"{ks}.t"
-        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
+        table = await create_new_test_table(manager, ks, "pk int primary key, v int", table_name="t")
 
         await manager.server_stop_gracefully(node2.server_id)
         await manager.server_stop_gracefully(node3.server_id)
@@ -193,8 +191,7 @@ async def test_hints_consistency_during_decommission(manager: ManagerClient):
 
     logger.info("Creatting a keyspace with RF=1 and a table")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = { 'enabled': false }") as ks:
-        table = f"{ks}.t"
-        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
+        table = await create_new_test_table(manager, ks, "pk int primary key, v int", table_name="t")
 
         logger.info("Stopping node 3")
         await manager.server_stop_gracefully(server3.server_id)
@@ -274,8 +271,7 @@ async def test_hints_consistency_during_replace(manager: ManagerClient):
     cql = await manager.get_cql_exclusive(servers[0])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        table = f"{ks}.t"
-        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
+        table = await create_new_test_table(manager, ks, "pk int primary key, v int", table_name="t")
 
         await manager.server_stop_gracefully(servers[2].server_id)
         await manager.others_not_see_server(servers[2].ip_addr)
@@ -401,8 +397,7 @@ async def test_hint_to_pending(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        table = f"{ks}.t"
-        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
+        table = await create_new_test_table(manager, ks, "pk int primary key, v int", table_name="t")
         replica = (await get_tablet_replicas(manager, servers[0], ks, "t", 0))[0]
         host_ids = [await manager.get_host_id(server.server_id) for server in servers]
         if replica[0] != host_ids[1]:
@@ -460,8 +455,7 @@ async def test_hint_to_leaving_when_reducing_rf(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r2', 'r3']}") as ks:
-        table = f"{ks}.t"
-        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int) WITH tablets = {{'min_tablet_count': 1}};")
+        table = await create_new_test_table(manager, ks, "pk int primary key, v int", extra=" WITH tablets = {'min_tablet_count': 1}", table_name="t")
         host_ids = [await manager.get_host_id(server.server_id) for server in servers]
 
         # Stop the servers with replicas

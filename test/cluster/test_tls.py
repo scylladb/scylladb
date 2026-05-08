@@ -6,7 +6,7 @@
 
 from test.pylib.manager_client import ManagerClient
 from cassandra.connection import ConnectionShutdown
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 import asyncio
 import logging
@@ -32,7 +32,7 @@ async def test_upgrade_to_ssl(manager: ManagerClient) -> None:
     servers = await manager.running_servers()
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY) WITH tombstone_gc = {{'mode': 'immediate'}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", extra=f" WITH tombstone_gc = {{'mode': 'immediate'}}", table_name=cf)
 
         async def update_config_and_restart(mode):
             for srv in servers:

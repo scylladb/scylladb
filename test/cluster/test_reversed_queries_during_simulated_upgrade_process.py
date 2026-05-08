@@ -7,7 +7,7 @@ from itertools import zip_longest
 
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 
 def verify_data(response, expected_data):
@@ -31,7 +31,7 @@ async def test_reversed_queries_during_upgrade(manager: ManagerClient) -> None:
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int, ck1 int, ck2 int, PRIMARY KEY (pk, ck1, ck2));")
+        await create_new_test_table(manager, ks, "pk int, ck1 int, ck2 int, PRIMARY KEY (pk, ck1, ck2)", table_name="test")
 
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, ck1, ck2) VALUES ({k % 10}, {k % 3}, {k});") for k in range(100)])
 

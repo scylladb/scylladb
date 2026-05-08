@@ -10,7 +10,7 @@ import pytest
 import logging
 
 from test.pylib.util import wait_for_view
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 from cassandra import ReadTimeout, WriteTimeout
 
 logger = logging.getLogger(__name__)
@@ -37,8 +37,8 @@ async def test_mv_read_concurrency(manager: ManagerClient) -> None:
 
     cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (p int PRIMARY KEY, mvp int, v text)")
-        await cql.run_async(f"CREATE TABLE {ks}.tab2 (p int PRIMARY KEY, mvp int)")
+        await create_new_test_table(manager, ks, "p int PRIMARY KEY, mvp int, v text", table_name="tab")
+        await create_new_test_table(manager, ks, "p int PRIMARY KEY, mvp int", table_name="tab2")
         await cql.run_async(f"CREATE MATERIALIZED VIEW IF NOT EXISTS {ks}.mv AS SELECT p, mvp FROM {ks}.tab \
             WHERE p IS NOT NULL AND mvp IS NOT NULL PRIMARY KEY (mvp, p)")
         await wait_for_view(cql, 'mv', node_count)
@@ -109,7 +109,7 @@ async def test_mv_read_memory(manager: ManagerClient) -> None:
     cql, _ = await manager.get_ready_cql(servers)
     # Use just 1 tablet to make the test more predictable by running all view updates on the same shard
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (p int PRIMARY KEY, mvp int, v text)")
+        await create_new_test_table(manager, ks, "p int PRIMARY KEY, mvp int, v text", table_name="tab")
         await cql.run_async(f"CREATE MATERIALIZED VIEW IF NOT EXISTS {ks}.mv AS SELECT p, mvp FROM {ks}.tab \
             WHERE p IS NOT NULL AND mvp IS NOT NULL PRIMARY KEY (mvp, p)")
         await wait_for_view(cql, 'mv', node_count)

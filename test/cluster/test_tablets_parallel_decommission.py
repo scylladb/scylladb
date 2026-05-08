@@ -10,7 +10,7 @@ import time
 import pytest
 
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import get_coordinator_host, new_test_keyspace, ensure_group0_leader_on
+from test.cluster.util import get_coordinator_host, new_test_keyspace, ensure_group0_leader_on, create_new_test_table
 from test.pylib.internal_types import ServerInfo, IPAddress
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import gather_safely
@@ -50,7 +50,7 @@ async def test_tablets_are_drained_in_parallel(manager: ManagerClient):
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tab")
 
         coord_srv = await get_coordinator_host(manager)
         log = await manager.server_open_log(coord_srv.server_id) # group0 leader
@@ -120,7 +120,7 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tab")
 
         servers_to_remove = [servers[3], servers[4]]
         host_ids_to_remove = await gather_safely(*(manager.get_host_id(s.server_id) for s in servers_to_remove))
@@ -179,7 +179,7 @@ async def test_decommission_can_be_canceled(manager: ManagerClient):
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                         " 'dc1': ['rack1']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tab")
 
         coord_log = await manager.server_open_log(coord_serv.server_id) # group0 leader
         mark = await coord_log.mark()
@@ -263,7 +263,7 @@ async def test_decommission_is_rejected_when_another_one_is_still_pending(manage
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                         " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tab")
 
         coord_log = await manager.server_open_log(coord_serv.server_id) # group0 leader
         mark = await coord_log.mark()
@@ -311,7 +311,7 @@ async def test_remove_is_canceled_if_there_is_node_down(manager: ManagerClient):
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                         " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tab")
 
         await manager.server_stop_gracefully(servers[3].server_id)
         await manager.server_stop_gracefully(servers[2].server_id)
@@ -333,7 +333,7 @@ async def test_decommission_start_time_is_stable(manager: ManagerClient):
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tab")
 
         coord_serv = servers[0]
         coord_log = await manager.server_open_log(coord_serv.server_id) # group0 leader
@@ -380,7 +380,7 @@ async def test_decommission_can_not_be_canceled_once_running(manager: ManagerCli
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tab")
 
         coord_serv = servers[0]
         coord_log = await manager.server_open_log(coord_serv.server_id) # group0 leader
@@ -436,7 +436,7 @@ async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: M
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack2']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tab")
 
         coord_serv = servers[0]
         coord_log = await manager.server_open_log(coord_serv.server_id) # group0 leader
@@ -482,7 +482,7 @@ async def test_node_lost_during_decommission_drain(manager: ManagerClient):
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tab")
 
         coord_serv = servers[0]
         coord_log = await manager.server_open_log(coord_serv.server_id) # group0 leader

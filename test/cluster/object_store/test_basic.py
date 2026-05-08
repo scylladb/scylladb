@@ -11,7 +11,7 @@ from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import reconnect_driver
+from test.cluster.util import reconnect_driver, create_new_test_table
 from test.cluster.object_store.conftest import format_tuples, keyspace_options
 from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
@@ -51,7 +51,7 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
     workdir = await manager.server_get_workdir(servers[0].server_id)
     print(f'Create keyspace (storage server listening at {object_storage.address})')
     async with new_test_keyspace(manager, keyspace_options(object_storage, rf=replication_factor)) as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+        await create_new_test_table(manager, ks, "name text PRIMARY KEY, value int", table_name="test")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
 
         assert not os.path.exists(os.path.join(workdir, f'data/{ks}')), "object storage backed keyspace has local directory created"
@@ -125,7 +125,7 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
     async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+        await create_new_test_table(manager, ks, "name text PRIMARY KEY, value int", table_name="test")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
 
         await manager.api.flush_keyspace(server.ip_addr, ks)
@@ -168,7 +168,7 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
 
     print(f'Create keyspace (storage server listening at {object_storage.address})')
     async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+        await create_new_test_table(manager, ks, "name text PRIMARY KEY, value int", table_name="test")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
 
         res = cql.execute(f"SELECT * FROM {ks}.test;")
@@ -232,7 +232,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
     print(f'Create keyspace (storage server listening at {object_storage.address})')
 
     async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+        await create_new_test_table(manager, ks, "name text PRIMARY KEY, value int", table_name="test")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});") for k in range(4)])
 
         res = cql.execute(f"SELECT * FROM {ks}.test;")

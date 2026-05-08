@@ -6,7 +6,7 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
-from test.cluster.util import create_new_test_keyspace
+from test.cluster.util import create_new_test_keyspace, create_new_test_table
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 import pytest
@@ -36,7 +36,7 @@ async def test_validate_truncate_with_concurrent_writes(manager: ManagerClient):
 
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}}")
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int, ck int, val int, PRIMARY KEY(pk, ck));")
+    await create_new_test_table(manager, ks, "pk int, ck int, val int, PRIMARY KEY(pk, ck)", table_name="test")
 
     trunc_started_event = asyncio.Event()
     trunc_completed_event = asyncio.Event()

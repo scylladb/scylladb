@@ -14,7 +14,7 @@ from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.conftest import cluster_con
 from test.pylib.util import gather_safely, wait_for_cql_and_get_hosts
-from test.cluster.util import create_new_test_keyspace
+from test.cluster.util import create_new_test_keyspace, create_new_test_table
 
 import pytest
 import logging
@@ -69,8 +69,7 @@ async def test_maintenance_mode(manager: ManagerClient):
         rf_tag = "" if rf is None else f"rf{rf}"
         tablets_tag = "tablets" if tablets_enabled else "vnodes"
         table_suffix = f"{replication_strategy.lower()}_{rf_tag}_{tablets_tag}"
-        table = f"{ks}.{table_suffix}"
-        await cql.run_async(f"CREATE TABLE {table} (k int PRIMARY KEY, v int)")
+        table = await create_new_test_table(manager, ks, "k int PRIMARY KEY, v int", table_name=table_suffix)
         logger.info(f"Created table {table}")
 
         async def insert_one(cl: ConsistencyLevel):

@@ -5,7 +5,7 @@
 #
 
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import new_test_keyspace, reconnect_driver, create_new_test_table
 from cassandra.protocol import InvalidRequest
 
 import asyncio
@@ -29,7 +29,7 @@ async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name="test")
 
         # sleep before CDC augmentation, because we want to have a write that starts with some base schema, and then
         # the table is altered while the write is in progress, and the CDC augmentation will use the new schema that
@@ -88,7 +88,7 @@ async def test_cdc_compatible_schema(manager: ManagerClient):
     log = await manager.server_open_log(servers[0].server_id)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=f" WITH cdc={{'enabled': true}}", table_name="test")
 
         await cql.run_async(f"INSERT INTO {ks}.test(pk, v) VALUES(1, 10)")
         await cql.run_async(f"ALTER TABLE {ks}.test ADD a int")
@@ -124,7 +124,7 @@ async def test_recreate_column_too_soon(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int, dropped_col int) WITH cdc={{'enabled': true}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int, dropped_col int", extra=f" WITH cdc={{'enabled': true}}", table_name="test")
         await cql.run_async(f"ALTER TABLE {ks}.test DROP dropped_col")
 
         # recreating too soon
@@ -157,7 +157,7 @@ async def test_concurrent_writes_and_drop_column_with_cdc_preimage(manager: Mana
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int, dropped_col int) WITH cdc={{'enabled': true, 'preimage': 'full'}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int, dropped_col int", extra=f" WITH cdc={{'enabled': true, 'preimage': 'full'}}", table_name="test")
 
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, 0)") for pk in range(50)])
 

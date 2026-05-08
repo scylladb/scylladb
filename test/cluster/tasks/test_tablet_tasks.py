@@ -14,7 +14,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import create_table_insert_data_for_repair, get_tablet_task_id
 from test.pylib.rest_client import read_barrier
 from test.pylib.tablets import get_all_tablet_replicas
-from test.cluster.util import create_new_test_keyspace, new_test_keyspace, get_topology_coordinator, find_server_by_host_id
+from test.cluster.util import create_new_test_keyspace, new_test_keyspace, get_topology_coordinator, find_server_by_host_id, create_new_test_table
 from test.cluster.test_incremental_repair import trigger_tablet_merge
 from test.cluster.test_tablets2 import inject_error_on
 from test.cluster.tasks.task_manager_client import TaskManagerClient
@@ -182,8 +182,8 @@ async def test_tablet_repair_task_list(manager: ManagerClient):
     assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
 
     # Create other tables.
-    await cql.run_async(f"CREATE TABLE {ks}.test2 (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
-    await cql.run_async(f"CREATE TABLE {ks}.test3 (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=f" WITH tombstone_gc = {{'mode':'repair'}}", table_name="test2")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=f" WITH tombstone_gc = {{'mode':'repair'}}", table_name="test3")
     keys = range(256)
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test2 (pk, c) VALUES ({k}, {k});") for k in keys])
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test3 (pk, c) VALUES ({k}, {k});") for k in keys])
@@ -285,7 +285,7 @@ async def prepare_migration_test(manager: ManagerClient):
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
     await make_server()
 
     await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({1}, {1});")
@@ -490,8 +490,8 @@ async def test_tablet_resize_task(manager: ManagerClient):
     table1 = "test1"
     table2 = "test2"
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as keyspace:
-        await cql.run_async(f"CREATE TABLE {keyspace}.{table1} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
-        await cql.run_async(f"CREATE TABLE {keyspace}.{table2} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+        await create_new_test_table(manager, keyspace, "pk int PRIMARY KEY, c blob", extra=" WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1", table_name=table1)
+        await create_new_test_table(manager, keyspace, "pk int PRIMARY KEY, c blob", extra=" WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1", table_name=table2)
 
         total_keys = 60
         keys = range(total_keys)
@@ -530,7 +530,7 @@ async def test_tablet_resize_list(manager: ManagerClient):
     cql = manager.get_cql()
     table1 = "test1"
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as keyspace:
-        await cql.run_async(f"CREATE TABLE {keyspace}.{table1} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+        await create_new_test_table(manager, keyspace, "pk int PRIMARY KEY, c blob", extra=" WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1", table_name=table1)
 
         total_keys = 60
         keys = range(total_keys)
@@ -590,7 +590,7 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
     cql = manager.get_cql()
     table1 = "test1"
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as keyspace:
-        await cql.run_async(f"CREATE TABLE {keyspace}.{table1} (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+        await create_new_test_table(manager, keyspace, "pk int PRIMARY KEY, c blob", extra=" WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1", table_name=table1)
 
         total_keys = 60
         keys = range(total_keys)

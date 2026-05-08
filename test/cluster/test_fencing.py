@@ -13,7 +13,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
-from test.cluster.util import new_test_keyspace, get_topology_version
+from test.cluster.util import new_test_keyspace, get_topology_version, create_new_test_table
 from test.pylib.scylla_cluster import ScyllaVersionDescription
 import pytest
 import logging
@@ -253,7 +253,7 @@ async def test_fence_lwt_during_bootstap(manager: ManagerClient):
     logger.info("Create a test keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         logger.info("Create test table")
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         logger.info("Add the fourth server")
         servers += [await manager.server_add(property_file=property_file,
@@ -381,7 +381,7 @@ async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: Scylla
     logger.info("Create a test keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         logger.info("Create test table")
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1)")
 
         update_stmt = cql.prepare(f"UPDATE {ks}.test SET c = ? WHERE pk = 1 IF c = ?")

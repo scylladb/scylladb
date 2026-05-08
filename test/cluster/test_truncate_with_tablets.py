@@ -8,7 +8,7 @@ from cassandra.protocol import InvalidRequest
 from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import get_topology_coordinator, new_test_keyspace
+from test.cluster.util import get_topology_coordinator, new_test_keyspace, create_new_test_table
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 import time
@@ -34,7 +34,7 @@ async def test_truncate_while_migration(manager: ManagerClient):
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -89,7 +89,7 @@ async def test_truncate_with_concurrent_drop(manager: ManagerClient):
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -138,7 +138,7 @@ async def test_truncate_while_node_restart(manager: ManagerClient):
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -185,7 +185,7 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -231,7 +231,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -275,7 +275,7 @@ async def test_replay_position_check_during_truncate(manager):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         keys = range(10)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
@@ -315,8 +315,8 @@ async def test_parallel_truncate(manager: ManagerClient):
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
-        await cql.run_async(f'CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, c int);')
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test1")
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -377,7 +377,7 @@ async def test_split_emitted_during_truncate(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=f" WITH tablets = {{'min_tablet_count': 1}}", table_name="test")
 
         keys = range(10)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])

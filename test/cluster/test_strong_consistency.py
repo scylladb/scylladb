@@ -8,7 +8,7 @@ from typing import Tuple
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import gather_safely, wait_for, Host
-from test.cluster.util import new_test_keyspace, new_test_table, reconnect_driver
+from test.cluster.util import new_test_keyspace, new_test_table, reconnect_driver, create_new_test_table
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
@@ -134,7 +134,7 @@ async def test_basic_write_read(manager: ManagerClient):
     logger.info("Creating a strongly-consistent keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         logger.info("Creating a table")
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         logger.info("Select raft group id for the tablet")
         group_id = await get_table_raft_group_id(manager, ks, 'test')
@@ -512,7 +512,7 @@ async def test_no_schema_when_apply_write(manager: ManagerClient):
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         # Drop incoming append entries from group0 (schema changes) on `servers[2]` after the table is created,
         # so strong consistency raft groups are created on the node but it won't receive next alter table mutations.
@@ -557,7 +557,7 @@ async def test_old_schema_when_apply_write(manager: ManagerClient):
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         group_id = await get_table_raft_group_id(manager, ks, 'test')
         leader_host_id = await wait_for_leader(manager, servers[0], group_id)
@@ -785,8 +785,7 @@ async def test_drop_table_during_insert(manager: ManagerClient):
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
         " AND tablets = {'initial': 1} AND consistency = 'global'",
     ) as ks:
-        table = f"{ks}.tbl"
-        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+        table = await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", table_name="tbl")
 
         log = await manager.server_open_log(server.server_id)
         mark = await log.mark()
@@ -949,9 +948,7 @@ async def test_queries_while_dropping_table(manager: ManagerClient):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         table_name = "my_table"
-        table = f"{ks}.{table_name}"
-
-        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+        table = await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", table_name=table_name)
         await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)")
 
         await gather_safely(*[
@@ -1244,9 +1241,7 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerCl
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         table_name = "my_table"
-        table = f"{ks}.{table_name}"
-
-        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+        table = await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", table_name=table_name)
 
         group_id = await get_table_raft_group_id(manager, ks, table_name)
         leader_host_id = await wait_for_leader(manager, leader_server, group_id)
@@ -1310,9 +1305,7 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         table_name = "my_table"
-        table = f"{ks}.{table_name}"
-
-        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+        table = await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", table_name=table_name)
 
         group_id = await get_table_raft_group_id(manager, ks, table_name)
         leader_host_id = await wait_for_leader(manager, leader_server, group_id)

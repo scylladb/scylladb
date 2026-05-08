@@ -7,7 +7,7 @@ import asyncio
 import pytest
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_view
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import new_test_keyspace, reconnect_driver, create_new_test_table
 
 from cassandra.cluster import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
@@ -53,7 +53,7 @@ async def test_mv_build_during_shutdown(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
+        await create_new_test_table(manager, ks, "pk int primary key, v int", table_name="t")
 
         for i in range(100):
             await cql.run_async(f"insert into {ks}.t (pk, v) values ({i}, {i+1})")

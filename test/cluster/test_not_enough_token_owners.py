@@ -9,7 +9,7 @@ import time
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 
 @pytest.mark.asyncio
@@ -55,7 +55,7 @@ async def test_not_enough_token_owners(manager: ManagerClient):
     await wait_for_cql_and_get_hosts(cql, [server_a, server_c], time.time() + 60)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = { 'enabled': true }") as ks_name:
-        await cql.run_async(f'CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)')
+        await create_new_test_table(manager, ks_name, "pk int PRIMARY KEY, v int", table_name="tbl")
         await cql.run_async(f'INSERT INTO {ks_name}.tbl (pk, v) VALUES (1, 1)')
 
         # FIXME: Once scylladb/scylladb#16195 is fixed, we will have to replace the expected error message.

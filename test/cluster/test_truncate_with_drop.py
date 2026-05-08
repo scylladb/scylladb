@@ -6,7 +6,7 @@
 import logging
 import asyncio
 
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 from test.pylib.manager_client import ManagerClient
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
@@ -21,7 +21,7 @@ async def test_truncation_on_drop(manager: ManagerClient):
 
     # Create a keyspace
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
         table_id = await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'")
         table_id = table_id[0].id
 
@@ -53,7 +53,7 @@ async def test_truncation_records_pruned_on_dirty_restart(manager: ManagerClient
     
     # Create a keyspace
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
         table_id = await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'")
         table_id = table_id[0].id
 

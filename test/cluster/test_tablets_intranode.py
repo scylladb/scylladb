@@ -8,7 +8,7 @@ from cassandra.cluster import Session, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, start_writes
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 
 import pytest
@@ -38,7 +38,7 @@ async def test_intranode_migration(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         finish_writes = await start_writes(cql, ks, "test")
 
@@ -74,7 +74,7 @@ async def test_crash_during_intranode_migration(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         finish_writes = await start_writes(cql, ks, "test", ignore_errors=True)
 
@@ -141,7 +141,7 @@ async def test_cross_shard_migration(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         finish_writes = await start_writes(cql, ks, "test")
 

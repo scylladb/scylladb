@@ -21,7 +21,7 @@ from test.pylib.minio_server import MinioServer
 from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import format_tuples
 from test.cluster.object_store.test_backup import topo, take_snapshot, do_test_streaming_scopes
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for
 
@@ -117,7 +117,7 @@ async def test_refresh_deletes_uploaded_sstables(manager: ManagerClient):
     cf = 'cf'
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk text primary key, value int)")
+        await create_new_test_table(manager, ks, "pk text primary key, value int", table_name=cf)
         insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
         insert_stmt.consistency_level = ConsistencyLevel.ALL
         keys = range(256)

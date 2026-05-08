@@ -24,7 +24,7 @@ async def test_create_table_notification_deadlock_with_shutdown(manager: Manager
         await manager.api.enable_injection(server.ip_addr, pause_in_notif_injection, one_shot=True)
 
         # Start creating the table asynchronously. it will wait at the injection point during the notification.
-        cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
+        cql.run_async(f"CREATE TABLE IF NOT EXISTS {ks}.t (pk int primary key, v int)")
 
         log = await manager.server_open_log(server.server_id)
         mark = await log.mark()

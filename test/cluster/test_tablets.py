@@ -17,7 +17,8 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
-    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, find_server_by_host_id
+    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, find_server_by_host_id, \
+    create_new_test_table
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -54,10 +55,10 @@ async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 3}}") as ks:
         with pytest.raises(ConfigurationException, match=f"Datacenter {this_dc} doesn't have enough token-owning nodes"):
-            await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+            await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
 
         await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 2}}")
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
 
 @pytest.mark.asyncio
@@ -89,7 +90,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
     logger.info("Creating table")
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         logger.info("Populating table")
         keys = range(256)
@@ -119,7 +120,7 @@ async def test_reshape_with_tablets(manager: ManagerClient):
     cql = manager.get_cql()
     number_of_tablets = 2
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} and tablets = {{'initial': {number_of_tablets} }}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         logger.info("Disabling autocompaction for the table")
         await manager.api.disable_autocompaction(server.ip_addr, ks, "test")
@@ -231,7 +232,7 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         logger.info("Populating table")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in range(4)])
@@ -257,7 +258,7 @@ async def test_tablets_api_consistency(manager: ManagerClient, endpoint):
     cql = manager.get_cql()
     expected_tablet_count = 4
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH TABLETS = {{'min_tablet_count': {expected_tablet_count}, 'max_tablet_count': {expected_tablet_count}}};")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=f" WITH TABLETS = {{'min_tablet_count': {expected_tablet_count}, 'max_tablet_count': {expected_tablet_count}}}", table_name="test")
 
 
         def columnar(lst):
@@ -770,7 +771,7 @@ async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: Mana
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']} AND tablets = {'initial': 4}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="t")
         await asyncio.gather(*[cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk) VALUES ({k})", consistency_level=ConsistencyLevel.QUORUM)) for k in range(10)])
 
         await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': ['rack2a', 'rack2b']}}")
@@ -1285,7 +1286,7 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode
     async with new_test_keyspace(manager, "WITH"
                         " replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
                         " and tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int, ck int, c int, PRIMARY KEY (pk, ck));")
+        await create_new_test_table(manager, ks, "pk int, ck int, c int, PRIMARY KEY (pk, ck)", table_name="test")
 
         logger.info("Populating table")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, ck, c) VALUES (0, {k}, 0);") for k in range(128)])
@@ -1637,7 +1638,7 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
     logger.info("Create the test table, populate few rows and flush to disk")
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k%3});") for k in range(256)])
     await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
     node0_workdir = await manager.server_get_workdir(servers[0].server_id)
@@ -1690,7 +1691,7 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 } AND tablets = { 'initial': 1 }") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         node_to_remove = servers['dc1'][0]
         node_to_replace = servers['dc1'][1]
@@ -1729,8 +1730,8 @@ async def test_excludenode(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
-                                          "'dc1': ['rack1', 'rack2']} AND tablets = { 'initial': 8 }") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+                                           "'dc1': ['rack1', 'rack2']} AND tablets = { 'initial': 8 }") as ks:
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         live_node = servers[0]
         node_to_remove = servers[1]
@@ -1770,8 +1771,8 @@ async def test_excludenode_shrink_rf(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
-                                          "'dc1': 1, 'dc2': 1} AND tablets = { 'initial': 4 }") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+                                           "'dc1': 1, 'dc2': 1} AND tablets = { 'initial': 4 }") as ks:
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         # Stop the only node in dc2
         await manager.server_stop(dc2_server.server_id)
@@ -1812,7 +1813,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 } AND tablets = { 'initial': 1 }") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         node_to_remove = servers['dc1'][0]
         initiator_node = servers['dc2'][0]
@@ -1851,7 +1852,7 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient,
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 } AND tablets = { 'initial': 1 }") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
         stmt.consistency_level = ConsistencyLevel.ALL
@@ -1909,7 +1910,7 @@ async def test_drop_keyspace_while_split(manager: ManagerClient):
 
     # create a table so that it has at least 2 tablets (and storage groups) per shard
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
     await manager.api.disable_autocompaction(servers[0].ip_addr, ks)
 
@@ -1955,7 +1956,7 @@ async def test_drop_with_tablet_migration_cleanup(manager: ManagerClient):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         # Create the table, insert data and flush
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=" WITH tablets = {'min_tablet_count': 1}", table_name="test")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in range(100)])
         await manager.api.flush_keyspace(server.ip_addr, ks)
 
@@ -2110,7 +2111,7 @@ async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(m
     ]
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline)
 
-    await cql.run_async(f"CREATE TABLE {ks}.test2 (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=" WITH tombstone_gc = {'mode':'repair'}", table_name="test2")
 
     await manager.disable_tablet_balancing()
 
@@ -2162,7 +2163,7 @@ async def check_tablet_rebuild_with_repair(manager: ManagerClient, fail: bool):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
@@ -2324,7 +2325,7 @@ async def test_disabling_balancing_preempts_balancer(manager: ManagerClient):
         log = await manager.server_open_log(coord_srv.server_id)
         mark = await log.mark()
 
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
         await log.wait_for('Initiating tablet', from_mark=mark)
 
         # Should preempt balancing
@@ -2358,7 +2359,7 @@ async def test_table_creation_wakes_up_balancer(manager: ManagerClient):
         # Create a table, which should prevent the coordinator from sleeping
         await manager.api.enable_injection(server.ip_addr, 'wait-after-topology-coordinator-gets-event', one_shot=True)
         mark = await log.mark()
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         # Verify it didn't go to sleep. If it did, the wait for wakeup would be 30s on average,
         # up to stats refresh period, which is 60s. So use a small timeout.
@@ -2394,7 +2395,7 @@ async def test_multi_rf_increase_auto_abort_excluded_node(request: pytest.Fixtur
     dc1_host = (await wait_for_cql_and_get_hosts(cql, [dc1_server], time.time() + 30))[0]
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']} AND tablets = {'initial': 4}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", table_name="t")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
 
         # Verify initial state: all replicas in dc1
@@ -2455,7 +2456,7 @@ async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, ma
     dc1_host = (await wait_for_cql_and_get_hosts(cql, [dc1_server], time.time() + 30))[0]
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']} AND tablets = {'initial': 4}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", table_name="t")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({k}, {k});", host=dc1_host) for k in range(10)])
 
         # Stop dc2/rack1 node but do NOT exclude it

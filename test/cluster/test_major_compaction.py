@@ -10,7 +10,7 @@ import asyncio
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import new_test_keyspace, reconnect_driver, create_new_test_table
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ async def test_major_compaction_consider_only_existing_data(manager: ManagerClie
     cf = "test_consider_only_existing_data"
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY) WITH tombstone_gc = {{'mode': 'immediate'}}")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", extra=f" WITH tombstone_gc = {{'mode': 'immediate'}}", table_name=cf)
         await disable_autocompaction_across_keyspaces(manager, server.ip_addr, ks)
 
         logger.info("Populating table")
@@ -115,7 +115,7 @@ async def test_major_compaction_flush_all_tables(manager: ManagerClient, compact
     cf = "test_flush_all_tables"
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY)")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name=cf)
         await disable_autocompaction_across_keyspaces(manager, server.ip_addr, ks)
 
         logger.info("Populating table")
@@ -163,7 +163,7 @@ async def test_shutdown_drain_during_compaction(manager: ManagerClient):
     cf = "test_shutdown_drain_during_compaction"
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name=cf)
         await disable_autocompaction_across_keyspaces(manager, server.ip_addr, ks)
 
         logger.info("Populating table")
@@ -218,7 +218,7 @@ async def test_alter_compaction_strategy_during_compaction(manager: ManagerClien
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
         logger.info("Create table")
         cf = "t1"
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int, ck int, val int, PRIMARY KEY (pk, ck)) WITH compaction={{'class': 'TimeWindowCompactionStrategy'}}")
+        await create_new_test_table(manager, ks, "pk int, ck int, val int, PRIMARY KEY (pk, ck)", extra=f" WITH compaction={{'class': 'TimeWindowCompactionStrategy'}}", table_name=cf)
 
         logger.info("Inject error to pause compaction midway")
         injection_name="twcs_get_sstables_for_compaction"
@@ -265,7 +265,7 @@ async def test_disable_autocompaction_during_major_compaction(manager: ManagerCl
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         logger.info("Creating table")
-        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY)")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name=cf)
 
         logger.info("Populating table")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{cf} (pk) VALUES ({k});") for k in range(100)])

@@ -12,7 +12,7 @@ from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,7 @@ async def test_read_repair_with_conflicting_hash_keys(request: pytest.FixtureReq
     cql, _ = await manager.get_ready_cql(srvs)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};") as ks:
-        table = f"{ks}.t"
-        await cql.run_async(f"CREATE TABLE {table} (pk bigint PRIMARY KEY, c int);")
+        table = await create_new_test_table(manager, ks, "pk bigint PRIMARY KEY, c int", table_name="t")
 
         # Stop one of the nodes.
         await manager.server_stop_gracefully(srvs[0].server_id)

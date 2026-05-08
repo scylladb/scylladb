@@ -9,7 +9,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for
-from test.cluster.util import new_test_keyspace, create_new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_keyspace, create_new_test_table
 
 import pytest
 import asyncio
@@ -51,7 +51,7 @@ async def test_tablet_merge_simple(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c blob", extra=" WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1", table_name="test")
 
         # Initial average table size of 400k (1 tablet), so triggers some splits.
         total_keys = 200
@@ -198,7 +198,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c blob", extra=" WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1", table_name="test")
 
         async def perform_topology_ops():
             logger.info("Topology ops in background")
@@ -336,7 +336,7 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
 
     cql, _ = await manager.get_ready_cql(servers)
     ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': 1}}")
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c blob", extra=f" WITH compression = {{'sstable_compression': ''}}", table_name="test")
 
     await inject_error_on(manager, "forbid_cross_rack_migration_attempt", servers)
 
@@ -389,9 +389,9 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
 
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': 1}}")
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c blob", extra=f" WITH compression = {{'sstable_compression': ''}}", table_name="test")
     num_tables = 200 if build_mode != 'debug' else 20
-    await asyncio.gather(*[cql.run_async(f"CREATE TABLE {ks}.test{i} (pk int PRIMARY KEY, c blob);") for i in range(1, num_tables)])
+    await asyncio.gather(*[create_new_test_table(manager, ks, "pk int PRIMARY KEY, c blob", table_name=f"test{i}") for i in range(1, num_tables)])
 
     async def check_logs(when):
         for server in servers:
@@ -466,7 +466,7 @@ async def test_missing_data(manager: ManagerClient):
     inital_tablets = 32
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {inital_tablets}}}") as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
 
@@ -534,7 +534,7 @@ async def test_merge_with_drop(manager: ManagerClient):
     initial_tablets = 32
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': {initial_tablets}}};")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=f" WITH tablets = {{'min_tablet_count': {initial_tablets}}}", table_name="test")
 
         await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
 
@@ -625,7 +625,7 @@ async def test_background_merge_deadlock(manager: ManagerClient):
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
 
     # Create a table which will go through 3 merge cycles.
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) with tablets = {{'min_tablet_count': 8}};")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=f" with tablets = {{'min_tablet_count': 8}}", table_name="test")
 
     await manager.api.enable_injection(servers[0].ip_addr, "merge_completion_fiber", one_shot=True)
     log = await manager.server_open_log(servers[0].server_id)

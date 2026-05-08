@@ -13,7 +13,7 @@ from cassandra.cluster import ConnectionException, NoHostAvailable  # type: igno
 
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ async def test_mv_tablets_empty_ip(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk int primary key, v int)")
+        await create_new_test_table(manager, ks, "pk int primary key, v int", table_name="t")
         await cql.run_async(f"CREATE materialized view {ks}.t_view AS select pk, v from {ks}.t where v is not null primary key (v, pk)")
 
         stop_event = asyncio.Event()

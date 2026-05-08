@@ -12,7 +12,7 @@ import time
 from cassandra.cluster import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 
@@ -47,10 +47,8 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
     host1, host2, host3 = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 30)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = { 'enabled': true }") as ks:
-        cql.execute(f"CREATE TABLE {ks}.tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
-                    "     WITH speculative_retry = 'NONE'"
-                    "     AND tombstone_gc = {'mode': 'immediate', 'propagation_delay_in_seconds': 0}"
-                    "     AND compaction = {'class': 'NullCompactionStrategy'}")
+        table_extra = " WITH speculative_retry = 'NONE' AND tombstone_gc = {'mode': 'immediate', 'propagation_delay_in_seconds': 0} AND compaction = {'class': 'NullCompactionStrategy'}"
+        await create_new_test_table(manager, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)", extra=table_extra, table_name="tbl")
 
         for write_statement, delete_statement in statement_pairs:
             execute_with_tracing(cql, SimpleStatement(write_statement.format(ks=ks), consistency_level=ConsistencyLevel.ALL), log = True)

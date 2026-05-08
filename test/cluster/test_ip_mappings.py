@@ -12,7 +12,7 @@ from uuid import UUID
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely
-from test.cluster.util import disable_schema_agreement_wait, new_test_keyspace, reconnect_driver
+from test.cluster.util import disable_schema_agreement_wait, new_test_keyspace, reconnect_driver, create_new_test_table
 
 from cassandra.cluster import ConsistencyLevel, SimpleStatement
 
@@ -24,8 +24,7 @@ async def test_broken_bootstrap(manager: ManagerClient):
     server_b = await manager.server_add(start=False)
 
     async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
-        table = f"{ks}.test"
-        await manager.cql.run_async(f"CREATE TABLE {table} (a int PRIMARY KEY, b int)")
+        table = await create_new_test_table(manager, ks, "a int PRIMARY KEY, b int", table_name="test")
         for i in range(100):
             await manager.cql.run_async(f"INSERT INTO {table} (a, b) VALUES ({i}, {i})")
         await inject_error_one_shot(manager.api, server_a.ip_addr, "crash-before-bootstrapping-node-added")
@@ -73,7 +72,7 @@ async def test_full_shutdown_during_replace(manager: ManagerClient, reuse_ip: bo
         async with new_test_keyspace(manager, """WITH REPLICATION = {'class': 'NetworkTopologyStrategy',
                                      'replication_factor': 3} AND tablets = {'enabled': false}""", host) as ks:
             table = f'{ks}.test'
-            await cql.run_async(f'CREATE TABLE {table} (a int PRIMARY KEY, b int)', host=host)
+            await cql.run_async(f'CREATE TABLE IF NOT EXISTS {table} (a int PRIMARY KEY, b int)', host=host)
 
             logger.info(f'Stopping {dead_server}')
             await manager.server_stop_gracefully(dead_server.server_id)

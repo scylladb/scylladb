@@ -12,7 +12,7 @@ from test.pylib.rest_client import InjectionHandler, inject_error_one_shot
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 import asyncio
 import logging
@@ -204,7 +204,7 @@ async def test_node_ops_tasks_tree(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({1}, {1});")
         await cql.run_async(f"TRUNCATE {ks}.test;")
 

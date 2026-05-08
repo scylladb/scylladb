@@ -5,7 +5,7 @@
 #
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 from collections import defaultdict
 import pytest
 import logging
@@ -48,7 +48,7 @@ async def test_balance_empty_tablets(manager: ManagerClient):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 16}") as ks:
         for table in ('t1', 't2', 't3'):
-            await cql.run_async(f'CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, val text);')
+            await create_new_test_table(manager, ks, "pk int PRIMARY KEY, val text", table_name=table)
 
         servers.append(await manager.server_add(config=cfg_small, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'r1'}))
         small_host_id = await manager.get_host_id(servers[1].server_id)

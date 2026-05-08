@@ -9,7 +9,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, Host
 from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
-from test.cluster.util import create_new_test_keyspace
+from test.cluster.util import create_new_test_keyspace, create_new_test_table
 
 from cassandra.cluster import Session as CassandraSession
 from cassandra.query import SimpleStatement, ConsistencyLevel
@@ -350,7 +350,7 @@ async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraS
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                   "'DC1': 2, 'DC2': 1} AND tablets = {'initial': 8};")
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=f" WITH tombstone_gc = {{'mode':'repair'}}", table_name="test")
     keys = range(256)
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
     table_id = await manager.get_table_id(ks, "test")

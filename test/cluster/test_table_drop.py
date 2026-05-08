@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import shutil
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import unique_name
 import pytest
@@ -26,7 +26,7 @@ async def test_drop_table_during_flush(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k%3});") for k in range(64)])
         await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
 

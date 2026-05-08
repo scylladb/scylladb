@@ -9,7 +9,7 @@ import time
 import logging
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.util import create_new_test_keyspace
+from test.cluster.util import create_new_test_keyspace, create_new_test_table
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +33,7 @@ async def test_partitioned_sstable_set(manager: ManagerClient, mode):
     else:
         ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': 'false'};")
 
-    cql.execute(f"""CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH compaction = {{
-        'class' : 'IncrementalCompactionStrategy',
-        'sstable_size_in_mb' : '0'
-    }}""")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=" WITH compaction = {'class' : 'IncrementalCompactionStrategy', 'sstable_size_in_mb' : '0'}", table_name="test")
 
     await manager.api.disable_autocompaction(server.ip_addr, ks)
 

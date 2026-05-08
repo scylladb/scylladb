@@ -8,7 +8,7 @@ import asyncio
 import random
 import time
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 from cassandra.protocol import ConfigurationException
 import pytest
 import logging
@@ -25,8 +25,8 @@ async def test_property(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t_enabled (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
-        await cql.run_async(f"CREATE TABLE {ks}.t_disabled (pk int PRIMARY KEY, v int)")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=" WITH storage_engine = 'logstor'", table_name="t_enabled")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", table_name="t_disabled")
 
         desc = await cql.run_async(f"DESCRIBE TABLE {ks}.t_enabled")
         logger.info(f"Table t_enabled description:\n{desc}")
@@ -37,7 +37,7 @@ async def test_property(manager: ManagerClient):
         assert "storage_engine = 'logstor'" not in desc[0].create_statement
 
         with pytest.raises(ConfigurationException, match="The 'logstor' storage engine cannot be used with tables that have clustering columns"):
-            await cql.run_async(f"CREATE TABLE {ks}.t_enabled (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH storage_engine = 'logstor'")
+            await create_new_test_table(manager, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)", extra=" WITH storage_engine = 'logstor'", table_name="t_enabled")
 
 @pytest.mark.asyncio
 async def test_config_option_consistency(manager: ManagerClient):
@@ -54,7 +54,7 @@ async def test_config_option_consistency(manager: ManagerClient):
     async with new_test_keyspace(manager, "") as ks:
         # Should fail because logstor feature is not enabled
         with pytest.raises(ConfigurationException, match="The experimental feature 'logstor' must be enabled"):
-            await cql.run_async(f"CREATE TABLE {ks}.t_logstor (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+            await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=" WITH storage_engine = 'logstor'", table_name="t_logstor")
 
 @pytest.mark.asyncio
 async def test_basic_write_and_read(manager: ManagerClient):
@@ -67,7 +67,7 @@ async def test_basic_write_and_read(manager: ManagerClient):
 
         # test int value
 
-        await cql.run_async(f"CREATE TABLE {ks}.test_int (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=" WITH storage_engine = 'logstor'", table_name="test_int")
 
         await cql.run_async(f"INSERT INTO {ks}.test_int (pk, v) VALUES (1, 100)")
         await cql.run_async(f"INSERT INTO {ks}.test_int (pk, v) VALUES (2, 150)")
@@ -88,7 +88,7 @@ async def test_basic_write_and_read(manager: ManagerClient):
 
         # test frozen map value
 
-        await cql.run_async(f"CREATE TABLE {ks}.test_map (pk int PRIMARY KEY, v frozen<map<text, text>>) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v frozen<map<text, text>>", extra=" WITH storage_engine = 'logstor'", table_name="test_map")
 
         await cql.run_async(f"INSERT INTO {ks}.test_map (pk, v) VALUES (1, {{'a': 'apple', 'b': 'banana'}})")
         rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_map WHERE pk = 1")
@@ -108,7 +108,7 @@ async def test_range_read(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=" WITH storage_engine = 'logstor'", table_name="test")
         for i in range(10):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, {i*10})")
 
@@ -136,7 +136,7 @@ async def test_parallel_writes(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         # write to different keys in parallel
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, {i+1})") for i in range(100)])
@@ -155,7 +155,7 @@ async def test_overwrites(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         # write to a single key many times sequentially
         pk = 0
@@ -178,7 +178,7 @@ async def test_parallel_big_writes(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         # Create a large value of approximately 100KB, close to segment size
         large_value = 'x' * (100 * 1024)
@@ -217,7 +217,7 @@ async def test_recovery_basic(manager: ManagerClient, fail_separator_flush: bool
         await manager.api.enable_injection(servers[0].ip_addr, "fail_flush_separator_buffer", one_shot=False)
 
     async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         # Create large values (~40KB each) to fill multiple segments
         value_size = 40 * 1024
@@ -307,7 +307,7 @@ async def test_recovery_with_segment_reuse(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         # Track the last value written to each key
         last_values = {}
@@ -358,7 +358,7 @@ async def test_compaction(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         # write few segments with unique keys, then few segments with overwrites.
         # write large values so each write fills a single segment.
@@ -399,10 +399,10 @@ async def test_drop_table(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH tablets={'initial': 4}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test1")
 
         # create another table that will not be dropped to verify it's not affected
-        await cql.run_async(f"CREATE TABLE {ks}.test2 (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test2")
 
         # write data to fill few segments
         value_size = 30 * 1024
@@ -420,7 +420,7 @@ async def test_drop_table(manager: ManagerClient):
             assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2, but got {len(rows[0].v)}"
 
         # recreate the table and verify that old data is not visible
-        await cql.run_async(f"CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test1")
 
         for i in range(20):
             rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test1 WHERE pk = {i}")
@@ -473,7 +473,7 @@ async def test_trigger_separator_flush(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         # Calculate how many writes needed to fill disk twice
         disk_size_bytes = disk_size_mb * 1024 * 1024
@@ -518,7 +518,7 @@ async def test_tablet_split_trigger_by_size(manager: ManagerClient):
     s0_log = await manager.server_open_log(servers[0].server_id)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         assert await get_tablet_count(manager, servers[0], ks, 'test') == 1
 
@@ -561,7 +561,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1 AND storage_engine='logstor';")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c blob", extra=" WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1 AND storage_engine='logstor'", table_name="test")
 
         total_keys = 10
         keys = range(total_keys)
@@ -620,7 +620,7 @@ async def test_tablet_migration(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         nrows = 20
         value = 'x' * (30 * 1024)
@@ -656,7 +656,7 @@ async def test_tablet_intranode_migration(manager: ManagerClient):
     await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         nrows = 20
         value = 'x' * (30 * 1024)
@@ -712,7 +712,7 @@ async def test_tablet_migration_with_compaction(manager: ManagerClient):
     s1_log = await manager.server_open_log(s1.server_id)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, v text", extra=" WITH storage_engine = 'logstor'", table_name="test")
 
         value_size = 30 * 1024
         nrows = 20

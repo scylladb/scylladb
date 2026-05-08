@@ -7,7 +7,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 import pytest
 import logging
 import asyncio
@@ -61,7 +61,7 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 32}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         await inject_error_on(manager, "stream_tablet_move_to_cleanup", servers)
 

@@ -14,7 +14,7 @@ import logging
 
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import start_writes
-from test.cluster.util import create_new_test_keyspace, get_topology_coordinator
+from test.cluster.util import create_new_test_keyspace, get_topology_coordinator, create_new_test_table
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ async def test_removenode_with_coordinator_restart(manager: ManagerClient):
     cql = manager.get_cql()
 
     ks1 = await create_keyspace(cql, 3, rf=1)
-    await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks1, "pk int PRIMARY KEY, c int", table_name="test")
 
     logger.info('Stopping a node to be removed')
     await manager.server_stop(servers[2].server_id)
@@ -75,17 +75,17 @@ async def test_replace(manager: ManagerClient):
     cql = manager.get_cql()
 
     ks1 = await create_keyspace(cql, 32, rf=1)
-    await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks1, "pk int PRIMARY KEY, c int", table_name="test")
 
     # We want RF=2 table to validate that quorum reads work after replacing node finishes
     # bootstrap which indicates that bootstrap waits for rebuilt.
     # Otherwise, some reads would fail to find a quorum.
     ks2 = await create_keyspace(cql, 32, rf=2)
-    await cql.run_async(f"CREATE TABLE {ks2}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks2, "pk int PRIMARY KEY, c int", table_name="test")
 
     ks3 = await create_keyspace(cql, 32, rf=3)
-    await cql.run_async(f"CREATE TABLE {ks3}.test (pk int PRIMARY KEY, c int);")
-    await cql.run_async(f"CREATE TABLE {ks3}.test2 (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks3, "pk int PRIMARY KEY, c int", table_name="test")
+    await create_new_test_table(manager, ks3, "pk int PRIMARY KEY, c int", table_name="test2")
 
     logger.info("Populating table")
 
@@ -156,15 +156,15 @@ async def test_removenode(manager: ManagerClient):
 
     # RF=1
     ks1 = await create_keyspace(cql, 32, rf=1)
-    await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks1, "pk int PRIMARY KEY, c int", table_name="test")
 
     # RF=2
     ks2 = await create_keyspace(cql, 32, rf=2)
-    await cql.run_async(f"CREATE TABLE {ks2}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks2, "pk int PRIMARY KEY, c int", table_name="test")
 
     # RF=3
     ks3 = await create_keyspace(cql, 32, rf=3)
-    await cql.run_async(f"CREATE TABLE {ks3}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks3, "pk int PRIMARY KEY, c int", table_name="test")
 
     logger.info("Populating table")
 
@@ -225,7 +225,7 @@ async def test_removenode_with_ignored_node(manager: ManagerClient):
     cql = manager.get_cql()
 
     ks = await create_keyspace(cql, 32, rf=3)
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
     logger.info("Populating table")
 

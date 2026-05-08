@@ -17,7 +17,7 @@ from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_table
 
 
 logger = logging.getLogger(__name__)
@@ -251,7 +251,7 @@ async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         keys = dict()
         cql = manager.get_cql()
-        await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY", table_name="tbl")
         for i in range(100):
             key = random.randint(-1000000000, 1000000000)
             await cql.run_async(f"INSERT into {ks}.tbl (pk) VALUES({key})")

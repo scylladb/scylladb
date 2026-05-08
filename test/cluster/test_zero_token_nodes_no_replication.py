@@ -45,7 +45,7 @@ async def test_zero_token_nodes_no_replication(manager: ManagerClient):
                                     {{'class': '{replication_strategy}', 'replication_factor': 2}}
                                     AND tablets = {{ 'enabled': {str(tablets_enabled).lower()} }}""")
             ks_names.append(ks_name)
-            await cql_b.run_async(f'CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)')
+            await cql_b.run_async(f'CREATE TABLE IF NOT EXISTS {ks_name}.tbl (pk int PRIMARY KEY, v int)')
             for i in range(100):
                 insert_query = f'INSERT INTO {ks_name}.tbl (pk, v) VALUES ({i}, {i})'
                 if i % 2 == 0:

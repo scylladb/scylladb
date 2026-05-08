@@ -6,7 +6,7 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
-from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
+from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency, create_new_test_table
 
 import pytest
 import asyncio
@@ -28,8 +28,7 @@ async def test_data_resurrection_after_cleanup(manager: ManagerClient):
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
-        table = f"{ks}.test"
-        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c int) WITH gc_grace_seconds=0;")
+        table = await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", extra=" WITH gc_grace_seconds=0", table_name="test")
 
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({k}, {k});") for k in keys])

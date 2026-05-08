@@ -8,7 +8,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import load_tablet_sstables_repaired_at, load_tablet_repair_time, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import reconnect_driver, find_server_by_host_id, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace
+from test.cluster.util import reconnect_driver, find_server_by_host_id, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace, create_new_test_table
 from test.pylib.util import wait_for_cql_and_get_hosts
 
 from cassandra.query import ConsistencyLevel, SimpleStatement
@@ -797,7 +797,7 @@ async def test_repair_sigsegv_with_diff_shard_count(manager: ManagerClient, use_
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND TABLETS = {{ 'enabled': {str(use_tablet).lower()} }}  ") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int", table_name="test")
 
         async def write_with_cl_one(range_start, range_end):
             insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
@@ -897,8 +897,8 @@ async def _setup_table_for_race_window(manager, servers, cql):
     """
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                   "'replication_factor': 3} AND tablets = {'initial': 2};")
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) "
-                        f"WITH tombstone_gc = {{'mode':'repair'}};")
+    await create_new_test_table(manager, ks, "pk int PRIMARY KEY, c int",
+                               extra=" WITH tombstone_gc = {'mode':'repair'}", table_name="test")
 
     # Lower min_threshold to 2 so STCS fires as soon as two sstables appear in the
     # UNREPAIRED compaction view, making the race easy to trigger deterministically.
