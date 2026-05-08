@@ -57,7 +57,7 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
         logger.info(
             f"Enabling injection 'pause_before_barrier_and_drain' on the target server {target_server}")
         target_server_log = await manager.server_open_log(target_server.server_id)
-        await manager.api.enable_injection(target_server.ip_addr, "pause_before_barrier_and_drain", one_shot=True)
+        await manager.api.enable_injection(target_server.ip_addr, "pause_before_barrier_and_drain", one_shot=False)
 
         async def do_add_node():
             logger.info("Adding a node to the cluster")
@@ -71,7 +71,7 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
 
         # Wait for the topology change to start
         logger.info("Waiting for a topology change to start")
-        await target_server_log.wait_for("pause_before_barrier_and_drain: waiting for message")
+        mark, _ = await target_server_log.wait_for("pause_before_barrier_and_drain: waiting for message")
 
         # Now make sure responses on one of the replicas will be delayed
         server_to_pause = servers[1]
@@ -86,6 +86,15 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
         # Make sure the node that's response is paused, got the write request.
         await paused_server_logs.wait_for("storage_proxy_write_response_pause: waiting for message")
 
+        # Release the first barrier_and_drain — it completes because the write
+        # handler holds the current version (not stale yet).
+        await manager.api.message_injection(target_server.ip_addr, 'pause_before_barrier_and_drain')
+
+        # Wait for the second barrier_and_drain. Between the first and second,
+        # topology_state_load installs a new token_metadata version. The write
+        # handler still holds the old version's ERM, which is now stale.
+        await target_server_log.wait_for("pause_before_barrier_and_drain: waiting for message", from_mark=mark)
+
         # Start shutdown of the query coordinator
         async def do_shutdown():
             logger.info(f"Starting shutdown of node {target_server.server_id}")
@@ -96,8 +105,10 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
         # Wait for the shutdown to start
         await target_server_log.wait_for("Stop transport: done")
 
-        # Unpause the coordinator to make it now continue with `barrier_and_drain` shutdown
-        await manager.api.message_injection(target_server.ip_addr, 'pause_before_barrier_and_drain')
+        # Disable the injection. This releases the paused barrier_and_drain
+        # handler (and any subsequent ones that arrived during stop_transport)
+        # so they don't block uninit_messaging_service.
+        await manager.api.disable_injection(target_server.ip_addr, "pause_before_barrier_and_drain")
 
         logger.info(f"Unblocking writes on the node {server_to_pause}")
         await manager.api.message_injection(server_to_pause.ip_addr, 'storage_proxy_write_response_pause')
