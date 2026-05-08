@@ -142,6 +142,13 @@ class error_injection {
     struct injection_shared_data {
         size_t received_message_count{0};
         size_t shared_read_message_count{0};
+<<<<<<< HEAD
+||||||| parent of 984a47fd71 (error_injection: release waiters when injection is disabled)
+        size_t waiter_count{0};
+=======
+        size_t waiter_count{0};
+        bool disabled{false};
+>>>>>>> 984a47fd71 (error_injection: release waiters when injection is disabled)
         condition_variable received_message_cv;
         error_injection_parameters parameters;
         sstring injection_name;
@@ -216,6 +223,9 @@ public:
 
             try {
                 co_await _shared_data->received_message_cv.wait(timeout, [&] {
+                    if (_shared_data->disabled) {
+                        return true;
+                    }
                     if (as) {
                         as->check();
                     }
@@ -380,10 +390,24 @@ public:
     }
 
     void disable(const std::string_view& injection_name) {
-        _enabled.erase(injection_name);
+        errinj_logger.debug("Disabling injection \"{}\"", injection_name);
+        auto it = _enabled.find(injection_name);
+        if (it != _enabled.end()) {
+            // Release any handlers currently waiting for messages on this
+            // injection. They hold a shared_ptr to the shared_data, so it
+            // stays alive after we erase the map entry.
+            it->second.shared_data->disabled = true;
+            it->second.shared_data->received_message_cv.broadcast();
+            _enabled.erase(it);
+        }
     }
 
     void disable_all() {
+        errinj_logger.debug("Disabling all injections");
+        for (auto& [_, data] : _enabled) {
+            data.shared_data->disabled = true;
+            data.shared_data->received_message_cv.broadcast();
+        }
         _enabled.clear();
     }
 
