@@ -1050,7 +1050,7 @@ future<> database::create_local_system_table(
         cfg.memtable_scheduling_group = default_scheduling_group();
         cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
     }
-    auto lock = get_tables_metadata().hold_write_lock();
+    auto lock = co_await get_tables_metadata().hold_write_lock();
     std::exception_ptr ex;
     try {
         add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
