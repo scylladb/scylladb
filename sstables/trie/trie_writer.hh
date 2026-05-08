@@ -32,6 +32,7 @@
 
 #pragma once
 
+#include <seastar/core/thread.hh>
 #include <seastar/util/log.hh>
 #include <map>
 #include <set>
@@ -254,6 +255,7 @@ inline void trie_writer<Output>::lay_out_children(ptr<writer_node> x) {
     }
 
     while (unwritten_children.size()) {
+        seastar::thread::maybe_yield();
         // Find the smallest child which doesn't fit.
         // (If all fit, then this will be the past-the-end iterator).
         // Its predecessor will be the biggest child which does fit.
@@ -350,6 +352,7 @@ template <trie_writer_sink Output>
 inline void trie_writer<Output>::complete_until_depth(size_t depth) {
     expensive_log("writer_node::complete_until_depth: start,_stack={}, depth={}, _current_depth={}", _stack.size(), depth, _current_depth);
     while (_current_depth > depth) {
+        seastar::thread::maybe_yield();
         // Every node must be smaller than a page, and the transition chain
         // must be short enough to ensure that.
         //
