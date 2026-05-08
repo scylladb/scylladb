@@ -69,8 +69,8 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                 return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cfg, encoding_stats{}).then([sst] {
                     return sst->open_data();
-                }).then([cf, sst, offstrategy, origin, on_sstable_written] -> future<std::vector<sstables::shared_sstable>> {
-                    auto on_add = [on_sstable_written] (sstables::shared_sstable loading_sst) -> future<> {
+                }).then([cf, sst, offstrategy, origin, on_sstable_written, cfg] -> future<std::vector<sstables::shared_sstable>> {
+                    auto on_add = [on_sstable_written, sst, cfg] (sstables::shared_sstable loading_sst) -> future<> {
                         if (on_sstable_written) {
                             on_sstable_written(loading_sst);
                         }
