@@ -5,6 +5,7 @@
 
 #include "open_info.hh"
 
+#include <vector>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include "locator/host_id.hh"
@@ -23,6 +24,7 @@ public:
     virtual future<> create_entry(table_id tid, locator::host_id node_owner, sstring status, sstable_state state, sstables::entry_descriptor desc) = 0;
     virtual future<> update_entry_status(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstring status) = 0;
     virtual future<> update_entry_state(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstables::sstable_state state) = 0;
+    virtual future<> batch_update_entry_status(table_id tid, locator::host_id node_owner, const std::vector<sstables::generation_type>& gens, sstring status) = 0;
     virtual future<> delete_entry(table_id tid, locator::host_id node_owner, sstables::generation_type gen) = 0;
     using entry_consumer = noncopyable_function<future<>(sstring status, sstables::sstable_state state, sstables::entry_descriptor desc)>;
     virtual future<> sstables_registry_list(table_id tid, locator::host_id node_owner, entry_consumer consumer) = 0;

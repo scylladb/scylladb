@@ -331,6 +331,11 @@ public:
         }
         co_return;
     }
+    virtual future<> batch_update_entry_status(table_id tid, locator::host_id node_owner, const std::vector<sstables::generation_type>& gens, sstring status) override {
+        for (auto& gen : gens) {
+            co_await update_entry_status(tid, node_owner, gen, status);
+        }
+    }
     virtual future<> update_entry_state(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstables::sstable_state state) override {
         auto it = _entries.find(key_type{tid, node_owner, gen});
         if (it != _entries.end()) {

@@ -23,6 +23,10 @@ public:
         return _keyspace->sstables_registry_update_entry_status(tid, node_owner, gen, status);
     }
 
+    virtual seastar::future<> batch_update_entry_status(table_id tid, locator::host_id node_owner, const std::vector<sstables::generation_type>& gens, sstring status) override {
+        return _keyspace->sstables_registry_batch_update_entry_status(tid, node_owner, gens, status);
+    }
+
     virtual seastar::future<> update_entry_state(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstables::sstable_state state) override {
         return _keyspace->sstables_registry_update_entry_state(tid, node_owner, gen, state);
     }
