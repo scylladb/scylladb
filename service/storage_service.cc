@@ -6005,7 +6005,10 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail_before", [] {
                     throw std::runtime_error("raft_topology_barrier_and_drain_fail_before injected exception");
                 });
-                co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5)));
+                // share=false: each barrier_and_drain invocation needs its own message
+                // to proceed. Without this, a single message_injection call would release
+                // all past and future handlers sharing the same injection.
+                co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5), nullptr, false));
                 if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
                     for (auto& n : _topology_state_machine._topology.transition_nodes) {
                         if (!_address_map.find(locator::host_id{n.first.uuid()})) {
