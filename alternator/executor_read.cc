@@ -1293,6 +1293,248 @@ static std::vector<float> parse_vector(const rjson::value& value, int dimensions
     return out;
 }
 
+// Converts a DynamoDB typed value (e.g. {"S": "hello"} or {"N": "42"}) to a
+// JSON value in the format expected by the vector store pre-filter.
+// Only scalar types S (string) and N (number) are supported; any other type
+// (L, M, SS, NS, BS, BOOL, NULL, B, ...) triggers a ValidationException.
+static rjson::value value_to_prefilter_json(const rjson::value& value) {
+    if (!value.IsObject() || value.MemberCount() != 1) {
+        throw api_error::validation(
+            "value in VectorSearch KeyConditionExpression must be a typed DynamoDB value");
+    }
+    auto it = value.MemberBegin();
+    std::string_view type_tag = rjson::to_string_view(it->name);
+    const rjson::value& inner = it->value;
+    if (type_tag == "S") {
+        if (!inner.IsString()) {
+            throw api_error::validation("S type value must be a string");
+        }
+        return rjson::copy(inner);
+    } else if (type_tag == "N") {
+        if (!inner.IsString()) {
+            throw api_error::validation("N type value must be a string");
+        }
+        std::string_view num_str = rjson::to_string_view(inner);
+        double d;
+        auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), d);
+        if (ec != std::errc{} || ptr != num_str.data() + num_str.size() || !std::isfinite(d)) {
+            throw api_error::validation(format(
+                "VectorSearch KeyConditionExpression N value '{}' is not a valid number", num_str));
+        }
+        return rjson::value(d);
+    }
+    throw api_error::validation(format(
+        "Type '{}' is not supported in VectorSearch KeyConditionExpression; "
+        "only S (string) and N (number) are supported", type_tag));
+}
+
+// Converts a single primitive condition from a parsed KeyConditionExpression
+// to vector store pre-filter JSON restriction(s), appended to restrictions_arr.
+// projected_cols maps projected attribute names to their column definitions;
+// any attribute not in this map triggers a ValidationException.
+static void primitive_condition_to_prefilter(
+        const parsed::primitive_condition& cond,
+        const std::unordered_map<std::string, const column_definition*>& projected_cols,
+        rjson::value& restrictions_arr)
+{
+    using ctype = parsed::primitive_condition::type;
+
+    // Return the column_definition for a parsed::value that must be a top-level
+    // attribute path referencing a projected column.
+    auto require_projected_col = [&](const parsed::value& v) -> const column_definition& {
+        const parsed::path& path = std::get<parsed::path>(v._value);
+        if (path.has_operators()) {
+            throw api_error::validation(
+                "VectorSearch KeyConditionExpression does not support nested attribute paths");
+        }
+        auto it = projected_cols.find(std::string(path.root()));
+        if (it == projected_cols.end()) {
+            throw api_error::validation(format(
+                "VectorSearch KeyConditionExpression references attribute '{}' which is not a projected "
+                "attribute of the vector index; only projected attributes can "
+                "be used for pre-filtering", path.root()));
+        }
+        return *it->second;
+    };
+
+    // Extract the resolved DynamoDB JSON value from a parsed::constant literal.
+    auto require_resolved_val = [](const parsed::value& v) -> const rjson::value& {
+        if (!v.is_constant()) {
+            throw api_error::validation(
+                "value in VectorSearch KeyConditionExpression must be a constant");
+        }
+        const parsed::constant& c = std::get<parsed::constant>(v._value);
+        // We're after resolve_condition_expression(), so only literals remain
+        // not ":name" references.
+        throwing_assert(std::holds_alternative<parsed::constant::literal>(c._value));
+        return *std::get<parsed::constant::literal>(c._value);
+    };
+
+    if (cond._op == ctype::EQ || cond._op == ctype::LT || cond._op == ctype::LE ||
+            cond._op == ctype::GT || cond._op == ctype::GE) {
+        // Binary comparison: one operand is a column path, the other a constant.
+        if (cond._values.size() != 2) {
+            throw api_error::validation("VectorSearch KeyConditionExpression binary comparison must have two operands");
+        }
+        bool col_left = cond._values[0].is_path();
+        bool col_right = cond._values[1].is_path();
+        if (!col_left && !col_right) {
+            throw api_error::validation(
+                "VectorSearch KeyConditionExpression comparison must reference an attribute name");
+        }
+        if (col_left && col_right) {
+            throw api_error::validation(
+                "VectorSearch KeyConditionExpression comparison must include a constant value");
+        }
+        const parsed::value& col_v   = col_left ? cond._values[0] : cond._values[1];
+        const parsed::value& const_v = col_left ? cond._values[1] : cond._values[0];
+        const column_definition& cdef = require_projected_col(col_v);
+
+        // If the constant is on the left (e.g. :v < pk), flip the direction.
+        const char* op_str;
+        if (col_left) {
+            switch (cond._op) {
+            case ctype::EQ: op_str = "=="; break;
+            case ctype::LT: op_str = "<";  break;
+            case ctype::LE: op_str = "<="; break;
+            case ctype::GT: op_str = ">";  break;
+            case ctype::GE: op_str = ">="; break;
+            // The outer "if" guarantees cond._op is one of EQ/LT/LE/GT/GE;
+            // the default cases below are unreachable by construction.
+            default: on_internal_error(elogger, "can't happen");
+            }
+        } else {
+            switch (cond._op) {
+            case ctype::EQ: op_str = "=="; break;
+            case ctype::LT: op_str = ">";  break; // :v < pk -> pk > :v
+            case ctype::LE: op_str = ">="; break; // :v <= pk -> pk >= :v
+            case ctype::GT: op_str = "<";  break; // :v > pk -> pk < :v
+            case ctype::GE: op_str = "<="; break; // :v >= pk -> pk <= :v
+            default: on_internal_error(elogger, "can't happen");
+            }
+        }
+        auto rhs_json = value_to_prefilter_json(require_resolved_val(const_v));
+        auto restriction = rjson::empty_object();
+        rjson::add(restriction, "type", rjson::from_string(op_str));
+        rjson::add(restriction, "lhs", rjson::from_string(cdef.name_as_text()));
+        rjson::add(restriction, "rhs", std::move(rhs_json));
+        rjson::push_back(restrictions_arr, std::move(restriction));
+
+    } else if (cond._op == ctype::IN) {
+        // IN operator: first value is the column, the remaining are constants.
+        if (cond._values.empty() || !cond._values[0].is_path()) {
+            throw api_error::validation(
+                "VectorSearch KeyConditionExpression IN must have an attribute name as its first operand");
+        }
+        const column_definition& cdef = require_projected_col(cond._values[0]);
+        auto rhs_arr = rjson::empty_array();
+        for (size_t i = 1; i < cond._values.size(); ++i) {
+            rjson::push_back(rhs_arr, value_to_prefilter_json(
+                    require_resolved_val(cond._values[i])));
+        }
+        auto restriction = rjson::empty_object();
+        rjson::add(restriction, "type", rjson::from_string("IN"));
+        rjson::add(restriction, "lhs", rjson::from_string(cdef.name_as_text()));
+        rjson::add(restriction, "rhs", std::move(rhs_arr));
+        rjson::push_back(restrictions_arr, std::move(restriction));
+
+    } else if (cond._op == ctype::BETWEEN) {
+        // a BETWEEN b AND c is expanded to two restrictions: a >= b AND a <= c.
+        if (cond._values.size() != 3 || !cond._values[0].is_path() ||
+                !cond._values[1].is_constant() || !cond._values[2].is_constant()) {
+            throw api_error::validation(
+                "VectorSearch KeyConditionExpression BETWEEN must have an attribute and two constant bounds");
+        }
+        const column_definition& cdef = require_projected_col(cond._values[0]);
+        auto lower_json = value_to_prefilter_json(require_resolved_val(cond._values[1]));
+        auto upper_json = value_to_prefilter_json(require_resolved_val(cond._values[2]));
+        auto col_json = rjson::from_string(cdef.name_as_text());
+
+        auto restr_ge = rjson::empty_object();
+        rjson::add(restr_ge, "type", rjson::from_string(">="));
+        rjson::add(restr_ge, "lhs", rjson::copy(col_json));
+        rjson::add(restr_ge, "rhs", std::move(lower_json));
+        rjson::push_back(restrictions_arr, std::move(restr_ge));
+
+        auto restr_le = rjson::empty_object();
+        rjson::add(restr_le, "type", rjson::from_string("<="));
+        rjson::add(restr_le, "lhs", std::move(col_json));
+        rjson::add(restr_le, "rhs", std::move(upper_json));
+        rjson::push_back(restrictions_arr, std::move(restr_le));
+
+    } else {
+        throw api_error::validation(
+            "VectorSearch KeyConditionExpression uses an unsupported operator for vector search "
+            "pre-filtering; supported operators are =, <, <=, >, >=, IN, BETWEEN");
+    }
+}
+
+// Parses a KeyConditionExpression from a vector search request and builds a
+// pre-filter JSON object for the vector store (same format as the CQL filter
+// in vector_search/filter.cc). The expression may only reference projected
+// attributes; currently those are the base table's key columns. Returns an
+// empty JSON object if no KeyConditionExpression is present.
+static rjson::value parse_vector_search_prefilter(
+        parsed::expression_cache& parsed_expr_cache,
+        const rjson::value& request,
+        const schema& schema,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values)
+{
+    const rjson::value* key_cond_expr = rjson::find(request, "KeyConditionExpression");
+    if (!key_cond_expr) {
+        return rjson::empty_object();
+    }
+    if (!key_cond_expr->IsString()) {
+        throw api_error::validation("KeyConditionExpression must be a string");
+    }
+    if (key_cond_expr->GetStringLength() == 0) {
+        throw api_error::validation("KeyConditionExpression must not be empty");
+    }
+
+    parsed::condition_expression parsed_expr;
+    try {
+        parsed_expr = parsed_expr_cache.parse_condition_expression(
+                rjson::to_string_view(*key_cond_expr), "KeyConditionExpression");
+    } catch (expressions_syntax_error& e) {
+        throw api_error::validation(e.what());
+    }
+
+    const rjson::value* attr_names  = rjson::find(request, "ExpressionAttributeNames");
+    const rjson::value* attr_values = rjson::find(request, "ExpressionAttributeValues");
+    resolve_condition_expression(parsed_expr, attr_names, attr_values,
+            used_attribute_names, used_attribute_values);
+
+    // Build the map of projected attribute name -> column_definition.
+    // Currently only the base table's key columns are projected.
+    std::unordered_map<std::string, const column_definition*> projected_cols;
+    for (const column_definition& cdef : schema.partition_key_columns()) {
+        projected_cols[cdef.name_as_text()] = &cdef;
+    }
+    for (const column_definition& cdef : schema.clustering_key_columns()) {
+        projected_cols[cdef.name_as_text()] = &cdef;
+    }
+
+    // Flatten the expression into AND-connected primitive conditions.
+    // OR and NOT are rejected by condition_expression_and_list().
+    std::vector<const parsed::primitive_condition*> conditions;
+    condition_expression_and_list(parsed_expr, conditions);
+
+    auto restrictions_arr = rjson::empty_array();
+    for (const parsed::primitive_condition* cond : conditions) {
+        primitive_condition_to_prefilter(*cond, projected_cols, restrictions_arr);
+    }
+
+    if (restrictions_arr.Empty()) {
+        return rjson::empty_object();
+    }
+
+    auto result = rjson::empty_object();
+    rjson::add(result, "restrictions", std::move(restrictions_arr));
+    rjson::add(result, "allow_filtering", rjson::value(true));
+    return result;
+}
+
 // Converts a similarity score (float) to a JSON value. JSON does not support
 // infinite or NaN values, so if the score is infinite (which can happen with
 // the DOT_PRODUCT similarity function on non-normalized vectors) we clamp to
@@ -1454,9 +1696,19 @@ static future<executor::request_return_type> query_vector(
         co_return api_error::validation(
             "VectorSearch does not support QueryFilter; use FilterExpression instead");
     }
+    // KeyConditions (the old-style API) is not supported for vector search Queries.
+    if (rjson::find(request, "KeyConditions")) {
+        co_return api_error::validation(
+            "VectorSearch does not support KeyConditions; use KeyConditionExpression instead");
+    }
     // FilterExpression: post-filter the vector search results by any attribute.
     filter flt(parsed_expr_cache, request, filter::request_type::QUERY,
                used_attribute_names, used_attribute_values);
+    // KeyConditionExpression: pre-filter sent to the vector store before ANN search.
+    // Only projected attributes (currently key columns) are allowed.
+    rjson::value pre_filter = parse_vector_search_prefilter(
+            parsed_expr_cache, request, *base_schema,
+            used_attribute_names, used_attribute_values);
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "Query");
     const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
@@ -1471,7 +1723,6 @@ static future<executor::request_return_type> query_vector(
     // Query the vector store for the approximate nearest neighbors.
     auto timeout = executor::default_timeout();
     abort_on_expiry aoe(timeout);
-    rjson::value pre_filter = rjson::empty_object(); // TODO, implement
     auto pkeys_result = co_await vsc.ann(
             base_schema->ks_name(), std::string(index_name), base_schema,
             std::move(query_vec), limit, pre_filter, aoe.abort_source());

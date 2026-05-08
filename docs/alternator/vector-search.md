@@ -294,13 +294,6 @@ different way, and explicitly rejects others that have no meaningful interpretat
   reflect writes instantly, so strongly-consistent reads are impossible.
   **`ConsistentRead=true` is rejected.**
 
-- **No key condition.** A standard Query requires a `KeyConditionExpression`
-  to select which partition to read. Vector search queries the vector store
-  globally across all partitions of the table. `KeyConditions` and
-  `KeyConditionExpression` are therefore not applicable and are silently
-  ignored. (Local vector indexes, which would scope the search to a single
-  partition and use `KeyConditionExpression`, are not yet supported.)
-
 **Select parameter:**
 
 The standard DynamoDB `Select` parameter is supported for vector search queries
@@ -328,19 +321,38 @@ therefore significantly slower than returning only projected attributes with
 `ALL_PROJECTED_ATTRIBUTES`.  For latency-sensitive applications, prefer
 `ALL_PROJECTED_ATTRIBUTES` or limiting `SPECIFIC_ATTRIBUTES` to key columns.
 
-**FilterExpression:**
+**Filtering: pre-filter and post-filter:**
 
-Vector search supports `FilterExpression` for post-filtering results. This
-works the same way as `FilterExpression` on a standard DynamoDB `Query`: after
-the ANN search, the filter is applied to each candidate item and only matching
-items are returned.
+Vector search supports two complementary filtering mechanisms:
 
-**Important:** filtering happens _after_ the `Limit` nearest neighbors have
-already been selected by the vector index. If the filter discards some of
-those candidates, the response may contain **fewer than `Limit` items**. The
-server does not automatically fetch additional neighbors to replace filtered-out
-items. This is identical to how `FilterExpression` interacts with `Limit` in a
-standard DynamoDB `Query`.
+**Pre-filtering (`KeyConditionExpression`):** conditions are sent to the vector
+store before the ANN search, so the search is performed only over matching
+items. Because pre-filtering is evaluated inside the vector store, only
+attributes that are projected into the vector index can be referenced — today
+that means the base table's key columns (hash key and range key if present).
+Supported operators are `=`, `<`, `<=`, `>`, `>=`, `IN`, and `BETWEEN`;
+conditions are combined with `AND`. `OR` and `NOT` are rejected because the
+vector store's pre-filter API only accepts a flat list of conditions implicitly
+ANDed together. The `<>` (not-equal) operator is also rejected. In cases where
+`OR` would otherwise test a single attribute against multiple values, `IN` can
+often serve as a replacement: instead of `p = :v1 OR p = :v2`, write
+`p IN (:v1, :v2)`. `KeyConditions` (the legacy non-expression API) is **not**
+supported and will be rejected with a `ValidationException`.
+
+Pre-filtering guarantees that the response contains exactly `Limit` items
+whenever at least that many items match the filter, because the ANN search
+operates only within the matching subset.
+
+**Post-filtering (`FilterExpression`):** after the ANN search returns its `Limit`
+nearest-neighbor candidates, the filter is applied to each candidate and only
+matching items are returned. Because filtering happens _after_ the `Limit`
+candidates have already been selected, some may be discarded, and the response
+may contain **fewer than `Limit` items**. The server does not automatically
+fetch additional neighbors to replace filtered-out items. Any attribute may be
+referenced in a `FilterExpression`, not only projected columns. This is
+identical to how `FilterExpression` interacts with `Limit` in a standard
+DynamoDB `Query`. `QueryFilter` (the legacy non-expression filter API) is **not**
+supported and will be rejected with a `ValidationException`.
 
 The response always includes two count fields:
 
@@ -373,10 +385,6 @@ The response always includes two count fields:
   any base-table reads. When a `FilterExpression` is present, however, the full
   item must be fetched from the base table to evaluate the filter, and only the
   projected (key) attributes are returned for items that pass.
-
-> **Note:** `QueryFilter` (the legacy non-expression filter API) is **not**
-> supported for vector search queries and will be rejected with a
-> `ValidationException`. Use `FilterExpression` instead.
 
 **ReturnScores field:**
 
