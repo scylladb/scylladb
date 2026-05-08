@@ -45,11 +45,16 @@ using error_injection_parameters = std::unordered_map<sstring, sstring>;
 // in class error_injection below). Parameters:
 // timeout - the timeout after which the pause is aborted
 // as (optional) - abort_source used to abort the pause
+// share - if true (default), injection handlers share received messages:
+//         every message can be received by all handlers (even if they start
+//         waiting in the future). If false, only one handler can receive a
+//         specific message; other handlers will wait for new messages.
 struct wait_for_message {
     std::chrono::milliseconds timeout;
-    abort_source* as = nullptr;
-    wait_for_message(std::chrono::milliseconds tmo) noexcept : timeout(tmo) {}
-    wait_for_message(std::chrono::milliseconds tmo, abort_source* a) noexcept : timeout(tmo), as(a) {}
+    abort_source* as;
+    bool share;
+    wait_for_message(std::chrono::milliseconds tmo, abort_source* a = nullptr, bool share_ = true) noexcept
+        : timeout(tmo), as(a), share(share_) {}
 };
 
 /**
@@ -552,7 +557,7 @@ public:
             errinj_logger.info("{}: waiting for message", name);
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + wfm.timeout, wfm.as);
             errinj_logger.info("{}: message received", name);
-        });
+        }, wfm.share);
     }
 
     template <typename T = std::string_view>
