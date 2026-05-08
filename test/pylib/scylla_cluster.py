@@ -799,8 +799,8 @@ class ScyllaServer:
                                 "'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
                 session.execute("DROP KEYSPACE k")
 
-    async def shutdown_control_connection(self) -> None:
-        """Shut down driver connection"""
+    def shutdown_control_connection(self) -> None:
+        """Shut down driver connection and notify socket"""
         if self.control_connection is not None:
             self.control_connection.shutdown()
             self.control_connection = None
@@ -808,13 +808,20 @@ class ScyllaServer:
             self.control_cluster.shutdown()
             self.control_cluster = None
 
-    @stop_event
-    @start_stop_lock
     async def stop(self) -> None:
         """Stop a running server. No-op if not running. Uses SIGKILL to
-        stop, so is not graceful. Waits for the process to exit before return."""
+        stop, so is not graceful. Waits for the process to exit before return.
+
+        This method intentionally does not acquire start_stop_lock so that it
+        can kill a server even while stop_gracefully() is blocked waiting for
+        the process to exit (e.g. the node is deadlocked). The concurrent
+        stop_gracefully() will unblock once the process dies from SIGKILL.
+        A local copy of self.cmd is used because there are await points after
+        which another coroutine (stop_gracefully) may set self.cmd to None."""
         self.logger.info("stopping %s in %s", self, self.workdir.name)
-        if not self.cmd:
+        cmd = self.cmd
+        if not cmd:
+            self.shutdown_control_connection()
             return
 
         # Dump the profile if exists and supported by the API.
@@ -825,25 +832,25 @@ class ScyllaServer:
             # since it is not part of the test functionality, allow
             # this step to fail unconditionally.
             pass
-        await self.shutdown_control_connection()
+        self.shutdown_control_connection()
 
-        if self.cmd.returncode is not None:
+        if cmd.returncode is not None:
             # process has already exited
-            if self.cmd.returncode != 0:
-                self.logger.error("%s exited with non-zero status code: %d", self, self.cmd.returncode)
+            if cmd.returncode != 0:
+                self.logger.error("%s exited with non-zero status code: %d", self, cmd.returncode)
             self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
             return
 
         try:
-            self.cmd.kill()
+            cmd.kill()
         except ProcessLookupError:
-            # the process *might* exit after checking for self.cmd.returncode
-            # and before self.cmd.kill() call. this is unlikely, but should not
+            # the process *might* exit after checking for cmd.returncode
+            # and before cmd.kill() call. this is unlikely, but should not
             # be considered as a failure.
             pass
         else:
-            await self.cmd.wait()
+            await cmd.wait()
         finally:
             self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
@@ -857,7 +864,7 @@ class ScyllaServer:
         if not self.cmd:
             return
 
-        await self.shutdown_control_connection()
+        self.shutdown_control_connection()
         try:
             self.cmd.terminate()
         except ProcessLookupError:
