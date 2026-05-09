@@ -183,6 +183,7 @@ class file_manager {
     size_t _file_size;
     std::filesystem::path _base_dir;
     seastar::scheduling_group _sched_group;
+    bool _format_on_startup;
 
     size_t _next_file_id{0};
 
@@ -201,6 +202,7 @@ public:
         , _file_size(cfg.file_size)
         , _base_dir(cfg.base_dir)
         , _sched_group(cfg.compaction_sg)
+        , _format_on_startup(cfg.format_on_startup)
         , _open_read_files(_max_files)
     {}
 
@@ -212,7 +214,7 @@ public:
 
     future<> format_file_region(seastar::file file, uint64_t offset, size_t size);
     future<> format_file(size_t file_id);
-    void recover_next_file_id(size_t next_file_id);
+    future<> recover_next_file(size_t next_file_id);
 
     size_t allocated_file_count() const noexcept { return _next_file_id; }
 
@@ -263,8 +265,22 @@ future<> file_manager::format_file(size_t file_id) {
     }
 }
 
-void file_manager::recover_next_file_id(size_t next_file_id) {
+future<> file_manager::recover_next_file(size_t next_file_id) {
     _next_file_id = next_file_id;
+
+    if (_format_on_startup) {
+        auto holder = _async_gate.hold();
+        auto next_file_id = _next_file_id;
+        co_await with_scheduling_group(_sched_group, [this, next_file_id] -> future<> {
+            for (size_t file_id = next_file_id; file_id < _max_files; ++file_id) {
+                logstor_logger.info("Formatting logstor file {} ({}/{})", get_file_path(file_id).string(), file_id + 1, _max_files);
+                co_await format_file(file_id);
+                _next_file_id = file_id + 1;
+            }
+        });
+        _next_file_formatter = make_ready_future<>();
+        co_return;
+    }
 
     if (_next_file_id < _max_files) {
         _next_file_formatter = with_gate(_async_gate, [this] {
@@ -1819,7 +1835,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     _next_new_segment_id = allocated_segment_count;
     _next_segment_seq = max_segment_seq + 1;
 
-    _file_mgr.recover_next_file_id(next_file_id);
+    co_await _file_mgr.recover_next_file(next_file_id);
 
     logstor_logger.info("Recovery complete");
 }
