@@ -720,6 +720,27 @@ def test_updatetable_vectorindex_taken_name_or_attribute(vs):
                       'VectorAttribute': {'AttributeName': bad_attr, 'Dimensions': 17 }
                     }}])
 
+# Like test_updatetable_vectorindex_taken_name_or_attribute() above, but the
+# existing vector index was created with an INCLUDE projection. In this case
+# the target option is stored as JSON ({"tc":"v","fc":[...]}) rather than a
+# plain attribute name, and the duplicate-attribute check must still work.
+def test_updatetable_vectorindex_taken_attribute_include(vs):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[
+                {'IndexName': 'vec',
+                 'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                 'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']}}
+            ]) as table:
+        # 'v' is already the target of an INCLUDE-projected vector index;
+        # adding a second vector index on the same attribute must be rejected.
+        with pytest.raises(ClientError, match='ValidationException.*AttributeName'):
+            table.update(VectorIndexUpdates=[{'Create':
+                {'IndexName': 'newind',
+                 'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}
+                }}])
+
 # In test_updatetable_vectorindex_taken_name_or_attribute() above we tested
 # that we can't add a vector index with the same name as an existing GSI or
 # LSI. Here we check that the reverse also holds - we can't add a GSI with
@@ -1670,6 +1691,36 @@ def test_updateitem_vectorindex_bad_vector(table_vs):
             UpdateExpression='SET v = :val',
             ExpressionAttributeValues={':val': [1, Decimal('1e100'), 3]})
 
+# Like test_putitem_vectorindex_bad_vector and test_updateitem_vectorindex_bad_vector
+# above, but the table uses an INCLUDE-projected vector index. In this case the
+# target column is stored as JSON (which also lists the projected attributes),
+# and it we need to extract the attribute name correctly to know which
+# attributes in the update we need to validate.
+def test_putitem_updateitem_vectorindex_bad_vector_include(vs):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[
+                {'IndexName': 'vind',
+                 'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                 'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']}}
+            ]) as table:
+        p = random_string()
+        # A list of the wrong length - should be rejected by PutItem:
+        with pytest.raises(ClientError, match='ValidationException'):
+            table.put_item(Item={'p': p, 'v': [1, 2]})
+        with pytest.raises(ClientError, match='ValidationException'):
+            table.put_item(Item={'p': p, 'v': [1, 2, 3, 4]})
+        # A list of the wrong length - should be rejected by UpdateItem:
+        with pytest.raises(ClientError, match='ValidationException'):
+            table.update_item(Key={'p': p},
+                UpdateExpression='SET v = :val',
+                ExpressionAttributeValues={':val': [1, 2]})
+        with pytest.raises(ClientError, match='ValidationException'):
+            table.update_item(Key={'p': p},
+                UpdateExpression='SET v = :val',
+                ExpressionAttributeValues={':val': [1, 2, 3, 4]})
+
 # Same as test_putitem_vectorindex_bad_vector but using BatchWriteItem.
 def test_batchwriteitem_vectorindex_bad_vector(table_vs):
     p = random_string()
@@ -2066,6 +2117,13 @@ def test_vector_projection_bad(vs):
         # 'not_an_object',   # We can't check this with boto3
         {'ProjectionType': 'GARBAGE'},
         {},  # missing ProjectionType
+        {'ProjectionType': 'INCLUDE'},  # INCLUDE without NonKeyAttributes
+        {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': []},  # INCLUDE with empty list
+        # ProjectionType=ALL is not yet supported for vector indexes.
+        # Supporting it would require the vector store to store and search
+        # across the entire :attrs map blob (arbitrary per-item attributes),
+        # rather than a fixed list of named columns as INCLUDE does.
+        {'ProjectionType': 'ALL'},
     ]
     for bad_projection in bad_projections:
         with pytest.raises(ClientError, match='ValidationException.*Projection'):
@@ -2091,7 +2149,7 @@ def test_vector_projection_bad(vs):
 
 # Test that a vector index created with Projection={'ProjectionType': 'KEYS_ONLY'}
 # (via CreateTable or UpdateTable) works correctly:
-# - The ProjectionType=KEYS_ONLY is accepted
+# - DescribeTable returns the correct Projection (no NonKeyAttributes)
 # - Select=ALL_PROJECTED_ATTRIBUTES returns only the primary key attributes
 # - Select=ALL_ATTRIBUTES returns all attributes
 # ProjectionType=KEYS_ONLY matches the default vector index behavior, so it
@@ -2121,6 +2179,12 @@ def test_vector_projection_keys_only(vs, needs_vector_store, via_update):
         p = random_string()
         table.put_item(Item={'p': p, 'v': [1, 0, 0], 'x': 'hello'})
         wait_for_vector_index_active(table, 'vind')
+        # DescribeTable returns the correct Projection.
+        desc = table.meta.client.describe_table(TableName=table.name)
+        vec_indexes = desc['Table'].get('VectorIndexes', [])
+        assert len(vec_indexes) == 1
+        assert vec_indexes[0]['Projection']['ProjectionType'] == 'KEYS_ONLY'
+        assert 'NonKeyAttributes' not in vec_indexes[0]['Projection']
         # Select=ALL_PROJECTED_ATTRIBUTES returns only the primary key.
         result = table.query(
             IndexName='vind',
@@ -2135,6 +2199,269 @@ def test_vector_projection_keys_only(vs, needs_vector_store, via_update):
             Limit=1,
             Select='ALL_ATTRIBUTES')
         assert result['Items'] == [{'p': p, 'v': [1, 0, 0], 'x': 'hello'}]
+
+# Test that a vector index created with Projection={'ProjectionType': 'INCLUDE'}
+# and NonKeyAttributes works correctly:
+# - DescribeTable returns the correct Projection (including NonKeyAttributes)
+# - Select=ALL_PROJECTED_ATTRIBUTES returns key + non-key projected attributes only
+# - Select=ALL_ATTRIBUTES returns all attributes (base table lookup)
+# - KeyConditionExpression can filter on the projected non-key attribute (pre-filter)
+@pytest.mark.parametrize('via_update', [False, True], ids=['createtable', 'updatetable'])
+def test_vector_projection_include(vs, needs_vector_store, via_update):
+    if via_update:
+        ctx = new_test_table(vs,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    else:
+        ctx = new_test_table(vs,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+                VectorIndexes=[{
+                    'IndexName': 'vind',
+                    'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                    'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']},
+                }])
+    with ctx as table:
+        if via_update:
+            table.update(VectorIndexUpdates=[{'Create': {
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']},
+            }}])
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': [1, 0, 0], 'x': 'hello', 'y': 'world'})
+        wait_for_vector_index_active(table, 'vind')
+        # DescribeTable returns the correct Projection.
+        desc = table.meta.client.describe_table(TableName=table.name)
+        vec_indexes = desc['Table'].get('VectorIndexes', [])
+        assert len(vec_indexes) == 1
+        assert vec_indexes[0]['Projection']['ProjectionType'] == 'INCLUDE'
+        assert vec_indexes[0]['Projection']['NonKeyAttributes'] == ['x']
+        # Select=ALL_PROJECTED_ATTRIBUTES returns only key + projected non-key attrs.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=1,
+            Select='ALL_PROJECTED_ATTRIBUTES')
+        assert result['Items'] == [{'p': p, 'x': 'hello'}]
+        # Select=ALL_ATTRIBUTES returns the full item.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=1,
+            Select='ALL_ATTRIBUTES')
+        assert result['Items'] == [{'p': p, 'v': [1, 0, 0], 'x': 'hello', 'y': 'world'}]
+
+# Test that a INCLUDE-projected non-key attribute can be used in a
+# KeyConditionExpression (pre-filter sent to the vector store).
+def test_vector_projection_include_prefilter(vs, needs_vector_store):
+    # Create the table WITHOUT a vector index first, put items, then add the
+    # index so that the initial scan backfill sees the items (and their 'x'
+    # filtering column values) rather than relying solely on CDC.
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        # Two items: "keep" has x='a', "drop" is nearer but x='b'.
+        table.put_item(Item={'p': p + '_drop', 'v': Vector([0, 0, 1]), 'x': 'b'})
+        table.put_item(Item={'p': p + '_keep', 'v': Vector([0.1, 0, 1]), 'x': 'a'})
+        table.update(VectorIndexUpdates=[{'Create': {
+            'IndexName': 'vind',
+            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+            'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']},
+        }}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [0, 0, 1]},
+            Limit=1,
+            KeyConditionExpression='x = :val',
+            ExpressionAttributeValues={':val': 'a'},
+        )
+        assert result['Count'] == 1
+        assert result['Items'][0]['p'] == p + '_keep'
+
+# Like test_vector_projection_include_prefilter but uses a number (N-type)
+# attribute for pre-filtering. Numbers are stored by Alternator as CQL
+# decimal, not as raw UTF-8, so this exercises the N-type decoding path in
+# extract_alternator_scalar.
+def test_vector_projection_include_prefilter_number(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p + '_drop', 'v': Vector([0, 0, 1]), 'score': Decimal('1')})
+        table.put_item(Item={'p': p + '_keep', 'v': Vector([0.1, 0, 1]), 'score': Decimal('2')})
+        table.update(VectorIndexUpdates=[{'Create': {
+            'IndexName': 'vind',
+            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+            'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['score']},
+        }}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [0, 0, 1]},
+            Limit=1,
+            KeyConditionExpression='score = :val',
+            ExpressionAttributeValues={':val': Decimal('2')},
+        )
+        assert result['Count'] == 1
+        assert result['Items'][0]['p'] == p + '_keep'
+
+# Test that when a numeric pre-filter (e.g. x < 2) is used on an INCLUDE-
+# projected attribute, items where the attribute is either missing entirely or
+# has the wrong type (a string instead of a number) are silently filtered out
+# rather than causing an error. Only items with a matching numeric value should
+# be returned.
+def test_vector_projection_include_prefilter_type_mismatch(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        # Four items close to the query vector [1, 0, 0] so all four appear as
+        # nearest neighbors within Limit=4.  Only "_keep" has a numeric x < 2.
+        # "_drop_num" has x=3 (numeric but out of range).
+        # "_drop_str" has x='hello' (string, wrong type for a numeric filter).
+        # "_drop_missing" has no x attribute at all.
+        table.put_item(Item={'p': p + '_keep',         'v': Vector([1,   0, 0]), 'x': Decimal('1')})
+        table.put_item(Item={'p': p + '_drop_num',     'v': Vector([0.9, 0, 0]), 'x': Decimal('3')})
+        table.put_item(Item={'p': p + '_drop_str',     'v': Vector([0.8, 0, 0]), 'x': 'hello'})
+        table.put_item(Item={'p': p + '_drop_missing', 'v': Vector([0.7, 0, 0])})
+        table.update(VectorIndexUpdates=[{'Create': {
+            'IndexName': 'vind',
+            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+            'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']},
+        }}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=4,
+            KeyConditionExpression='x < :val',
+            ExpressionAttributeValues={':val': Decimal('2')},
+        )
+        assert result['Count'] == 1
+        assert result['Items'][0]['p'] == p + '_keep'
+
+# Test that numeric pre-filter comparisons (e.g. x < 5) use numeric ordering,
+# not lexicographic string ordering. This is a regression test: if N-type
+# attributes are stored and compared as strings, "10" < "5" and "20" < "5"
+# would be true (wrong), returning items that should be excluded.
+def test_vector_projection_include_prefilter_number_ordering(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        # Items with x=1, x=2, x=10, x=20 (numbers) and x='1' (string).
+        # A filter of x < 5 should return only x=1 and x=2.
+        # Lexicographic comparison would incorrectly also match x=10 and x=20.
+        # The S-type string '1' must NOT match even though '1' parses as 1 < 5:
+        # type mismatches (S-type vs a numeric filter) must be rejected.
+        table.put_item(Item={'p': p + '_1',    'v': Vector([1,   0, 0]), 'x': Decimal('1')})
+        table.put_item(Item={'p': p + '_2',    'v': Vector([0.9, 0, 0]), 'x': Decimal('2')})
+        table.put_item(Item={'p': p + '_10',   'v': Vector([0.8, 0, 0]), 'x': Decimal('10')})
+        table.put_item(Item={'p': p + '_20',   'v': Vector([0.7, 0, 0]), 'x': Decimal('20')})
+        table.put_item(Item={'p': p + '_str1', 'v': Vector([0.6, 0, 0]), 'x': '1'})
+        table.update(VectorIndexUpdates=[{'Create': {
+            'IndexName': 'vind',
+            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+            'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']},
+        }}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=5,
+            KeyConditionExpression='x < :val',
+            ExpressionAttributeValues={':val': Decimal('5')},
+        )
+        assert result['Count'] == 2
+        items_x = {item['x'] for item in result['Items']}
+        assert items_x == {Decimal('1'), Decimal('2')}
+
+# Test that a KeyConditionExpression referencing an attribute that is NOT in
+# the vector index's NonKeyAttributes list is rejected with a
+# ValidationException. Pre-filtering is only allowed on projected attributes.
+def test_vector_projection_include_prefilter_non_projected(vs):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']},
+            }]) as table:
+        # 'y' is not in NonKeyAttributes=['x'], so this must be rejected.
+        with pytest.raises(ClientError, match='ValidationException.*y'):
+            table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [1, 0, 0]},
+                Limit=1,
+                KeyConditionExpression='y = :val',
+                ExpressionAttributeValues={':val': 'hello'},
+            )
+        # Same for a KEYS_ONLY index: no non-key attribute may be used.
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                'Projection': {'ProjectionType': 'KEYS_ONLY'},
+            }]) as table:
+        with pytest.raises(ClientError, match='ValidationException.*x'):
+            table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [1, 0, 0]},
+                Limit=1,
+                KeyConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 'hello'},
+            )
+
+# Test that INCLUDE-projected filtering columns are picked up via CDC (i.e.
+# for items written AFTER the index is created), not just via the initial
+# backfill scan. The CDC consumer is a separate code path from the scan.
+def test_vector_projection_include_prefilter_cdc(vs, needs_vector_store):
+    # Create the table WITH the vector index so items are indexed via CDC.
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']},
+            }]) as table:
+        # Wait until the empty-table prefill scan completes so subsequent
+        # writes are guaranteed to go through the CDC path.
+        wait_for_vector_index_active(table, 'vind')
+        p = random_string()
+        # Two items written after the index exists → indexed via CDC.
+        # "drop" is nearer to the query vector but has x='b'; "keep" has x='a'.
+        table.put_item(Item={'p': p + '_drop', 'v': Vector([0, 0, 1]),   'x': 'b'})
+        table.put_item(Item={'p': p + '_keep', 'v': Vector([0.1, 0, 1]), 'x': 'a'})
+        # Retry until both items are visible, then check that the pre-filter works.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [0, 0, 1]},
+                Limit=2,
+            )
+            if len(result.get('Items', [])) == 2:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for CDC-indexed items to appear')
+            time.sleep(0.1)
+        # Both items are now indexed. Apply the pre-filter.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [0, 0, 1]},
+            Limit=2,
+            KeyConditionExpression='x = :val',
+            ExpressionAttributeValues={':val': 'a'},
+        )
+        assert result['Count'] == 1
+        assert result['Items'][0]['p'] == p + '_keep'
 
 # As we saw in test_item.py::test_attribute_allowed_chars in the DynamoDB API
 # attribute names can contain any characters whatsoever, including quotes,

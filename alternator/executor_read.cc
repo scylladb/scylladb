@@ -36,6 +36,7 @@
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
 #include "index/secondary_index.hh"
+#include "cql3/statements/index_target.hh"
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/error_injection.hh"
@@ -1315,12 +1316,16 @@ static rjson::value value_to_prefilter_json(const rjson::value& value) {
             throw api_error::validation("N type value must be a string");
         }
         std::string_view num_str = rjson::to_string_view(inner);
+        // Validate and parse as double to reject non-finite or malformed values.
         double d;
         auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), d);
         if (ec != std::errc{} || ptr != num_str.data() + num_str.size() || !std::isfinite(d)) {
             throw api_error::validation(format(
                 "VectorSearch KeyConditionExpression N value '{}' is not a valid number", num_str));
         }
+        // Send as a JSON number so the vector store can distinguish numeric
+        // restrictions from string restrictions and apply numeric ordering
+        // (not lexicographic string ordering) for < > <= >= comparisons.
         return rjson::value(d);
     }
     throw api_error::validation(format(
@@ -1330,18 +1335,18 @@ static rjson::value value_to_prefilter_json(const rjson::value& value) {
 
 // Converts a single primitive condition from a parsed KeyConditionExpression
 // to vector store pre-filter JSON restriction(s), appended to restrictions_arr.
-// projected_cols maps projected attribute names to their column definitions;
-// any attribute not in this map triggers a ValidationException.
+// projected_cols is the set of allowed projected attribute names;
+// any attribute not in this set triggers a ValidationException.
 static void primitive_condition_to_prefilter(
         const parsed::primitive_condition& cond,
-        const std::unordered_map<std::string, const column_definition*>& projected_cols,
+        const std::unordered_set<std::string>& projected_cols,
         rjson::value& restrictions_arr)
 {
     using ctype = parsed::primitive_condition::type;
 
-    // Return the column_definition for a parsed::value that must be a top-level
+    // Return the attribute name for a parsed::value that must be a top-level
     // attribute path referencing a projected column.
-    auto require_projected_col = [&](const parsed::value& v) -> const column_definition& {
+    auto require_projected_col = [&](const parsed::value& v) -> std::string_view {
         const parsed::path& path = std::get<parsed::path>(v._value);
         if (path.has_operators()) {
             throw api_error::validation(
@@ -1354,7 +1359,7 @@ static void primitive_condition_to_prefilter(
                 "attribute of the vector index; only projected attributes can "
                 "be used for pre-filtering", path.root()));
         }
-        return *it->second;
+        return *it;
     };
 
     // Extract the resolved DynamoDB JSON value from a parsed::constant literal.
@@ -1388,7 +1393,7 @@ static void primitive_condition_to_prefilter(
         }
         const parsed::value& col_v   = col_left ? cond._values[0] : cond._values[1];
         const parsed::value& const_v = col_left ? cond._values[1] : cond._values[0];
-        const column_definition& cdef = require_projected_col(col_v);
+        std::string_view col_name = require_projected_col(col_v);
 
         // If the constant is on the left (e.g. :v < pk), flip the direction.
         const char* op_str;
@@ -1416,7 +1421,7 @@ static void primitive_condition_to_prefilter(
         auto rhs_json = value_to_prefilter_json(require_resolved_val(const_v));
         auto restriction = rjson::empty_object();
         rjson::add(restriction, "type", rjson::from_string(op_str));
-        rjson::add(restriction, "lhs", rjson::from_string(cdef.name_as_text()));
+        rjson::add(restriction, "lhs", rjson::from_string(col_name));
         rjson::add(restriction, "rhs", std::move(rhs_json));
         rjson::push_back(restrictions_arr, std::move(restriction));
 
@@ -1426,7 +1431,7 @@ static void primitive_condition_to_prefilter(
             throw api_error::validation(
                 "VectorSearch KeyConditionExpression IN must have an attribute name as its first operand");
         }
-        const column_definition& cdef = require_projected_col(cond._values[0]);
+        std::string_view col_name = require_projected_col(cond._values[0]);
         auto rhs_arr = rjson::empty_array();
         for (size_t i = 1; i < cond._values.size(); ++i) {
             rjson::push_back(rhs_arr, value_to_prefilter_json(
@@ -1434,7 +1439,7 @@ static void primitive_condition_to_prefilter(
         }
         auto restriction = rjson::empty_object();
         rjson::add(restriction, "type", rjson::from_string("IN"));
-        rjson::add(restriction, "lhs", rjson::from_string(cdef.name_as_text()));
+        rjson::add(restriction, "lhs", rjson::from_string(col_name));
         rjson::add(restriction, "rhs", std::move(rhs_arr));
         rjson::push_back(restrictions_arr, std::move(restriction));
 
@@ -1445,10 +1450,10 @@ static void primitive_condition_to_prefilter(
             throw api_error::validation(
                 "VectorSearch KeyConditionExpression BETWEEN must have an attribute and two constant bounds");
         }
-        const column_definition& cdef = require_projected_col(cond._values[0]);
+        std::string_view col_name = require_projected_col(cond._values[0]);
         auto lower_json = value_to_prefilter_json(require_resolved_val(cond._values[1]));
         auto upper_json = value_to_prefilter_json(require_resolved_val(cond._values[2]));
-        auto col_json = rjson::from_string(cdef.name_as_text());
+        auto col_json = rjson::from_string(col_name);
 
         auto restr_ge = rjson::empty_object();
         rjson::add(restr_ge, "type", rjson::from_string(">="));
@@ -1472,12 +1477,13 @@ static void primitive_condition_to_prefilter(
 // Parses a KeyConditionExpression from a vector search request and builds a
 // pre-filter JSON object for the vector store (same format as the CQL filter
 // in vector_search/filter.cc). The expression may only reference projected
-// attributes; currently those are the base table's key columns. Returns an
-// empty JSON object if no KeyConditionExpression is present.
+// attributes: key columns plus any non-key attributes listed in non_key_projected_attrs.
+// Returns an empty JSON object if no KeyConditionExpression is present.
 static rjson::value parse_vector_search_prefilter(
         parsed::expression_cache& parsed_expr_cache,
         const rjson::value& request,
         const schema& schema,
+        const std::vector<std::string>& non_key_projected_attrs,
         std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values)
 {
@@ -1505,14 +1511,17 @@ static rjson::value parse_vector_search_prefilter(
     resolve_condition_expression(parsed_expr, attr_names, attr_values,
             used_attribute_names, used_attribute_values);
 
-    // Build the map of projected attribute name -> column_definition.
-    // Currently only the base table's key columns are projected.
-    std::unordered_map<std::string, const column_definition*> projected_cols;
+    // Build the set of allowed projected attribute names:
+    // base table key columns plus any INCLUDE-projected non-key attributes.
+    std::unordered_set<std::string> projected_cols;
     for (const column_definition& cdef : schema.partition_key_columns()) {
-        projected_cols[cdef.name_as_text()] = &cdef;
+        projected_cols.insert(cdef.name_as_text());
     }
     for (const column_definition& cdef : schema.clustering_key_columns()) {
-        projected_cols[cdef.name_as_text()] = &cdef;
+        projected_cols.insert(cdef.name_as_text());
+    }
+    for (const std::string& attr : non_key_projected_attrs) {
+        projected_cols.insert(attr);
     }
 
     // Flatten the expression into AND-connected primitive conditions.
@@ -1572,6 +1581,7 @@ static future<executor::request_return_type> query_vector(
     std::string_view index_name = rjson::to_string_view(*index_name_v);
     int dimensions = 0;
     bool is_vector = false;
+    std::vector<std::string> non_key_projected_attrs;
     for (const index_metadata& im : base_schema->indices()) {
         if (im.name() == index_name) {
             const auto& opts = im.options();
@@ -1588,10 +1598,27 @@ static future<executor::request_return_type> query_vector(
                 } catch (std::logic_error&) {}
             }
             throwing_assert(dimensions > 0);
+            // Projection info is encoded in the target option's "fc" field:
+            // a non-empty "fc" array means INCLUDE with those non-key attrs; otherwise KEYS_ONLY.
+            auto target_it = opts.find(cql3::statements::index_target::target_option_name);
+            if (target_it != opts.end() && !target_it->second.empty() && target_it->second[0] == '{') {
+                try {
+                    auto target_json = rjson::parse(target_it->second);
+                    if (const rjson::value* fc = rjson::find(target_json, "fc"); fc && fc->IsArray()) {
+                        for (const auto& elem : fc->GetArray()) {
+                            if (elem.IsString()) {
+                                non_key_projected_attrs.emplace_back(rjson::to_string_view(elem));
+                            }
+                        }
+                    }
+                } catch (...) {}
+            }
+
             is_vector = true;
             break;
         }
     }
+    std::string projection_type = non_key_projected_attrs.empty() ? "KEYS_ONLY" : "INCLUDE";
     if (!is_vector) {
         co_return api_error::validation(
             format("VectorSearch IndexName '{}' is not a vector index.", index_name));
@@ -1686,15 +1713,20 @@ static future<executor::request_return_type> query_vector(
     }
     std::optional<alternator::attrs_to_get> attrs_to_get_opt;
     if (select == select_type::projection) {
-        // ALL_PROJECTED_ATTRIBUTES for a vector index: return only key attributes.
-        alternator::attrs_to_get key_attrs;
+        // ALL_PROJECTED_ATTRIBUTES for a vector index. Asks for the key
+        // attributes plus any non-key attributes projected into the vector
+        // index.
+        alternator::attrs_to_get all_projected_attrs;
         for (const column_definition& cdef : base_schema->partition_key_columns()) {
-            attribute_path_map_add("Select", key_attrs, cdef.name_as_text());
+            attribute_path_map_add("Select", all_projected_attrs, cdef.name_as_text());
         }
         for (const column_definition& cdef : base_schema->clustering_key_columns()) {
-            attribute_path_map_add("Select", key_attrs, cdef.name_as_text());
+            attribute_path_map_add("Select", all_projected_attrs, cdef.name_as_text());
         }
-        attrs_to_get_opt = std::move(key_attrs);
+        for (const std::string& attr : non_key_projected_attrs) {
+            attribute_path_map_add("Select", all_projected_attrs, attr);
+        }
+        attrs_to_get_opt = std::move(all_projected_attrs);
     } else {
         attrs_to_get_opt = calculate_attrs_to_get(request, parsed_expr_cache, used_attribute_names, select);
     }
@@ -1712,9 +1744,9 @@ static future<executor::request_return_type> query_vector(
     filter flt(parsed_expr_cache, request, filter::request_type::QUERY,
                used_attribute_names, used_attribute_values);
     // KeyConditionExpression: pre-filter sent to the vector store before ANN search.
-    // Only projected attributes (currently key columns) are allowed.
+    // Only projected attributes (key columns plus INCLUDE-projected non-key attrs) are allowed.
     rjson::value pre_filter = parse_vector_search_prefilter(
-            parsed_expr_cache, request, *base_schema,
+            parsed_expr_cache, request, *base_schema, non_key_projected_attrs,
             used_attribute_names, used_attribute_values);
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "Query");
@@ -1727,12 +1759,51 @@ static future<executor::request_return_type> query_vector(
     co_await verify_permission(enforce_authorization, warn_authorization,
             client_state, base_schema, auth::permission::SELECT, stats);
 
+    // For Select=SPECIFIC_ATTRIBUTES with an INCLUDE-projection vector index,
+    // if all requested attributes are covered by key columns or projected non-key
+    // attributes, we can skip the base-table read: ask the vector store to return
+    // those non-key attrs and build the response directly from the vector store result.
+    std::vector<std::string> specific_return_columns;
+    bool specific_attrs_all_projected = false;
+    if (select == select_type::regular && !flt && projection_type == "INCLUDE" && attrs_to_get_opt) {
+        std::unordered_set<std::string> key_col_names;
+        for (const column_definition& cdef : base_schema->partition_key_columns()) {
+            key_col_names.insert(cdef.name_as_text());
+        }
+        for (const column_definition& cdef : base_schema->clustering_key_columns()) {
+            key_col_names.insert(cdef.name_as_text());
+        }
+        std::unordered_set<std::string> projected_non_key_set(
+                non_key_projected_attrs.begin(), non_key_projected_attrs.end());
+        bool all_projected = true;
+        for (const auto& [attr, subpath] : *attrs_to_get_opt) {
+            // has_value() means the node is a leaf (no sub-path narrowing) which
+            // is the safe case. !has_value() means the path drills into a nested
+            // attribute (has_members/has_indexes), which we cannot handle here.
+            if (!subpath.has_value() ||
+                    (!key_col_names.count(attr) && !projected_non_key_set.count(attr))) {
+                all_projected = false;
+                break;
+            }
+        }
+        if (all_projected) {
+            specific_attrs_all_projected = true;
+            for (const auto& [attr, _] : *attrs_to_get_opt) {
+                if (!key_col_names.count(attr)) {
+                    specific_return_columns.push_back(attr);
+                }
+            }
+        }
+    }
+
     // Query the vector store for the approximate nearest neighbors.
     auto timeout = executor::default_timeout();
     abort_on_expiry aoe(timeout);
     auto pkeys_result = co_await vsc.ann(
             base_schema->ks_name(), std::string(index_name), base_schema,
-            std::move(query_vec), limit, pre_filter, aoe.abort_source());
+            std::move(query_vec), limit, pre_filter, aoe.abort_source(),
+            (select == select_type::projection && !flt && projection_type == "INCLUDE") ? non_key_projected_attrs :
+            (specific_attrs_all_projected ? specific_return_columns : std::vector<std::string>{}));
     if (!pkeys_result.has_value()) {
         const sstring error_msg = std::visit(vector_search::error_visitor{}, pkeys_result.error());
         co_return api_error::validation(error_msg);
@@ -1750,11 +1821,18 @@ static future<executor::request_return_type> query_vector(
         co_return rjson::print(std::move(response));
     }
 
-    // For SELECT=ALL_PROJECTED_ATTRIBUTES with no filter: skip fetching from
-    // the base table and build items directly from the key columns returned by
-    // the vector store. If a filter is present, fall through to the base-table
-    // fetch to apply it.
-    if (select == select_type::projection && !flt) {
+    // Fast path: build the response directly from the vector store result -
+    // which includes the key columns and potentially additional non-key
+    // projected columns which we asked for. This applies to three cases:
+    // - ALL_PROJECTED_ATTRIBUTES on a KEYS_ONLY index: return only key cols.
+    // - ALL_PROJECTED_ATTRIBUTES on an INCLUDE index: return key + projected
+    // - SPECIFIC_ATTRIBUTES where all requested attrs are covered by projected
+    //   columns (specific_attrs_all_projected): same as the case above but
+    //   only the key columns present in attrs_to_get_opt are included.
+    bool use_vs_fast_path = (select == select_type::projection && !flt &&
+                             (projection_type == "KEYS_ONLY" || projection_type == "INCLUDE")) ||
+                            specific_attrs_all_projected;
+    if (use_vs_fast_path) {
         rjson::value items_json = rjson::empty_array();
         rjson::value scores_json = rjson::empty_array();
         for (const auto& pkey : pkeys) {
@@ -1762,19 +1840,41 @@ static future<executor::request_return_type> query_vector(
             std::vector<bytes> exploded_pk = pkey.partition.key().explode();
             auto exploded_pk_it = exploded_pk.begin();
             for (const column_definition& cdef : base_schema->partition_key_columns()) {
-                rjson::value key_val = rjson::empty_object();
-                rjson::add_with_string_name(key_val, type_to_string(cdef.type), json_key_column_value(*exploded_pk_it, cdef));
-                rjson::add_with_string_name(item, std::string_view(cdef.name_as_text()), std::move(key_val));
+                if (!specific_attrs_all_projected || attrs_to_get_opt->contains(cdef.name_as_text())) {
+                    rjson::value key_val = rjson::empty_object();
+                    rjson::add_with_string_name(key_val, type_to_string(cdef.type), json_key_column_value(*exploded_pk_it, cdef));
+                    rjson::add_with_string_name(item, std::string_view(cdef.name_as_text()), std::move(key_val));
+                }
                 ++exploded_pk_it;
             }
             if (base_schema->clustering_key_size() > 0) {
                 std::vector<bytes> exploded_ck = pkey.clustering.explode();
                 auto exploded_ck_it = exploded_ck.begin();
                 for (const column_definition& cdef : base_schema->clustering_key_columns()) {
-                    rjson::value key_val = rjson::empty_object();
-                    rjson::add_with_string_name(key_val, type_to_string(cdef.type), json_key_column_value(*exploded_ck_it, cdef));
-                    rjson::add_with_string_name(item, std::string_view(cdef.name_as_text()), std::move(key_val));
+                    if (!specific_attrs_all_projected || attrs_to_get_opt->contains(cdef.name_as_text())) {
+                        rjson::value key_val = rjson::empty_object();
+                        rjson::add_with_string_name(key_val, type_to_string(cdef.type), json_key_column_value(*exploded_ck_it, cdef));
+                        rjson::add_with_string_name(item, std::string_view(cdef.name_as_text()), std::move(key_val));
+                    }
                     ++exploded_ck_it;
+                }
+            }
+            if (projection_type == "INCLUDE") {
+                // Non-key projected column values are stored as Alternator type-tagged
+                // blobs and returned by the vector store as "0x<hex>" strings via
+                // try_to_json(). Decode each blob to get the DynamoDB attribute value.
+                for (auto const& [col_name, col_val] : pkey.column_values) {
+                    // Alternator non-key attributes are stored as blobs and
+                    // serialized by try_to_json() as "0x<hex>" JSON strings.
+                    throwing_assert(col_val.IsString());
+                    auto hex_sv = rjson::to_string_view(col_val);
+                    throwing_assert(hex_sv.size() >= 2 && hex_sv[0] == '0' && hex_sv[1] == 'x');
+                    try {
+                        auto raw = from_hex(hex_sv.substr(2));
+                        rjson::add_with_string_name(item, col_name, alternator::deserialize_item(bytes_view(raw)));
+                    } catch (...) {
+                        // Ignore malformed or undeserializable values
+                    }
                 }
             }
             rjson::push_back(items_json, std::move(item));
@@ -1793,11 +1893,6 @@ static future<executor::request_return_type> query_vector(
         }
         co_return rjson::print(std::move(response));
     }
-
-    // TODO: For SELECT=SPECIFIC_ATTRIBUTES, if they are part of the projected
-    // attributes, we should use the above optimized code path - not fall through
-    // to the read from the base table as below as we need to do if the specific
-    // attributes contain non-projected columns.
 
     // Fetch the matching items from the base table and build the response.
     // When a filter is present, we always fetch the full item so that all
@@ -1844,21 +1939,26 @@ static future<executor::request_return_type> query_vector(
             }
             if (select != select_type::count) {
                 if (select == select_type::projection) {
-                    // A filter caused us to fall through here instead of
-                    // taking the projection early-exit above. Reconstruct
-                    // the key-only item from the full item we fetched.
-                    rjson::value key_item = rjson::empty_object();
-                    for (const column_definition& cdef : base_schema->partition_key_columns()) {
-                        if (const rjson::value* v = rjson::find(*opt_item, cdef.name_as_text())) {
-                            rjson::add_with_string_name(key_item, cdef.name_as_text(), rjson::copy(*v));
+                    // We fell through to the base table fetch instead of
+                    // taking the projection early-exit above.
+                    // Return key columns plus any non-key projected attrs
+                    // (the latter is empty for KEYS_ONLY indexes).
+                    rjson::value proj_item = rjson::empty_object();
+                    auto add_if_present = [&](std::string_view name) {
+                        if (const rjson::value* v = rjson::find(*opt_item, name)) {
+                            rjson::add_with_string_name(proj_item, name, rjson::copy(*v));
                         }
+                    };
+                    for (const column_definition& cdef : base_schema->partition_key_columns()) {
+                        add_if_present(cdef.name_as_text());
                     }
                     for (const column_definition& cdef : base_schema->clustering_key_columns()) {
-                        if (const rjson::value* v = rjson::find(*opt_item, cdef.name_as_text())) {
-                            rjson::add_with_string_name(key_item, cdef.name_as_text(), rjson::copy(*v));
-                        }
+                        add_if_present(cdef.name_as_text());
                     }
-                    rjson::push_back(items_json, std::move(key_item));
+                    for (const std::string& attr : non_key_projected_attrs) {
+                        add_if_present(attr);
+                    }
+                    rjson::push_back(items_json, std::move(proj_item));
                 } else {
                     // When a filter caused us to fetch the full item, apply the
                     // requested projection (attrs_to_get_opt) before returning it.

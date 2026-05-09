@@ -80,13 +80,15 @@ returned when `Select=ALL_PROJECTED_ATTRIBUTES` is used in a vector search query
 | `ProjectionType` | Description |
 |-----------------|-------------|
 | `KEYS_ONLY` | Only the primary key attributes of the base table (hash key and range key if present) are projected into the index. This is the default when `Projection` is omitted. |
-| `ALL` | All table attributes are projected into the index. *(Not yet supported.)* |
-| `INCLUDE` | The primary key attributes plus the additional non-key attributes listed in `NonKeyAttributes` are projected. *(Not yet supported.)* |
+| `ALL` | *(Not yet supported — returns a `ValidationException`.)* |
+| `INCLUDE` | The primary key attributes plus the additional non-key attributes listed in `NonKeyAttributes` are projected. |
 
-> **Note:** Currently only `ProjectionType=KEYS_ONLY` is implemented. Specifying
-> `ProjectionType=ALL` or `ProjectionType=INCLUDE` returns a `ValidationException`.
-> Since `KEYS_ONLY` is also the default, omitting `Projection` entirely is
-> equivalent to specifying `{'ProjectionType': 'KEYS_ONLY'}`.
+> **Note:** `ProjectionType=ALL` is not yet implemented for vector indexes. The underlying
+> difficulty is that `ALL` has no fixed attribute list: each item may carry any attributes,
+> so the vector store would need to store and dynamically search the entire attribute map,
+> which is not yet supported.  Use `INCLUDE` to project a known set of non-key attributes.
+> Since `KEYS_ONLY` is the default when `Projection` is omitted, specifying
+> `{'ProjectionType': 'KEYS_ONLY'}` is equivalent to omitting the `Projection` field entirely.
 
 Example (using boto3):
 ```python
@@ -135,8 +137,8 @@ Each element of the list is an object with exactly one of the following keys:
 
 The `Projection` field in the `Create` action is optional and accepts the same
 values as the `Projection` field in `CreateTable`'s `VectorIndexes` (see above).
-Currently only `ProjectionType=KEYS_ONLY` is supported; it is also the default
-when `Projection` is omitted.
+`ProjectionType=KEYS_ONLY` and `ProjectionType=INCLUDE` are both supported.
+`KEYS_ONLY` is the default when `Projection` is omitted.
 
 The `SimilarityFunction` field is also optional and accepts the same values as
 in `CreateTable`'s `VectorIndexes` (see above). Defaults to `COSINE` when omitted.
@@ -161,8 +163,9 @@ field in the `TableDescription` object when the table has at least one
 vector index. The structure mirrors the `CreateTable` input: a list of
 objects each containing `IndexName`, `VectorAttribute`
 (`AttributeName` + `Dimensions`), and `Projection` (`ProjectionType`).
-Currently `Projection` always contains `{"ProjectionType": "KEYS_ONLY"}`
-because that is the only supported projection type.
+`Projection` reflects the projection type used when the index was created:
+`{"ProjectionType": "KEYS_ONLY"}` or
+`{"ProjectionType": "INCLUDE", "NonKeyAttributes": [...]}`.
 If a `SimilarityFunction` was specified at index creation, it is returned
 at the index level (alongside `IndexName`, `VectorAttribute`, and `Projection`).
 When `SimilarityFunction` was not specified, `COSINE` is returned as the default.
@@ -303,7 +306,7 @@ and controls which attributes are returned for each matching item:
 
 | `Select` value | Behavior |
 |----------------|----------|
-| `ALL_PROJECTED_ATTRIBUTES` (default) | Return only the attributes projected to the vector index. Currently, only the primary key attributes (hash key, and range key if present) are projected; support for configuring additional projected attributes is not yet implemented. Note that the vector attribute itself is **not** included: the vector store may not retain the original floating-point values (e.g., it may quantize them), so the authoritative copy lives only in the base table. This is the most efficient option because Scylla can return the results directly from the vector store without an additional fetch from the base table. |
+| `ALL_PROJECTED_ATTRIBUTES` (default) | Return only the attributes projected to the vector index: the primary key attributes (hash key, and range key if present), plus any additional non-key attributes specified via `ProjectionType=INCLUDE`. Note that the vector attribute itself is **not** included: the vector store may not retain the original floating-point values (e.g., it may quantize them), so the authoritative copy lives only in the base table. This is the most efficient option because Scylla can return the results directly from the vector store without an additional fetch from the base table. |
 | `ALL_ATTRIBUTES` | Return all attributes of each matching item, fetched from the base table. |
 | `SPECIFIC_ATTRIBUTES` | Return only the attributes named in `ProjectionExpression` or `AttributesToGet`. |
 | `COUNT` | Return only the count of matching items; no `Items` list is included in the response. |
@@ -330,8 +333,9 @@ Vector search supports two complementary filtering mechanisms:
 **Pre-filtering (`KeyConditionExpression`):** conditions are sent to the vector
 store before the ANN search, so the search is performed only over matching
 items. Because pre-filtering is evaluated inside the vector store, only
-attributes that are projected into the vector index can be referenced — today
-that means the base table's key columns (hash key and range key if present).
+attributes that are projected into the vector index can be referenced — the
+base table's key columns (hash key and range key if present), plus any
+non-key attributes projected with `ProjectionType=INCLUDE`.
 Supported operators are `=`, `<`, `<=`, `>`, `>=`, `IN`, and `BETWEEN`;
 conditions are combined with `AND`. `OR` and `NOT` are rejected because the
 vector store's pre-filter API only accepts a flat list of conditions implicitly
@@ -344,6 +348,29 @@ supported and will be rejected with a `ValidationException`.
 Pre-filtering guarantees that the response contains exactly `Limit` items
 whenever at least that many items match the filter, because the ANN search
 operates only within the matching subset.
+
+**Type semantics for non-key projected attributes:**
+
+Unlike key attributes, non-key attributes projected with `ProjectionType=INCLUDE`
+do not have a fixed schema. Each item may store any DynamoDB attribute type for
+those columns — or omit them entirely. Pre-filter comparisons are type-aware:
+an item is treated as not matching whenever the filtered attribute is absent or
+has a different type from the comparison value in the expression. Specifically:
+
+- An item where the attribute is **missing** does not match any filter on that
+  attribute.
+- An item where the attribute holds a value of the **wrong type** — for example,
+  a string value compared with a numeric operator — does not match.
+
+For example, the filter `x < 5` (where `5` is a number) matches only items
+where `x` holds a numeric value less than `5`. An item where `x` is missing
+does not match. An item where `x` holds the string value `"6"` also does not
+match — a string vs. number comparison is a type mismatch and is never a match,
+regardless of what lexicographic ordering would say.
+
+Only the scalar DynamoDB attribute types `S` (string) and `N` (number) are
+supported in non-key projected attributes. Attributes of other types (lists,
+maps, sets, etc.) are treated as absent.
 
 **Post-filtering (`FilterExpression`):** after the ANN search returns its `Limit`
 nearest-neighbor candidates, the filter is applied to each candidate and only

@@ -68,6 +68,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/statements/index_target.hh"
 #include "index/secondary_index.hh"
+#include "index/vector_index.hh"
 #include "alternator/ttl_tag.hh"
 #include "vector_search/vector_store_client.hh"
 #include "utils/simple_value_with_expiry.hh"
@@ -588,9 +589,29 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "IndexName", rjson::from_string(im.name()));
             rjson::value vector_attribute = rjson::empty_object();
+            std::vector<std::string> projected_non_key_attrs;
             auto target_it = opts.find(cql3::statements::index_target::target_option_name);
             if (target_it != opts.end()) {
-                rjson::add(vector_attribute, "AttributeName", rjson::from_string(target_it->second));
+                // target option is either a plain attribute name or a JSON object {"tc":...,"fc":[...]}
+                std::string attr_name(target_it->second);
+                if (!attr_name.empty() && attr_name[0] == '{') {
+                    // JSON format: extract "tc" (vector column) and "fc"
+                    // (projected non-key attributes).
+                    try {
+                        auto target_json = rjson::parse(attr_name);
+                        if (const rjson::value* tc = rjson::find(target_json, "tc")) {
+                            attr_name = rjson::to_string(*tc);
+                        }
+                        if (const rjson::value* fc = rjson::find(target_json, "fc"); fc && fc->IsArray()) {
+                            for (const auto& elem : fc->GetArray()) {
+                                if (elem.IsString()) {
+                                    projected_non_key_attrs.emplace_back(rjson::to_string(elem));
+                                }
+                            }
+                        }
+                    } catch (...) {}
+                }
+                rjson::add(vector_attribute, "AttributeName", rjson::from_string(attr_name));
             }
             auto dims_it = opts.find("dimensions");
             if (dims_it != opts.end()) {
@@ -603,10 +624,21 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
                 }
             }
             rjson::add(entry, "VectorAttribute", std::move(vector_attribute));
-            // Always return a Projection. Currently only KEYS_ONLY is
-            // supported, so we always return that.
+            // Projection is derived from the target option's "fc" field: a
+            // non-empty fc means INCLUDE with those non-key attributes.
+            // Otherwise KEYS_ONLY. ProjectionType=ALL is not supported
+            // for vector indexes.
             rjson::value projection = rjson::empty_object();
-            rjson::add(projection, "ProjectionType", "KEYS_ONLY");
+            if (!projected_non_key_attrs.empty()) {
+                rjson::add(projection, "ProjectionType", "INCLUDE");
+                rjson::value nka_arr = rjson::empty_array();
+                for (const auto& attr : projected_non_key_attrs) {
+                    rjson::push_back(nka_arr, rjson::from_string(attr));
+                }
+                rjson::add(projection, "NonKeyAttributes", std::move(nka_arr));
+            } else {
+                rjson::add(projection, "ProjectionType", "KEYS_ONLY");
+            }
             rjson::add(entry, "Projection", std::move(projection));
             auto sf_it = opts.find("similarity_function");
             if (sf_it != opts.end()) {
@@ -1348,7 +1380,8 @@ static bool has_vector_index_on_attribute(const schema& s, std::string_view attr
         // LSI are implemented as materialized views, not secondary indexes).
         const auto& opts = im.options();
         auto target_it = opts.find(cql3::statements::index_target::target_option_name);
-        if (target_it != opts.end() && target_it->second == attribute_name) {
+        if (target_it != opts.end() &&
+                secondary_index::vector_index::get_target_column(target_it->second) == attribute_name) {
             return true;
         }
     }
@@ -1628,23 +1661,73 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
             int dimensions = get_dimensions(*vector_attribute_v, "VectorIndexes");
             std::string similarity_function = get_similarity_function(v, "VectorIndexes");
-            // The optional Projection parameter is only supported with
-            // ProjectionType=KEYS_ONLY. Other values are not yet supported.
+            // Parse the Projection parameter.
+            // Supported values: KEYS_ONLY (default) and INCLUDE.
+            // ALL is not yet supported (the vector store would need to store the
+            // entire :attrs map blob and dynamically look up any attribute at
+            // query time, which is not yet implemented).
+            // For INCLUDE, NonKeyAttributes must be a list of attribute names.
+            std::string projection_type = "KEYS_ONLY";
+            std::vector<std::string> non_key_attributes;
             const rjson::value* projection_v = rjson::find(v, "Projection");
             if (projection_v) {
                 if (!projection_v->IsObject()) {
                     co_return api_error::validation("VectorIndexes Projection must be an object.");
                 }
                 const rjson::value* projection_type_v = rjson::find(*projection_v, "ProjectionType");
-                if (!projection_type_v || !projection_type_v->IsString() ||
-                        rjson::to_string_view(*projection_type_v) != "KEYS_ONLY") {
-                    co_return api_error::validation("VectorIndexes Projection: only ProjectionType=KEYS_ONLY is currently supported.");
+                if (!projection_type_v || !projection_type_v->IsString()) {
+                    co_return api_error::validation("VectorIndexes Projection: ProjectionType must be a string.");
                 }
+                std::string_view pt = rjson::to_string_view(*projection_type_v);
+                if (pt == "KEYS_ONLY") {
+                    projection_type = "KEYS_ONLY";
+                } else if (pt == "ALL") {
+                    co_return api_error::validation(
+                        "VectorIndexes Projection: ProjectionType=ALL is not yet supported "
+                        "for vector indexes.  Use KEYS_ONLY or INCLUDE instead.");
+                } else if (pt == "INCLUDE") {
+                    projection_type = "INCLUDE";
+                    const rjson::value* nka_v = rjson::find(*projection_v, "NonKeyAttributes");
+                    if (!nka_v || !nka_v->IsArray() || nka_v->Empty()) {
+                        co_return api_error::validation(
+                            "VectorIndexes Projection=INCLUDE requires a non-empty NonKeyAttributes list.");
+                    }
+                    for (const auto& elem : nka_v->GetArray()) {
+                        if (!elem.IsString()) {
+                            co_return api_error::validation(
+                                "VectorIndexes NonKeyAttributes elements must be strings.");
+                        }
+                        non_key_attributes.emplace_back(rjson::to_string_view(elem));
+                    }
+                } else {
+                    co_return api_error::validation(fmt::format(
+                        "VectorIndexes Projection: unsupported ProjectionType '{}'; "
+                        "supported values are KEYS_ONLY and INCLUDE.", pt));
+                }
+            }
+            // Build the target option: if we have non-key projected attributes (INCLUDE),
+            // use the JSON format {"tc": attr, "fc": [...projected_non_key...]}.
+            // No "pk" field: Alternator vector indexes are always Global (not Local).
+            // Pre-filtering still works because IndexEntry::new() merges primary_key_columns
+            // into filtering_columns automatically.
+            // For KEYS_ONLY, use the simple string format (no filtering columns).
+            sstring target_option;
+            if (!non_key_attributes.empty()) {
+                rjson::value target_json = rjson::empty_object();
+                rjson::add(target_json, "tc", rjson::from_string(attribute_name));
+                rjson::value fc_arr = rjson::empty_array();
+                for (const auto& attr : non_key_attributes) {
+                    rjson::push_back(fc_arr, rjson::from_string(attr));
+                }
+                rjson::add(target_json, "fc", std::move(fc_arr));
+                target_option = rjson::print(std::move(target_json));
+            } else {
+                target_option = sstring(attribute_name);
             }
             // Add a vector index metadata entry to the base table schema.
             index_options_map index_options;
             index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
-            index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
+            index_options[cql3::statements::index_target::target_option_name] = std::move(target_option);
             index_options["dimensions"] = std::to_string(dimensions);
             index_options["similarity_function"] = similarity_function;
             builder.with_index(index_metadata{sstring(index_name), index_options,
@@ -2047,25 +2130,72 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     }
                     int dimensions = get_dimensions(*vector_attribute_v, "VectorIndexUpdates");
                     std::string similarity_function = get_similarity_function(it->value, "VectorIndexUpdates");
-                    // The optional Projection parameter is only supported with
-                    // ProjectionType=KEYS_ONLY. Other values are not yet supported.
+                    // The optional Projection parameter is supported:
+                    // KEYS_ONLY (default) and INCLUDE with NonKeyAttributes.
+                    // ALL is not yet supported (the vector store would need to store the
+                    // entire :attrs map blob and dynamically look up any attribute at
+                    // query time, which is not yet implemented).
+                    std::string update_projection_type = "KEYS_ONLY";
+                    std::vector<std::string> update_non_key_attributes;
                     const rjson::value* projection_v = rjson::find(it->value, "Projection");
                     if (projection_v) {
                         if (!projection_v->IsObject()) {
                             co_return api_error::validation("VectorIndexUpdates Projection must be an object.");
                         }
                         const rjson::value* projection_type_v = rjson::find(*projection_v, "ProjectionType");
-                        if (!projection_type_v || !projection_type_v->IsString() ||
-                                rjson::to_string_view(*projection_type_v) != "KEYS_ONLY") {
-                            co_return api_error::validation("VectorIndexUpdates Projection: only ProjectionType=KEYS_ONLY is currently supported.");
+                        if (!projection_type_v || !projection_type_v->IsString()) {
+                            co_return api_error::validation("VectorIndexUpdates Projection: ProjectionType must be a string.");
                         }
+                        std::string_view pt = rjson::to_string_view(*projection_type_v);
+                        if (pt == "KEYS_ONLY") {
+                            update_projection_type = "KEYS_ONLY";
+                        } else if (pt == "ALL") {
+                            co_return api_error::validation(
+                                "VectorIndexUpdates Projection: ProjectionType=ALL is not yet supported "
+                                "for vector indexes.  Use KEYS_ONLY or INCLUDE instead.");
+                        } else if (pt == "INCLUDE") {
+                            update_projection_type = "INCLUDE";
+                            const rjson::value* nka_v = rjson::find(*projection_v, "NonKeyAttributes");
+                            if (!nka_v || !nka_v->IsArray() || nka_v->Empty()) {
+                                co_return api_error::validation(
+                                    "VectorIndexUpdates Projection=INCLUDE requires a non-empty NonKeyAttributes list.");
+                            }
+                            for (const auto& elem : nka_v->GetArray()) {
+                                if (!elem.IsString()) {
+                                    co_return api_error::validation(
+                                        "VectorIndexUpdates NonKeyAttributes elements must be strings.");
+                                }
+                                update_non_key_attributes.emplace_back(rjson::to_string_view(elem));
+                            }
+                        } else {
+                            co_return api_error::validation(fmt::format(
+                                "VectorIndexUpdates Projection: unsupported ProjectionType '{}'; "
+                                "supported values are KEYS_ONLY and INCLUDE.", pt));
+                        }
+                    }
+                    // Build the target option, using JSON format for INCLUDE.
+                    // No "pk" field: Alternator vector indexes are always Global (not Local).
+                    // Pre-filtering still works because IndexEntry::new() merges primary_key_columns
+                    // into filtering_columns automatically.
+                    sstring update_target_option;
+                    if (!update_non_key_attributes.empty()) {
+                        rjson::value target_json = rjson::empty_object();
+                        rjson::add(target_json, "tc", rjson::from_string(attribute_name));
+                        rjson::value fc_arr = rjson::empty_array();
+                        for (const auto& attr : update_non_key_attributes) {
+                            rjson::push_back(fc_arr, rjson::from_string(attr));
+                        }
+                        rjson::add(target_json, "fc", std::move(fc_arr));
+                        update_target_option = rjson::print(std::move(target_json));
+                    } else {
+                        update_target_option = sstring(attribute_name);
                     }
                     // A vector index will use CDC on this table, so the CDC
                     // log table name will need to fit our length limits
                     validate_cdc_log_name_length(builder.cf_name());
                     index_options_map index_options;
                     index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
-                    index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
+                    index_options[cql3::statements::index_target::target_option_name] = std::move(update_target_option);
                     index_options["dimensions"] = std::to_string(dimensions);
                     index_options["similarity_function"] = similarity_function;
                     builder.with_index(index_metadata{index_name, index_options,
@@ -2467,7 +2597,7 @@ static std::unordered_map<bytes, int> vector_index_attributes(const schema& s) {
             continue;
         }
         try {
-            ret[to_bytes(target_it->second)] = std::stoi(dims_it->second);
+            ret[to_bytes(secondary_index::vector_index::get_target_column(target_it->second))] = std::stoi(dims_it->second);
         } catch (...) {}
     }
     return ret;
