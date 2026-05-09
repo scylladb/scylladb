@@ -130,6 +130,7 @@ public:
     replicas_per_token_range preferred_replicas;
     std::optional<db::read_repair_decision> read_repair_decision;
     node_local_only node_local_only;
+    bool defer_coordinator_latency_mark = false;
 
     storage_proxy_coordinator_query_options(storage_proxy_clock_type::time_point timeout,
             service_permit permit_,
@@ -137,14 +138,16 @@ public:
             tracing::trace_state_ptr trace_state = nullptr,
             replicas_per_token_range preferred_replicas = { },
             std::optional<db::read_repair_decision> read_repair_decision = { },
-            service::node_local_only node_local_only_ = service::node_local_only::no)
+            service::node_local_only node_local_only_ = service::node_local_only::no,
+            bool defer_coordinator_latency_mark_ = false)
         : _timeout(timeout)
         , permit(std::move(permit_))
         , cstate(client_state_)
         , trace_state(std::move(trace_state))
         , preferred_replicas(std::move(preferred_replicas))
         , read_repair_decision(read_repair_decision)
-        , node_local_only(node_local_only_) {
+        , node_local_only(node_local_only_)
+        , defer_coordinator_latency_mark(defer_coordinator_latency_mark_) {
     }
 
     storage_proxy_clock_type::time_point timeout(storage_proxy& sp) const {
@@ -169,6 +172,7 @@ struct storage_proxy_coordinator_query_result {
 struct storage_proxy_coordinator_mutate_options {
     cdc::per_request_options cdc_options;
     node_local_only node_local_only = node_local_only::no;
+    bool defer_coordinator_latency_mark = false;
 };
 
 class cas_request;
@@ -467,7 +471,7 @@ private:
     template<typename Range>
     future<result<unique_response_handler_vector>> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
     future<result<>> mutate_begin(unique_response_handler_vector ids, db::consistency_level cl, tracing::trace_state_ptr trace_state, std::optional<clock_type::time_point> timeout_opt = { });
-    future<result<>> mutate_end(future<result<>> mutate_result, utils::latency_counter, write_stats& stats, tracing::trace_state_ptr trace_state);
+    future<result<>> mutate_end(future<result<>> mutate_result, write_stats& stats, tracing::trace_state_ptr trace_state);
     future<result<>> schedule_repair(locator::effective_replication_map_ptr ermp, mutations_per_partition_key_map diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state, service_permit permit);
     bool need_throttle_writes() const;
     void unthrottle();

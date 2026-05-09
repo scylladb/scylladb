@@ -482,6 +482,19 @@ select_statement::do_execute(query_processor& qp,
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
 
+    // Set the histogram for deferred latency marking.
+    // Serial consistency reads go through paxos (cas_read histogram),
+    // non-serial reads use read or range histograms.
+    {
+        auto& stats = qp.proxy().get_stats();
+        if (db::is_serial_consistency(options.get_consistency())) {
+            state.set_latency_histogram(stats.cas_read);
+        } else {
+            bool is_range = key_ranges.empty() || !query::is_single_partition(key_ranges.front());
+            state.set_latency_histogram(is_range ? stats.range : stats.read);
+        }
+    }
+
     auto token = dht::token();
     std::optional<locator::tablet_routing_info> tablet_info = {};
 
@@ -765,7 +778,7 @@ view_indexed_table_select_statement::do_execute_base_query(
             if (previous_result_size < query::result_memory_limiter::maximum_result_size && concurrency < max_base_table_query_concurrency) {
                 concurrency *= 2;
             }
-            coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qp.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+            coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qp.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, service::node_local_only::no, state.has_deferred_latency()});
             if (!rqr.has_value()) {
                 co_return std::move(rqr).as_failure();
             }
@@ -837,7 +850,7 @@ view_indexed_table_select_statement::do_execute_base_query(
                 command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
             }
             coordinator_result<service::storage_proxy::coordinator_query_result> rqr
-                    = co_await qp.proxy().query_result(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+                    = co_await qp.proxy().query_result(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, service::node_local_only::no, state.has_deferred_latency()});
             if (!rqr.has_value()) {
                 co_return std::move(rqr).as_failure();
             }
@@ -912,7 +925,7 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
                         command,
                         std::move(prange),
                         options.get_consistency(),
-                        {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
+                        {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only, state.has_deferred_latency()},
                         cas_shard).then(utils::result_wrap([] (service::storage_proxy::coordinator_query_result qr) {
                     return make_ready_future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>>(std::move(qr.query_result));
                 }));
@@ -921,7 +934,7 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
             return this->process_results(std::move(result), cmd, options, now);
         }));
     } else {
-        return qp.proxy().query_result(_query_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only}, std::move(cas_shard))
+        return qp.proxy().query_result(_query_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only, state.has_deferred_latency()}, std::move(cas_shard))
             .then(wrap_result_to_error_message([this, &options, now, cmd] (service::storage_proxy::coordinator_query_result qr) {
                 return this->process_results(std::move(qr.query_result), cmd, options, now);
             }));
@@ -1199,6 +1212,10 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
 
     validate_for_read(cl);
 
+    // Secondary index reads always go through proxy().query_result().
+    // Mark as read since these are always single-partition lookups by primary key.
+    state.set_latency_histogram(qp.proxy().get_stats().read);
+
     auto now = gc_clock::now();
 
     ++_stats.secondary_index_reads;
@@ -1431,7 +1448,7 @@ view_indexed_table_select_statement::read_posting_list(query_processor& qp,
 
     int32_t page_size = options.get_page_size();
     if (page_size <= 0 || !service::pager::query_pagers::may_need_paging(*_view_schema, page_size, *cmd, partition_ranges)) {
-        return qp.proxy().query_result(_view_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
+        return qp.proxy().query_result(_view_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, service::node_local_only::no, state.has_deferred_latency()})
         .then(utils::result_wrap([this, now, &options, selection = std::move(selection), partition_slice = std::move(partition_slice)] (service::storage_proxy::coordinator_query_result qr)
                 -> coordinator_result<::shared_ptr<cql_transport::messages::result_message::rows>> {
             cql3::selection::result_set_builder builder(*selection, now, &options);
@@ -1883,7 +1900,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             || !service::pager::query_pagers::may_need_paging(*_schema, page_size,
                     *command, key_ranges))) {
         return do_query(erm_keepalive, {}, qp.proxy(), _schema, command, std::move(key_ranges), cl,
-                {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}})
+                {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, service::node_local_only::no, state.has_deferred_latency()})
         .then(wrap_result_to_error_message([this, erm_keepalive, now, &options, slice = command->slice] (service::storage_proxy_coordinator_query_result&& qr) mutable {
             cql3::selection::result_set_builder builder(*_selection, now, &options);
             query::result_view::consume(*qr.query_result, std::move(slice),
@@ -2116,6 +2133,9 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
         validate_for_read(options.get_consistency());
 
+        // Vector index reads go through proxy().query_result() with single-partition lookups.
+        state.set_latency_histogram(qp.proxy().get_stats().read);
+
         _query_start_time_point = gc_clock::now();
 
         update_stats();
@@ -2208,7 +2228,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
                 cmd->slice._row_ranges = query::clustering_row_ranges{query::clustering_range::make_singular(key.clustering)};
                 coordinator_result<service::storage_proxy::coordinator_query_result> rqr =
                         co_await qp.proxy().query_result(_schema, cmd, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(),
-                                {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+                                {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, service::node_local_only::no, state.has_deferred_latency()});
                 if (!rqr) {
                     co_return std::move(rqr).as_failure();
                 }
@@ -2228,7 +2248,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
 
     co_return co_await qp.proxy()
             .query_result(_query_schema, command, std::move(partition_ranges), options.get_consistency(),
-                    {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
+                    {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only, state.has_deferred_latency()},
                     std::nullopt)
             .then(wrap_result_to_error_message([this, &options, command](service::storage_proxy::coordinator_query_result qr) {
                 command->set_row_limit(get_limit(options, _limit));

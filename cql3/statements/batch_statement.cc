@@ -275,9 +275,12 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
         _statements[i].statement->restrictions().validate_primary_key(options.for_statement(i));
     }
 
+    // Set the histogram for deferred latency marking.
+    auto& stats = qp.proxy().get_stats();
     if (_has_conditions) {
         ++_stats.cas_batches;
         _stats.statements_in_cas_batches += _statements.size();
+        query_state.set_latency_histogram(stats.cas_write);
         return execute_with_conditions(qp, options, query_state).then([guardrail_state, cl] (auto result) {
             if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
                 result->add_warning(format("Using write consistency level {} listed on the "
@@ -290,10 +293,13 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     ++_stats.batches;
     _stats.statements_in_batches += _statements.size();
 
+    query_state.set_latency_histogram(stats.write);
+
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
+    auto defer_latency = query_state.has_deferred_latency();
     return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
-                                                                                                                               permit = query_state.get_permit()] (utils::chunked_vector<mutation> ms) mutable {
-        return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit));
+                                                                                                                                permit = query_state.get_permit(), defer_latency] (utils::chunked_vector<mutation> ms) mutable {
+        return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), defer_latency);
     }).then([guardrail_state, cl] (coordinator_result<> res) {
         if (!res) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
@@ -314,7 +320,8 @@ future<coordinator_result<>> batch_statement::execute_without_conditions(
         db::consistency_level cl,
         db::timeout_clock::time_point timeout,
         tracing::trace_state_ptr tr_state,
-        service_permit permit) const
+        service_permit permit,
+        bool defer_coordinator_latency_mark) const
 {
     // FIXME: do we need to do this?
 #if 0
@@ -341,7 +348,9 @@ future<coordinator_result<>> batch_statement::execute_without_conditions(
             mutate_atomic = false;
         }
     }
-    return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit), db::allow_per_partition_rate_limit::yes);
+    return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit), db::allow_per_partition_rate_limit::yes, false, {
+        .defer_coordinator_latency_mark = defer_coordinator_latency_mark,
+    });
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
@@ -402,7 +411,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 
     auto* request_ptr = request.get();
     return qp.proxy().cas(schema, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
-            {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
+            {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state(), {}, {}, service::node_local_only::no, qs.has_deferred_latency()},
             std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([this, request = std::move(request)] (bool is_applied) {
         return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
     });
@@ -489,5 +498,4 @@ audit::statement_category batch_statement::category() const {
 }
 
 }
-
 

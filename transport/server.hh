@@ -250,7 +250,17 @@ public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
     using result_with_bounce = foreign_ptr<seastar::shared_ptr<messages::result_message::bounce>>;
-    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce>;
+    using process_fn_result = std::variant<result_with_foreign_response_ptr, result_with_bounce>;
+    struct process_fn_return_type {
+        process_fn_result result;
+        std::optional<service::deferred_latency_mark> latency_mark;
+
+        process_fn_return_type(result_with_foreign_response_ptr r, std::optional<service::deferred_latency_mark> lm = std::nullopt);
+        process_fn_return_type(result_with_bounce r, std::optional<service::deferred_latency_mark> lm = std::nullopt);
+        process_fn_return_type(process_fn_return_type&&) noexcept;
+        process_fn_return_type& operator=(process_fn_return_type&&) noexcept;
+        ~process_fn_return_type();
+    };
 
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
@@ -287,6 +297,11 @@ private:
     std::optional<seastar::lowres_clock::time_point> timeout_for_sleep(std::exception_ptr eptr) const;
     future<foreign_ptr<std::unique_ptr<cql_server::response>>> sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, foreign_ptr<std::unique_ptr<cql_server::response>>&& resp);
 
+    struct response_with_latency {
+        foreign_ptr<std::unique_ptr<cql_server::response>> response;
+        std::optional<service::deferred_latency_mark> latency_mark;
+    };
+
     class connection : public generic_server::connection {
         cql_server& _server;
         socket_address _server_addr;
@@ -308,7 +323,7 @@ private:
         };
     private:
         using execution_stage_type = inheriting_concrete_execution_stage<
-                future<foreign_ptr<std::unique_ptr<cql_server::response>>>,
+                future<response_with_latency>,
                 cql_server::connection*,
                 fragmented_temporary_buffer::istream,
                 uint8_t,
@@ -330,7 +345,7 @@ private:
     private:
         friend class process_request_executor;
 
-        future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
+        future<response_with_latency> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
         utils::result_with_exception<cql_binary_frame_v3, exceptions::protocol_exception, class cql_frame_error> parse_frame(temporary_buffer<char> buf) const;

@@ -80,6 +80,16 @@ using coordinator_result = exceptions::coordinator_result<T>;
 
 namespace cql_transport {
 
+// process_fn_return_type constructors/destructor - defined here because
+// response is an incomplete type in the header.
+cql_server::process_fn_return_type::process_fn_return_type(result_with_foreign_response_ptr r, std::optional<service::deferred_latency_mark> lm)
+    : result(std::move(r)), latency_mark(std::move(lm)) {}
+cql_server::process_fn_return_type::process_fn_return_type(result_with_bounce r, std::optional<service::deferred_latency_mark> lm)
+    : result(std::move(r)), latency_mark(std::move(lm)) {}
+cql_server::process_fn_return_type::process_fn_return_type(process_fn_return_type&&) noexcept = default;
+cql_server::process_fn_return_type& cql_server::process_fn_return_type::operator=(process_fn_return_type&&) noexcept = default;
+cql_server::process_fn_return_type::~process_fn_return_type() = default;
+
 static logging::logger clogger("cql_server");
 
 /**
@@ -503,7 +513,9 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
         std::move(req.cached_fn_calls),
         handling_node_bounce::yes));
 
-    if (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&result)) {
+    if (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&result.result)) {
+        // The request needs to be redirected — don't mark latency since
+        // no real work was done on this node.
         auto host = (*bounce_msg)->target_host();
         auto shard = (*bounce_msg)->target_shard();
         co_return forward_cql_execute_response{
@@ -513,7 +525,13 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
         };
     }
 
-    auto& final_result = std::get<cql_server::result_with_foreign_response_ptr>(result);
+    // Mark latency on the target shard since forwarded requests don't
+    // go through the originating shard's transport flush path.
+    if (result.latency_mark && result.latency_mark->histogram) {
+        result.latency_mark->histogram->mark(result.latency_mark->lc.stop().latency());
+    }
+
+    auto& final_result = std::get<cql_server::result_with_foreign_response_ptr>(result.result);
 
     if (!final_result) {
         co_return co_await coroutine::try_future(final_result.assume_error().as_exception_future<forward_cql_execute_response>());
@@ -934,7 +952,7 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
         return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state);
     }
 }
-future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+future<cql_server::response_with_latency>
     cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit) {
     using auth_state = service::client_state::auth_state;
 
@@ -1004,18 +1022,26 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
                                             _version, get_dialect());
         default:                               return make_exception_future<process_fn_return_type>(exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop))));
         }
-    }).then_wrapped([this, cqlop, &cql_stats, stream, &client_state, linearization_buffer = std::move(linearization_buffer), trace_state] (future<process_fn_return_type> f) {
+    }).then_wrapped([this, cqlop, &cql_stats, stream, &client_state, linearization_buffer = std::move(linearization_buffer), trace_state] (future<process_fn_return_type> f) -> future<response_with_latency> {
         auto stop_trace = defer([&] {
             tracing::stop_foreground(trace_state);
         });
-        return seastar::futurize_invoke([&] () {
+        // Extract latency mark so it survives error paths.
+        // On f.failed(), the mark was destroyed with the coroutine frame,
+        // so latency_mark stays nullopt — acceptable since the statement
+        // layer may not have run far enough to set a histogram.
+        std::optional<service::deferred_latency_mark> latency_mark;
+        std::exception_ptr eptr;
+        try {
             if (f.failed()) {
-                return make_exception_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(f).get_exception());
+                std::rethrow_exception(std::move(f).get_exception());
             }
 
-            result_with_foreign_response_ptr res = std::get<result_with_foreign_response_ptr>(f.get());
+            auto ret = f.get();
+            latency_mark = std::move(ret.latency_mark);
+            result_with_foreign_response_ptr res = std::get<result_with_foreign_response_ptr>(std::move(ret.result));
             if (!res) {
-                return std::move(res).assume_error().as_exception_future<foreign_ptr<std::unique_ptr<cql_server::response>>>();
+                std::move(res).assume_error().throw_me();
             }
 
             auto response = std::move(res).assume_value();
@@ -1035,7 +1061,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             case auth_state::AUTHENTICATION:
                 // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
                 if (cqlop != cql_binary_opcode::AUTH_RESPONSE && cqlop != cql_binary_opcode::CREDENTIALS) {
-                    return make_exception_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(exceptions::protocol_exception(format("Unexpected message {:d}, expecting AUTH_RESPONSE or CREDENTIALS", int(cqlop))));
+                    throw exceptions::protocol_exception(format("Unexpected message {:d}, expecting AUTH_RESPONSE or CREDENTIALS", int(cqlop)));
                 }
                 if (res_op == cql_binary_opcode::READY || res_op == cql_binary_opcode::AUTH_SUCCESS) {
                     client_state.set_auth_state(auth_state::READY);
@@ -1048,15 +1074,17 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 
             tracing::set_response_size(trace_state, response->size());
             cql_stats.response_size.add(response->size());
-            return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(response));
-        }).handle_exception([this, stream, &client_state, trace_state] (std::exception_ptr eptr) {
-            auto response = _server.handle_exception(stream, eptr, trace_state, _version, client_state);
-            if (auto timeout = _server.timeout_for_sleep(eptr)) {
-                // Return read timeout exception, as we wait here until the timeout passes
-                return _server.sleep_until_timeout_passes(*timeout, std::move(response));
-            }
-            return utils::result_into_future<result_with_foreign_response_ptr>(std::move(response));
-        });
+            co_return response_with_latency{std::move(response), std::move(latency_mark)};
+        } catch (...) {
+            eptr = std::current_exception();
+        }
+        // Handle exception outside catch block so co_await is allowed.
+        auto response = _server.handle_exception(stream, eptr, trace_state, _version, client_state);
+        if (auto timeout = _server.timeout_for_sleep(eptr)) {
+            auto resp = co_await _server.sleep_until_timeout_passes(*timeout, make_foreign(std::move(response)));
+            co_return response_with_latency{std::move(resp), std::move(latency_mark)};
+        }
+        co_return response_with_latency{make_foreign(std::move(response)), std::move(latency_mark)};
     });
 }
 
@@ -1263,14 +1291,15 @@ future<> cql_server::connection::process_request() {
                     op == uint8_t (cql_binary_opcode::EXECUTE) ||
                     op == uint8_t(cql_binary_opcode::BATCH));
 
-            future<foreign_ptr<std::unique_ptr<cql_server::response>>> request_process_future = should_paralelize ?
+            future<response_with_latency> request_process_future = should_paralelize ?
                     _process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit) :
                     process_request_one(istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit);
 
-            future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave), stream] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
+            future<> request_response_future = request_process_future.then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave), stream] (future<response_with_latency> response_f) mutable {
                 try {
                     auto& sg_stats = _server.get_cql_sg_stats();
                     size_t pending_response_size = 0;
+                    std::optional<service::deferred_latency_mark> latency_mark;
                     if (response_f.failed()) {
                         const auto message = format("request processing failed, error [{}]", response_f.get_exception());
                         clogger.error("{}: {}", _client_state.get_remote_address(), message);
@@ -1278,7 +1307,9 @@ future<> cql_server::connection::process_request() {
                                                   message,
                                                   tracing::trace_state_ptr()));
                     } else {
-                        auto response = response_f.get();
+                        auto result = response_f.get();
+                        latency_mark = std::move(result.latency_mark);
+                        auto response = std::move(result.response);
                         // Account for response body size exceeding the initial estimate.
                         auto resp_size = response->size();
                         auto permit_size = mem_permit.count();
@@ -1291,8 +1322,13 @@ future<> cql_server::connection::process_request() {
                         sg_stats._pending_response_memory += pending_response_size;
                         write_response(std::move(response), _compression);
                     }
-                    _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave), permit = std::move(mem_permit), &sg_stats, pending_response_size] {
+                    _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave), permit = std::move(mem_permit), &sg_stats, pending_response_size, latency_mark = std::move(latency_mark)] () mutable {
                         sg_stats._pending_response_memory -= pending_response_size;
+                        // Stop the latency counter and mark the histogram now that
+                        // the response has been flushed to the OS socket.
+                        if (latency_mark && latency_mark->histogram) {
+                            latency_mark->histogram->mark(latency_mark->lc.stop().latency());
+                        }
                     });
                 } catch (...) {
                     clogger.error("{}: request processing failed: {}",
@@ -1531,6 +1567,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     }
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
     auto& query_state = q_state->query_state;
+    query_state.start_latency();
     auto o = in.read_options(version, qp.local().get_cql_config());
     if (!o) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(o).assume_error());
@@ -1552,14 +1589,15 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     }
 
     return qp.local().execute_direct_without_checking_exception_message(query.assume_value(), query_state, dialect, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+        auto latency_mark = q_state->query_state.take_deferred_latency();
         if (msg->as_bounce()) {
-            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)), std::move(latency_mark));
         } else if (msg->is_exception()) {
-            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
+            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()), std::move(latency_mark));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
 
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, cql_metadata_id_wrapper{}, skip_metadata)));
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, cql_metadata_id_wrapper{}, skip_metadata)), std::move(latency_mark));
         }
     });
 }
@@ -1629,6 +1667,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
     auto& query_state = q_state->query_state;
+    query_state.start_latency();
     auto o = in.read_options(version, qp.local().get_cql_config());
     if (!o) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(o).assume_error());
@@ -1670,13 +1709,14 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     tracing::trace(trace_state, "Processing a statement");
     return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
+        auto latency_mark = q_state->query_state.take_deferred_latency();
         if (msg->as_bounce()) {
-            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)), std::move(latency_mark));
         } else if (msg->is_exception()) {
-            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
+            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()), std::move(latency_mark));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, std::move(metadata_id), skip_metadata)));
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, std::move(metadata_id), skip_metadata)), std::move(latency_mark));
         }
     });
 }
@@ -1787,6 +1827,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
 
     auto q_state = std::make_unique<cql_query_state>(client_state, trace_state, std::move(permit));
     auto& query_state = q_state->query_state;
+    query_state.start_latency();
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
     auto o = in.read_options(version, qp.local().get_cql_config());
     if (!o) {
@@ -1810,14 +1851,15 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     batch->set_audit_info(batch->audit_info());
     return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
             .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
+        auto latency_mark = q_state->query_state.take_deferred_latency();
         if (msg->as_bounce()) {
-            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)));
+            return cql_server::process_fn_return_type(make_foreign(static_pointer_cast<messages::result_message::bounce>(msg)), std::move(latency_mark));
         } else if (msg->is_exception()) {
-            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
+            return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()), std::move(latency_mark));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
 
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version, cql_metadata_id_wrapper{})));
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version, cql_metadata_id_wrapper{})), std::move(latency_mark));
         }
     });
 }
@@ -1859,10 +1901,10 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
 
     bool init_trace = (bool)!bounced; // If the request was bounced, we already started the trace in the handler
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,
-        version, permit, trace_state, init_trace, {}, dialect));
-    while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
+        version, permit, trace_state, init_trace, std::move(cached_fn_calls), dialect));
+    while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg.result)) {
         auto shard = (*bounce_msg)->target_shard();
-        auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
+        auto cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
         auto target_host = (*bounce_msg)->target_host();
         auto my_host_id = _query_processor.local().proxy().get_token_metadata_ptr()->get_topology().my_host_id();
         if (target_host == my_host_id) {
@@ -1870,13 +1912,25 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
             auto sg = _config.bounce_request_smp_service_group;
             auto gcs = client_state.move_to_other_shard();
             auto gt = tracing::global_trace_state_ptr(trace_state);
-            msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version] (cql_server& server) -> future<process_fn_return_type> {
+            msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version, cached_vals = std::move(cached_vals)] (cql_server& server) mutable -> future<process_fn_return_type> {
                 bytes_ostream linearization_buffer;
                 request_reader in(is, linearization_buffer);
                 auto local_client_state = gcs.get(&server._abort_source);
                 auto local_trace_state = gt.get();
-                co_return co_await process_fn(local_client_state, server._query_processor, in, stream, version,
-                        /* FIXME */empty_service_permit(), std::move(local_trace_state), false, cached_vals, dialect);
+                auto ret = co_await process_fn(local_client_state, server._query_processor, in, stream, version,
+                        /* FIXME */empty_service_permit(), std::move(local_trace_state), false, std::move(cached_vals), dialect);
+                // Mark latency on the target shard before returning.
+                // The histogram pointer belongs to this shard's stats and
+                // must not be dereferenced from another shard.
+                // Only mark when the result is not a bounce — a bounce means
+                // the request will be retried elsewhere and no real work was done.
+                if (!std::get_if<cql_server::result_with_bounce>(&ret.result)) {
+                    if (ret.latency_mark && ret.latency_mark->histogram) {
+                        ret.latency_mark->histogram->mark(ret.latency_mark->lc.stop().latency());
+                    }
+                }
+                ret.latency_mark.reset();
+                co_return ret;
             });
         } else {
             // Node bounce
@@ -1897,7 +1951,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 .dialect = dialect,
                 .client_state = client_state,
                 .trace_info = tracing::make_trace_info(trace_state),
-                .cached_fn_calls = std::move(cached_fn_calls),
+                .cached_fn_calls = std::move(cached_vals),
             };
 
             auto response = co_await forward_cql(

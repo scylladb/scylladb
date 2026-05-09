@@ -281,7 +281,10 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 
     _restrictions->validate_primary_key(options);
 
+    // Set the histogram for deferred latency marking.
+    auto& stats = qp.proxy().get_stats();
     if (has_conditions()) {
+        qs.set_latency_histogram(stats.cas_write);
         auto result = co_await execute_with_condition(qp, qs, options);
         if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
             result->add_warning(format("Using write consistency level {} listed on the "
@@ -289,6 +292,8 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
         }
         co_return result;
     }
+
+    qs.set_latency_histogram(stats.write);
 
     json_cache_opt json_cache = maybe_prepare_json_cache(options);
     std::vector<dht::partition_range> keys = build_partition_keys(options, json_cache);
@@ -334,7 +339,8 @@ modification_statement::execute_without_condition(query_processor& qp, service::
         }
 
         return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write(), {
-            .node_local_only = options.get_specific_options().node_local_only
+            .node_local_only = options.get_specific_options().node_local_only,
+            .defer_coordinator_latency_mark = qs.has_deferred_latency(),
         });
     });
 }
@@ -450,7 +456,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     }
 
     return qp.proxy().cas(s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
-            {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
+            {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state(), {}, {}, service::node_local_only::no, qs.has_deferred_latency()},
             std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout).then([this, request = std::move(request), tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (bool is_applied) {
         auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
         result->add_tablet_info(tablet_replicas, token_range);

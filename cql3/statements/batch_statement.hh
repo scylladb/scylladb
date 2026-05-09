@@ -140,7 +140,8 @@ private:
             db::consistency_level cl,
             db::timeout_clock::time_point timeout,
             tracing::trace_state_ptr tr_state,
-            service_permit permit) const;
+            service_permit permit,
+            bool defer_coordinator_latency_mark) const;
 
     future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
             query_processor& qp,

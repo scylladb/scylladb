@@ -3979,9 +3979,8 @@ future<result<>> storage_proxy::mutate_begin(unique_response_handler_vector ids,
 
 // this function should be called with a future that holds result of mutation attempt (usually
 // future returned by mutate_begin()). The future should be ready when function is called.
-future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils::latency_counter lc, write_stats& stats, tracing::trace_state_ptr trace_state) {
+future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, write_stats& stats, tracing::trace_state_ptr trace_state) {
     SCYLLA_ASSERT(mutate_result.available());
-    stats.write.mark(lc.stop().latency());
 
     return utils::result_futurize_try([&] {
         auto&& res = mutate_result.get();
@@ -4208,14 +4207,27 @@ future<> storage_proxy::mutate(utils::chunked_vector<mutation> mutations, db::co
 }
 
 future<result<>> storage_proxy::mutate_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, coordinator_mutate_options options) {
+    std::optional<utils::latency_counter> lc;
+    if (!options.defer_coordinator_latency_mark) {
+        lc.emplace();
+        lc->start();
+    }
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl, std::move(options.cdc_options)).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this(), allow_limit, options = std::move(options)](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl, std::move(options.cdc_options)).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this(), allow_limit, options = std::move(options), lc = std::move(lc)](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
             auto tracker = std::move(std::get<1>(t));
-            return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, std::move(tracker), std::move(options));
+            return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, std::move(tracker), std::move(options)).finally([this, lc = std::move(lc)] () mutable {
+                if (lc) {
+                    get_stats().write.mark(lc->stop().latency());
+                }
+            });
         });
     }
-    return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, nullptr, std::move(options));
+    return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, nullptr, std::move(options)).finally([this, lc = std::move(lc)] () mutable {
+        if (lc) {
+            get_stats().write.mark(lc->stop().latency());
+        }
+    });
 }
 
 future<result<>> storage_proxy::do_mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker, coordinator_mutate_options options) {
@@ -4262,15 +4274,12 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, tracin
     // special handling, e.g. counters. otherwise, a default type is used.
     auto type = type_opt.value_or(std::next(std::begin(mutations)) == std::end(mutations) ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH);
 
-    utils::latency_counter lc;
-    lc.start();
-
     return mutate_prepare(mutations, cl, type, tr_state, std::move(permit), allow_limit, std::move(options)).then(utils::result_wrap([this, cl, timeout_opt, tracker = std::move(cdc_tracker),
             tr_state] (storage_proxy::unique_response_handler_vector ids) mutable {
         register_cdc_operation_result_tracker(ids, tracker);
         return mutate_begin(std::move(ids), cl, tr_state, timeout_opt);
-    })).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<result<>> f) mutable {
-        return p->mutate_end(std::move(f), lc, get_stats(), std::move(tr_state));
+    })).then_wrapped([this, p = shared_from_this(), tr_state] (future<result<>> f) mutable {
+        return p->mutate_end(std::move(f), get_stats(), std::move(tr_state));
     });
 }
 
@@ -4379,8 +4388,6 @@ static host_id_vector_replica_set endpoint_filter(
 
 future<result<>>
 storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, coordinator_mutate_options options) {
-    utils::latency_counter lc;
-    lc.start();
 
     class context {
         storage_proxy& _p;
@@ -4494,8 +4501,8 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
           return make_exception_future<lw_shared_ptr<context>>(std::current_exception());
       }
     };
-    auto cleanup = [p = shared_from_this(), lc, tr_state] (future<result<>> f) mutable {
-        return p->mutate_end(std::move(f), lc, p->get_stats(), std::move(tr_state));
+    auto cleanup = [p = shared_from_this(), tr_state] (future<result<>> f) mutable {
+        return p->mutate_end(std::move(f), p->get_stats(), std::move(tr_state));
     };
 
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
@@ -4532,9 +4539,6 @@ future<> storage_proxy::send_to_endpoint(
         write_stats& stats,
         allow_hints allow_hints,
         is_cancellable cancellable) {
-    utils::latency_counter lc;
-    lc.start();
-
     std::optional<clock_type::time_point> timeout;
     db::consistency_level cl = allow_hints ? db::consistency_level::ANY : db::consistency_level::ONE;
     if (type == db::write_type::VIEW) {
@@ -4542,6 +4546,9 @@ future<> storage_proxy::send_to_endpoint(
         // and to apply backpressure.
         timeout = clock_type::now() + 5min;
     }
+
+    utils::latency_counter lc;
+    lc.start();
 
     return mutate_prepare(std::array{std::move(m)},
             [this, tr_state, erm = std::move(ermp), target = std::array{target}, pending_endpoints, &stats, cancellable, cl, type, /* does view building should hold a real permit */ permit = empty_service_permit()] (std::unique_ptr<mutation_holder>& m) mutable {
@@ -4570,8 +4577,11 @@ future<> storage_proxy::send_to_endpoint(
             cancellable);
     }).then(utils::result_wrap([this, cl, tr_state = std::move(tr_state), timeout = std::move(timeout)] (unique_response_handler_vector ids) mutable {
         return mutate_begin(std::move(ids), cl, std::move(tr_state), std::move(timeout));
-    })).then_wrapped([p = shared_from_this(), lc, &stats] (future<result<>> f) {
-        return p->mutate_end(std::move(f), lc, stats, nullptr).then(utils::result_into_future<result<>>);
+    })).then_wrapped([p = shared_from_this(), lc, &stats] (future<result<>> f) mutable {
+        // Internal writes (hints, view updates) don't go through the CQL
+        // transport layer, so mark latency here directly.
+        stats.write.mark(lc.stop().latency());
+        return p->mutate_end(std::move(f), stats, nullptr).then(utils::result_into_future<result<>>);
     });
 }
 
@@ -6739,28 +6749,41 @@ storage_proxy::do_query(schema_ptr s,
         auto f = do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options), std::move(*cas_shard));
         return utils::then_ok_result<result<storage_proxy::coordinator_query_result>>(std::move(f));
     } else {
-        utils::latency_counter lc;
-        lc.start();
+        std::optional<utils::latency_counter> lc;
+        if (!query_options.defer_coordinator_latency_mark) {
+            lc.emplace();
+            lc->start();
+        }
         auto p = shared_from_this();
 
         if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
             try {
-                return query_singular(cmd,
+                auto f = query_singular(cmd,
                         std::move(partition_ranges),
                         cl,
-                        std::move(query_options)).finally([lc, p] () mutable {
+                        std::move(query_options));
+                if (!lc) {
+                    return f;
+                }
+                return std::move(f).finally([lc = std::move(*lc), p] () mutable {
                     p->get_stats().read.mark(lc.stop().latency());
                 });
             } catch (const replica::no_such_column_family&) {
-                get_stats().read.mark(lc.stop().latency());
+                if (lc) {
+                    get_stats().read.mark(lc->stop().latency());
+                }
                 return make_empty();
             }
         }
 
-        return query_partition_key_range(cmd,
+        auto f = query_partition_key_range(cmd,
                 std::move(partition_ranges),
                 cl,
-                std::move(query_options)).finally([lc, p] () mutable {
+                std::move(query_options));
+        if (!lc) {
+            return f;
+        }
+        return std::move(f).finally([lc = std::move(*lc), p] () mutable {
             p->get_stats().range.mark(lc.stop().latency());
         });
     }
@@ -6929,15 +6952,21 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
 
     unsigned contentions = 0;
 
-    utils::latency_counter lc;
-    lc.start();
+    std::optional<utils::latency_counter> lc;
+    if (!query_options.defer_coordinator_latency_mark) {
+        lc.emplace();
+        lc->start();
+    }
 
     bool condition_met;
 
     try {
         auto update_stats = seastar::defer ([&] {
             get_stats().cas_foreground--;
-            write ? get_stats().cas_write.mark(lc.stop().latency()) : get_stats().cas_read.mark(lc.stop().latency());
+            if (lc) {
+                auto latency = lc->stop().latency();
+                (write ? get_stats().cas_write : get_stats().cas_read).mark(latency);
+            }
             if (contentions > 0) {
                 write ? get_stats().cas_write_contention.add(contentions) : get_stats().cas_read_contention.add(contentions);
             }
@@ -6964,7 +6993,11 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
                 ++get_stats().cas_failed_read_round_optimization;
 
                 auto pr = partition_ranges; // cannot move original because it can be reused during retry
-                auto cqr = co_await query(schema, cmd, std::move(pr), cl, query_options);
+                // Always defer read latency marking for the internal read inside CAS;
+                // CAS has its own latency histogram (cas_read/cas_write) marked in update_stats above.
+                auto internal_query_options = query_options;
+                internal_query_options.defer_coordinator_latency_mark = true;
+                auto cqr = co_await query(schema, cmd, std::move(pr), cl, std::move(internal_query_options));
                 qr = std::move(cqr.query_result);
             }
 
