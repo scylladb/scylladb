@@ -38,6 +38,9 @@ struct primary_key {
     /// [0.0, 1.0] for cosine and euclidean; unbounded for dot product on
     /// non-normalized vectors.
     float similarity = 0.0f;
+    /// Values of filtering columns returned by the vector store
+    /// when return_columns is non-empty in the ann() call.
+    std::map<std::string, rjson::value> column_values;
 };
 
 /// A client with the vector-store service.
@@ -98,8 +101,10 @@ public:
     /// neighbors. Each returned primary_key has its similarity field set to
     /// the similarity score returned by the vector store, which sorts the
     /// results in decreasing similarity order (higher similarity score = more
-    /// similar).
-    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
+    /// similar). When return_columns is non-empty, the vector store also returns
+    /// the values of those filtering columns in each primary_key's
+    /// column_values map.
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as, const std::vector<std::string>& return_columns = {})
             -> future<std::expected<primary_keys, ann_error>>;
 
 private:
