@@ -6237,11 +6237,11 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
 
         auto& cm = t->get_compaction_manager();
         auto split_opt = compaction::compaction_type_options::split{classify_fn};
-        auto new_ssts = cm.maybe_split_sstable(input, t.as_compaction_group_view(), split_opt).get();
+        auto new_ssts = cm.maybe_split_new_sstable(input, t.as_compaction_group_view(), split_opt).get();
         BOOST_REQUIRE(new_ssts.size() == expected_output_size);
         for (auto& sst : new_ssts) {
             // split sstables don't require further split.
-            auto ssts = cm.maybe_split_sstable(sst, t.as_compaction_group_view(), split_opt).get();
+            auto ssts = cm.maybe_split_new_sstable(sst, t.as_compaction_group_view(), split_opt).get();
             BOOST_REQUIRE(ssts.size() == 1);
             BOOST_REQUIRE(ssts.front() == sst);
         }
@@ -6253,8 +6253,96 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
             }
             return classify_fn(t);
         };
-        BOOST_REQUIRE_THROW(cm.maybe_split_sstable(input, t.as_compaction_group_view(), compaction::compaction_type_options::split{throwing_classifier}).get(),
+        BOOST_REQUIRE_THROW(cm.maybe_split_new_sstable(input, t.as_compaction_group_view(), compaction::compaction_type_options::split{throwing_classifier}).get(),
                             std::runtime_error);
+    });
+}
+
+SEASTAR_TEST_CASE(unsealed_sstable_compaction_test) {
+    BOOST_REQUIRE(smp::count == 1);
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder("tests", "unsealed_sstable_compaction_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type).build();
+
+        auto t = env.make_table_for_tests(s);
+        auto close_t = deferred_stop(t);
+        t->start();
+
+        mutation mut(s, partition_key::from_exploded(*s, {to_bytes("alpha")}));
+        mut.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 0);
+
+        sstable_writer_config sst_cfg = env.manager().configure_writer();
+        sst_cfg.leave_unsealed = true;
+        auto unsealed_sstable = make_sstable_easy(env, make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(mut)), sst_cfg);
+
+        BOOST_REQUIRE(file_exists(unsealed_sstable->get_filename(sstables::component_type::TemporaryTOC).format()).get());
+
+        auto sst_gen = env.make_sst_factory(s);
+        auto info = compact_sstables(env, compaction::compaction_descriptor({ unsealed_sstable }), t, sst_gen).get();
+        BOOST_REQUIRE(info.new_sstables.size() == 1);
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_clone_leaving_unsealed_dest_sstable) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+
+        auto mut1 = mutation(s, pk);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+
+        sstables::sstable_generation_generator gen_generator;
+
+        bool leave_unsealed = true;
+        auto d = sst->clone(gen_generator(), leave_unsealed).get();
+
+        auto sst2 = env.make_sstable(s, d.generation, d.version, d.format);
+        sst2->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
+        BOOST_REQUIRE(!file_exists(sst2->get_filename(sstables::component_type::TOC).format()).get());
+        BOOST_REQUIRE(file_exists(sst2->get_filename(sstables::component_type::TemporaryTOC).format()).get());
+
+        leave_unsealed = false;
+        d = sst->clone(gen_generator(), leave_unsealed).get();
+
+        auto sst3 = env.make_sstable(s, d.generation, d.version, d.format);
+        sst3->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
+        BOOST_REQUIRE(file_exists(sst3->get_filename(sstables::component_type::TOC).format()).get());
+        BOOST_REQUIRE(!file_exists(sst3->get_filename(sstables::component_type::TemporaryTOC).format()).get());
+    });
+}
+
+SEASTAR_TEST_CASE(failure_when_adding_new_sstable_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+
+        auto mut1 = mutation(s, pk);
+        mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {mut1});
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+
+        auto on_add = [] (sstables::shared_sstable) { throw std::runtime_error("fail to seal"); return make_ready_future<>(); };
+        BOOST_REQUIRE_THROW(table->add_new_sstable_and_update_cache(sst, on_add).get(), std::runtime_error);
+
+        // Verify new sstable was unlinked on failure.
+        BOOST_REQUIRE(!file_exists(sst->get_filename(sstables::component_type::Data).format()).get());
+
+        auto sst2 = make_sstable_containing(env.make_sstable(s), {mut1});
+        auto sst3 = make_sstable_containing(env.make_sstable(s), {mut1});
+        BOOST_REQUIRE_THROW(table->add_new_sstables_and_update_cache({sst2, sst3}, on_add).get(), std::runtime_error);
+
+        // Verify both sstables are unlinked on failure.
+        BOOST_REQUIRE(!file_exists(sst2->get_filename(sstables::component_type::Data).format()).get());
+        BOOST_REQUIRE(!file_exists(sst3->get_filename(sstables::component_type::Data).format()).get());
     });
 }
 

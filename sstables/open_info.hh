@@ -83,6 +83,8 @@ struct sstable_open_config {
     bool current_shard_as_sstable_owner = false;
     // Do not move the sharding metadata to the sharder, keeping it in the scylla metadata..
     bool keep_sharding_metadata = false;
+    // Allows unsealed sstable to be loaded, since it must read components from temporary TOC instead.
+    bool unsealed_sstable = false;
 };
 
 }
