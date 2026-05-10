@@ -1574,7 +1574,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         "If you are trying to upgrade the node then first upgrade the cluster to use auth v2.");
                 }
                 auto service_levels_version = sys_ks.local().get_service_levels_version().get();
-                if (raft_topology_done && (!service_levels_version || *service_levels_version != 2)) {
+                if (raft_topology_done && (!service_levels_version || *service_levels_version != 2)
+                        && !utils::get_local_injector().enter("skip_service_levels_v2_initialization")) {
                     should_self_heal_service_levels_version = true;
                     startlog.warn(
                             "Cluster is using raft topology but service levels are still marked as version {}. "
