@@ -979,6 +979,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "When disabled, logstor files are formatted lazily on first write, which reduces startup time but may cause slightly degraded write performance on first access to each file.")
     , logstor_compaction_trigger_threshold_percent(this, "logstor_compaction_trigger_threshold_percent", value_status::Used, 20,
         "Trigger automatic logstor compaction when the number of available segments drops below this percentage of the total number of logstor segments. A value of 0 disables the trigger threshold.")
+    , logstor_compaction_soft_pressure_threshold_percent(this, "logstor_compaction_soft_pressure_threshold_percent", value_status::Used, 15,
+        "Start increasing logstor compaction CPU shares when the number of available segments drops below this percentage of the total number of logstor segments. At or above this threshold, compaction uses the base shares. As available segments decrease below it, shares increase linearly until reaching the maximum when no segments are available.")
     , logstor_separator_delay_limit_ms(this, "logstor_separator_delay_limit_ms", value_status::Used, 100,
         "Maximum delay in milliseconds for logstor separator debt control.")
     , logstor_separator_max_memory_in_mb(this, "logstor_separator_max_memory_in_mb", value_status::Used, 256,

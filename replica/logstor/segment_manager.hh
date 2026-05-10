@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/rwlock.hh>
@@ -49,6 +50,7 @@ struct segment_manager_config {
     bool compaction_enabled = true;
     size_t max_segments_per_compaction = 8;
     uint32_t trigger_compaction_threshold_percent = 20;
+    uint32_t compaction_soft_pressure_threshold_percent = 15;
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;
     seastar::scheduling_group separator_sg;
