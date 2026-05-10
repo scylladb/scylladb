@@ -490,14 +490,6 @@ def test_query_vector_item_metrics(vs, metrics, needs_vector_store):
 # in test_vector.py. This test is specifically about the *efficiency*: once
 # the optimization is implemented, returning projected attrs should not require
 # reading the base table at all.
-#
-# This optimization is not yet implemented: the vector store's ann() response
-# currently carries only primary-key columns (partition + clustering key) and
-# a similarity score; it does not yet return the projected non-key attribute
-# values.  Until the vector-store protocol is extended and the executor fast
-# path wired up for INCLUDE projection, this test is expected to fail.
-@pytest.mark.xfail(reason="INCLUDE fast-path (no base-table read) not yet implemented; "
-                           "ann() response does not carry projected column values")
 def test_vector_projection_include_no_base_table_read(vs, metrics, needs_vector_store):
     with new_test_table(vs,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
@@ -539,12 +531,6 @@ def test_vector_projection_include_no_base_table_read(vs, metrics, needs_vector_
 # The correctness of SPECIFIC_ATTRIBUTES for INCLUDE projection is already
 # verified by test_vector_projection_include in test_vector.py.  This test
 # is specifically about the *efficiency* of the projected-attr case.
-#
-# This optimization is not yet implemented for the same reason as
-# test_vector_projection_include_no_base_table_read (ann() does not return
-# projected column values), so this test is also expected to fail.
-@pytest.mark.xfail(reason="INCLUDE fast-path (no base-table read) not yet implemented; "
-                           "ann() response does not carry projected column values")
 def test_vector_projection_include_specific_attributes_no_base_table_read(vs, metrics, needs_vector_store):
     with new_test_table(vs,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],

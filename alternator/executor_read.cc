@@ -1618,7 +1618,6 @@ static future<executor::request_return_type> query_vector(
             break;
         }
     }
-    std::string projection_type = non_key_projected_attrs.empty() ? "KEYS_ONLY" : "INCLUDE";
     if (!is_vector) {
         co_return api_error::validation(
             format("VectorSearch IndexName '{}' is not a vector index.", index_name));
@@ -1765,7 +1764,7 @@ static future<executor::request_return_type> query_vector(
     // those non-key attrs and build the response directly from the vector store result.
     std::vector<std::string> specific_return_columns;
     bool specific_attrs_all_projected = false;
-    if (select == select_type::regular && !flt && projection_type == "INCLUDE" && attrs_to_get_opt) {
+    if (select == select_type::regular && !flt && !non_key_projected_attrs.empty() && attrs_to_get_opt) {
         std::unordered_set<std::string> key_col_names;
         for (const column_definition& cdef : base_schema->partition_key_columns()) {
             key_col_names.insert(cdef.name_as_text());
@@ -1802,7 +1801,7 @@ static future<executor::request_return_type> query_vector(
     auto pkeys_result = co_await vsc.ann(
             base_schema->ks_name(), std::string(index_name), base_schema,
             std::move(query_vec), limit, pre_filter, aoe.abort_source(),
-            (select == select_type::projection && !flt && projection_type == "INCLUDE") ? non_key_projected_attrs :
+            (select == select_type::projection && !flt && !non_key_projected_attrs.empty()) ? non_key_projected_attrs :
             (specific_attrs_all_projected ? specific_return_columns : std::vector<std::string>{}));
     if (!pkeys_result.has_value()) {
         const sstring error_msg = std::visit(vector_search::error_visitor{}, pkeys_result.error());
@@ -1829,8 +1828,7 @@ static future<executor::request_return_type> query_vector(
     // - SPECIFIC_ATTRIBUTES where all requested attrs are covered by projected
     //   columns (specific_attrs_all_projected): same as the case above but
     //   only the key columns present in attrs_to_get_opt are included.
-    bool use_vs_fast_path = (select == select_type::projection && !flt &&
-                             (projection_type == "KEYS_ONLY" || projection_type == "INCLUDE")) ||
+    bool use_vs_fast_path = (select == select_type::projection && !flt) ||
                             specific_attrs_all_projected;
     if (use_vs_fast_path) {
         rjson::value items_json = rjson::empty_array();
@@ -1859,7 +1857,7 @@ static future<executor::request_return_type> query_vector(
                     ++exploded_ck_it;
                 }
             }
-            if (projection_type == "INCLUDE") {
+            if (!non_key_projected_attrs.empty()) {
                 // Non-key projected column values are stored as Alternator type-tagged
                 // blobs and returned by the vector store as "0x<hex>" strings via
                 // try_to_json(). Decode each blob to get the DynamoDB attribute value.
