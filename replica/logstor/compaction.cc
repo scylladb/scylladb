@@ -126,4 +126,19 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
     };
 }
 
+float compaction_shares_pressure(uint64_t available_segments, free_segment_watermarks watermarks) noexcept {
+    // Also covers the trigger being disabled, where both watermarks are zero: with no free-segment
+    // target there is no space-driven demand for shares.
+    if (available_segments >= watermarks.high) {
+        return 0.0f;
+    }
+    // Reaching the maximum shares while half the target is still in hand keeps the equilibrium of a
+    // saturated controller away from the point where normal writes stall.
+    const auto saturation_point = watermarks.low / 2;
+    if (available_segments <= saturation_point) {
+        return 1.0f;
+    }
+    return float(watermarks.high - available_segments) / float(watermarks.high - saturation_point);
+}
+
 } // namespace replica::logstor

@@ -123,6 +123,25 @@ struct compaction_batch {
 std::optional<compaction_batch> select_compaction_batch(const segment_set& segments,
         uint64_t segment_size, size_t batch_cap);
 
+// Where the free-segment target falls on the compaction_shares_pressure() ramp. It is a property of
+// the watermarks rather than a tunable: with the relative hysteresis of make_free_segment_watermarks()
+// the target sits a third of the way up the ramp on any disk size, up to the rounding of the two
+// watermarks to whole segments. Exported so that the shares controller can put a control point on it.
+constexpr float compaction_shares_pressure_at_target = 1.0f / 3.0f;
+
+// Space pressure driving the compaction shares controller: 0 at or above the high watermark, where
+// automatic compaction stops and there is no space demand at all, compaction_shares_pressure_at_target
+// at the free-segment target - the intended steady-state operating point - and 1 once half the
+// target has been consumed, linear in between.
+//
+// The free-segment count is the integral of the mismatch between the write rate and the rate at
+// which compaction reclaims, so mapping it proportionally to shares is integral control on that
+// mismatch: the loop settles at whatever shares match the write rate, and the slope only decides
+// where in the free-segment range it settles. That is why pressure saturates while half the target
+// is still in hand instead of at the point where writes stall: a workload that needs the maximum
+// shares must be able to settle somewhere that still leaves the write path room.
+float compaction_shares_pressure(uint64_t available_segments, free_segment_watermarks watermarks) noexcept;
+
 inline constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
