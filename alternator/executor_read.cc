@@ -1625,6 +1625,13 @@ static future<executor::request_return_type> query_vector(
     if (limit == 0) {
         co_return api_error::validation("Limit must be greater than 0");
     }
+    // The maximum limit for vector search matches the CQL constant
+    // max_ann_query_limit in vector_indexed_table_select_statement.
+    static constexpr uint32_t max_vector_search_limit = 1000;
+    if (limit > max_vector_search_limit) {
+        co_return api_error::validation(
+            format("Limit must not be greater than {}", max_vector_search_limit));
+    }
 
     // Consistent reads are not supported for vector search, just like GSI.
     if (get_read_consistency(request) != db::consistency_level::LOCAL_ONE) {

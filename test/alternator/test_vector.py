@@ -1024,6 +1024,34 @@ def test_query_vectorsearch_limit_bad(table_vs):
                 Limit=bad_limit
             )
 
+# The maximum allowed Limit for vector search. Set as max_vector_search_limit
+# in executor.cc, and analogous to CQL's max_ann_query_limit defined in
+# select_statement.hh.
+MAX_VECTOR_SEARCH_LIMIT = 1000
+
+# Test that a Query with VectorSearch does not allow a Limit above
+# MAX_VECTOR_SEARCH_LIMIT. This limit also exists in CQL as max_ann_query_limit
+# in vector_indexed_table_select_statement (select_statement.hh). The allowed
+# Limit needs to be limited because vector search does not support pagination.
+def test_query_vectorsearch_limit_too_large(table_vs):
+    with pytest.raises(ClientError, match='ValidationException.*Limit'):
+        table_vs.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 2, 3]},
+            Limit=MAX_VECTOR_SEARCH_LIMIT + 1,
+        )
+
+# Test that a Query with VectorSearch with Limit=MAX_VECTOR_SEARCH_LIMIT
+# (the maximum allowed value) succeeds - it should not be rejected.
+# The query may return fewer results than the limit (the table_vs fixture
+# has few items, possibly none), but must not fail with a validation error.
+def test_query_vectorsearch_limit_at_max(table_vs, needs_vector_store):
+    table_vs.query(
+        IndexName='vind',
+        VectorSearch={'QueryVector': [1, 2, 3]},
+        Limit=MAX_VECTOR_SEARCH_LIMIT,
+    )
+
 # Test that a Query with VectorSearch does not support ConsistentRead=True,
 # just like queries on a GSI.
 def test_query_vectorsearch_consistent_read(table_vs):
