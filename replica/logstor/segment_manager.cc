@@ -10,11 +10,14 @@
 #include "replica/logstor/segment_io.hh"
 #include "exceptions/exceptions.hh"
 #include "replica/compaction_group.hh"
+#include "backlog_controller.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/types.hh"
 #include "replica/logstor/compaction.hh"
 #include <absl/container/flat_hash_map.h>
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <linux/if_link.h>
 #include <seastar/core/file.hh>
@@ -35,6 +38,7 @@
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/util/memory-data-source.hh>
 #include <seastar/core/condition-variable.hh>
@@ -495,6 +499,40 @@ std::optional<file_id_t> file_manager::file_name_to_file_id(const std::string& f
     return std::nullopt;
 }
 
+// Maps compaction_shares_pressure() to CPU shares. The backlog is the pressure itself, so control
+// point inputs are in [0, 1]. The maximum output is left as its own constant for now, rather than
+// following the sstable controller's compaction_max_shares setting, which is a separate change.
+//
+// Each control point sits on an anchor of the pressure ramp:
+//
+//   - pressure 0, at or above automatic compaction's stop watermark: nothing to reclaim, so only
+//     explicitly submitted compaction runs, at the same floor the sstable controller uses;
+//   - pressure compaction_shares_pressure_at_target, at the free-segment target: the intended
+//     steady-state operating point;
+//   - pressure 1, once half the target has been consumed: compaction is losing against the write
+//     rate and gets the maximum.
+//
+// Shares therefore grow gently across the trigger's hysteresis band, where the target has already
+// been met, and six times faster below the target. The exact output at the target is not critical:
+// the loop settles at whatever shares match the write rate, and this constant only decides how far
+// below the target it settles.
+class logstor_compaction_controller : public backlog_controller {
+public:
+    static constexpr float idle_shares = 50.0f;
+    static constexpr float target_shares = 200.0f;
+    static constexpr float max_shares = 2000.0f;
+    static inline const std::vector<control_point> control_points = {
+            {0.0f, idle_shares},
+            {compaction_shares_pressure_at_target, target_shares},
+            {1.0f, max_shares},
+    };
+
+    logstor_compaction_controller(scheduling_group sg, float static_shares, std::chrono::milliseconds interval,
+            std::function<float()> current_backlog)
+        : backlog_controller(std::move(sg), interval, control_points, std::move(current_backlog), static_shares) {
+    }
+};
+
 class compaction_manager_impl : public compaction_manager {
 public:
 
@@ -525,13 +563,8 @@ private:
         uint64_t separator_segments_freed{0};
     } _stats;
 
-    struct controller {
-        float _compaction_overhead{1.0}; // running average ratio
-
-        void update(size_t segment_write_count, uint64_t new_segments);
-    };
-    controller _controller;
-    timer<lowres_clock> _adjust_shares_timer;
+    logstor_compaction_controller _shares_controller;
+    utils::observer<float> _compaction_static_shares_observer;
 
     seastar::semaphore _separator_flush_sem{0};
     seastar::semaphore _compaction_sem{1};
@@ -567,7 +600,17 @@ public:
     compaction_manager_impl(segment_manager_impl& sm, compaction_config cfg)
         : _sm(sm)
         , _cfg(std::move(cfg))
-        , _adjust_shares_timer(default_scheduling_group(), [this] { adjust_shares(); })
+        , _shares_controller(
+                _cfg.compaction_sg,
+                _cfg.compaction_static_shares.get(),
+                std::chrono::milliseconds(250),
+                [this] {
+                    return compaction_pressure();
+                }
+            )
+        , _compaction_static_shares_observer(_cfg.compaction_static_shares.observe([this] (float new_shares) {
+            return _shares_controller.update_static_shares(new_shares);
+        }))
     {}
 
     future<> start();
@@ -578,6 +621,7 @@ public:
     }
 
     const stats& get_stats() const noexcept { return _stats; }
+    float compaction_pressure() const noexcept;
 
     separator_buffer allocate_separator_buffer() override;
     future<> flush_separator_buffer(separator_buffer buf, logstor_group&) override;
@@ -624,20 +668,9 @@ private:
     group_compaction_state& get_group_state(logstor_group&);
     group_compaction_state* find_group_state(logstor_group&) noexcept;
 
-    void adjust_shares() {
-        if (auto static_shares = _cfg.compaction_static_shares.get(); static_shares != 0) {
-            _cfg.compaction_sg.set_shares(static_shares);
-        } else {
-            auto shares = std::max<float>(1000 * _controller._compaction_overhead, 1000);
-            _cfg.compaction_sg.set_shares(shares);
-        }
-    }
 };
 
 future<> compaction_manager_impl::start() {
-    if (_cfg.compaction_sg != default_scheduling_group()) {
-        _adjust_shares_timer.arm_periodic(std::chrono::milliseconds(50));
-    }
     refresh_free_segment_watermarks();
     co_return;
 }
@@ -661,7 +694,7 @@ future<> compaction_manager_impl::stop() {
     auto f = co_await coroutine::as_future(_auto_compaction_completion.get_future());
     f.ignore_ready_future();
 
-    _adjust_shares_timer.cancel();
+    co_await _shares_controller.shutdown();
 
     _groups.clear();
 }
@@ -1024,6 +1057,10 @@ private:
     friend struct compaction_buffer;
     friend class segment_stream_sink_impl;
 };
+
+float compaction_manager_impl::compaction_pressure() const noexcept {
+    return compaction_shares_pressure(_sm.available_segment_count(write_source::normal_write), get_free_segment_watermarks());
+}
 
 void compaction_manager_impl::refresh_free_segment_watermarks() noexcept {
     _free_segment_watermarks = make_free_segment_watermarks(_sm._max_segments.configured,
@@ -1898,18 +1935,10 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
         }
     }
 
-    const auto segments_reclaimed = compaction_segments_in > compaction_segments_out ? compaction_segments_in - compaction_segments_out : 0;
     _stats.compaction_segments_in += compaction_segments_in;
     _stats.compaction_segments_out += compaction_segments_out;
     _stats.compaction_records_rewritten += cb.stats.records_rewritten;
     _stats.compaction_records_skipped += cb.stats.records_skipped;
-
-    _controller.update(cb.stats.flush_count, segments_reclaimed);
-}
-
-void compaction_manager_impl::controller::update(size_t segment_write_count, uint64_t new_segments) {
-    float new_overhead = static_cast<float>(segment_write_count) / std::max<uint64_t>(1, new_segments);
-    _compaction_overhead = 0.8 * _compaction_overhead + 0.2 * new_overhead;
 }
 
 future<> compaction_manager_impl::do_split_compaction(replica::table& t, logstor_group& src, mutation_writer::classify_by_token_group classifier, abort_source& as) {
