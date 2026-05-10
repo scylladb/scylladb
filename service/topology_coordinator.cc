@@ -4308,7 +4308,7 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
     // it's in `topology_coordinator::enable_features` ,so  topology_coordinator will re-run its loop
     // and `maybe_migrate_system_tables` will be called.
 
-    if (_feature_service.driver_service_level) {
+    if (_feature_service.driver_service_level && !utils::get_local_injector().enter("skip_service_levels_v2_initialization")) {
         const auto sl_driver_created = co_await _sys_ks.get_service_level_driver_created();
         if (!sl_driver_created.value_or(false)) {
             co_return co_await _sl_controller.migrate_to_driver_service_level(std::move(guard), _sys_ks);
