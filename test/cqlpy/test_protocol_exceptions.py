@@ -4,12 +4,14 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from cassandra.cluster import NoHostAvailable
+from cassandra.connection import Connection
 from contextlib import contextmanager
 import pytest
 import re
 import requests
 import socket
 import struct
+from unittest import mock
 from test.cqlpy import nodetool
 from test.cqlpy.util import cql_session
 from test.pylib.skip_types import skip_env
@@ -361,3 +363,26 @@ def test_no_protocol_exceptions(scylla_only, no_ssl, debug_exceptions_logging, h
 
     cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
     assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
+
+# Regression test for GitHub issue #27452.
+def test_supported_includes_host_id(scylla_only, no_ssl, cql, host, request):
+    expected_host_id = str(cql.execute("SELECT host_id FROM system.local WHERE key = 'local'").one()[0])
+    captured_supported = {}
+    original_handle = Connection._handle_options_response
+
+    def _capture_supported(self, options_response):
+        if hasattr(options_response, "options"):
+            captured_supported.update(options_response.options)
+        return original_handle(self, options_response)
+
+    with mock.patch.object(Connection, "_handle_options_response", _capture_supported):
+        with cql_session(
+                host=host,
+                port=request.config.getoption("--port"),
+                is_ssl=False,
+                username=request.config.getoption("--auth_username") or "cassandra",
+                password=request.config.getoption("--auth_password") or "cassandra",
+        ):
+            pass
+
+    assert captured_supported["SCYLLA_HOST_ID"] == [expected_host_id]
