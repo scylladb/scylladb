@@ -50,6 +50,17 @@ policy, timeouts, and other configuration.
 Such data should be sent in `CLIENT_OPTIONS` key, as JSON. The recommended
 structure of this JSON will be decided in the future.
 
+## Host ID discovery
+
+The `SCYLLA_HOST_ID` option in the SUPPORTED response contains the host ID of
+the node that accepted the connection, formatted as a UUID string. This is the
+same value exposed as `host_id` in the connected node's `system.local` row.
+
+This option lets drivers identify the connected node during protocol
+initialization without issuing an additional `system.local` query. It is an
+informational option returned by the server; clients do not send
+`SCYLLA_HOST_ID` in STARTUP.
+
 ## Intranode sharding
 
 This extension allows the driver to discover how Scylla internally

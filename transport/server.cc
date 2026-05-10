@@ -1979,6 +1979,8 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     // CLIENT_OPTIONS value is a JSON string that can be used to pass client-specific configuration,
     // e.g. CQL driver configuration.
     opts.insert({"CLIENT_OPTIONS", ""});
+    // Let drivers identify the connected node without an extra system.local query.
+    opts.insert({"SCYLLA_HOST_ID", _server._gossiper.my_host_id().to_sstring()});
     if (_server._config.allow_shard_aware_drivers) {
         opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
