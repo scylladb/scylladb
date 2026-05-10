@@ -3623,11 +3623,194 @@ def test_query_vectorsearch_prefilter_and_number_between(vs, needs_vector_store)
         assert {item['c'] for item in result['Items']} == {Decimal(1), Decimal(2)}
 
 
-# TODO: Like test_vector_projection_keys_only, write additional tests for
-# ProjectionType=INCLUDE with NonKeyAttributes and ProjectionType=ALL.
-# We don't yet support this feature, so I didn't bother to write such a
-# test yet, but I can write an xfailing test because we know what we
-# expect ALL_PROJECTED_ATTRIBUTES to return in that case.
+# More tests for pre-filtering on projected columns (ProjectionType=INCLUDE)
+# which focus on verifying that the vector store's projected columns are
+# correctly updated via CDC when the original item is modified, including
+# delicate operations like removing a projected column or replacing the whole
+# item.
+
+# Test that UpdateItem REMOVE on a projected filtering column causes the vector
+# store to clear the stored column value, so that subsequent pre-filter queries
+# on that column no longer match the item. However, the item itself should NOT
+# be deleted from the vector index since it still has its vector attribute -
+# and the item is still retrievable by an unfiltered vector search query.
+# The "however" part is actually a very important part of this test (and used
+# to fail due to a bug in the vector store).
+def test_vector_projection_include_prefilter_updateitem_remove_column(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        # Insert an item with the projected filtering column x='hello'.
+        table.put_item(Item={'p': p, 'v': Vector([1, 0, 0]), 'x': 'hello'})
+        table.update(VectorIndexUpdates=[{'Create': {
+            'IndexName': 'vind',
+            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+            'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']},
+        }}])
+        wait_for_vector_index_active(table, 'vind')
+        # After the prefill finished, the item is retrievable with the pre-
+        # filter x="hello". Let's verify:
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            KeyConditionExpression='x = :val',
+            ExpressionAttributeValues={':val': 'hello'},
+            Limit=1)
+        assert result['Count'] == 1
+        assert result['Items'][0]['p'] == p
+        # REMOVE the projected filtering column x from the item via CDC.
+        # The item should (eventually) disappear from the filtered search:
+        table.update_item(Key={'p': p}, UpdateExpression='REMOVE x')
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [1, 0, 0]},
+                Limit=1,
+                KeyConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 'hello'},
+            )
+            if result['Count'] == 0:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for x removal to be reflected in vector store pre-filter')
+            time.sleep(0.1)
+        # The item still exists and still has its vector - so it must remain in
+        # the vector index and be returned by an unfiltered query.
+        #
+        # This simple sanity check is actually an important test of its own -
+        # and used to fail due to a bug in the vector store where changing
+        # any non-vector attribute cause the vector store to mis-understand that
+        # the vector was deleted. It's not easy to check this bug without using
+        # projected columns in the test because we only knew above that the
+        # vector store actually processed the CDC event (and can check its
+        # result) by noticing the projected column changed.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=1,
+        )
+        assert result['Count'] == 1
+        assert result['Items'][0]['p'] == p
+
+# Test that UpdateItem updating only one of several projected filtering columns
+# does not erase the stored value of the other columns. The untouched column
+# must remain filterable after the CDC event is processed.
+def test_vector_projection_include_prefilter_updateitem_other_column_preserved(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': Vector([1, 0, 0]), 'x': 'old', 'y': 'stays'})
+        table.update(VectorIndexUpdates=[{'Create': {
+            'IndexName': 'vind',
+            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+            'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x', 'y']},
+        }}])
+        wait_for_vector_index_active(table, 'vind')
+        # After the prefill finished, the item is retrievable with the pre-
+        # filter x="old" and y="stays". Let's verify:
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=1,
+            KeyConditionExpression='x = :val',
+            ExpressionAttributeValues={':val': 'old'})
+        assert result['Count'] == 1 and result['Items'][0]['p'] == p
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=1,
+            KeyConditionExpression='y = :val',
+            ExpressionAttributeValues={':val': 'stays'})
+        assert result['Count'] == 1 and result['Items'][0]['p'] == p
+        # With UpdateItem, change only x to 'new', leaving y unchanged.
+        # This change will go through CDC and eventually be reflected in
+        # vector search queries.
+        table.update_item(Key={'p': p},
+            UpdateExpression='SET x = :newx',
+            ExpressionAttributeValues={':newx': 'new'})
+        # Wait for the CDC event carrying x='new' to be picked up by the vector store.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [1, 0, 0]},
+                Limit=1,
+                KeyConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 'new'},
+            )
+            if result['Count'] == 1:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for x=new to appear in vector store pre-filter')
+            time.sleep(0.1)
+        # y was not changed by the UpdateItem. Its stored value must still be
+        # 'stays' — the CDC event must not have erased it.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=1,
+            KeyConditionExpression='y = :val',
+            ExpressionAttributeValues={':val': 'stays'},
+        )
+        assert result['Count'] == 1
+        assert result['Items'][0]['p'] == p
+
+# Test that PutItem replacing an item that had a projected filtering column with
+# a new item that lacks that column causes the vector store to clear the old
+# column value. After the CDC event propagates, a pre-filter on the old column
+# value must not match the replaced item.
+def test_vector_projection_include_prefilter_putitem_clears_old_column(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        # Insert an item with filtering column x='hello'.
+        table.put_item(Item={'p': p, 'v': Vector([1, 0, 0]), 'x': 'hello'})
+        table.update(VectorIndexUpdates=[{'Create': {
+            'IndexName': 'vind',
+            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+            'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['x']},
+        }}])
+        wait_for_vector_index_active(table, 'vind')
+        # After the prefill finished, the item is retrievable with the pre-
+        # filter x='hello'. Let's verify:
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=1,
+            KeyConditionExpression='x = :val',
+            ExpressionAttributeValues={':val': 'hello'})
+        assert result['Count'] == 1 and result['Items'][0]['p'] == p
+        # Replace the item via PutItem (CDC path) with a new item that has the
+        # same vector but no x attribute.
+        table.put_item(Item={'p': p, 'v': Vector([1, 0, 0])})
+        # Once the CDC replacement event propagates, a pre-filter on x='hello'
+        # must no longer match the item because x no longer exists on the item.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [1, 0, 0]},
+                Limit=1,
+                KeyConditionExpression='x = :val',
+                ExpressionAttributeValues={':val': 'hello'},
+            )
+            if result['Count'] == 0:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for stale x=hello to be cleared from vector store after PutItem')
+            time.sleep(0.1)
+        # Verify the item is still indexed (the new vector is the same as before).
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [1, 0, 0]},
+            Limit=1,
+        )
+        assert result['Count'] == 1
+        assert result['Items'][0]['p'] == p
 
 # TODO: test enabling vector index and Alternator Streams together, and
 # checking that Alternator Streams works as expected. Also we may need to
