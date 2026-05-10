@@ -269,7 +269,7 @@ response = table.query(
 | `IndexName` | Required. Must name a vector index on this table (not a GSI or LSI). |
 | `VectorSearch.QueryVector` | Required. A DynamoDB `AttributeValue` of type `L` (all elements of type `N`) or the ScyllaDB-specific type `FLOAT32VECTOR` (plain floating-point JSON numbers). |
 | QueryVector length | Must match the `Dimensions` configured for the named vector index. |
-| `Limit` | Required. Defines _k_ — how many nearest neighbors to return. Must be a positive integer. |
+| `Limit` | Required. Defines _k_ — how many nearest neighbors to return. Must be a positive integer no greater than 1000. |
 
 **Differences from standard Query:**
 
@@ -281,7 +281,9 @@ different way, and explicitly rejects others that have no meaningful interpretat
   `ExclusiveStartKey`. In vector search, `Limit` defines _k_: the ANN
   algorithm runs once and returns exactly the _k_ nearest neighbors. There
   is no natural "next page" — each page would require a full re-run of the
-  search — so **`ExclusiveStartKey` is rejected**.
+  search — so **`ExclusiveStartKey` is rejected**. Because vector search does
+  not support pagination, `Limit` is capped at 1000; if you need more results
+  you must issue separate queries with different query vectors.
 
 - **Results are ordered by vector distance, not by sort key.** A standard
   Query returns rows in sort-key order; `ScanIndexForward=false` reverses
