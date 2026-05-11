@@ -353,6 +353,9 @@ def testAlterTypeUsedInPartitionKey(cql, test_keyspace):
             # frozen UDT used directly in a partition key
             with create_table(cql, test_keyspace, f"(pk frozen<{type1}>, val int, PRIMARY KEY(pk))") as table1:
                 assert_invalid_message(cql, type1, table1, "ALTER TYPE %s ADD v2 int;")
+                # Covers dtest cql_types_test.py::test_udt_change_in_partition_key
+                # ALTER TYPE RENAME must also be rejected on PK UDTs
+                assert_invalid_message(cql, type1, table1, "ALTER TYPE %s RENAME v1 TO v1_renamed;")
             # frozen UDT used in a frozen UDT used in a partition key
             with create_table(cql, test_keyspace, f"(pk frozen<{type2}>, val int, PRIMARY KEY(pk))") as table2:
                 assert_invalid_message(cql, type1, table2, "ALTER TYPE %s ADD v2 int;")
