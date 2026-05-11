@@ -1,5 +1,5 @@
-Migrate a Keyspace from Vnodes to Tablets
-==========================================
+Migrate a Keyspace from Vnodes to Tablets :label-caution:`Experimental`
+=========================================================================
 
 This procedure describes how to migrate an existing keyspace from vnodes
 to tablets. Tablets are designed to be the long-term replacement for vnodes,
@@ -7,6 +7,9 @@ offering numerous benefits such as faster topology operations, automatic load
 balancing, automatic cleanups, and improved streaming performance. Migrating to
 tablets is strongly recommended. See :doc:`Data Distribution with Tablets </architecture/tablets/>`
 for details.
+
+ℹ️ This feature is experimental and will change in future releases, including
+the removal of current limitations.
 
 .. note::
 
