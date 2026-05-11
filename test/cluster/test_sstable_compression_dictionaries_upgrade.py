@@ -34,7 +34,7 @@ async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: Scyll
         '--logger-log-level=database=debug',
         '--abort-on-seastar-bad-alloc',
         '--dump-memory-diagnostics-on-alloc-failure-kind=all',
-    ], version=scylla_2025_1))
+    ], config={'rf_rack_valid_keyspaces': False}, version=scylla_2025_1))
 
     logger.info("Creating tables")
     cql = manager.get_cql()

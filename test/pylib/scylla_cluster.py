@@ -235,7 +235,7 @@ async def get_scylla_2025_1_executable(build_mode: str) -> str:
     is_debug = build_mode == 'debug' or build_mode == 'sanitize'
     package = "scylla-debug" if is_debug else "scylla"
     arch = platform.machine()
-    url = f'https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/{package}-2025.1.0-0.20250325.9dca28d2b818.{arch}.tar.gz'
+    url = f'https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/{package}-2025.1.12-0.20260329.1d372670365f.{arch}.tar.gz'
 
     return await get_scylla_executable(url)
 
