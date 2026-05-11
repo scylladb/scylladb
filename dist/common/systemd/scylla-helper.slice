@@ -7,7 +7,7 @@ MemoryAccounting=true
 IOAccounting=true
 CPUAccounting=true
 
-CPUWeight=10
+CPUWeight=100
 IOWeight=10
 
 # MemoryHigh is the throttle point
