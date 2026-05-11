@@ -1200,9 +1200,11 @@ async def _setup_tombstone_gc_cluster(manager, *, tablets=2, extra_cmdline=None)
     cmdline = ['--logger-log-level', 'repair=debug']
     if extra_cmdline:
         cmdline += extra_cmdline
+    # These tests enable hinted handoff and materialized views, which make debug-mode
+    # concurrent bootstrap occasionally exceed the topology timeout before the test starts.
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
         manager, nr_keys=0, cmdline=cmdline, tablets=tablets,
-        disable_flush_cache_time=True)
+        disable_flush_cache_time=True, sequential_server_add=True)
     # Lower propagation_delay to 0 so gc_before = repair_time, making tombstones
     # GC-eligible immediately after a successful repair rather than 1h later.
     await cql.run_async(
