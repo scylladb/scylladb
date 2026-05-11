@@ -9,7 +9,7 @@
 
 import pytest
 from cassandra.protocol import InvalidRequest, ConfigurationException
-from .util import unique_name, new_test_table, new_function, new_aggregate, new_type
+from .util import unique_name, new_test_keyspace, new_test_table, new_function, new_aggregate, new_type
 
 # Test that computing an average by hand works the same as
 # the built-in function
@@ -266,3 +266,18 @@ def test_replace_sfunc_ffunc(cql, test_keyspace, cassandra_bug):
                 cql.execute(f"CREATE OR REPLACE FUNCTION {test_keyspace}.{sum_final} {sum_final_body2}")
                 result = cql.execute(f"SELECT {custom_sum}(id) AS result FROM {table}").one()
                 assert result.result == 36
+
+# Test that an aggregate cannot reference a UDT from another keyspace.
+# Ported from scylla-dtest user_functions_test.py::test_aggregate_with_udt_keyspace_isolation (SCYLLADB-1928).
+# Reproduces CASSANDRA-9409.
+def test_aggregate_with_udt_keyspace_isolation(cql, test_keyspace):
+    with new_type(cql, test_keyspace, "(a int)") as udt:
+        _, udt_name = udt.split('.')
+        with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as other_ks:
+            # The SFUNC 'plus' doesn't need to exist — the cross-keyspace
+            # UDT reference error fires during type validation, before
+            # function lookup.
+            with pytest.raises(InvalidRequest, match="cannot refer to a user type in keyspace"):
+                cql.execute(
+                    f"CREATE AGGREGATE {other_ks}.suma ({test_keyspace}.{udt_name}) "
+                    f"SFUNC plus STYPE int INITCOND 10")

@@ -8,8 +8,9 @@
 #############################################################################
 
 import pytest
-from .util import unique_name, new_function
 from cassandra.protocol import InvalidRequest
+
+from .util import new_test_keyspace, new_test_table, new_type, unique_name, new_function
 
 # Unfortunately, while ScyllaDB and Cassandra support the same UDF
 # feature, each supports a different choice of languages. In particular,
@@ -65,3 +66,52 @@ def test_drop_overloaded_udf(cql, test_keyspace, has_java_udf):
             # So let's recreate them to pacify new_function():
             cql.execute(f"CREATE FUNCTION {test_keyspace}.{fun} {body1}")
             cql.execute(f"CREATE FUNCTION {test_keyspace}.{fun} {body2}")
+
+# Test that a UDF can take a frozen UDT argument and that the UDT cannot
+# be dropped while the function is in use.
+# Ported from scylla-dtest user_functions_test.py::test_udf_with_udt (SCYLLADB-1928).
+def test_udf_with_udt(cql, test_keyspace, has_java_udf):
+    with new_type(cql, test_keyspace, "(a text, b int)") as udt:
+        _, udt_name = udt.split('.')
+        with new_test_table(cql, test_keyspace,
+                            f"key int PRIMARY KEY, udt frozen<{udt_name}>") as table:
+            cql.execute(f"INSERT INTO {table} (key, udt) VALUES (1, {{a: 'un', b: 1}})")
+            cql.execute(f"INSERT INTO {table} (key, udt) VALUES (2, {{a: 'deux', b: 2}})")
+            cql.execute(f"INSERT INTO {table} (key, udt) VALUES (3, {{a: 'trois', b: 3}})")
+
+            if has_java_udf:
+                func_body = f"(udt {udt_name}) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return udt.getInt(\"b\");'"
+            else:
+                func_body = f"(udt {udt_name}) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return udt.b'"
+            with new_function(cql, test_keyspace, func_body) as funk:
+                result = list(cql.execute(f"SELECT sum({test_keyspace}.{funk}(udt)) FROM {table}"))
+                assert len(result) == 1
+                assert result[0][0] == 6
+
+                # UDT should not be droppable while function references it
+                with pytest.raises(InvalidRequest, match="is still used by"):
+                    cql.execute(f"DROP TYPE {udt}")
+
+# Test that a UDF cannot reference a UDT from another keyspace.
+# Ported from scylla-dtest user_functions_test.py::test_udf_with_udt_keyspace_isolation (SCYLLADB-1928).
+# Reproduces CASSANDRA-9409.
+def test_udf_with_udt_keyspace_isolation(cql, test_keyspace, has_java_udf):
+    with new_type(cql, test_keyspace, "(a text, b int)") as udt:
+        _, udt_name = udt.split('.')
+        with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as other_ks:
+            if has_java_udf:
+                lang_arg = "LANGUAGE java AS 'return \"f1\";'"
+                lang_ret = "LANGUAGE java AS 'return null;'"
+            else:
+                lang_arg = "LANGUAGE lua AS 'return \"f1\"'"
+                lang_ret = "LANGUAGE lua AS 'return nil'"
+            # Cannot use UDT from test_keyspace as function arg in other_ks
+            with pytest.raises(InvalidRequest, match="cannot refer to a user type in keyspace"):
+                cql.execute(
+                    f"CREATE FUNCTION {other_ks}.overloaded(v {test_keyspace}.{udt_name}) "
+                    f"CALLED ON NULL INPUT RETURNS text {lang_arg}")
+            # Cannot use UDT from test_keyspace as return type in other_ks
+            with pytest.raises(InvalidRequest, match="cannot refer to a user type in keyspace"):
+                cql.execute(
+                    f"CREATE FUNCTION {other_ks}.testfun(v text) "
+                    f"CALLED ON NULL INPUT RETURNS {test_keyspace}.{udt_name} {lang_ret}")
