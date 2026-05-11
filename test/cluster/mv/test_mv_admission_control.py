@@ -15,9 +15,8 @@ from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet, get_tab
 from test.cluster.util import new_test_keyspace
 
 from cassandra.cluster import ConsistencyLevel, EXEC_PROFILE_DEFAULT # type: ignore
-from cassandra.cqltypes import Int32Type # type: ignore
 from cassandra.policies import FallthroughRetryPolicy # type: ignore
-from cassandra.query import SimpleStatement, BoundStatement # type: ignore
+from cassandra.query import SimpleStatement # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,8 @@ logger = logging.getLogger(__name__)
 async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
     node_count = 2
     config = {'error_injections_at_startup': ['view_update_limit', 'update_backlog_immediately'], 'tablets_mode_for_new_keyspaces': 'enabled'}
-    servers = await manager.servers_add(node_count, config=config)
+    # Use 1 shard to make sure that the same shard handles both writes, so that the second write sees the backlog increase caused by the first one.
+    servers = await manager.servers_add(node_count, config=config, cmdline=['--smp=1'])
     cql, hosts = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -41,17 +41,15 @@ async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
         await pin_the_only_tablet(manager, ks, "tab", servers[0])
         await pin_the_only_tablet(manager, ks, "mv_cf_view", servers[1])
 
-        # Prepare the statement so that the write goes to the same shard both
-        # times (the first write will cause only the shard on which it was
-        # performed to have the updated view update backlog).
-        stmt = cql.prepare(f"INSERT INTO {ks}.tab (key, c, v) VALUES (?, ?, ?)")
-        # To inspect the error message, we need to disable retries, which can't
-        # be done in `prepare()` or `run_async()`. Instead, we use `BoundStatement`.
-        bnd_stmt = BoundStatement(stmt, retry_policy=FallthroughRetryPolicy())
+        # To inspect the error message, we need to disable retries.
+        stmt = SimpleStatement(f"INSERT INTO {ks}.tab (key, c, v) VALUES (0, 0, '{240000*'a'}')",
+                               retry_policy=FallthroughRetryPolicy())
         await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "never_finish_remote_view_updates", one_shot=False) for s in servers))
-        await cql.run_async(bnd_stmt.bind([0, 0, 240000*'a']), host=hosts[0])
+        await cql.run_async(stmt, host=hosts[0])
         with pytest.raises(Exception, match="View update backlog is too high"):
-            await cql.run_async(bnd_stmt.bind([0, 0, 'a']), host=hosts[0])
+            stmt2 = SimpleStatement(f"INSERT INTO {ks}.tab (key, c, v) VALUES (0, 0, 'a')",
+                                    retry_policy=FallthroughRetryPolicy())
+            await cql.run_async(stmt2, host=hosts[0])
         await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, "never_finish_remote_view_updates") for s in servers))
 
 # In this test we have a table with a materialized view and a replication factor of 3
