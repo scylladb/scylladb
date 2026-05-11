@@ -44,8 +44,7 @@ def test_create_fulltext_index_with_analyzer_option(cql, test_keyspace, scylla_o
     """All supported analyzer values should be accepted."""
     analyzers = [
         'standard', 'english', 'german', 'french', 'spanish', 'italian',
-        'portuguese', 'russian', 'chinese', 'japanese', 'korean',
-        'simple', 'whitespace',
+        'portuguese', 'russian', 'simple', 'whitespace',
     ]
     schema = 'p int primary key, content text'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -56,6 +55,22 @@ def test_create_fulltext_index_with_analyzer_option(cql, test_keyspace, scylla_o
                 f"WITH OPTIONS = {{'analyzer': '{analyzer}'}}"
             )
             cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+
+
+def test_create_fulltext_index_with_cjk_analyzers_fails(cql, test_keyspace, scylla_only):
+    """CJK analyzers should be rejected. (VECTOR-672)"""
+    analyzers = [
+        'chinese', 'japanese', 'korean',
+    ]
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        for analyzer in analyzers:
+            index_name = unique_name()
+            with pytest.raises(InvalidRequest, match="Invalid value in option 'analyzer'"):
+                cql.execute(
+                    f"CREATE CUSTOM INDEX {index_name} ON {table}(content) USING 'fulltext_index' "
+                    f"WITH OPTIONS = {{'analyzer': '{analyzer}'}}"
+                )
 
 
 def test_create_fulltext_index_with_analyzer_case_insensitive(cql, test_keyspace, scylla_only):

@@ -23,7 +23,7 @@ namespace secondary_index {
 // This list corresponds to analyzers expected to be provided
 // by the backend search engine (Tantivy).
 static const std::vector<sstring> analyzer_values = {
-        "standard", "english", "german", "french", "spanish", "italian", "portuguese", "russian", "chinese", "japanese", "korean", "simple", "whitespace"};
+        "standard", "english", "german", "french", "spanish", "italian", "portuguese", "russian", "simple", "whitespace"};
 
 const static std::unordered_map<sstring, std::function<void(std::string_view, const sstring&, const sstring&)>> fulltext_index_options = {
         // 'analyzer' specifies the built-in text analyzer to use for tokenization.
