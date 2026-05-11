@@ -1,4 +1,4 @@
-# Copyright 2025-present ScyllaDB
+# Copyright 2026-present ScyllaDB
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -23,139 +23,78 @@
 
 import pytest
 import time
+from contextlib import contextmanager
 from botocore.exceptions import ClientError
 from .util import (random_string, full_query, full_scan,
                    multiset, create_test_table, new_test_table, wait_for_gsi)
-
-# Helper copied from test_gsi.py — retries for GSI eventual consistency.
-def assert_index_query(table, index_name, expected_items, **kwargs):
-    expected = multiset(expected_items)
-    for i in range(5):
-        got = multiset(full_query(table, IndexName=index_name,
-                                  ConsistentRead=False, **kwargs))
-        if expected == got:
-            return
-        elif got - expected:
-            pytest.fail("assert_index_query() found unexpected items: "
-                        + str(got - expected))
-        print('assert_index_query retrying')
-        time.sleep(1)
-    assert expected == multiset(full_query(table, IndexName=index_name,
-                                           ConsistentRead=False, **kwargs))
-
-def assert_index_scan(table, index_name, expected_items, **kwargs):
-    expected = multiset(expected_items)
-    for i in range(5):
-        got = multiset(full_scan(table, IndexName=index_name,
-                                 ConsistentRead=False, **kwargs))
-        if expected == got:
-            return
-        elif got - expected:
-            pytest.fail("assert_index_scan() found unexpected items: "
-                        + str(got - expected))
-        print('assert_index_scan retrying')
-        time.sleep(1)
-    assert expected == multiset(full_scan(table, IndexName=index_name,
-                                          ConsistentRead=False, **kwargs))
+from .test_gsi import assert_index_query, assert_index_scan
 
 ###############################################################################
 # Shared fixtures — module-scoped tables pre-loaded with data for query tests
 ###############################################################################
 
+# Build the kwargs dict for creating a table with a single composite GSI.
+# hash_keys/range_keys: list of (name, type) tuples, e.g. [('h1', 'S')].
+# base_keys - first entry is HASH, second (if any) is RANGE.
+def _composite_gsi_table_kwargs(index_name, hash_keys, range_keys,
+                                base_keys=[('p', 'S')], projection='ALL'):
+    key_types = ['HASH'] + ['RANGE'] * (len(base_keys) - 1)
+    key_schema = [{'AttributeName': n, 'KeyType': t}
+                  for (n, _), t in zip(base_keys, key_types)]
+    attr_defs = [{'AttributeName': n, 'AttributeType': t}
+                 for n, t in base_keys + hash_keys + range_keys]
+    gsi_ks = ([{'AttributeName': n, 'KeyType': 'HASH'} for n, _ in hash_keys] +
+              [{'AttributeName': n, 'KeyType': 'RANGE'} for n, _ in range_keys])
+    return dict(
+        KeySchema=key_schema,
+        AttributeDefinitions=attr_defs,
+        GlobalSecondaryIndexes=[{
+            'IndexName': index_name,
+            'KeySchema': gsi_ks,
+            'Projection': {'ProjectionType': projection},
+        }])
+
+# Create a table with a composite GSI (for use in fixtures).
+def _create_composite_gsi_table(dynamodb, index_name, hash_keys, range_keys,
+                                base_keys=[('p', 'S')], projection='ALL'):
+    return create_test_table(dynamodb,
+        **_composite_gsi_table_kwargs(index_name, hash_keys, range_keys,
+                                      base_keys, projection))
+
+# Context-manager variant (for use in individual tests).
+@contextmanager
+def _new_composite_gsi_table(dynamodb, index_name, hash_keys, range_keys,
+                             base_keys=[('p', 'S')], projection='ALL'):
+    with new_test_table(dynamodb,
+            **_composite_gsi_table_kwargs(index_name, hash_keys, range_keys,
+                                          base_keys, projection)) as table:
+        yield table
+
 # Fixture 1: Minimum composite — 2 HASH + 2 RANGE, all String type.
-# Base table: hash key 'p' (S).
-# GSI 'idx_2h2r': HASH [h1, h2], RANGE [r1, r2], Projection ALL.
 @pytest.fixture(scope="module")
 def test_table_gsi_2h2r(dynamodb):
-    table = create_test_table(dynamodb,
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[
-            {'AttributeName': 'p', 'AttributeType': 'S'},
-            {'AttributeName': 'h1', 'AttributeType': 'S'},
-            {'AttributeName': 'h2', 'AttributeType': 'S'},
-            {'AttributeName': 'r1', 'AttributeType': 'S'},
-            {'AttributeName': 'r2', 'AttributeType': 'S'},
-        ],
-        GlobalSecondaryIndexes=[
-            {   'IndexName': 'idx_2h2r',
-                'KeySchema': [
-                    {'AttributeName': 'h1', 'KeyType': 'HASH'},
-                    {'AttributeName': 'h2', 'KeyType': 'HASH'},
-                    {'AttributeName': 'r1', 'KeyType': 'RANGE'},
-                    {'AttributeName': 'r2', 'KeyType': 'RANGE'},
-                ],
-                'Projection': {'ProjectionType': 'ALL'}
-            }
-        ])
+    table = _create_composite_gsi_table(dynamodb, 'idx_2h2r',
+        hash_keys=[('h1', 'S'), ('h2', 'S')],
+        range_keys=[('r1', 'S'), ('r2', 'S')])
     yield table
     table.delete()
 
 # Fixture 2: Maximum composite — 4 HASH + 4 RANGE, mixed types.
-# Base table: hash key 'p' (S).
-# GSI 'idx_4h4r': HASH [h1(S), h2(S), h3(S), h4(S)],
-#                 RANGE [r1(N), r2(S), r3(B), r4(S)], Projection ALL.
 @pytest.fixture(scope="module")
 def test_table_gsi_4h4r(dynamodb):
-    table = create_test_table(dynamodb,
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[
-            {'AttributeName': 'p', 'AttributeType': 'S'},
-            {'AttributeName': 'h1', 'AttributeType': 'S'},
-            {'AttributeName': 'h2', 'AttributeType': 'S'},
-            {'AttributeName': 'h3', 'AttributeType': 'S'},
-            {'AttributeName': 'h4', 'AttributeType': 'S'},
-            {'AttributeName': 'r1', 'AttributeType': 'N'},
-            {'AttributeName': 'r2', 'AttributeType': 'S'},
-            {'AttributeName': 'r3', 'AttributeType': 'B'},
-            {'AttributeName': 'r4', 'AttributeType': 'S'},
-        ],
-        GlobalSecondaryIndexes=[
-            {   'IndexName': 'idx_4h4r',
-                'KeySchema': [
-                    {'AttributeName': 'h1', 'KeyType': 'HASH'},
-                    {'AttributeName': 'h2', 'KeyType': 'HASH'},
-                    {'AttributeName': 'h3', 'KeyType': 'HASH'},
-                    {'AttributeName': 'h4', 'KeyType': 'HASH'},
-                    {'AttributeName': 'r1', 'KeyType': 'RANGE'},
-                    {'AttributeName': 'r2', 'KeyType': 'RANGE'},
-                    {'AttributeName': 'r3', 'KeyType': 'RANGE'},
-                    {'AttributeName': 'r4', 'KeyType': 'RANGE'},
-                ],
-                'Projection': {'ProjectionType': 'ALL'}
-            }
-        ])
+    table = _create_composite_gsi_table(dynamodb, 'idx_4h4r',
+        hash_keys=[('h1', 'S'), ('h2', 'S'), ('h3', 'S'), ('h4', 'S')],
+        range_keys=[('r1', 'N'), ('r2', 'S'), ('r3', 'B'), ('r4', 'S')])
     yield table
     table.delete()
 
-# Fixture 3: Mixed types — 2 HASH (S, N) + 2 RANGE (N, B).
-# Base table: hash key 'p' (S), sort key 'c' (S).
-# GSI 'idx_mixed': HASH [mh1(S), mh2(N)], RANGE [mr1(N), mr2(B)].
+# Fixture 3: Mixed types — 2 HASH (S, N) + 2 RANGE (N, B), base table with sort key.
 @pytest.fixture(scope="module")
 def test_table_gsi_mixed_types(dynamodb):
-    table = create_test_table(dynamodb,
-        KeySchema=[
-            {'AttributeName': 'p', 'KeyType': 'HASH'},
-            {'AttributeName': 'c', 'KeyType': 'RANGE'},
-        ],
-        AttributeDefinitions=[
-            {'AttributeName': 'p', 'AttributeType': 'S'},
-            {'AttributeName': 'c', 'AttributeType': 'S'},
-            {'AttributeName': 'mh1', 'AttributeType': 'S'},
-            {'AttributeName': 'mh2', 'AttributeType': 'N'},
-            {'AttributeName': 'mr1', 'AttributeType': 'N'},
-            {'AttributeName': 'mr2', 'AttributeType': 'B'},
-        ],
-        GlobalSecondaryIndexes=[
-            {   'IndexName': 'idx_mixed',
-                'KeySchema': [
-                    {'AttributeName': 'mh1', 'KeyType': 'HASH'},
-                    {'AttributeName': 'mh2', 'KeyType': 'HASH'},
-                    {'AttributeName': 'mr1', 'KeyType': 'RANGE'},
-                    {'AttributeName': 'mr2', 'KeyType': 'RANGE'},
-                ],
-                'Projection': {'ProjectionType': 'ALL'}
-            }
-        ])
+    table = _create_composite_gsi_table(dynamodb, 'idx_mixed',
+        hash_keys=[('mh1', 'S'), ('mh2', 'N')],
+        range_keys=[('mr1', 'N'), ('mr2', 'B')],
+        base_keys=[('p', 'S'), ('c', 'S')])
     yield table
     table.delete()
 
@@ -165,22 +104,8 @@ def test_table_gsi_mixed_types(dynamodb):
 
 # Test that creating a GSI with 2 HASH keys and no RANGE keys succeeds.
 def test_gsi_composite_create_2h(dynamodb):
-    with new_test_table(dynamodb,
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[
-            {'AttributeName': 'p', 'AttributeType': 'S'},
-            {'AttributeName': 'a', 'AttributeType': 'S'},
-            {'AttributeName': 'b', 'AttributeType': 'S'},
-        ],
-        GlobalSecondaryIndexes=[
-            {   'IndexName': 'gsi',
-                'KeySchema': [
-                    {'AttributeName': 'a', 'KeyType': 'HASH'},
-                    {'AttributeName': 'b', 'KeyType': 'HASH'},
-                ],
-                'Projection': {'ProjectionType': 'ALL'}
-            }
-        ]) as table:
+    with _new_composite_gsi_table(dynamodb, 'gsi',
+            hash_keys=[('a', 'S'), ('b', 'S')], range_keys=[]) as table:
         desc = table.meta.client.describe_table(TableName=table.name)
         gsi = desc['Table']['GlobalSecondaryIndexes'][0]
         assert gsi['KeySchema'] == [
@@ -190,91 +115,27 @@ def test_gsi_composite_create_2h(dynamodb):
 
 # Test that creating a GSI with max 4 HASH + 4 RANGE succeeds.
 def test_gsi_composite_create_4h4r(dynamodb):
-    with new_test_table(dynamodb,
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[
-            {'AttributeName': 'p', 'AttributeType': 'S'},
-            {'AttributeName': 'a', 'AttributeType': 'S'},
-            {'AttributeName': 'b', 'AttributeType': 'S'},
-            {'AttributeName': 'c', 'AttributeType': 'S'},
-            {'AttributeName': 'd', 'AttributeType': 'S'},
-            {'AttributeName': 'e', 'AttributeType': 'S'},
-            {'AttributeName': 'f', 'AttributeType': 'S'},
-            {'AttributeName': 'g', 'AttributeType': 'S'},
-            {'AttributeName': 'h', 'AttributeType': 'S'},
-        ],
-        GlobalSecondaryIndexes=[
-            {   'IndexName': 'gsi',
-                'KeySchema': [
-                    {'AttributeName': 'a', 'KeyType': 'HASH'},
-                    {'AttributeName': 'b', 'KeyType': 'HASH'},
-                    {'AttributeName': 'c', 'KeyType': 'HASH'},
-                    {'AttributeName': 'd', 'KeyType': 'HASH'},
-                    {'AttributeName': 'e', 'KeyType': 'RANGE'},
-                    {'AttributeName': 'f', 'KeyType': 'RANGE'},
-                    {'AttributeName': 'g', 'KeyType': 'RANGE'},
-                    {'AttributeName': 'h', 'KeyType': 'RANGE'},
-                ],
-                'Projection': {'ProjectionType': 'ALL'}
-            }
-        ]) as table:
+    with _new_composite_gsi_table(dynamodb, 'gsi',
+            hash_keys=[('a', 'S'), ('b', 'S'), ('c', 'S'), ('d', 'S')],
+            range_keys=[('e', 'S'), ('f', 'S'), ('g', 'S'), ('h', 'S')]) as table:
         desc = table.meta.client.describe_table(TableName=table.name)
         gsi = desc['Table']['GlobalSecondaryIndexes'][0]
         assert len(gsi['KeySchema']) == 8
 
 # 5 HASH attributes exceeds the limit of 4.
 def test_gsi_composite_create_5h_rejected(dynamodb):
-    attrs = [{'AttributeName': f'a{i}', 'AttributeType': 'S'} for i in range(5)]
-    attrs.append({'AttributeName': 'p', 'AttributeType': 'S'})
-    ks = [{'AttributeName': f'a{i}', 'KeyType': 'HASH'} for i in range(5)]
     with pytest.raises(ClientError, match='ValidationException'):
-        with new_test_table(dynamodb,
-            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-            AttributeDefinitions=attrs,
-            GlobalSecondaryIndexes=[
-                {   'IndexName': 'gsi',
-                    'KeySchema': ks,
-                    'Projection': {'ProjectionType': 'ALL'}
-                }
-            ]) as table:
+        with _new_composite_gsi_table(dynamodb, 'gsi',
+                hash_keys=[(f'a{i}', 'S') for i in range(5)],
+                range_keys=[]) as table:
             pass
 
 # 1 HASH + 5 RANGE exceeds the limit of 4 RANGE.
 def test_gsi_composite_create_5r_rejected(dynamodb):
-    attrs = [{'AttributeName': f'r{i}', 'AttributeType': 'S'} for i in range(5)]
-    attrs.append({'AttributeName': 'p', 'AttributeType': 'S'})
-    attrs.append({'AttributeName': 'h', 'AttributeType': 'S'})
-    ks = [{'AttributeName': 'h', 'KeyType': 'HASH'}]
-    ks += [{'AttributeName': f'r{i}', 'KeyType': 'RANGE'} for i in range(5)]
     with pytest.raises(ClientError, match='ValidationException'):
-        with new_test_table(dynamodb,
-            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-            AttributeDefinitions=attrs,
-            GlobalSecondaryIndexes=[
-                {   'IndexName': 'gsi',
-                    'KeySchema': ks,
-                    'Projection': {'ProjectionType': 'ALL'}
-                }
-            ]) as table:
-            pass
-
-# 4 HASH + 5 RANGE = 9 total exceeds max 8.
-def test_gsi_composite_create_4h5r_rejected(dynamodb):
-    attrs = [{'AttributeName': f'h{i}', 'AttributeType': 'S'} for i in range(4)]
-    attrs += [{'AttributeName': f'r{i}', 'AttributeType': 'S'} for i in range(5)]
-    attrs.append({'AttributeName': 'p', 'AttributeType': 'S'})
-    ks = [{'AttributeName': f'h{i}', 'KeyType': 'HASH'} for i in range(4)]
-    ks += [{'AttributeName': f'r{i}', 'KeyType': 'RANGE'} for i in range(5)]
-    with pytest.raises(ClientError, match='ValidationException'):
-        with new_test_table(dynamodb,
-            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-            AttributeDefinitions=attrs,
-            GlobalSecondaryIndexes=[
-                {   'IndexName': 'gsi',
-                    'KeySchema': ks,
-                    'Projection': {'ProjectionType': 'ALL'}
-                }
-            ]) as table:
+        with _new_composite_gsi_table(dynamodb, 'gsi',
+                hash_keys=[('h', 'S')],
+                range_keys=[(f'r{i}', 'S') for i in range(5)]) as table:
             pass
 
 # HASH entries must come before RANGE entries. This has RANGE then HASH.
@@ -324,22 +185,8 @@ def test_gsi_composite_interleaved_rejected(dynamodb):
 # RANGE-only key schema with no HASH is not allowed.
 def test_gsi_composite_range_only_rejected(dynamodb):
     with pytest.raises(ClientError, match='ValidationException'):
-        with new_test_table(dynamodb,
-            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[
-                {'AttributeName': 'p', 'AttributeType': 'S'},
-                {'AttributeName': 'a', 'AttributeType': 'S'},
-                {'AttributeName': 'b', 'AttributeType': 'S'},
-            ],
-            GlobalSecondaryIndexes=[
-                {   'IndexName': 'gsi',
-                    'KeySchema': [
-                        {'AttributeName': 'a', 'KeyType': 'RANGE'},
-                        {'AttributeName': 'b', 'KeyType': 'RANGE'},
-                    ],
-                    'Projection': {'ProjectionType': 'ALL'}
-                }
-            ]) as table:
+        with _new_composite_gsi_table(dynamodb, 'gsi',
+                hash_keys=[], range_keys=[('a', 'S'), ('b', 'S')]) as table:
             pass
 
 # Same attribute name appearing twice in HASH is a duplicate.
@@ -405,20 +252,6 @@ def test_gsi_composite_missing_attribute_definition(dynamodb):
             ]) as table:
             pass
 
-# Multi-attribute key schemas are NOT allowed on base tables.
-def test_gsi_composite_base_table_multiattr_rejected(dynamodb):
-    with pytest.raises(ClientError, match='ValidationException'):
-        with new_test_table(dynamodb,
-            KeySchema=[
-                {'AttributeName': 'p', 'KeyType': 'HASH'},
-                {'AttributeName': 'q', 'KeyType': 'HASH'},
-            ],
-            AttributeDefinitions=[
-                {'AttributeName': 'p', 'AttributeType': 'S'},
-                {'AttributeName': 'q', 'AttributeType': 'S'},
-            ]) as table:
-            pass
-
 # Multi-attribute key schemas are NOT allowed on LSIs.
 def test_gsi_composite_lsi_multiattr_rejected(dynamodb):
     with pytest.raises(ClientError, match='ValidationException'):
@@ -430,15 +263,14 @@ def test_gsi_composite_lsi_multiattr_rejected(dynamodb):
             AttributeDefinitions=[
                 {'AttributeName': 'p', 'AttributeType': 'S'},
                 {'AttributeName': 'c', 'AttributeType': 'S'},
-                {'AttributeName': 'l1', 'AttributeType': 'S'},
-                {'AttributeName': 'l2', 'AttributeType': 'S'},
+                {'AttributeName': 'l', 'AttributeType': 'S'},
             ],
             LocalSecondaryIndexes=[
                 {   'IndexName': 'lsi',
                     'KeySchema': [
                         {'AttributeName': 'p', 'KeyType': 'HASH'},
-                        {'AttributeName': 'l1', 'KeyType': 'RANGE'},
-                        {'AttributeName': 'l2', 'KeyType': 'RANGE'},
+                        {'AttributeName': 'c', 'KeyType': 'RANGE'},
+                        {'AttributeName': 'l', 'KeyType': 'RANGE'},
                     ],
                     'Projection': {'ProjectionType': 'ALL'}
                 }
@@ -482,38 +314,21 @@ def test_gsi_composite_describe_4h4r(test_table_gsi_4h4r):
 
 # Verify KEYS_ONLY projection on a composite GSI.
 def test_gsi_composite_describe_projection(dynamodb):
-    with new_test_table(dynamodb,
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[
-            {'AttributeName': 'p', 'AttributeType': 'S'},
-            {'AttributeName': 'a', 'AttributeType': 'S'},
-            {'AttributeName': 'b', 'AttributeType': 'S'},
-            {'AttributeName': 'c', 'AttributeType': 'S'},
-        ],
-        GlobalSecondaryIndexes=[
-            {   'IndexName': 'gsi',
-                'KeySchema': [
-                    {'AttributeName': 'a', 'KeyType': 'HASH'},
-                    {'AttributeName': 'b', 'KeyType': 'HASH'},
-                    {'AttributeName': 'c', 'KeyType': 'RANGE'},
-                ],
-                'Projection': {'ProjectionType': 'KEYS_ONLY'}
-            }
-        ]) as table:
+    with _new_composite_gsi_table(dynamodb, 'gsi',
+            hash_keys=[('a', 'S'), ('b', 'S')], range_keys=[],
+            projection='KEYS_ONLY') as table:
         desc = table.meta.client.describe_table(TableName=table.name)
         gsi = desc['Table']['GlobalSecondaryIndexes'][0]
         assert gsi['Projection'] == {'ProjectionType': 'KEYS_ONLY'}
         # Write an item with extra attrs; query GSI; only key attrs returned.
         p = random_string()
-        a_val, b_val, c_val = random_string(), random_string(), random_string()
-        table.put_item(Item={'p': p, 'a': a_val, 'b': b_val, 'c': c_val,
+        a_val, b_val = random_string(), random_string()
+        table.put_item(Item={'p': p, 'a': a_val, 'b': b_val,
                              'extra': 'should_not_appear'})
         # With KEYS_ONLY, the returned item should only have the base table
-        # key ('p') and the GSI key attrs ('a', 'b', 'c'). Not 'extra'.
-        expected = [{'p': p, 'a': a_val, 'b': b_val, 'c': c_val}]
-        assert_index_query(table, 'gsi', expected,
-            KeyConditionExpression='a = :a AND b = :b',
-            ExpressionAttributeValues={':a': a_val, ':b': b_val})
+        # key ('p') and the GSI key attrs ('a', 'b'). Not 'extra'.
+        expected = [{'p': p, 'a': a_val, 'b': b_val}]
+        assert_index_scan(table, 'gsi', expected)
 
 # Verify a table with 2 distinct composite GSIs described correctly.
 def test_gsi_composite_describe_multiple_gsi(dynamodb):
@@ -580,14 +395,11 @@ def test_gsi_composite_updatetable_create_2h2r(dynamodb):
                 'Projection': {'ProjectionType': 'ALL'}
             }}])
         wait_for_gsi(table, 'gsi')
-        # Write an item and query the new GSI
+        # Write an item and verify it appears in the new GSI
         p = random_string()
         a_val, b_val, c_val = random_string(), random_string(), random_string()
         table.put_item(Item={'p': p, 'a': a_val, 'b': b_val, 'c': c_val})
-        assert_index_query(table, 'gsi',
-            [{'p': p, 'a': a_val, 'b': b_val, 'c': c_val}],
-            KeyConditionExpression='a = :a AND b = :b AND c = :c',
-            ExpressionAttributeValues={':a': a_val, ':b': b_val, ':c': c_val})
+        assert_index_scan(table, 'gsi', [{'p': p, 'a': a_val, 'b': b_val, 'c': c_val}])
 
 # Add a composite GSI to a table with existing data; verify backfill.
 def test_gsi_composite_updatetable_backfill(dynamodb):
@@ -621,9 +433,7 @@ def test_gsi_composite_updatetable_backfill(dynamodb):
             }}])
         wait_for_gsi(table, 'gsi')
         # Verify all pre-existing items are backfilled into the GSI
-        assert_index_query(table, 'gsi', items,
-            KeyConditionExpression='a = :a AND b = :b',
-            ExpressionAttributeValues={':a': 'common', ':b': 'shared'})
+        assert_index_scan(table, 'gsi', items)
 
 # UpdateTable with 5 HASH attrs should be rejected.
 def test_gsi_composite_updatetable_5h_rejected(dynamodb):
@@ -669,39 +479,21 @@ def test_gsi_composite_updatetable_hash_after_range_rejected(dynamodb):
 # Category 4: Data Write — Sparse Index Behavior
 ###############################################################################
 
-# Item missing one of the HASH attrs is NOT indexed.
-def test_gsi_composite_sparse_missing_one_hash_attr(test_table_gsi_2h2r):
+# Item missing any single GSI key attr (HASH or RANGE) is NOT indexed.
+def test_gsi_composite_sparse_missing_one_key_attr(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    p = random_string()
-    # Provide h1 but not h2
-    table.put_item(Item={'p': p, 'h1': 'val', 'r1': 'a', 'r2': 'b'})
-    # The item should not appear in the GSI
+    # Missing a HASH attr (h2)
+    p1 = random_string()
+    table.put_item(Item={'p': p1, 'h1': 'val', 'r1': 'a', 'r2': 'b'})
+    # Missing a RANGE attr (r2)
+    p2 = random_string()
+    table.put_item(Item={'p': p2, 'h1': 'val', 'h2': 'val2', 'r1': 'a'})
+    # Neither item should appear in the GSI
     results = full_scan(table, IndexName='idx_2h2r', ConsistentRead=False)
-    assert not any(i.get('p') == p for i in results)
+    assert not any(i.get('p') in (p1, p2) for i in results)
 
-# Item missing one of the RANGE attrs is NOT indexed.
-def test_gsi_composite_sparse_missing_one_range_attr(test_table_gsi_2h2r):
-    table = test_table_gsi_2h2r
-    p = random_string()
-    # Provide h1, h2, r1, but not r2
-    table.put_item(Item={'p': p, 'h1': 'val', 'h2': 'val2', 'r1': 'a'})
-    results = full_scan(table, IndexName='idx_2h2r', ConsistentRead=False)
-    assert not any(i.get('p') == p for i in results)
-
-# Item with ALL key attrs present IS indexed.
-def test_gsi_composite_sparse_all_present(test_table_gsi_2h2r):
-    table = test_table_gsi_2h2r
-    p = random_string()
-    h1_val, h2_val = random_string(), random_string()
-    item = {'p': p, 'h1': h1_val, 'h2': h2_val, 'r1': 'a', 'r2': 'b'}
-    table.put_item(Item=item)
-    assert_index_query(table, 'idx_2h2r', [item],
-        KeyConditionExpression='h1 = :h1 AND h2 = :h2 AND r1 = :r1 AND r2 = :r2',
-        ExpressionAttributeValues={
-            ':h1': h1_val, ':h2': h2_val, ':r1': 'a', ':r2': 'b'})
-
-# UpdateItem that adds the missing attr causes item to appear in GSI.
-def test_gsi_composite_sparse_add_missing_attr_via_update(test_table_gsi_2h2r):
+# UpdateItem that adds/removes a key attr causes item to appear/disappear.
+def test_gsi_composite_sparse_update_attr(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     p = random_string()
     h1_val, h2_val = random_string(), random_string()
@@ -709,7 +501,7 @@ def test_gsi_composite_sparse_add_missing_attr_via_update(test_table_gsi_2h2r):
     table.put_item(Item={'p': p, 'h1': h1_val, 'h2': h2_val, 'r1': 'a'})
     results = full_scan(table, IndexName='idx_2h2r', ConsistentRead=False)
     assert not any(i.get('p') == p for i in results)
-    # Now add r2 via update
+    # Add r2 via update — item should now appear in GSI
     table.update_item(Key={'p': p},
         UpdateExpression='SET r2 = :v',
         ExpressionAttributeValues={':v': 'b'})
@@ -717,23 +509,9 @@ def test_gsi_composite_sparse_add_missing_attr_via_update(test_table_gsi_2h2r):
     assert_index_query(table, 'idx_2h2r', [expected],
         KeyConditionExpression='h1 = :h1 AND h2 = :h2',
         ExpressionAttributeValues={':h1': h1_val, ':h2': h2_val})
-
-# UpdateItem that removes a key attr causes item to disappear from GSI.
-def test_gsi_composite_sparse_remove_attr_via_update(test_table_gsi_2h2r):
-    table = test_table_gsi_2h2r
-    p = random_string()
-    h1_val, h2_val = random_string(), random_string()
-    table.put_item(Item={'p': p, 'h1': h1_val, 'h2': h2_val,
-                         'r1': 'a', 'r2': 'b'})
-    # Verify it's indexed first
-    assert_index_query(table, 'idx_2h2r',
-        [{'p': p, 'h1': h1_val, 'h2': h2_val, 'r1': 'a', 'r2': 'b'}],
-        KeyConditionExpression='h1 = :h1 AND h2 = :h2',
-        ExpressionAttributeValues={':h1': h1_val, ':h2': h2_val})
-    # Remove h2
+    # Remove h2 via update — item should disappear from GSI
     table.update_item(Key={'p': p},
         UpdateExpression='REMOVE h2')
-    # Item should disappear from GSI (eventually)
     for i in range(10):
         results = full_query(table, IndexName='idx_2h2r',
             ConsistentRead=False,
@@ -744,49 +522,18 @@ def test_gsi_composite_sparse_remove_attr_via_update(test_table_gsi_2h2r):
         time.sleep(1)
     pytest.fail("Item still present in GSI after removing a key attribute")
 
-# GSI with only HASH keys (no RANGE); all hash attrs present → indexed.
-def test_gsi_composite_sparse_hash_only_all_present(dynamodb):
-    with new_test_table(dynamodb,
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[
-            {'AttributeName': 'p', 'AttributeType': 'S'},
-            {'AttributeName': 'a', 'AttributeType': 'S'},
-            {'AttributeName': 'b', 'AttributeType': 'S'},
-        ],
-        GlobalSecondaryIndexes=[
-            {   'IndexName': 'gsi',
-                'KeySchema': [
-                    {'AttributeName': 'a', 'KeyType': 'HASH'},
-                    {'AttributeName': 'b', 'KeyType': 'HASH'},
-                ],
-                'Projection': {'ProjectionType': 'ALL'}
-            }
-        ]) as table:
-        p = random_string()
-        a_val, b_val = random_string(), random_string()
-        item = {'p': p, 'a': a_val, 'b': b_val, 'extra': 'data'}
-        table.put_item(Item=item)
-        assert_index_query(table, 'gsi', [item],
-            KeyConditionExpression='a = :a AND b = :b',
-            ExpressionAttributeValues={':a': a_val, ':b': b_val})
-
 ###############################################################################
 # Category 5: Data Write — Type Validation
 ###############################################################################
 
-# PutItem with wrong type for a composite HASH attr.
-def test_gsi_composite_wrong_type_hash_attr(test_table_gsi_2h2r):
+# PutItem with wrong type for a composite key attr (HASH or RANGE).
+def test_gsi_composite_wrong_type_key_attr(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     p = random_string()
     # h2 is defined as S but we provide a number
     with pytest.raises(ClientError, match='ValidationException.*mismatch'):
         table.put_item(Item={'p': p, 'h1': 'ok', 'h2': 123,
                              'r1': 'a', 'r2': 'b'})
-
-# PutItem with wrong type for a composite RANGE attr.
-def test_gsi_composite_wrong_type_range_attr(test_table_gsi_2h2r):
-    table = test_table_gsi_2h2r
-    p = random_string()
     # r1 is defined as S but we provide a number
     with pytest.raises(ClientError, match='ValidationException.*mismatch'):
         table.put_item(Item={'p': p, 'h1': 'ok', 'h2': 'ok',
