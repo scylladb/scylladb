@@ -2198,12 +2198,588 @@ def test_query_vectorsearch_queryvector_bad_number_string(table_vs, needs_vector
 # test yet, but I can write an xfailing test because we know what we
 # expect ALL_PROJECTED_ATTRIBUTES to return in that case.
 
-# TODO: test enabling vector index and Alternator Streams together, and
-# checking that Alternator Streams works as expected. Also we may need to
-# do something to avoid vector search's favorite parameters like TTL and
-# post-changes to take control - or vice versa we may get CDC which isn't
-# good enough for vector search.
-# Note that today, Alternator Streams only works with vnodes while vector
-# search doesn't work with vnodes - so we can't actually check this
-# combination! But we must check it when Alternator Streams finally supports
-# tablets.
+# Test enabling both vector index and Alternator Streams together on the same
+# table, and checking that both work as expected: New items appear in vector
+# search results and also in stream records.
+# This test focuses on streams with KEYS_ONLY view type, below we have
+# additional tests for other types - NEW_IMAGE and OLD_IMAGE.
+# Beyond just testing that the two features can coexist, we also want to
+# test different combinations and orders of how these features can be enabled
+# and later disabled, to check that at any time the situation with the
+# feature(s) enabled and the underlying CDC implementation is exactly as
+# we expect.
+# Three enablement orderings are tested via parametrize:
+# - both_at_creation: both vector index and Streams enabled in CreateTable.
+# - stream_then_vector: Streams enabled first, then vector index added.
+# - vector_then_stream: vector index enabled first, then Streams added.
+#   Note: a fourth way - adding both vector index and Streams by one
+#   UpdateTable request - is not allowed. This is checked in the next test
+#   (test_updatetable_vector_and_streams_same_request).
+# Additionally, we test two cases where we disable one of the features after
+# creating both, to check that the other continues working correctly:
+# - both_at_creation_then_disable_stream
+# - both_at_creation_then_disable_vector
+@pytest.mark.parametrize('setup_mode', [
+    'both_at_creation',
+    'stream_then_vector',
+    'vector_then_stream',
+    'both_at_creation_then_disable_stream',
+    'both_at_creation_then_disable_vector',
+])
+def test_vector_with_streams(vs, needs_vector_store, dynamodbstreams, cql, setup_mode):
+    vector_index_spec = {
+        'IndexName': 'vind',
+        'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+    }
+    # Note that the stream may ask for KEYS_ONLY, but the vector store's CDC
+    # needs deltas - both need to coexist on the same table.
+    stream_spec = {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}
+
+    create_kwargs = dict(
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+    )
+    if setup_mode.startswith('both_at_creation'):
+        create_kwargs['VectorIndexes'] = [vector_index_spec]
+        create_kwargs['StreamSpecification'] = stream_spec
+
+    with new_test_table(vs, **create_kwargs) as table:
+        if setup_mode == 'stream_then_vector':
+            # Enable Streams first, then add the vector index.
+            table.update(StreamSpecification=stream_spec)
+            table.update(VectorIndexUpdates=[{'Create': vector_index_spec}])
+        elif setup_mode == 'vector_then_stream':
+            # Enable the vector index first, then add the streams.
+            table.update(VectorIndexUpdates=[{'Create': vector_index_spec}])
+            table.update(StreamSpecification=stream_spec)
+
+        # Wait for the vector index to finish its initial prefill scan before
+        # writing, to ensure the later write is picked up via CDC, not prefill.
+        wait_for_vector_index_active(table, 'vind')
+
+        # Wait for the stream to become ENABLED:
+        streams_resp = dynamodbstreams.list_streams(TableName=table.name)
+        assert streams_resp['Streams']
+        arn = streams_resp['Streams'][0]['StreamArn']
+        stream_deadline = time.monotonic() + 60
+        while True:
+            desc = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
+            if desc.get('StreamStatus') == 'ENABLED':
+                break
+            if time.monotonic() > stream_deadline:
+                pytest.fail('Timed out waiting for stream to become ENABLED')
+            time.sleep(0.5)
+        # Collect all shard "LATEST" iterators, handling multi-page DescribeStream.
+        iterators = []
+        while True:
+            for shard in desc['Shards']:
+                shard_id = shard['ShardId']
+                iterators.append(dynamodbstreams.get_shard_iterator(
+                    StreamArn=arn, ShardId=shard_id,
+                    ShardIteratorType='LATEST')['ShardIterator'])
+            if 'LastEvaluatedShardId' not in desc:
+                break
+            desc = dynamodbstreams.describe_stream(
+                StreamArn=arn,
+                ExclusiveStartShardId=desc['LastEvaluatedShardId'])['StreamDescription']
+
+        # Confirm that DescribeTable and DescribeStream say that the vector
+        # index and stream are both enabled, with the expected KEYS_ONLY.
+        table_desc = table.meta.client.describe_table(TableName=table.name)['Table']
+        assert 'VectorIndexes' in table_desc
+        vector_indexes = table_desc.get('VectorIndexes')
+        assert len(vector_indexes) == 1
+        assert vector_indexes[0]['IndexName'] == 'vind'
+        assert 'StreamSpecification' in table_desc
+        stream_spec_desc = table_desc['StreamSpecification']
+        assert stream_spec_desc['StreamEnabled'] == True
+        assert stream_spec_desc['StreamViewType'] == 'KEYS_ONLY'
+
+        # Confirm with CQL DESCRIBE TABLE that the CDC is configured with
+        # delta=full, which is required for the vector index to work correctly
+        # (unless post-image is enabled, which it isn't)
+        ks = f'alternator_{table.name}'
+        create_stmt = cql.execute(f'DESCRIBE TABLE "{ks}"."{table.name}"').one().create_statement
+        assert "'delta': 'full'" in create_stmt
+        assert "'preimage': 'false'" in create_stmt
+        assert "'postimage': 'false'" in create_stmt
+
+        # Write an item with a vector. Both the vector store (via CDC) and
+        # Alternator Streams (also via CDC) should pick this up.
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': [1, 0, 0]})
+
+        # 1. Wait for the item to appear in vector search results.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [1, 0, 0]},
+                Limit=1,
+                Select='ALL_PROJECTED_ATTRIBUTES',
+            )
+            if result.get('Items') and result['Items'][0]['p'] == p:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for item to appear in vector search results')
+            time.sleep(0.1)
+
+        # 2. Wait for the INSERT record to appear in Alternator Streams.
+        # We poll all shards until we see the record for key p.
+        # The retry loop isn't really necessary because if we found the
+        # item in vector search, we know it already appeared in CDC from where
+        # the vector index read.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        found_in_stream = False
+        while not found_in_stream:
+            new_iterators = []
+            for it in iterators:
+                response = dynamodbstreams.get_records(ShardIterator=it)
+                if 'NextShardIterator' in response:
+                    new_iterators.append(response['NextShardIterator'])
+                for record in response.get('Records', []):
+                    keys = record['dynamodb']['Keys']
+                    if keys.get('p', {}).get('S') == p and record['eventName'] == 'INSERT':
+                        found_in_stream = True
+                        # KEYS_ONLY stream must not include NewImage or OldImage
+                        # (which would contain the full item with 'v' etc.).
+                        assert 'NewImage' not in record['dynamodb']
+                        assert 'OldImage' not in record['dynamodb']
+            iterators = new_iterators
+            if not found_in_stream:
+                if time.monotonic() > deadline:
+                    pytest.fail('Timed out waiting for INSERT record to appear in Alternator Streams')
+                time.sleep(0.1)
+
+        if setup_mode == 'both_at_creation_then_disable_stream':
+            # Check that if we disable Streams now, DescribeTable/ListStreams
+            # say the stream no longer  exists, but DescribeTable says the
+            # vector index is still enabled, and moreover the vector index
+            # still works - if we write a new vector, we can eventually find
+            # it in a vector search.
+            table.update(StreamSpecification={'StreamEnabled': False})
+            # DescribeTable says stream is disabled, vector index is enabled
+            table_desc = table.meta.client.describe_table(TableName=table.name)['Table']
+            assert 'StreamSpecification' not in table_desc
+            assert 'VectorIndexes' in table_desc
+            assert len(table_desc['VectorIndexes']) == 1
+            assert table_desc['VectorIndexes'][0]['IndexName'] == 'vind'
+            # DescribeStream on the old stream ARN says the stream is gone
+            desc = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
+            assert desc['StreamStatus'] == 'DISABLED'
+            # ListStreams must no longer lists streams for this table.
+            list_resp = dynamodbstreams.list_streams(TableName=table.name)
+            assert not list_resp.get('Streams')
+            # Write a new item and verify the vector index still picks it up
+            p2 = random_string()
+            table.put_item(Item={'p': p2, 'v': [0, 1, 0]})
+            deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+            while True:
+                result = table.query(
+                    IndexName='vind',
+                    VectorSearch={'QueryVector': [0, 1, 0]},
+                    Limit=1,
+                    Select='ALL_PROJECTED_ATTRIBUTES',
+                )
+                if result.get('Items') and result['Items'][0]['p'] == p2:
+                    break
+                if time.monotonic() > deadline:
+                    pytest.fail('Timed out waiting for new item to appear in vector search after stream disabled')
+                time.sleep(0.1)
+        if setup_mode == 'both_at_creation_then_disable_vector':
+            # Delete the vector index. The stream should remain enabled.
+            table.update(VectorIndexUpdates=[{'Delete': {'IndexName': 'vind'}}])
+            # DescribeTable must no longer report VectorIndexes, but must
+            # still report StreamSpecification with KEYS_ONLY.
+            table_desc = table.meta.client.describe_table(TableName=table.name)['Table']
+            assert not table_desc.get('VectorIndexes')
+            assert 'StreamSpecification' in table_desc
+            assert table_desc['StreamSpecification']['StreamEnabled'] == True
+            assert table_desc['StreamSpecification']['StreamViewType'] == 'KEYS_ONLY'
+            # ListStreams must still list this table's stream, with the same ARN.
+            list_resp = dynamodbstreams.list_streams(TableName=table.name)
+            assert list_resp.get('Streams')
+            assert list_resp['Streams'][0]['StreamArn'] == arn
+
+            # Now that there's no longer a vector index, we no longer need
+            # delta=full which we needed while the vector index existed (and
+            # we confirmed above was set up). At this point, we need just what
+            # the Alternator KEYS_ONLY stream needs - this is delta=keys.
+            # So let's verify that we've gone back to delta=keys, or we'll be
+            # wasting performance.
+            ks = f'alternator_{table.name}'
+            create_stmt = cql.execute(f'DESCRIBE TABLE "{ks}"."{table.name}"').one().create_statement
+            assert "'delta': 'keys'" in create_stmt
+            assert "'preimage': 'false'" in create_stmt
+            assert "'postimage': 'false'" in create_stmt
+
+            # Write a new item and verify it still appears in the stream.
+            # Not only is Streams still enabled, we can actually continue to
+            # use the same iterators we had before to see new records.
+            p2 = random_string()
+            table.put_item(Item={'p': p2, 'v': [0, 1, 0]})
+            deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+            found_in_stream = False
+            while not found_in_stream:
+                new_iterators = []
+                for it in iterators:
+                    response = dynamodbstreams.get_records(ShardIterator=it)
+                    if 'NextShardIterator' in response:
+                        new_iterators.append(response['NextShardIterator'])
+                    for record in response.get('Records', []):
+                        keys = record['dynamodb']['Keys']
+                        if keys.get('p', {}).get('S') == p2 and record['eventName'] == 'INSERT':
+                            found_in_stream = True
+                            assert 'NewImage' not in record['dynamodb']
+                            assert 'OldImage' not in record['dynamodb']
+                iterators = new_iterators
+                if not found_in_stream:
+                    if time.monotonic() > deadline:
+                        pytest.fail('Timed out waiting for INSERT record in stream after vector index deleted')
+                    time.sleep(0.1)
+
+# Test that you can't change the Streams setup *and* vector indexes in one
+# UpdateTable call. We have the same test for streams and GSIs, in
+# test_gsi_updatetable.py::test_gsi_updatetable_combined_with_streams.
+def test_updatetable_vector_and_streams_same_request(vs):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        vector_ops = [
+            {'Create': {'IndexName': 'vind', 'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}},
+            {'Delete': {'IndexName': 'nonexistent'}},
+        ]
+        stream_specs = [
+            {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
+            {'StreamEnabled': False},
+        ]
+        for vector_op in vector_ops:
+            for stream_spec in stream_specs:
+                with pytest.raises(ClientError, match='ValidationException.*cannot create or delete index while changing stream status'):
+                    table.update(
+                        VectorIndexUpdates=[vector_op],
+                        StreamSpecification=stream_spec)
+
+# Test special interactions of Streams with NEW_IMAGE, and vector index:
+# * When enabling vector index when streams with NEW_IMAGE was already
+#   enabled, things work - the vector search functions, stream returns new
+#   images as requested. DescribeStream knows we're in NEW_IMAGE.
+# * Enabling the vector index did not enable delta=full mode because NEW_IMAGE
+#   (postimage) is enough, and adding delta=full on top would be wasteful.
+# * After disabling the stream, the post-images are no longer needed, but
+#   CDC should continue to be enabled and switch to delta=full mode (the vector
+#   index default), and the vector index continues to get updated.
+@pytest.mark.parametrize('setup_mode', [
+    'stream_then_vector_then_disable_stream',
+    'stream_then_vector_then_disable_vector',
+])
+def test_vector_with_new_image_stream(vs, needs_vector_store, dynamodbstreams, cql, setup_mode):
+    stream_spec = {'StreamEnabled': True, 'StreamViewType': 'NEW_IMAGE'}
+    vector_index_spec = {
+        'IndexName': 'vind',
+        'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+    }
+
+    # Create the table with a NEW_IMAGE stream, then add the vector index.
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            StreamSpecification=stream_spec) as table:
+        table.update(VectorIndexUpdates=[{'Create': vector_index_spec}])
+        wait_for_vector_index_active(table, 'vind')
+
+        # Wait for the stream to become ENABLED.
+        streams_resp = dynamodbstreams.list_streams(TableName=table.name)
+        assert streams_resp['Streams']
+        arn = streams_resp['Streams'][0]['StreamArn']
+        stream_deadline = time.monotonic() + 60
+        while True:
+            desc = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
+            if desc.get('StreamStatus') == 'ENABLED':
+                break
+            if time.monotonic() > stream_deadline:
+                pytest.fail('Timed out waiting for stream to become ENABLED')
+            time.sleep(0.1)
+
+        # DescribeStream and DescribeTable must both report NEW_IMAGE
+        assert desc['StreamViewType'] == 'NEW_IMAGE'
+        table_desc = table.meta.client.describe_table(TableName=table.name)['Table']
+        assert table_desc['StreamSpecification']['StreamEnabled'] == True
+        assert table_desc['StreamSpecification']['StreamViewType'] == 'NEW_IMAGE'
+
+        # Check, using CQL DESCRIBE TABLE, that CDC is configured with
+        # postimage=true (for NEW_IMAGE) but delta=keys, not full - because
+        # the vector store can use the post image directly, so upgrading to
+        # delta=full is wasteful.
+        ks = f'alternator_{table.name}'
+        create_stmt = cql.execute(f'DESCRIBE TABLE "{ks}"."{table.name}"').one().create_statement
+        assert "'postimage': 'true'" in create_stmt
+        assert "'delta': 'keys'" in create_stmt
+
+        # Collect all shard LATEST iterators, that we'll use to read from
+        # the stream.
+        iterators = []
+        while True:
+            for shard in desc['Shards']:
+                iterators.append(dynamodbstreams.get_shard_iterator(
+                    StreamArn=arn, ShardId=shard['ShardId'],
+                    ShardIteratorType='LATEST')['ShardIterator'])
+            if 'LastEvaluatedShardId' not in desc:
+                break
+            desc = dynamodbstreams.describe_stream(
+                StreamArn=arn,
+                ExclusiveStartShardId=desc['LastEvaluatedShardId'])['StreamDescription']
+
+        # Write an item. Both vector store and stream should pick it up.
+        p1 = random_string()
+        item = {'p': p1, 'v': [1, 0, 0], 'x': 'hello'}
+        table.put_item(Item=item)
+
+        # Wait for the item to appear in vector search results.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(IndexName='vind',
+                VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1)
+            if result.get('Items') and result['Items'][0]['p'] == p1:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for item to appear in vector search')
+            time.sleep(0.1)
+
+        # Wait for the INSERT record to appear in the stream.
+        # The stream must include NewImage (because StreamViewType=NEW_IMAGE)
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        found_in_stream = False
+        while not found_in_stream:
+            new_iterators = []
+            for it in iterators:
+                response = dynamodbstreams.get_records(ShardIterator=it)
+                if 'NextShardIterator' in response:
+                    new_iterators.append(response['NextShardIterator'])
+                for record in response.get('Records', []):
+                    keys = record['dynamodb']['Keys']
+                    if keys.get('p', {}).get('S') == p1 and record['eventName'] == 'INSERT':
+                        found_in_stream = True
+                        # NEW_IMAGE stream must include NewImage with the full item.
+                        assert 'NewImage' in record['dynamodb']
+                        deserializer = boto3.dynamodb.types.TypeDeserializer()
+                        new_image = {x:deserializer.deserialize(y) for (x,y) in record['dynamodb']['NewImage'].items()}
+                        assert new_image == item
+                        # No OldImage - we only asked for NEW_IMAGE and in
+                        # any case there was no previous item in this test.
+                        assert 'OldImage' not in record['dynamodb']
+            iterators = new_iterators
+            if not found_in_stream:
+                if time.monotonic() > deadline:
+                    pytest.fail('Timed out waiting for INSERT record in stream')
+                time.sleep(0.1)
+
+        if setup_mode == 'stream_then_vector_then_disable_stream':
+            # Now disable the stream. The vector index will remain enabled.
+            table.update(StreamSpecification={'StreamEnabled': False})
+
+            # Verify that DescribeTable and DescribeStream report the stream is
+            # really disabled, and DescribeTable still reports the vector index
+            # is enabled.
+            table_desc = table.meta.client.describe_table(TableName=table.name)['Table']
+            # Currently, when vector index is enabled, our implementation drops
+            # StreamSpecification entirely, it doesn't have it with enabled = false.
+            assert 'StreamSpecification' not in table_desc
+            assert 'VectorIndexes' in table_desc
+            assert len(table_desc['VectorIndexes']) == 1
+            assert table_desc['VectorIndexes'][0]['IndexName'] == 'vind'
+            # If we try to describe the old ARN of the stream, it should say it's disabled:
+            desc = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
+            assert desc['StreamStatus'] == 'DISABLED'
+            # Also check that ListStreams for this table doesn't return this stream
+            # (it's disabled, so it shouldn't appear as an active stream).
+            list_resp = dynamodbstreams.list_streams(TableName=table.name)
+            assert not list_resp.get('Streams')
+
+            # Check that CDC is still enabled, but post-image is off and
+            # delta=full (the vector index default):
+            create_stmt = cql.execute(f'DESCRIBE TABLE "{ks}"."{table.name}"').one().create_statement
+            assert "'postimage': 'false'" in create_stmt
+            assert "'delta': 'full'" in create_stmt
+
+            # Write a second item and verify the vector store still indexes it,
+            # so the remaining CDC is good enough for the vector store.
+            p2 = random_string()
+            table.put_item(Item={'p': p2, 'v': [0, 1, 0]})
+            deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+            while True:
+                result = table.query(IndexName='vind',
+                    VectorSearch={'QueryVector': [0, 1, 0]}, Limit=1)
+                if result.get('Items') and result['Items'][0]['p'] == p2:
+                    break
+                if time.monotonic() > deadline:
+                    pytest.fail('Timed out waiting for item to appear in vector search after stream disabled')
+                time.sleep(0.1)
+        if setup_mode == 'stream_then_vector_then_disable_vector':
+            # Now disable the vector index. The stream will remain enabled.
+            table.update(VectorIndexUpdates=[{'Delete': {'IndexName': 'vind'}}])
+
+            # Verify that DescribeTable and DescribeStream report the stream is
+            # still enabled, and DescribeTable no longer reports the vector index
+            # as enabled.
+            table_desc = table.meta.client.describe_table(TableName=table.name)['Table']
+            assert table_desc['StreamSpecification']['StreamEnabled'] == True
+            assert table_desc['StreamSpecification']['StreamViewType'] == 'NEW_IMAGE'
+            assert 'VectorIndexes' not in table_desc
+            # The old ARN of the stream is still usable and listed in ListStreams:
+            desc = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
+            assert desc['StreamStatus'] == 'ENABLED'
+            list_resp = dynamodbstreams.list_streams(TableName=table.name)
+            assert 'Streams' in list_resp
+            assert len(list_resp['Streams']) == 1
+            assert list_resp['Streams'][0]['StreamArn'] == arn
+            # Verify that CDC is still enabled, still has postimage and
+            # delta=keys which the stream still needs
+            create_stmt = cql.execute(f'DESCRIBE TABLE "{ks}"."{table.name}"').one().create_statement
+            assert "'postimage': 'true'" in create_stmt
+            assert "'delta': 'keys'" in create_stmt
+            # Write a second item and verify the stream still receives it.
+            # We continue with the same iterators we had before, which should
+            # still work because the stream is still enabled.
+            p2 = random_string()
+            item = {'p': p2, 'x': 'hello'}
+            table.put_item(Item=item)
+            deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+            found_in_stream = False
+            while not found_in_stream:
+                new_iterators = []
+                for it in iterators:
+                    response = dynamodbstreams.get_records(ShardIterator=it)
+                    if 'NextShardIterator' in response:
+                        new_iterators.append(response['NextShardIterator'])
+                    for record in response.get('Records', []):
+                        keys = record['dynamodb']['Keys']
+                        if keys.get('p', {}).get('S') == p2 and record['eventName'] == 'INSERT':
+                            found_in_stream = True
+                            # NEW_IMAGE stream must still include NewImage with the full item.
+                            assert 'NewImage' in record['dynamodb']
+                            deserializer = boto3.dynamodb.types.TypeDeserializer()
+                            new_image = {x: deserializer.deserialize(y) for (x, y) in record['dynamodb']['NewImage'].items()}
+                            assert new_image == item
+                iterators = new_iterators
+                if not found_in_stream:
+                    if time.monotonic() > deadline:
+                        pytest.fail('Timed out waiting for INSERT record in stream after vector disabled')
+                    time.sleep(0.1)
+
+# Test that enabling a vector index doesn't confuse Alternator to report that
+# this table has streams enabled. The vector index enables CDC internally
+# but this must not be mistaken for a user-facing stream: DescribeTable must
+# not show StreamSpecification, and ListStreams should not list any streams
+# for this table..
+def test_vectorindex_no_spurious_stream(table_vs, dynamodbstreams):
+    # DescribeTable must not report StreamSpecification for a table that only
+    # has a vector index (and no user-requested Alternator Stream).
+    table_desc = table_vs.meta.client.describe_table(TableName=table_vs.name)['Table']
+    assert 'StreamSpecification' not in table_desc
+    # ListStreams must not list any streams return this table.
+    list_resp = dynamodbstreams.list_streams(TableName=table_vs.name)
+    assert not list_resp.get('Streams')
+
+# Test special interactions of Streams with OLD_IMAGE, and vector index:
+# * When enabling a vector index after a stream with OLD_IMAGE was already
+#   enabled, things work - the vector search functions, stream returns old
+#   images as requested.
+# * DescribeTable, DescribeStream, and ListStreams know this stream exists
+#   and has OLD_IMAGE. This is despite the implementation detail that the
+#   vector index enabled delta=full on CDC (because pre-images aren't enough
+#   for it).
+def test_vector_with_old_image_stream(vs, needs_vector_store, dynamodbstreams, cql):
+    stream_spec = {'StreamEnabled': True, 'StreamViewType': 'OLD_IMAGE'}
+    vector_index_spec = {
+        'IndexName': 'vind',
+        'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+    }
+
+    # Create the table with an OLD_IMAGE stream, then add the vector index.
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            StreamSpecification=stream_spec) as table:
+        table.update(VectorIndexUpdates=[{'Create': vector_index_spec}])
+        wait_for_vector_index_active(table, 'vind')
+
+        # ListStreams must list this table's stream
+        streams_resp = dynamodbstreams.list_streams(TableName=table.name)
+        assert streams_resp['Streams']
+        assert len(streams_resp['Streams']) == 1
+        arn = streams_resp['Streams'][0]['StreamArn']
+
+        # Wait for the stream to become ENABLED.
+        stream_deadline = time.monotonic() + 60
+        while True:
+            desc = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
+            if desc.get('StreamStatus') == 'ENABLED':
+                break
+            if time.monotonic() > stream_deadline:
+                pytest.fail('Timed out waiting for stream to become ENABLED')
+            time.sleep(0.5)
+
+        # DescribeStream and DescribeTable must both report OLD_IMAGE.
+        assert desc['StreamViewType'] == 'OLD_IMAGE'
+        table_desc = table.meta.client.describe_table(TableName=table.name)['Table']
+        assert table_desc['StreamSpecification']['StreamEnabled'] == True
+        assert table_desc['StreamSpecification']['StreamViewType'] == 'OLD_IMAGE'
+
+        # Verify (using CQL DESCRIBE TABLE) that CDC is configured with preimage=true,
+        # postimage=false and delta=full (which the vector index needs when
+        # postimage=false)
+        ks = f'alternator_{table.name}'
+        create_stmt = cql.execute(f'DESCRIBE TABLE "{ks}"."{table.name}"').one().create_statement
+        assert "'preimage': 'full'" in create_stmt
+        assert "'postimage': 'false'" in create_stmt
+        assert "'delta': 'full'" in create_stmt
+
+        # Collect all shard LATEST iterators to prepare to read from the stream.
+        iterators = []
+        while True:
+            for shard in desc['Shards']:
+                iterators.append(dynamodbstreams.get_shard_iterator(
+                    StreamArn=arn, ShardId=shard['ShardId'],
+                    ShardIteratorType='LATEST')['ShardIterator'])
+            if 'LastEvaluatedShardId' not in desc:
+                break
+            desc = dynamodbstreams.describe_stream(
+                StreamArn=arn,
+                ExclusiveStartShardId=desc['LastEvaluatedShardId'])['StreamDescription']
+
+        # Write a first version of an item and wait for it to appear in vector search.
+        p = random_string()
+        item1 = {'p': p, 'v': [1, 0, 0], 'x': 'version1'}
+        table.put_item(Item=item1)
+
+        # Overwrite the item with a new version. The stream should eventually
+        # produce a record record with OldImage=item1 (the previous version)
+        # and no NewImage.
+        item2 = {'p': p, 'v': [1, 0, 0], 'x': 'version2'}
+        table.put_item(Item=item2)
+
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        found_oldimage = False
+        while not found_oldimage:
+            new_iterators = []
+            for it in iterators:
+                response = dynamodbstreams.get_records(ShardIterator=it)
+                if 'NextShardIterator' in response:
+                    new_iterators.append(response['NextShardIterator'])
+                for record in response.get('Records', []):
+                    keys = record['dynamodb']['Keys']
+                    if keys.get('p', {}).get('S') == p:
+                        # OLD_IMAGE stream must include OldImage with the previous item.
+                        if 'OldImage' in record['dynamodb']:
+                            found_oldimage = True
+                            deserializer = boto3.dynamodb.types.TypeDeserializer()
+                            old_image = {x: deserializer.deserialize(y) for (x, y) in record['dynamodb']['OldImage'].items()}
+                            assert old_image == item1
+                            # OLD_IMAGE must not include NewImage.
+                            assert 'NewImage' not in record['dynamodb']
+            iterators = new_iterators
+            if not found_oldimage:
+                if time.monotonic() > deadline:
+                    pytest.fail('Timed out waiting for MODIFY record in Alternator Streams')
+                time.sleep(0.1)
