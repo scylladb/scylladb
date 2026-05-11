@@ -11,6 +11,8 @@
 #include "utils/rjson.hh"
 
 #include <fmt/ranges.h>
+#include <fnmatch.h>
+#include <seastar/core/on_internal_error.hh>
 
 namespace audit {
 
@@ -146,6 +148,63 @@ sstring audit_rules_to_json_string(const std::vector<audit_rule>& rules) {
     }
 
     return rjson::print(arr);
+}
+
+bool matches_category(const audit_rule& rule, statement_category category) {
+    return rule.categories.contains(category);
+}
+
+bool matches_table(const audit_rule& rule, std::string_view keyspace, std::string_view table) {
+    return matches_qualified_table(rule, qualified_table_name(keyspace, table));
+}
+
+static bool matches_any_pattern(const std::vector<sstring>& patterns, std::string_view value) {
+    if (patterns.empty()) {
+        return false;
+    }
+    sstring value_s(value);
+    for (const auto& pattern : patterns) {
+        int rc = fnmatch(pattern.c_str(), value_s.c_str(), FNM_EXTMATCH);
+        if (rc == 0) {
+            return true;
+        }
+        if (rc != FNM_NOMATCH) {
+            logger.warn("Audit: fnmatch error for pattern '{}' against value '{}' (rc={})",
+                        pattern, value, rc);
+        }
+    }
+    return false;
+}
+
+bool matches_qualified_table(const audit_rule& rule, std::string_view qualified_table_name) {
+    return matches_any_pattern(rule.qualified_table_names, qualified_table_name);
+}
+
+bool matches_role(const audit_rule& rule, std::string_view role) {
+    return matches_any_pattern(rule.roles, role);
+}
+
+audit_sink_set rule_sinks(const audit_rule& rule) {
+    audit_sink_set result;
+    for (const auto& s : rule.sinks) {
+        if (s == "table") {
+            result.set(audit_sink::table);
+        } else if (s == "syslog") {
+            result.set(audit_sink::syslog);
+        } else {
+            // Should never happen — validate_audit_rule() rejects unknown sinks.
+            on_internal_error(logger, fmt::format("Unknown audit sink '{}' in validated rule", s));
+        }
+    }
+    return result;
+}
+
+bool matches_rule(const audit_rule& rule, statement_category category,
+                  std::string_view keyspace, std::string_view table,
+                  std::string_view role) {
+    return matches_category(rule, category)
+        && (is_table_scoped_category(category) ? (keyspace.empty() || matches_table(rule, keyspace, table)) : true)
+        && matches_role(rule, role);
 }
 
 } // namespace audit
