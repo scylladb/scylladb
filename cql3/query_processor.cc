@@ -1076,14 +1076,28 @@ query_processor::do_execute_with_params(
 
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-query_processor::execute_batch_without_checking_exception_message(
-        ::shared_ptr<statements::batch_statement> batch,
+query_processor::execute_batch(
+        ::shared_ptr<statements::batch_statement> stmt,
         service::query_state& query_state,
         query_options& options,
         std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-    auto access_future = co_await coroutine::as_future(batch->check_access(*this, query_state.get_client_state()));
+    return execute_batch_without_checking_exception_message(
+            std::move(stmt),
+            query_state,
+            options,
+            std::move(pending_authorization_entries))
+            .then(cql_transport::messages::propagate_exception_as_future<::shared_ptr<cql_transport::messages::result_message>>);
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+query_processor::execute_batch_without_checking_exception_message(
+        ::shared_ptr<cql_statement> stmt,
+        service::query_state& query_state,
+        query_options& options,
+        std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
+    auto access_future = co_await coroutine::as_future(stmt->check_access(*this, query_state.get_client_state()));
     bool failed = access_future.failed();
-    co_await audit::inspect(batch, query_state, options, failed);
+    co_await audit::inspect(stmt, query_state, options, failed);
     if (failed) {
         std::rethrow_exception(access_future.get_exception());
     }
@@ -1094,17 +1108,20 @@ query_processor::execute_batch_without_checking_exception_message(
                 log.error("failed to cache the entry: {}", std::current_exception());
             }
         });
-    batch->validate();
-    batch->validate(*this, query_state.get_client_state());
-    _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
-   if (log.is_enabled(logging::log_level::trace)) {
-        std::ostringstream oss;
-        for (const auto& s: batch->get_statements()) {
-            oss << std::endl <<  s.statement->raw_cql_statement.linearize();
+    auto* batch = dynamic_cast<statements::batch_statement*>(stmt.get());
+    if (batch) {
+        batch->validate();
+        _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
+        if (log.is_enabled(logging::log_level::trace)) {
+            std::ostringstream oss;
+            for (const auto& s: batch->get_statements()) {
+                oss << std::endl <<  s.statement->raw_cql_statement.linearize();
+            }
+            log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
         }
-        log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
     }
-    co_return co_await batch->execute(*this, query_state, options, std::nullopt);
+    stmt->validate(*this, query_state.get_client_state());
+    co_return co_await stmt->execute_without_checking_exception_message(*this, query_state, options, std::nullopt);
 }
 
 future<service::broadcast_tables::query_result>

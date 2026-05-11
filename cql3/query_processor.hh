@@ -471,26 +471,18 @@ public:
 
     future<> stop();
 
-    inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_batch(
             ::shared_ptr<statements::batch_statement> stmt,
             service::query_state& query_state,
             query_options& options,
-            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-        return execute_batch_without_checking_exception_message(
-                std::move(stmt),
-                query_state,
-                options,
-                std::move(pending_authorization_entries))
-                .then(cql_transport::messages::propagate_exception_as_future<::shared_ptr<cql_transport::messages::result_message>>);
-    }
+            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
     // Like execute_batch, but is allowed to return exceptions as result_message::exception.
     // The result_message::exception must be explicitly handled.
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_batch_without_checking_exception_message(
-            ::shared_ptr<statements::batch_statement>,
+            ::shared_ptr<cql_statement>,
             service::query_state& query_state,
             query_options& options,
             std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
