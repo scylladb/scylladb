@@ -16,6 +16,7 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
+from test.pylib.rest_client import HTTPError
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import new_test_keyspace
 
@@ -354,3 +355,28 @@ async def test_small_table_optimization_repair(manager):
 
     rows = await cql.run_async(f"SELECT * from system.repair_history")
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_repair_rejects_equal_start_and_end_token(manager):
+    """Verify that repair rejects a request where startToken == endToken.
+    When start == end, the wrapping range (T, T] covers the full token ring,
+    causing an unintended full repair instead of a no-op.
+    Reproduces https://scylladb.atlassian.net/browse/CUSTOMER-358
+    """
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND TABLETS = {'enabled': false}")
+    cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY)")
+
+    token = "1558831538804957103"
+    params = {
+        "columnFamilies": "tbl",
+        "startToken": token,
+        "endToken": token,
+    }
+    with pytest.raises(HTTPError, match="Start and end tokens must be different"):
+        await manager.api.client.post_json(f"/storage_service/repair_async/ks",
+                                           host=servers[0].ip_addr, params=params)

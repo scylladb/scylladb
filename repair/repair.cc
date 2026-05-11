@@ -1279,6 +1279,9 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     }
 
     if (!options.start_token.empty() || !options.end_token.empty()) {
+        if (!options.start_token.empty() && !options.end_token.empty() && options.start_token == options.end_token) {
+            throw std::invalid_argument("Start and end tokens must be different.");
+        }
         // Intersect the list of local ranges with the given token range,
         // dropping ranges with no intersection.
         std::optional<::wrapping_interval<dht::token>::bound> tok_start;
