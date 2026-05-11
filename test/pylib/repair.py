@@ -64,7 +64,9 @@ async def load_tablet_repair_task_infos(cql, host, table_id):
 
     return repair_task_infos
 
-async def create_table_insert_data_for_repair(manager, rf = 3 , tablets = 8, fast_stats_refresh = True, nr_keys = 256, disable_flush_cache_time = False, cmdline = None) -> (list[ServerInfo], CassandraSession, list[Host], str, str):
+async def create_table_insert_data_for_repair(manager, rf=3, tablets=8, fast_stats_refresh=True, nr_keys=256,
+                                              disable_flush_cache_time=False, cmdline=None,
+                                              sequential_server_add=False) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
     assert rf <= 3, "A keyspace with RF > 3 will be RF-rack-invalid if there are fewer racks than the RF"
 
     if fast_stats_refresh:
@@ -73,8 +75,13 @@ async def create_table_insert_data_for_repair(manager, rf = 3 , tablets = 8, fas
         config = {}
     if disable_flush_cache_time:
         config.update({'repair_hints_batchlog_flush_cache_time_in_ms': 0})
-    servers = await manager.servers_add(3, config=config, cmdline=cmdline,
-                                        property_file=[{"dc": "dc1", "rack": f"r{i % rf}"} for i in range(rf)])
+    property_files = [{"dc": "dc1", "rack": f"r{i % rf}"} for i in range(3)]
+    if sequential_server_add:
+        servers = []
+        for property_file in property_files:
+            servers.append(await manager.server_add(config=config, cmdline=cmdline, property_file=property_file))
+    else:
+        servers = await manager.servers_add(len(property_files), config=config, cmdline=cmdline, property_file=property_files)
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {{'class': 'NetworkTopologyStrategy', "
                   "'replication_factor': {}}} AND tablets = {{'initial': {}}};".format(rf, tablets))
