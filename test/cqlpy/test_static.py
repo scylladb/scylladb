@@ -11,7 +11,8 @@
 
 import pytest
 from cassandra.protocol import SyntaxException, InvalidRequest
-from .util import new_test_table, unique_key_int
+from cassandra.query import SimpleStatement
+from .util import new_test_table, new_secondary_index, unique_key_int
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -111,3 +112,24 @@ def test_syntax_primary_key_and_static(cql, test_keyspace):
     with pytest.raises((SyntaxException, InvalidRequest)):
         with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY STATIC, v int') as table:
             pass
+
+# Test reading a static column through a secondary index on a *regular*
+# column, when the index lookup matches rows in several partitions that have
+# different static values - including when paging splits the results.
+# The case where all matches are in one partition is already tested in
+# cassandra_tests/validation/entities/static_columns_test.py
+# (testStaticColumnsWithSecondaryIndex).
+def test_static_column_via_regular_index_multiple_partitions(cql, test_keyspace):
+    schema = 'p int, c int, s int static, v int, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_secondary_index(cql, table, 'v'):
+            insert = cql.prepare(f'INSERT INTO {table} (p, c, s, v) VALUES (?, ?, ?, ?)')
+            cql.execute(insert, [1, 1, 11, 7])
+            cql.execute(insert, [1, 2, 11, 8])
+            cql.execute(insert, [2, 1, 22, 7])
+            cql.execute(insert, [2, 2, 22, 7])
+            for fetch_size in [None, 1, 2]:
+                stmt = SimpleStatement(f'SELECT s FROM {table} WHERE v = 7', fetch_size=fetch_size)
+                assert sorted(cql.execute(stmt)) == [(11,), (22,), (22,)]
+                stmt = SimpleStatement(f'SELECT p, s FROM {table} WHERE v = 7', fetch_size=fetch_size)
+                assert sorted(cql.execute(stmt)) == [(1, 11), (2, 22), (2, 22)]
