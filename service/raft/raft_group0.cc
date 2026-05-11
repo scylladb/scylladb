@@ -725,7 +725,6 @@ future<> raft_group0::setup_group0(
 }
 
 future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
-    if (joined_group0()) {
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
         auto my_id = load_my_id();
         if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
@@ -752,14 +751,6 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
             // (that's the only way to join as non-voter today).
             co_return;
         }
-    } else {
-        // We're either upgrading or in recovery mode.
-    }
-
-    if (!_feat.supports_raft_cluster_mgmt) {
-        throw std::runtime_error("finish_setup_after_join: SUPPORTS_RAFT feature not yet enabled, but was expected to be enabled at this point."
-            " If you are trying to upgrade a node pf a cluster that is not using Raft yet, this is no longer supported.");
-    }
 }
 
 bool raft_group0::is_member(raft::server_id id, bool include_voters_only) {
