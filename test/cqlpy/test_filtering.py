@@ -14,7 +14,7 @@ import pytest
 import re
 from .util import new_test_table, new_type, user_type
 from cassandra.protocol import InvalidRequest
-from cassandra.query import UNSET_VALUE
+from cassandra.query import UNSET_VALUE, SimpleStatement
 
 # When filtering for "x > 0" or "x < 0", rows with an unset value for x
 # should not match the filter.
@@ -433,6 +433,29 @@ def test_filter_and_fetch_size(cql, test_keyspace, use_index, driver_bug_1):
         s.fetch_size = 3
         results = cql.execute(s)
         assert len(results.current_rows) == 3
+
+# Test filtering on a regular column, which is not selected, when only a
+# static column is selected. The result should have one row for each
+# clustering row that matches the filter, not one row for each partition,
+# also when the matches are in several partitions with different static
+# values and paging splits the results.
+# The similar case where a secondary index is used instead of filtering is
+# tested in test_static.py::test_static_column_via_regular_index_multiple_partitions
+def test_filter_regular_column_select_only_static(cql, test_keyspace):
+    schema = 'p int, c int, s int static, v int, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        insert = cql.prepare(f'INSERT INTO {table} (p, c, s, v) VALUES (?, ?, ?, ?)')
+        cql.execute(insert, [1, 1, 11, 1])
+        cql.execute(insert, [1, 2, 11, 2])
+        cql.execute(insert, [2, 3, 22, 3])
+        cql.execute(insert, [2, 4, 22, 4])
+        for fetch_size in [None, 1, 2]:
+            stmt = SimpleStatement(f'SELECT s FROM {table} WHERE v >= 2 ALLOW FILTERING', fetch_size=fetch_size)
+            assert sorted(cql.execute(stmt)) == [(11,), (22,), (22,)]
+            stmt = SimpleStatement(f'SELECT s FROM {table} WHERE v > 2 ALLOW FILTERING', fetch_size=fetch_size)
+            assert sorted(cql.execute(stmt)) == [(22,), (22,)]
+            stmt = SimpleStatement(f'SELECT s FROM {table} WHERE v >= 2 AND v <= 3 ALLOW FILTERING', fetch_size=fetch_size)
+            assert sorted(cql.execute(stmt)) == [(11,), (22,)]
 
 # token() function should either take all partition key components or none of them,
 # if the key(s) are specified, they should be listed in the partition key order
