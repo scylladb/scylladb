@@ -16,7 +16,7 @@ import textwrap
 from contextlib import ExitStack
 from .util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, \
     new_cql, keyspace_has_tablets, unique_name_prefix, new_session, new_user, new_materialized_view, \
-    new_secondary_index
+    new_secondary_index, is_scylla
 from .conftest import has_tablets
 from .test_service_levels import MAX_USER_SERVICE_LEVELS
 from test.pylib.skip_types import skip_env
@@ -530,8 +530,6 @@ def test_desc_cluster(scylla_only, cql, test_keyspace):
     
     assert sorted(desc_endpoints) == sorted(ring_endpoints)
 
-def is_scylla(cql):
-    return any('scylla' in name for name in [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")])
 
 # Test that 'DESC INDEX' contains create statement of index
 def test_desc_index(cql, test_keyspace):
