@@ -9,6 +9,7 @@
 #include "alternator/export.hh"
 #include <seastar/core/coroutine.hh>
 #include "utils/rjson.hh"
+#include "utils/s3/client.hh"
 #include <algorithm>
 #include <string>
 #include <string_view>
@@ -194,18 +195,98 @@ public:
     }
 };
 
-// Factory function to create in-memory sink pipeline for testing (no compression, JSON formatter).
-std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_memory_test_storage& storage) {
-    auto sink = std::make_unique<in_memory_storage_sink>(storage);
+/// Writes data to an S3 object. Each write() call uploads data immediately.
+class s3_storage_sink : public storage_sink_interface {
+    seastar::shared_ptr<s3::client> _client;
+    seastar::sstring _object_name;
+    seastar::output_stream<char> _upload_stream;
+
+public:
+    s3_storage_sink(seastar::shared_ptr<s3::client> client, seastar::sstring object_name)
+        : _client(std::move(client))
+        , _object_name(std::move(object_name))
+        , _upload_stream(seastar::output_stream<char>(_client->make_upload_sink(_object_name)))
+    {
+    }
+
+    seastar::future<> write(std::span<const std::byte> data) override {
+        // we will return the future from write() directly, no need to add `co_await` here.
+        return _upload_stream.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    seastar::future<> flush_and_close() override {
+        co_await _upload_stream.flush();
+        co_await _upload_stream.close();
+    }
+};
+
+/// Reads data from an S3 object and feeds it through a decompression_interface.
+/// read() streams the entire object, calling decompress() for each chunk,
+/// then calls decompression_interface::flush_and_close().
+class s3_storage_source : public import_pipeline_interface {
+    seastar::shared_ptr<s3::client> _client;
+    seastar::sstring _object_name;
+    std::unique_ptr<decompression_interface> _decompressor;
+
+public:
+    s3_storage_source(seastar::shared_ptr<s3::client> client, seastar::sstring object_name,
+                      std::unique_ptr<decompression_interface> decompressor)
+        : _client(std::move(client))
+        , _object_name(std::move(object_name))
+        , _decompressor(std::move(decompressor))
+    {
+    }
+
+    seastar::future<> read() override {
+        auto input = seastar::input_stream<char>(
+            _client->make_download_source(_object_name));
+        while (true) {
+            auto buf = co_await input.read();
+            if (buf.empty()) {
+                break;
+            }
+            co_await _decompressor->decompress(
+                std::span<const std::byte>(reinterpret_cast<const std::byte*>(buf.get()), buf.size()));
+        }
+        co_await input.close();
+    }
+    seastar::future<> flush_and_close() override {
+        co_await _decompressor->flush_and_close();
+    }
+};
+
+static std::unique_ptr<export_pipeline_interface>  create_export_pipeline(std::unique_ptr<storage_sink_interface> sink) {
     auto compressor = std::make_unique<noop_compressor>(std::move(sink));
     return std::make_unique<json_formatter>(std::move(compressor));
 }
 
+static std::unique_ptr<decompression_interface> create_decompression_pipeline(std::function<seastar::future<>(rjson::value)> on_item) {
+    auto parser = std::make_unique<json_parser>(std::move(on_item));
+    return std::make_unique<noop_decompressor>(std::move(parser));
+}
+
+// Factory function to create in-memory sink pipeline for testing (no compression, JSON formatter).
+std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_memory_test_storage& storage) {
+    auto sink = std::make_unique<in_memory_storage_sink>(storage);
+    return create_export_pipeline(std::move(sink));
+}
+
 // Factory function to create in-memory source pipeline for testing (no compression, JSON parser).
 std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage& storage, std::function<seastar::future<>(rjson::value)> on_item) {
-    auto parser = std::make_unique<json_parser>(std::move(on_item));
-    auto decompressor = std::make_unique<noop_decompressor>(std::move(parser));
+    auto decompressor = create_decompression_pipeline(std::move(on_item));
     return std::make_unique<in_memory_source>(storage, std::move(decompressor));
+}
+
+// Create s3 sink pipeline for a single file.
+std::unique_ptr<export_pipeline_interface> create_s3_sink_pipeline(seastar::shared_ptr<s3::client> client, seastar::sstring object_name) {
+    auto sink = std::make_unique<s3_storage_sink>(std::move(client), std::move(object_name));
+    return create_export_pipeline(std::move(sink));
+}
+
+// Create s3 source pipeline for a single file.
+std::unique_ptr<import_pipeline_interface> create_s3_source_pipeline(seastar::shared_ptr<s3::client> client, seastar::sstring object_name, std::function<seastar::future<>(rjson::value)> on_item) {
+    auto decompressor = create_decompression_pipeline(std::move(on_item));
+    return std::make_unique<s3_storage_source>(std::move(client), std::move(object_name), std::move(decompressor));
 }
 
 } // namespace alternator
