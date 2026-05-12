@@ -1084,7 +1084,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     break;
                 }
                 prefix.push_back(found->second);
-                if (has_slice(found->second.filter)) {
+                if (std::ranges::any_of(preds, [](const predicate& p) { return p.is_slice; })) {
                     break;
                 }
             }
