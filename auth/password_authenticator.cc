@@ -21,13 +21,13 @@
 #include "auth/authenticated_user.hh"
 #include "auth/authentication_options.hh"
 #include "auth/common.hh"
+#include "auth/config.hh"
 #include "auth/passwords.hh"
 #include "auth/roles-metadata.hh"
 #include "cql3/untyped_result_set.hh"
 #include "utils/log.hh"
 #include "service/migration_manager.hh"
 #include "cql3/query_processor.hh"
-#include "db/config.hh"
 #include "db/system_keyspace.hh"
 
 namespace auth {
@@ -43,11 +43,13 @@ static thread_local auto rng_for_salt = std::default_random_engine(std::random_d
 password_authenticator::~password_authenticator() {
 }
 
-password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache)
+password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache, const config& cfg)
     : _qp(qp)
     , _group0_client(g0)
     , _migration_manager(mm)
     , _cache(cache)
+    , _superuser_name(cfg.auth_superuser_name)
+    , _superuser_salted_password(cfg.auth_superuser_salted_password)
     , _stopped(make_ready_future<>()) 
 {}
 
@@ -65,7 +67,7 @@ sstring password_authenticator::update_row_query() const {
 
 future<> password_authenticator::maybe_create_default_password() {
     auto needs_password = [this] () -> future<bool> {
-        if (default_superuser(_qp).empty()) {
+        if (_superuser_name.empty()) {
             co_return false;
         }
         const sstring query = seastar::format("SELECT * FROM {}.{} WHERE is_superuser = true ALLOW FILTERING", db::system_keyspace::NAME, meta::roles_table::name);
@@ -78,7 +80,7 @@ future<> password_authenticator::maybe_create_default_password() {
         bool has_default = false;
         bool has_superuser_with_password = false;
         for (auto& result : *results) {
-            if (result.get_as<sstring>(meta::roles_table::role_col_name) == default_superuser(_qp)) {
+            if (result.get_as<sstring>(meta::roles_table::role_col_name) == _superuser_name) {
                 has_default = true;
             }
             if (has_salted_hash(result)) {
@@ -99,12 +101,12 @@ future<> password_authenticator::maybe_create_default_password() {
         co_return;
     }
     // Set default superuser's password.
-    std::string salted_pwd(_qp.db().get_config().auth_superuser_salted_password());
+    std::string salted_pwd(_superuser_salted_password);
     if (salted_pwd.empty()) {
         co_return;
     }
     const auto update_query = update_row_query();
-    co_await collect_mutations(_qp, batch, update_query, {salted_pwd, default_superuser(_qp)});
+    co_await collect_mutations(_qp, batch, update_query, {salted_pwd, sstring(_superuser_name)});
     co_await std::move(batch).commit(_group0_client, _as, get_raft_timeout());
     plogger.info("Created default superuser authentication record.");
 }

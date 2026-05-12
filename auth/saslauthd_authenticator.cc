@@ -17,9 +17,9 @@
 #include <seastar/net/socket_defs.hh>
 #include <seastar/util/log.hh>
 #include <system_error>
+#include "auth/config.hh"
 #include "common.hh"
 #include "cql3/query_processor.hh"
-#include "db/config.hh"
 #include "utils/log.hh"
 #include "seastarx.hh"
 
@@ -27,8 +27,8 @@ namespace auth {
 
 static logging::logger mylog("saslauthd_authenticator");
 
-saslauthd_authenticator::saslauthd_authenticator(cql3::query_processor& qp, ::service::raft_group0_client&, ::service::migration_manager&, cache&)
-    : _socket_path(qp.db().get_config().saslauthd_socket_path())
+saslauthd_authenticator::saslauthd_authenticator(cql3::query_processor& qp, ::service::raft_group0_client&, ::service::migration_manager&, cache&, const config& cfg)
+    : _socket_path(cfg.saslauthd_socket_path)
 {}
 
 future<> saslauthd_authenticator::start() {

@@ -26,12 +26,13 @@ class raft_group0_client;
 namespace auth {
 
 class cache;
+struct config;
 
 class certificate_authenticator : public authenticator {
     enum class query_source;
     std::vector<std::pair<query_source, boost::regex>> _queries;
 public:
-    certificate_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&);
+    certificate_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&, const config&);
     ~certificate_authenticator();
 
     future<> start() override;

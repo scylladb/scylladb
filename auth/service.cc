@@ -831,19 +831,19 @@ authenticator_factory make_authenticator_factory(
         };
     } else if (boost::iequals(short_name, "PasswordAuthenticator")) {
         return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
-            return std::make_unique<password_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+            return std::make_unique<password_authenticator>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
         };
     } else if (boost::iequals(short_name, "CertificateAuthenticator")) {
         return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
-            return std::make_unique<certificate_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+            return std::make_unique<certificate_authenticator>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
         };
     } else if (boost::iequals(short_name, "SaslauthdAuthenticator")) {
         return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
-            return std::make_unique<saslauthd_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+            return std::make_unique<saslauthd_authenticator>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
         };
     } else if (boost::iequals(short_name, "TransitionalAuthenticator")) {
         return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
-            return std::make_unique<transitional_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+            return std::make_unique<transitional_authenticator>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
         };
     }
     throw std::invalid_argument(fmt::format("Unknown authenticator: {}", name));
@@ -875,7 +875,7 @@ authenticator_factory make_maintenance_socket_authenticator_factory(
         sharded<::service::migration_manager>& mm,
         sharded<cache>& auth_cache) {
     return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
-        return std::make_unique<maintenance_socket_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
+        return std::make_unique<maintenance_socket_authenticator>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
     };
 }
 
