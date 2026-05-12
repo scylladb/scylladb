@@ -38,9 +38,9 @@ def test_schema(gdb_cmd, command):
 
 
 def test_generate_object_graph(gdb_cmd, request):
-    tmpdir = request.config.getoption("--tmpdir")
+    workdir = request.config.getoption("--test-artifact-dir")
     result = execute_gdb_command(
-        gdb_cmd, f"generate-object-graph -o {tmpdir}/og.dot -d 2 -t 10 $get_schema()"
+        gdb_cmd, f"generate-object-graph -o {workdir}/og.dot -d 2 -t 10 $get_schema()"
     )
     assert result.returncode == 0, (
         f"GDB command `generate-object-graph` failed. stdout: {result.stdout} stderr: {result.stderr}"

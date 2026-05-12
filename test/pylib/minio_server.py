@@ -35,15 +35,15 @@ class MinioServer:
 
     log_file: BufferedWriter
 
-    def __init__(self, tempdir_base, address, logger):
+    def __init__(self, workdir, address, logger):
         self.srv_exe = shutil.which('minio')
         self.address = address
         self.port = None
-        self.tempdir_base = pathlib.Path(tempdir_base)
-        tempdir = tempfile.mkdtemp(dir=tempdir_base, prefix="minio-")
-        self.tempdir = pathlib.Path(tempdir)
-        self.rootdir = self.tempdir / 'minio_root'
-        self.mcdir = self.tempdir / 'mc'
+        self.workdir = pathlib.Path(workdir)
+        volatile_dir = tempfile.mkdtemp(dir=workdir, prefix="minio-")
+        self.volatile_dir = pathlib.Path(volatile_dir)
+        self.rootdir = self.volatile_dir / 'minio_root'
+        self.mcdir = self.volatile_dir / 'mc'
         self.logger = logger
         self.cmd: Optional[Process] = None
         self.default_user = 'minioadmin'
@@ -51,7 +51,7 @@ class MinioServer:
         self.bucket_name = 'testbucket'
         self.access_key = os.environ.get(self.ENV_ACCESS_KEY, ''.join(random.choice(string.hexdigits) for i in range(16)))
         self.secret_key = os.environ.get(self.ENV_SECRET_KEY, ''.join(random.choice(string.hexdigits) for i in range(32)))
-        self.log_filename = (self.tempdir_base / 'minio').with_suffix(".log")
+        self.log_filename = (self.workdir / 'minio').with_suffix(".log")
         self.old_env = dict()
         self.default_config = None
 
@@ -286,18 +286,18 @@ class MinioServer:
         finally:
             self.logger.info('Killed minio server')
             self.cmd = None
-            shutil.rmtree(self.tempdir)
+            shutil.rmtree(self.volatile_dir)
 
 
 async def main():
     parser = argparse.ArgumentParser(description="Start a MinIO server")
-    parser.add_argument('--tempdir')
+    parser.add_argument('--test-artifact-dir', '--tempdir', dest='test_artifact_dir')
     parser.add_argument('--host', default='127.0.0.1')
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(suffix='-minio', dir=args.tempdir) as tempdir:
-        if args.tempdir is None:
-            print(f'{tempdir=}')
-        server = MinioServer(tempdir, args.host, logging.getLogger('minio'))
+    with tempfile.TemporaryDirectory(suffix='-minio', dir=args.test_artifact_dir) as workdir:
+        if args.test_artifact_dir is None:
+            print(f'{workdir=}')
+        server = MinioServer(workdir, args.host, logging.getLogger('minio'))
         await server.start()
         server.print_environ()
         try:

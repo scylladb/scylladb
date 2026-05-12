@@ -93,7 +93,7 @@ class TestSuite(ABC):
 
     def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         self.suite_path = pathlib.Path(path)
-        self.log_dir = pathlib.Path(options.tmpdir) / mode
+        self.log_dir = pathlib.Path(options.test_artifact_dir) / mode
         self.name = str(self.suite_path.name)
         self.cfg = cfg
         self.options = options
@@ -521,26 +521,26 @@ def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) 
                 p.unlink()
 
 @universalasync.async_to_sync_wraps
-async def prepare_environment(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool,
+async def prepare_environment(test_artifact_dir: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool,
                         toxiproxy_byte_limit: int) -> None:
-    prepare_dirs(tempdir_base, modes, gather_metrics, save_log_on_success=save_log_on_success)
-    await start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
+    prepare_dirs(test_artifact_dir, modes, gather_metrics, save_log_on_success=save_log_on_success)
+    await start_3rd_party_services(test_artifact_dir=test_artifact_dir, toxiproxy_byte_limit=toxiproxy_byte_limit)
 
-def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool = False) -> None:
+def prepare_dirs(test_artifact_dir: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool = False) -> None:
     setup_cgroup(gather_metrics)
-    prepare_dir(tempdir_base, "*.log", save_log_on_success)
-    prepare_dir(tempdir_base/ PYTEST_TESTS_LOGS_FOLDER, "*.log", save_log_on_success)
+    prepare_dir(test_artifact_dir, "*.log", save_log_on_success)
+    prepare_dir(test_artifact_dir/ PYTEST_TESTS_LOGS_FOLDER, "*.log", save_log_on_success)
     for directory in ['report', 'ldap_instances']:
-        full_path_directory = tempdir_base / directory
+        full_path_directory = test_artifact_dir / directory
         prepare_dir(full_path_directory, '*', save_log_on_success)
     for mode in modes:
-        prepare_dir(tempdir_base / mode, "*.log", save_log_on_success)
-        prepare_dir(tempdir_base / mode, "*.reject", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "failed_test", "*", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
+        prepare_dir(test_artifact_dir / mode, "*.log", save_log_on_success)
+        prepare_dir(test_artifact_dir / mode, "*.reject", save_log_on_success)
+        prepare_dir(test_artifact_dir / mode / "xml", "*.xml", save_log_on_success)
+        prepare_dir(test_artifact_dir / mode / "failed_test", "*", save_log_on_success)
+        prepare_dir(test_artifact_dir / mode / "allure", "*.xml", save_log_on_success)
         if TEST_RUNNER != "pytest":
-            prepare_dir(tempdir_base / mode / "pytest", "*", save_log_on_success)
+            prepare_dir(test_artifact_dir / mode / "pytest", "*", save_log_on_success)
 
 
 def _make_service_logger(logger_name: str, log_file: pathlib.Path) -> logging.Logger:
@@ -560,23 +560,23 @@ def _make_service_logger(logger_name: str, log_file: pathlib.Path) -> logging.Lo
 
 
 @universalasync.async_to_sync_wraps
-async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_limit: int):
+async def start_3rd_party_services(test_artifact_dir: pathlib.Path, toxiproxy_byte_limit: int):
     hosts = HostRegistry()
 
     finalize = start_ldap(
         host=await hosts.lease_host(),
         port=5000,
-        instance_root=tempdir_base / 'ldap_instances',
+        instance_root=test_artifact_dir / 'ldap_instances',
         toxiproxy_byte_limit=toxiproxy_byte_limit)
     async def make_async_finalize():
         finalize()
 
     TestSuite.artifacts.add_exit_artifact(None, make_async_finalize)
     ms = MinioServer(
-        tempdir_base=str(tempdir_base),
+        workdir=str(test_artifact_dir),
         address=await hosts.lease_host(),
         logger=LogPrefixAdapter(
-            logger=_make_service_logger("minio", tempdir_base / "minio.log"),
+            logger=_make_service_logger("minio", test_artifact_dir / "minio.log"),
             extra={"prefix": "minio"},
         ),
     )
@@ -589,7 +589,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         host=await hosts.lease_host(),
         port=2012,
         logger=LogPrefixAdapter(
-            logger=_make_service_logger("s3_mock", tempdir_base / "s3_mock.log"),
+            logger=_make_service_logger("s3_mock", test_artifact_dir / "s3_mock.log"),
             extra={"prefix": "s3_mock"},
         ),
     )
@@ -604,7 +604,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         max_retries=3,
         seed=int(time.time()),
         logger=LogPrefixAdapter(
-            logger=_make_service_logger("s3_proxy", tempdir_base / "s3_proxy.log"),
+            logger=_make_service_logger("s3_proxy", test_artifact_dir / "s3_proxy.log"),
             extra={"prefix": "s3_proxy"},
         ),
     )
