@@ -67,8 +67,6 @@ inline bool needs_filtering(oper_t op) {
            (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
 }
 
-bool contains_multi_column_restriction(const expression&);
-
 bool has_only_eq_binops(const expression&);
 
 static
@@ -817,13 +815,6 @@ build_value_for_fn(const column_definition& cdef, const expression& e, const sch
     };
 }
 
-bool contains_multi_column_restriction(const expression& e) {
-    const binary_operator* find_res = find_binop(e, [](const binary_operator& binop) {
-        return is<tuple_constructor>(binop.lhs);
-    });
-    return find_res != nullptr;
-}
-
 bool has_only_eq_binops(const expression& e) {
     const expr::binary_operator* non_eq_binop = find_in_expression<expr::binary_operator>(e,
         [](const expr::binary_operator& binop) {
@@ -1258,13 +1249,9 @@ statement_restrictions::statement_restrictions(private_tag,
 
     _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(regular_columns_filter));
 
-    auto multi_column_restrictions = expr::conjunction{
-        .children = expr::boolean_factors(_clustering_columns_restrictions)
-                | std::ranges::views::filter(contains_multi_column_restriction)
-                | std::ranges::to<std::vector>()
-    };
-
-    _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(multi_column_restrictions));
+    if (_has_multi_column) {
+        _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), _clustering_columns_restrictions);
+    }
 
     if (uses_secondary_indexing()) {
         auto& index_opt = _idx_opt;
