@@ -2277,17 +2277,16 @@ get_clustering_bounds_fn_t
 build_range_from_raw_bounds_fn(
         const std::vector<predicate>& exprs, const schema& schema) {
     std::vector<std::function<query::clustering_range (const query_options&)>> range_builders;
-    for (const auto& e : exprs | std::views::transform(&predicate::filter)) {
-        if (auto b = find_clustering_order(e)) {
-            range_builders.emplace_back([bb = *b, &schema] (const query_options& options) {
-                auto* b = &bb;
-                cql3::raw_value tup_val = expr::evaluate(b->rhs, options);
+    for (const auto& pred : exprs) {
+        if (pred.order == expr::comparison_order::clustering) {
+            range_builders.emplace_back([b = expr::as<binary_operator>(pred.filter), &schema] (const query_options& options) {
+                cql3::raw_value tup_val = expr::evaluate(b.rhs, options);
                 if (tup_val.is_null()) {
-                    on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", *b));
+                    on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", b));
                 }
 
                 const auto r = to_range(
-                    b->op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val, *type_of(b->rhs))));
+                    b.op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val, *type_of(b.rhs))));
                 return r;
             });
         }
