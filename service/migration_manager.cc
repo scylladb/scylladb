@@ -9,6 +9,7 @@
  */
 
 #include <algorithm>
+#include <random>
 #include <ranges>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
@@ -1189,6 +1190,45 @@ future<> migration_manager::announce<topology_change>(utils::chunked_vector<muta
 future<group0_guard> migration_manager::start_group0_operation(std::optional<raft_timeout> timeout) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     return _group0_client.start_operation(_as, timeout.value_or(raft_timeout{}));
+}
+
+static thread_local std::default_random_engine random_engine{std::random_device{}()};
+
+future<> migration_manager::ensure_group0_schema_version_is_set() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+
+    while (true) {
+        auto version = co_await db::schema_tables::get_group0_schema_version(_sys_ks.local());
+        if (version) {
+            mlogger.info("group0_schema_version is already set to {}", *version);
+            co_return;
+        }
+
+        mlogger.info("group0_schema_version is not set, performing a dummy schema change to assign it");
+        auto guard = co_await start_group0_operation();
+
+        if (!guard.with_raft()) {
+            mlogger.info("Not in raft mode (e.g. RECOVERY), skipping group0_schema_version assignment");
+            co_return;
+        }
+
+        // Re-check after acquiring the guard, another node may have set it.
+        // start_group0_operation() performs a raft barrier, so any previously
+        // committed group0 changes are applied locally by this point.
+        version = co_await db::schema_tables::get_group0_schema_version(_sys_ks.local());
+        if (version) {
+            mlogger.info("group0_schema_version was set to {} while waiting for guard", *version);
+            co_return;
+        }
+
+        try {
+            co_await announce<schema_change>(utils::chunked_vector<mutation>{}, std::move(guard), "set group0_schema_version");
+            co_return;
+        } catch (const group0_concurrent_modification&) {
+            mlogger.info("Concurrent schema change detected while setting group0_schema_version, retrying");
+        }
+        co_await sleep_abortable(std::chrono::milliseconds(std::uniform_int_distribution<>(0, 500)(random_engine)), _as);
+    }
 }
 
 /**
