@@ -375,7 +375,11 @@ public:
     future<std::vector<sstring>> list_existing_segments() const;
     future<std::vector<sstring>> list_existing_segments(const sstring& dir) const;
 
-    gc_clock::time_point min_gc_time(const cf_id_type&) const;
+    /**
+     * Gets the recorded min timestamp for the given id. Optionally filter by
+     * replay position, i.e. skip segments that have top position <= rp_filter
+     */
+    gc_clock::time_point min_gc_time(const cf_id_type&, const db::replay_position& rp_filter = {}) const;
 
     // Return the lowest possible replay position across all existing or future commitlog segments.
     // In other words, only positions greater or equal to min_position() can

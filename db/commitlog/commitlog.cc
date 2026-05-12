@@ -488,7 +488,7 @@ public:
     future<std::vector<descriptor>> list_descriptors(sstring dir) const;
     future<std::vector<sstring>> get_segments_to_replay() const;
 
-    gc_clock::time_point min_gc_time(const cf_id_type&) const;
+    gc_clock::time_point min_gc_time(const cf_id_type&, const db::replay_position&) const;
 
     flush_handler_id add_flush_handler(flush_handler h) {
         auto id = ++_flush_ids;
@@ -2053,9 +2053,12 @@ future<std::vector<sstring>> db::commitlog::segment_manager::get_segments_to_rep
     co_return segments_to_replay;
 }
 
-gc_clock::time_point db::commitlog::segment_manager::min_gc_time(const cf_id_type& id) const {
+gc_clock::time_point db::commitlog::segment_manager::min_gc_time(const cf_id_type& id, const db::replay_position& rp) const {
     auto res = gc_clock::time_point::max();
     for (auto& s : _segments) {
+        if (rp.valid() && replay_position(s->_desc.id, s->position()) <= rp) {
+            continue;
+        }
         res = std::min(res, s->min_time(id));
     }
     return res;
@@ -3956,8 +3959,8 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
     });
 }
 
-gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id) const {
-    return _segment_manager->min_gc_time(id);
+gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id, const db::replay_position& rp) const {
+    return _segment_manager->min_gc_time(id, rp);
 }
 
 db::replay_position db::commitlog::min_position() const {
