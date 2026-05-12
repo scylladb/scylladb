@@ -1191,6 +1191,39 @@ future<group0_guard> migration_manager::start_group0_operation(std::optional<raf
     return _group0_client.start_operation(_as, timeout.value_or(raft_timeout{}));
 }
 
+future<> migration_manager::ensure_group0_schema_version_is_set() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+
+    if (!_feat.group0_schema_versioning) {
+        co_return;
+    }
+
+    auto version = co_await db::schema_tables::get_group0_schema_version(_sys_ks.local());
+    if (version) {
+        mlogger.info("group0_schema_version is already set to {}", *version);
+        co_return;
+    }
+
+    mlogger.info("group0_schema_version is not set, performing a dummy schema change to assign it");
+    auto guard = co_await start_group0_operation();
+
+    if (!guard.with_raft()) {
+        mlogger.info("Not in raft mode (e.g. RECOVERY), skipping group0_schema_version assignment");
+        co_return;
+    }
+
+    // Re-check after acquiring the guard, another node may have set it.
+    // start_group0_operation() performs a raft barrier, so any previously
+    // committed group0 changes are applied locally by this point.
+    version = co_await db::schema_tables::get_group0_schema_version(_sys_ks.local());
+    if (version) {
+        mlogger.info("group0_schema_version was set to {} while waiting for guard", *version);
+        co_return;
+    }
+
+    co_await announce<schema_change>(utils::chunked_vector<mutation>{}, std::move(guard), "set group0_schema_version");
+}
+
 /**
  * Announce my version passively over gossip.
  * Used to notify nodes as they arrive in the cluster.
