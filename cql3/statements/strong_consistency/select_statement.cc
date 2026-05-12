@@ -8,6 +8,7 @@
 
 #include "select_statement.hh"
 
+#include "db/consistency_level_type.hh"
 #include "query/query-request.hh"
 #include "cql3/query_processor.hh"
 #include "service/strong_consistency/coordinator.hh"
@@ -17,10 +18,19 @@ namespace cql3::statements::strong_consistency {
 
 using result_message = cql_transport::messages::result_message;
 
+static void validate_consistency_level(const db::consistency_level& cl) {
+    if (cl != db::consistency_level::QUORUM && cl != db::consistency_level::LOCAL_QUORUM &&
+        cl != db::consistency_level::ONE && cl != db::consistency_level::LOCAL_ONE) {
+        throw exceptions::invalid_request_exception("Strongly consistent reads must use QUORUM/LOCAL_QUORUM or ONE/LOCAL_ONE consistency level");
+    }
+}
+
 future<::shared_ptr<result_message>> select_statement::do_execute(query_processor& qp,
         service::query_state& state, 
         const query_options& options) const
 {
+    validate_consistency_level(options.get_consistency());
+
     const auto key_ranges = _restrictions->get_partition_key_ranges(options);
     if (key_ranges.size() != 1 || !query::is_single_partition(key_ranges[0])) {
         throw exceptions::invalid_request_exception("Strongly consistent queries can only target a single partition");
