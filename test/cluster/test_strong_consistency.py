@@ -191,7 +191,7 @@ async def test_basic_write_read(manager: ManagerClient):
 
         # Test with prepared statements as well
         insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
-        bound_insert_stmt = BoundStatement(insert_stmt, consistency_level=ConsistencyLevel.ONE)
+        bound_insert_stmt = BoundStatement(insert_stmt)
         select_stmt = cql.prepare(f"SELECT * FROM {ks}.test WHERE pk = ?")
         bound_select_stmt = BoundStatement(select_stmt, consistency_level=ConsistencyLevel.ONE)
         bound_select_stmt.bind([10])
