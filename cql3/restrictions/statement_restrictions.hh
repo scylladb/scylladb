@@ -215,6 +215,7 @@ private:
     partition_range_restrictions _partition_range_restrictions;
 
     bool _partition_range_is_simple; ///< False iff _partition_range_restrictions imply a Cartesian product.
+    bool _pk_has_slice_or_needs_filtering = false; ///< True iff any PK restriction has a slice or needs-filtering operator.
 
 
     check_indexes _check_indexes = check_indexes::yes;

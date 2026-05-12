@@ -885,6 +885,7 @@ statement_restrictions::statement_restrictions(private_tag,
     const column_definition* ck_last_column = nullptr;
     const predicate* first_mc_pred = nullptr;
     bool pk_is_empty = true;
+    bool pk_has_slice_or_needs_filtering = false;
     bool has_token = false;
     std::optional<predicate> token_pred;
     std::unordered_map<const column_definition*, predicate> pk_range_preds;
@@ -1011,6 +1012,9 @@ statement_restrictions::statement_restrictions(private_tag,
                     }
                 }
                 _partition_range_is_simple &= !pred.is_in;
+                if (pred.is_slice || (pred.op && needs_filtering(*pred.op))) {
+                    pk_has_slice_or_needs_filtering = true;
+                }
             } else if (def->is_clustering_key()) {
                 if (has_mc_clustering) {
                     throw exceptions::invalid_request_exception(
@@ -1115,6 +1119,7 @@ statement_restrictions::statement_restrictions(private_tag,
     }
     _has_multi_column = has_mc_clustering;
     _ck_is_on_collection = ck_is_on_collection;
+    _pk_has_slice_or_needs_filtering = pk_has_slice_or_needs_filtering;
     if (_check_indexes) {
         auto cf = db.find_column_family(schema);
         auto& sim = cf.get_index_manager();
@@ -1546,7 +1551,7 @@ size_t statement_restrictions::partition_key_restrictions_size() const {
 bool statement_restrictions::pk_restrictions_need_filtering() const {
      return !is_empty_restriction(_partition_key_restrictions)
          && !has_token_restrictions()
-         && (has_partition_key_unrestricted_components() || has_slice_or_needs_filtering(_partition_key_restrictions));
+         && (has_partition_key_unrestricted_components() || _pk_has_slice_or_needs_filtering);
 }
 
 size_t statement_restrictions::clustering_columns_restrictions_size() const {
