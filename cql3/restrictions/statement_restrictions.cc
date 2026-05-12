@@ -67,14 +67,6 @@ inline bool needs_filtering(oper_t op) {
            (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
 }
 
-inline auto find_needs_filtering(const expression& e) {
-    return find_binop(e, [] (const binary_operator& bo) { return needs_filtering(bo.op); });
-}
-
-inline bool has_slice_or_needs_filtering(const expression& e) {
-    return find_binop(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
-}
-
 bool contains_multi_column_restriction(const expression&);
 
 bool has_only_eq_binops(const expression&);
