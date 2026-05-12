@@ -122,6 +122,21 @@ public:
         std::optional<segment_id_type> base_segment_id;
 
         const db::extensions * extensions = nullptr;
+
+        // Whether to use the v5 header format (with feature flags field).
+        // Gated behind the strongly_consistent_tables cluster feature to
+        // ensure all nodes in the cluster support the new format before
+        // any node starts writing it.  Set once at startup; a node
+        // restart is required to activate so that v4 and v5 segments are
+        // never mixed within a single commitlog instance.
+        bool use_v5_header = false;
+
+        // Feature flags to set on newly created segments (as raw uint64_t).
+        // This allows enabling commitlog capabilities without bumping the
+        // header version for each new feature.  Only effective when
+        // use_v5_header is true.
+        // Use descriptor::feature_flags enum values.
+        uint64_t features = 0;
     };
 
     struct descriptor {
@@ -136,20 +151,39 @@ public:
         static inline constexpr uint32_t segment_version_2 = 2u;
         static inline constexpr uint32_t segment_version_3 = 3u;
         static inline constexpr uint32_t segment_version_4 = 4u;
-        static inline constexpr uint32_t current_version = segment_version_4;
+        // Version 5 introduces a feature flags field in the segment header.
+        // New commitlog capabilities should be represented by flags, so we do
+        // not need to bump the header version for each new feature.
+        static inline constexpr uint32_t segment_version_5 = 5u;
+        static inline constexpr uint32_t current_version = segment_version_5;
+
+        // Feature flags encoded as bits in a uint64_t field in the segment header.
+        enum class feature_flags : uint64_t {
+            none = 0,
+        };
 
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;
-        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = current_version, sstring = {});
+        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = current_version, feature_flags flags = feature_flags::none, sstring = {});
         descriptor(replay_position p, const std::string& fname_prefix = FILENAME_PREFIX);
         descriptor(const std::string& filename, const std::string& fname_prefix = FILENAME_PREFIX);
 
         sstring filename() const;
         operator replay_position() const;
 
+        bool has_feature(feature_flags flag) const {
+            return (static_cast<uint64_t>(_flags) & static_cast<uint64_t>(flag)) != 0;
+        }
+
+        feature_flags flags() const {
+            return _flags;
+        }
+
         const segment_id_type id;
         const uint32_t ver;
         const std::string filename_prefix = FILENAME_PREFIX;
+    private:
+        feature_flags _flags = feature_flags::none;
     };
 
     commitlog(commitlog&&) noexcept;

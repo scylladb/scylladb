@@ -49,6 +49,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "utils/checked-file-impl.hh"
+#include "utils/crc.hh"
 
 BOOST_AUTO_TEST_SUITE(commitlog_test)
 
@@ -1128,8 +1129,9 @@ SEASTAR_TEST_CASE(test_commitlog_entry_offsets) {
 
         auto rp = h.release();
 
-        // verify the first rp is at file offset 32 (file header + chunk header)
-        BOOST_CHECK_EQUAL(rp.pos, 24 + 8); // TODO: export these sizes for tests. 
+        // verify the first rp is at file offset 32 (file header 24 + chunk header 8)
+        // (v4 header since use_v5_header is not set by default)
+        BOOST_CHECK_EQUAL(rp.pos, 24 + 8); // TODO: export these sizes for tests.
 
         co_await log.sync_all_segments();
 
@@ -2407,6 +2409,238 @@ SEASTAR_TEST_CASE(test_commitlog_replay_segment_order) {
         // Check strictly ascending order.
         for (size_t i = 1; i < replayed_ids.size(); ++i) {
             BOOST_CHECK_GT(replayed_ids[i], replayed_ids[i - 1]);
+        }
+    });
+}
+
+
+static constexpr uint64_t test_feature_flag_bit = 1ULL << 17U;
+
+static future<uint64_t> read_segment_header_flags(sstring segment_path) {
+    auto f = co_await seastar::open_file_dma(segment_path, seastar::open_flags::ro);
+    auto buf = co_await f.dma_read_exactly<char>(0, align_up<size_t>(32, f.disk_read_dma_alignment()));
+    co_await f.close();
+
+    BOOST_REQUIRE_GE(buf.size(), 32u);
+    const auto* ptr = reinterpret_cast<const unsigned char*>(buf.get()) + 20;
+    uint64_t flags = 0;
+    for (size_t i = 0; i < sizeof(uint64_t); ++i) {
+        flags = (flags << 8) | ptr[i];
+    }
+    co_return flags;
+}
+
+SEASTAR_TEST_CASE(test_commitlog_feature_flags_default) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    cfg.use_v5_header = true;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring tmp = "test data";
+
+        co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            dst.write(tmp.data(), tmp.size());
+        });
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        for (auto& seg : segments) {
+            auto flags = co_await read_segment_header_flags(seg);
+            BOOST_CHECK_EQUAL(flags, 0u);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_feature_flags_custom_bit_round_trip) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    cfg.use_v5_header = true;
+    cfg.features = test_feature_flag_bit;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring tmp = "test data";
+
+        co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            dst.write(tmp.data(), tmp.size());
+        });
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        for (auto& seg : segments) {
+            auto flags = co_await read_segment_header_flags(seg);
+            BOOST_CHECK_EQUAL(flags, test_feature_flag_bit);
+
+            bool replayed = false;
+            co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position) {
+                replayed = true;
+                return make_ready_future<>();
+            });
+            BOOST_CHECK(replayed);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_feature_flags_has_feature) {
+    using ff = commitlog::descriptor::feature_flags;
+    constexpr auto bit_17 = static_cast<ff>(test_feature_flag_bit);
+    constexpr auto bit_18 = static_cast<ff>(1ULL << 18U);
+
+    commitlog::descriptor d1(1, commitlog::descriptor::FILENAME_PREFIX, commitlog::descriptor::current_version, bit_17);
+    BOOST_CHECK(d1.has_feature(bit_17));
+    BOOST_CHECK(!d1.has_feature(bit_18));
+
+    commitlog::descriptor d2(2, commitlog::descriptor::FILENAME_PREFIX, commitlog::descriptor::current_version, ff::none);
+    BOOST_CHECK(!d2.has_feature(bit_17));
+
+    return make_ready_future<>();
+}
+
+// Test backward-compat: construct a minimal v4-format segment file (24-byte
+// header + zero-filled data) and verify read_log_file handles it without
+// errors.  The zero-filled data is treated as EOF, so no entries are replayed.
+SEASTAR_TEST_CASE(test_commitlog_v4_segment_replay) {
+    tmpdir tmp;
+    auto dir = tmp.path().string();
+
+    // Use a fixed segment ID. The filename must match the v4 format:
+    // CommitLog-<ver>-<id>.log
+    constexpr uint64_t seg_id = 42;
+    constexpr uint32_t seg_ver = commitlog::descriptor::segment_version_4;
+    auto filename = fmt::format("{}/CommitLog-{}-{}.log",
+            dir, seg_ver, seg_id);
+
+    // Build a 24-byte v4 header: magic(4) + ver(4) + id(8) + alignment(4) + crc(4)
+    // All values are big-endian on disk.
+    constexpr uint32_t alignment = 4096;
+    constexpr uint32_t magic = ('S' << 24) | ('C' << 16) | ('L' << 8) | 'C';
+
+    // Compute CRC the same way commitlog.cc does (crc32_nbo: process_be).
+    utils::crc32 crc;
+    crc.process_be(seg_ver);
+    crc.process_be(static_cast<int32_t>(seg_id & 0xffffffff));
+    crc.process_be(static_cast<int32_t>(seg_id >> 32));
+    crc.process_be(alignment);
+    auto checksum = crc.get();
+
+    // Write the file: 24-byte header followed by zeros to fill one sector.
+    // DMA requires alignment, so write a full 4096-byte block.
+    auto buf = seastar::allocate_aligned_buffer<char>(alignment, alignment);
+    std::memset(buf.get(), 0, alignment);
+    auto* p = buf.get();
+    auto put = [p](size_t off, uint32_t val) {
+        auto v = seastar::net::hton(val);
+        std::memcpy(p + off, &v, sizeof(v));
+    };
+    auto put64 = [p](size_t off, uint64_t val) {
+        auto v = seastar::net::hton(val);
+        std::memcpy(p + off, &v, sizeof(v));
+    };
+
+    put(0, magic);
+    put(4, seg_ver);
+    put64(8, seg_id);
+    put(16, alignment);
+    put(20, checksum);
+    // Bytes 24..4083 are zero data (includes the chunk header which is
+    // all-zero, signalling EOF).
+    // Bytes 4084..4091: sector id (big-endian).
+    // Bytes 4092..4095: sector CRC.
+    // The sector CRC covers the entire sector except the trailing 4 CRC bytes:
+    // header(24) + zero-data(4060) + id(8) = 4092 bytes.
+    put64(alignment - 12, seg_id);  // sector id
+    {
+        utils::crc32 sector_crc;
+        sector_crc.process(reinterpret_cast<const uint8_t*>(p), alignment - 4);
+        put(alignment - 4, sector_crc.get());
+    }
+
+    auto f = co_await seastar::open_file_dma(filename,
+            seastar::open_flags::wo | seastar::open_flags::create);
+    co_await f.dma_write(0, p, alignment);
+    co_await f.close();
+
+    // Replay the v4 segment. No entries should be found.
+    bool replayed = false;
+    co_await db::commitlog::read_log_file(filename,
+            db::commitlog::descriptor::FILENAME_PREFIX,
+            [&](db::commitlog::buffer_and_replay_position) {
+                replayed = true;
+                return make_ready_future<>();
+            });
+    BOOST_CHECK(!replayed);
+}
+
+// Test that v4-format segments (written without use_v5_header) can be replayed
+// by code that has use_v5_header enabled — simulates an upgrade scenario where
+// old segments exist on disk when the feature flag becomes active.
+SEASTAR_TEST_CASE(test_commitlog_v4_to_v5_upgrade_replay) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    // Write in v4 mode (default).
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring tmp = "upgrade test data";
+
+        co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            dst.write(tmp.data(), tmp.size());
+        });
+
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        // Replay the v4 segment — read_log_file handles v4 regardless of config.
+        for (auto& seg : segments) {
+            bool replayed = false;
+            co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX,
+                    [&](db::commitlog::buffer_and_replay_position) {
+                        replayed = true;
+                        return make_ready_future<>();
+                    });
+            BOOST_CHECK(replayed);
+        }
+    });
+}
+
+// Test that v5-format segments can be replayed even when use_v5_header is not
+// set — simulates reading v5 segments after the feature flag is disabled or on
+// a node that hasn't enabled it yet (mixed cluster / rollback scenario).
+SEASTAR_TEST_CASE(test_commitlog_v5_replay_without_feature_flag) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    cfg.use_v5_header = true;
+    cfg.features = test_feature_flag_bit;
+    // Disable warning about segments left on disk — we intentionally leave them.
+    cfg.warn_about_segments_left_on_disk_after_shutdown = false;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        sstring data = "v5 segment data";
+
+        co_await log.add_mutation(uuid, data.size(), db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            dst.write(data.data(), data.size());
+        });
+        co_await log.sync_all_segments();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+
+        // Replay the v5 segment — read_log_file handles v5 based on file
+        // content alone, independent of any config/feature flag.
+        for (auto& seg : segments) {
+            bool replayed = false;
+            co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX,
+                    [&](db::commitlog::buffer_and_replay_position) {
+                        replayed = true;
+                        return make_ready_future<>();
+                    });
+            BOOST_CHECK(replayed);
         }
     });
 }

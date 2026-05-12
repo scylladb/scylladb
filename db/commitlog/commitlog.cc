@@ -118,8 +118,8 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     return c;
 }
 
-db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v, sstring fname)
-        : _filename(std::move(fname)), id(i), ver(v), filename_prefix(fname_prefix) {
+db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v, descriptor::feature_flags flags, sstring fname)
+        : _filename(std::move(fname)), id(i), ver(v), filename_prefix(fname_prefix), _flags(flags) {
 }
 
 db::commitlog::descriptor::descriptor(replay_position p, const std::string& fname_prefix)
@@ -156,7 +156,7 @@ db::commitlog::descriptor::descriptor(const std::string& filename, const std::st
         segment_id_type id = std::stoull(m[3].str());
         uint32_t ver = std::stoul(m[2].str());
 
-        return descriptor(id, fname_prefix, ver, filename);
+        return descriptor(id, fname_prefix, ver, descriptor::feature_flags::none, filename);
     }()) {
 }
 
@@ -821,7 +821,8 @@ public:
     static constexpr size_t multi_entry_overhead_size = entry_overhead_size + sizeof(uint32_t);
     static constexpr size_t fragmented_entry_overhead_size = 4 * sizeof(uint32_t);
     static constexpr size_t segment_overhead_size = 2 * sizeof(uint32_t);
-    static constexpr size_t descriptor_header_size = 6 * sizeof(uint32_t);
+    static constexpr size_t descriptor_header_size = 8 * sizeof(uint32_t);    // magic + ver + id(2) + alignment + flags(2) + crc
+    static constexpr size_t descriptor_header_size_v4 = 6 * sizeof(uint32_t); // v4: magic + ver + id(2) + alignment + crc
     static constexpr uint32_t segment_magic = ('S'<<24) |('C'<< 16) | ('L' << 8) | 'C';
     static constexpr uint32_t multi_entry_size_magic = 0xffffffff;
     static constexpr uint32_t fragmented_entry_size_magic = 0xfffffffe;
@@ -831,6 +832,11 @@ public:
 
     // TODO : tune initial / default size
     static constexpr size_t default_size = 128 * 1024;
+
+    size_t active_header_size() const {
+        return _desc.ver == descriptor::segment_version_5
+            ? descriptor_header_size : descriptor_header_size_v4;
+    }
 
     segment(::shared_ptr<segment_manager> m, descriptor&& d, named_file&& f, size_t alignment)
             : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)),
@@ -1031,7 +1037,7 @@ public:
     std::tuple<size_t, size_t> buffer_usage_size(size_t s) const {
         auto overhead = segment_overhead_size;
         if (_file_pos == 0) {
-            overhead += descriptor_header_size;
+            overhead += active_header_size();
         }
 
         return {s + overhead, overhead};
@@ -1071,7 +1077,7 @@ public:
 
     bool buffer_is_empty() const {
         return buffer_position() <= segment_overhead_size
-                        || (_file_pos == 0 && buffer_position() <= (segment_overhead_size + descriptor_header_size));
+                        || (_file_pos == 0 && buffer_position() <= (segment_overhead_size + active_header_size()));
     }
     /**
      * Send any buffer contents to disk and get a new tmp buffer
@@ -1115,8 +1121,15 @@ public:
             crc.process<int32_t>(_desc.id & 0xffffffff);
             crc.process<int32_t>(_desc.id >> 32);
             crc.process<uint32_t>(uint32_t(_alignment));
+            if (_desc.ver == descriptor::segment_version_5) {
+                auto flags = static_cast<uint64_t>(_desc.flags());
+                write(out, flags);
+                crc.process(flags);
+                header_size = descriptor_header_size;
+            } else {
+                header_size = descriptor_header_size_v4;
+            }
             write(out, crc.checksum());
-            header_size = descriptor_header_size;
         }
 
         if (!termination) {
@@ -1584,7 +1597,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
         // more worst case
         auto size_with_meta_overhead = size_with_sector_overhead
             + (1 + size_with_sector_overhead/max_mutation_size) * (segment::entry_overhead_size + segment::fragmented_entry_overhead_size + segment::segment_overhead_size)
-            * (1 + size_with_sector_overhead/max_size) * segment::descriptor_header_size
+            * (1 + size_with_sector_overhead/max_size) * segment::descriptor_header_size  // conservative: uses v5 (max) size
             ;
         // this is not really true. We could have some space in current segment,
         // but again, lets be conservative.
@@ -1702,7 +1715,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
             auto get_segment = [&]() -> future<sseg_ptr> {
                 sseg_ptr s = co_await active_segment(timeout);
                 if (maybe_clear.empty() || maybe_clear.back().first.get() != s.get()) {
-                    if (s->position() > (segment::segment_overhead_size + segment::descriptor_header_size)) {
+                    if (s->position() > (segment::segment_overhead_size + s->active_header_size())) {
                         co_await s->sync(); // ensure file pos == restartable.
                     }
                     maybe_clear.emplace_back(s, s->file_position());
@@ -1803,7 +1816,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                     avail = std::min(rem2, max_mutation_size) 
                         - segment::entry_overhead_size
                         - segment::fragmented_entry_overhead_size
-                        - (pos == 0 ? segment::descriptor_header_size : 0)
+                        - (pos == 0 ? s->active_header_size() : 0)
                         - segment::segment_overhead_size
                         ;
                 }
@@ -2424,7 +2437,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment() {
     for (;;) {
-        descriptor d(next_id(), cfg.fname_prefix);
+        auto seg_ver = cfg.use_v5_header ? descriptor::segment_version_5 : descriptor::segment_version_4;
+        auto seg_flags = cfg.use_v5_header ? static_cast<descriptor::feature_flags>(cfg.features) : descriptor::feature_flags::none;
+        descriptor d(next_id(), cfg.fname_prefix, seg_ver, seg_flags);
         auto dst = filename(d);
         auto flags = open_flags::wo;
         if (cfg.use_o_dsync) {
@@ -3355,6 +3370,8 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
         size_t file_size = 0;
         size_t corrupt_size = 0;
         size_t alignment = 0;
+        // Populated by read_header; will be used by downstream consumers.
+        descriptor::feature_flags flags = descriptor::feature_flags::none;
         bool eof = false;
         bool header = true;
         bool failed = false;
@@ -3420,26 +3437,43 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
             stop();
         }
         future<> read_header() {
-            fragmented_temporary_buffer buf = co_await frag_reader.read_exactly(fin, segment::descriptor_header_size);
+            // Header layout:
+            //   v4: magic(4) + ver(4) + id(8) + alignment(4) + crc(4) = 24 bytes
+            //   v5: magic(4) + ver(4) + id(8) + alignment(4) + flags(8) + crc(4) = 32 bytes
+            //
+            // Read the common prefix (20 bytes) first to determine the version,
+            // then read the version-specific tail (4 for v4, 12 for v5).
+            static constexpr size_t common_size = sizeof(uint32_t) * 2 + sizeof(uint64_t) + sizeof(uint32_t);  // 20
+            fragmented_temporary_buffer common_buf = co_await frag_reader.read_exactly(fin, common_size);
 
-            if (buf.empty()) {
+            if (common_buf.empty()) {
                 eof = true;
                 co_return;
             }
 
-            // Will throw if we got eof
-            auto in = buf.get_istream();
+            auto in = common_buf.get_istream();
             auto magic = read<uint32_t>(in);
             auto ver = read<uint32_t>(in);
             auto id = read<uint64_t>(in);
             auto alignment = read<uint32_t>(in);
-            auto checksum = read<uint32_t>(in);
 
-            if (magic == 0 && ver == 0 && id == 0 && checksum == 0) {
-                // let's assume this was an empty (pre-allocated)
-                // file. just skip it.
+            if (magic == 0 && ver == 0 && id == 0 && alignment == 0) {
+                // Pre-allocated empty file.
                 co_return stop();
             }
+            if (magic != segment::segment_magic) {
+                throw invalid_segment_format();
+            }
+
+            size_t tail_size;
+            if (ver == descriptor::segment_version_5) {
+                tail_size = segment::descriptor_header_size - common_size;      // 12
+            } else if (ver == descriptor::segment_version_4) {
+                tail_size = segment::descriptor_header_size_v4 - common_size;   // 4
+            } else {
+                throw std::invalid_argument(fmt::format("Cannot replay commitlog segment with unsupported version {}", ver));
+            }
+
             if (id != d.id) {
                 // filename and id in file does not match.
                 // assume not valid/recycled.
@@ -3447,29 +3481,45 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                 co_return;
             }
 
-            if (magic != segment::segment_magic) {
-                throw invalid_segment_format();
-            }
-            if (ver != descriptor::current_version) {
-                throw std::invalid_argument("Cannot replay old commitlog segments");
+            fragmented_temporary_buffer tail_buf = co_await frag_reader.read_exactly(fin, tail_size);
+            if (tail_buf.empty()) {
+                co_return stop();
             }
 
+            // Validate header checksum.
+            // CRC covers: ver + id + alignment [+ flags for v5].
             crc32_nbo crc;
             crc.process(ver);
             crc.process<int32_t>(id & 0xffffffff);
             crc.process<int32_t>(id >> 32);
             crc.process<uint32_t>(alignment);
 
-            auto cs = crc.checksum();
-            if (cs != checksum) {
+            auto tail_in = tail_buf.get_istream();
+            if (ver == descriptor::segment_version_5) {
+                auto flags_val = read<uint64_t>(tail_in);
+                crc.process(flags_val);
+                this->flags = static_cast<descriptor::feature_flags>(flags_val);
+            }
+
+            auto checksum = read<uint32_t>(tail_in);
+            if (crc.checksum() != checksum) {
                 throw header_checksum_error();
             }
 
+            this->alignment = alignment;
+
+            // Construct initial from common + tail. The initial buffer
+            // participates in the first sector's CRC computation.
+            auto header_size = common_size + tail_size;
+            auto vec = std::move(common_buf).release();
+            auto tail_vec = std::move(tail_buf).release();
+            for (auto&& v : tail_vec) {
+                vec.emplace_back(std::move(v));
+            }
+            this->initial = fragmented_temporary_buffer(std::move(vec), header_size);
+            this->pos = header_size;
             this->id = id;
             this->next = 0;
-            this->alignment = alignment;
-            this->initial = std::move(buf);
-            this->pos = this->initial.size_bytes();
         }
 
         future<fragmented_temporary_buffer> read_data(size_t size) {

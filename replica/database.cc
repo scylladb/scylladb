@@ -899,6 +899,13 @@ database::init_commitlog() {
     if (features().fragmented_commitlog_entries) {
         config.allow_fragmented_entries = true;
     }
+    // use_v5_header is set once at startup and remains fixed for the
+    // lifetime of the node.  A restart is required after the feature is
+    // enabled cluster-wide so that we never mix v4 and v5 segment headers
+    // within a single commitlog instance.
+    if (features().strongly_consistent_tables) {
+        config.use_v5_header = true;
+    }
     return db::commitlog::create_commitlog(config).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
 
