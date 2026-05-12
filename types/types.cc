@@ -3700,7 +3700,7 @@ static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collectio
 }
 
 bytes_ostream serialize_for_cql(const abstract_type& type, collection_mutation_view v) {
-    SCYLLA_ASSERT(type.is_multi_cell());
+    throwing_assert(type.is_multi_cell());
 
     return v.with_deserialized(type, [&] (collection_mutation_view_description mv) {
         return visit(type, make_visitor(
