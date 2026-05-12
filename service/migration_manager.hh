@@ -146,6 +146,13 @@ public:
     //              `group0_raft_op_timeout_in_ms`, which defaults to one minute).
     future<group0_guard> start_group0_operation(std::optional<raft_timeout> timeout = std::nullopt);
 
+    // If group0_schema_version is not yet set in system.scylla_local
+    // (can happen if cluster was upgraded from pre-2024.2 and no schema
+    // change was performed since), perform a dummy schema change through
+    // group0 to assign it. This allows dropping the legacy schema version
+    // hashing code.
+    future<> ensure_group0_schema_version_is_set();
+
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
     // Parameters:

@@ -2061,6 +2061,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         }
 
         co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), true);
+        co_await _migration_manager.local().ensure_group0_schema_version_is_set();
 
         // Initializes monitor only after updating local topology.
         start_tablet_split_monitor();
@@ -2263,6 +2264,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
 
     SCYLLA_ASSERT(_group0);
     co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local(), false);
+    co_await _migration_manager.local().ensure_group0_schema_version_is_set();
     co_await _cdc_gens.local().after_join(std::move(cdc_gen_id));
 
     // Waited on during stop()
