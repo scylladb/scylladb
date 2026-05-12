@@ -1294,7 +1294,7 @@ statement_restrictions::clustering_key_restrictions_has_only_eq() const {
 
 bool
 statement_restrictions::has_token_restrictions() const {
-    return has_partition_token(_partition_key_restrictions, *_schema);
+    return std::holds_alternative<token_range_restrictions>(_partition_range_restrictions);
 }
 
 bool
