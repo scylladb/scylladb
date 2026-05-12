@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string_view>
 #include "auth/cache.hh"
+#include "auth/config.hh"
 #include "cql3/description.hh"
 #include "utils/log.hh"
 #include "utils/on_internal_error.hh"
@@ -29,7 +30,7 @@ future<> maintenance_socket_role_manager::ensure_role_operations_are_enabled() {
         on_internal_error(log, "role operations are already enabled");
     }
 
-    _std_mgr.emplace(_qp, _group0_client, _migration_manager, _cache);
+    _std_mgr.emplace(_qp, _group0_client, _migration_manager, _cache, _cfg);
     return _std_mgr->start();
 }
 
@@ -44,11 +45,13 @@ maintenance_socket_role_manager::maintenance_socket_role_manager(
         cql3::query_processor& qp,
         ::service::raft_group0_client& rg0c,
         ::service::migration_manager& mm,
-        cache& c)
+        cache& c,
+        const config& cfg)
     : _qp(qp)
     , _group0_client(rg0c)
     , _migration_manager(mm)
     , _cache(c)
+    , _cfg(cfg)
     , _std_mgr(std::nullopt)
     , _is_maintenance_mode(false) {
 }

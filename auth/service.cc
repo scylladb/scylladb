@@ -859,11 +859,11 @@ role_manager_factory make_role_manager_factory(
 
     if (boost::iequals(short_name, "CassandraRoleManager")) {
         return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
-            return std::make_unique<standard_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
+            return std::make_unique<standard_role_manager>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
         };
     } else if (boost::iequals(short_name, "LDAPRoleManager")) {
         return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
-            return std::make_unique<ldap_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
+            return std::make_unique<ldap_role_manager>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
         };
     }
     throw std::invalid_argument(fmt::format("Unknown role manager: {}", name));
@@ -891,7 +891,7 @@ role_manager_factory make_maintenance_socket_role_manager_factory(
         sharded<::service::migration_manager>& mm,
         sharded<cache>& auth_cache) {
     return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
-        return std::make_unique<maintenance_socket_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
+        return std::make_unique<maintenance_socket_role_manager>(qp.local(), g0, mm.local(), auth_cache.local(), cfg);
     };
 }
 
