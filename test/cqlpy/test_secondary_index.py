@@ -304,7 +304,6 @@ def test_too_large_indexed_collection_value(cql, test_keyspace):
 # to a table with pre-existing data. The background index-building process
 # cannot return an error to the user, but we do expect it to skip the
 # problematic row and continue to complete the rest of the index build.
-@pytest.mark.xfail(reason="issue #8627")
 def test_too_large_indexed_value_build(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
         # No index yet - a "big" value in v is perfectly fine:
