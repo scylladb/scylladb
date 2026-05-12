@@ -543,7 +543,12 @@ def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value):
                     real_item_count = item_count_map[p.split('/')[-1]]
                     assert js['itemCount'] == real_item_count
                     total_real_item_count += real_item_count
-                assert js['etag']
+                # The etag in the manifest has to be the one S3 reports for the data file. The
+                # file is uploaded in multiple parts, so its etag is not the md5 of the content
+                # and Scylla cannot compute it on its own - see `s3_storage_sink` in
+                # alternator/export.cc.
+                s3_etag = s3.head_object(Bucket=bucket, Key=p)['ETag'].strip('"')
+                assert js['etag'] == s3_etag, f"{js['etag']} != {s3_etag} for file {p}"
 
                 # There is md5 file for each data file, we verify that the md5 in manifest matches the calculated md5 of the downloaded file.
                 md5_checksum = js['md5Checksum'].encode('utf-8')
