@@ -226,6 +226,7 @@ private:
     schema_ptr _view_schema;
     std::unique_ptr<secondary_index::index> _idx_opt;
     expr::expression _idx_restrictions = expr::conjunction({});
+    std::vector<predicate> _idx_column_predicates; ///< Predicates for the chosen index's target column.
     get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
     get_clustering_bounds_fn_t _get_clustering_bounds_fn;
     get_clustering_bounds_fn_t _get_global_index_clustering_ranges_fn;

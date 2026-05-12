@@ -775,7 +775,13 @@ static bool are_predicates_supported_by(const std::vector<predicate>& preds,
     return bool(result);
 }
 
-static std::pair<std::optional<secondary_index::index>, expr::expression> do_find_idx(
+struct do_find_idx_result {
+    std::optional<secondary_index::index> index;
+    expr::expression restrictions;
+    std::vector<predicate> indexed_column_predicates;
+};
+
+static do_find_idx_result do_find_idx(
         bool uses_secondary_indexing,
         const secondary_index::secondary_index_manager& sim,
         std::span<const index_search_group> search_groups,
@@ -788,31 +794,6 @@ bool is_empty_restriction(const expression& e) {
     });
 
     return !contains_non_conjunction;
-}
-
-static
-std::function<bytes_opt (const query_options&)>
-build_value_for_fn(const column_definition& cdef, const expression& e, const schema& s) {
-    auto ac = to_predicate_on_column(e, &cdef, &s);
-    return [ac] (const query_options& options) -> bytes_opt {
-        value_set possible_vals = solve(ac, options);
-        return std::visit(overloaded_functor {
-            [&](const value_list& val_list) -> bytes_opt {
-                if (val_list.empty()) {
-                    return std::nullopt;
-                }
-
-                if (val_list.size() != 1) {
-                    on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", ac.filter));
-                }
-
-                return to_bytes(val_list.front());
-            },
-            [&](const interval<managed_bytes>&) -> bytes_opt {
-                on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", ac.filter));
-            }
-        }, possible_vals);
-    };
 }
 
 bool has_only_eq_binops(const expression& e) {
@@ -1195,12 +1176,13 @@ statement_restrictions::statement_restrictions(private_tag,
         const expr::allow_local_index allow_local_for_idx(
                 !has_partition_key_unrestricted_components()
                 && partition_key_restrictions_is_all_eq());
-        auto [idx_found, idx_restrictions] = do_find_idx(
+        auto idx_result = do_find_idx(
                 _uses_secondary_indexing, sim, search_groups, allow_local_for_idx);
-        if (idx_found) {
-            _idx_opt = std::make_unique<secondary_index::index>(std::move(*idx_found));
+        if (idx_result.index) {
+            _idx_opt = std::make_unique<secondary_index::index>(std::move(*idx_result.index));
         }
-        _idx_restrictions = std::move(idx_restrictions);
+        _idx_restrictions = std::move(idx_result.restrictions);
+        _idx_column_predicates = std::move(idx_result.indexed_column_predicates);
     }
 
     calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db, sc_pk_pred_vectors, sc_ck_pred_vectors, sc_nonpk_pred_vectors);
@@ -1355,13 +1337,13 @@ bool statement_restrictions::is_empty() const {
 }
 
 
-static std::pair<std::optional<secondary_index::index>, expr::expression> do_find_idx(
+static do_find_idx_result do_find_idx(
         bool uses_secondary_indexing,
         const secondary_index::secondary_index_manager& sim,
         std::span<const index_search_group> search_groups,
         allow_local_index allow_local) {
     if (!uses_secondary_indexing) {
-        return {std::nullopt, expr::conjunction({})};
+        return {std::nullopt, expr::conjunction({}), {}};
     }
 
     // Current score table:
@@ -1378,6 +1360,7 @@ static std::pair<std::optional<secondary_index::index>, expr::expression> do_fin
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
     expr::expression chosen_index_restrictions = expr::conjunction({});
+    std::vector<predicate> chosen_index_predicates;
 
     // Several indexes may be usable for this query. When their score is tied,
     // let's pick one by order of the columns mentioned in the restriction
@@ -1405,11 +1388,12 @@ static std::pair<std::optional<secondary_index::index>, expr::expression> do_fin
                     chosen_index = index;
                     chosen_index_score = index_score(index);
                     chosen_index_restrictions = group.restriction_expr;
+                    chosen_index_predicates = preds;
                 }
             }
         });
     }
-    return {chosen_index, chosen_index_restrictions};
+    return {chosen_index, chosen_index_restrictions, std::move(chosen_index_predicates)};
 }
 
 std::pair<std::optional<secondary_index::index>, expr::expression>
@@ -2667,15 +2651,32 @@ std::vector<query::clustering_range> statement_restrictions::get_local_index_clu
 
 get_singleton_value_fn_t
 statement_restrictions::build_value_for_index_partition_key_fn() const {
-    if (!_idx_opt) {
+    if (_idx_column_predicates.empty()) {
         return {};
     }
-    const column_definition* cdef = _schema->get_column_definition(to_bytes(_idx_opt->target_column()));
-    if (!cdef) {
-        throw exceptions::invalid_request_exception("Indexed column not found in schema");
+    auto merged = _idx_column_predicates[0];
+    for (size_t i = 1; i < _idx_column_predicates.size(); ++i) {
+        merged = make_conjunction(std::move(merged), _idx_column_predicates[i]);
     }
+    return [merged = std::move(merged)] (const query_options& options) -> bytes_opt {
+        value_set possible_vals = solve(merged, options);
+        return std::visit(overloaded_functor {
+            [&](const value_list& val_list) -> bytes_opt {
+                if (val_list.empty()) {
+                    return std::nullopt;
+                }
 
-    return build_value_for_fn(*cdef, _idx_restrictions, *_schema);
+                if (val_list.size() != 1) {
+                    on_internal_error(expr_logger, format("expr::value_for - multiple possible values for column: {}", merged.filter));
+                }
+
+                return to_bytes(val_list.front());
+            },
+            [&](const interval<managed_bytes>&) -> bytes_opt {
+                on_internal_error(expr_logger, format("expr::value_for - possible values are a range: {}", merged.filter));
+            }
+        }, possible_vals);
+    };
 }
 
 bytes_opt
