@@ -30,6 +30,7 @@
 #include "schema/schema_builder.hh"
 #include "mutation/timestamp.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/hashers.hh"
 #include "utils/log.hh"
 #include <seastar/core/enum.hh>
@@ -3502,6 +3503,8 @@ future<> system_keyspace::sstables_registry_batch_update_entry_status(table_id t
         auto& row = m.partition().clustered_row(*s, clustering_key::from_singular(*s, data_value(gen)));
         row.cells().apply(*status_cdef, atomic_cell::make_live(*status_cdef->type, ts, status_cdef->type->decompose(status)));
     }
+    utils::get_local_injector().inject("batch_update_entry_status_before_apply",
+            [] { throw std::runtime_error("batch_update_entry_status_before_apply"); });
     co_await apply_mutation(std::move(m));
 }
 
