@@ -34,7 +34,7 @@ from test.pylib.resource_gather import get_resource_gather, setup_cgroup
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
-from test.pylib.scylla_cluster import get_scylla_executable
+from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from typing import Any, List
@@ -629,6 +629,6 @@ async def get_testpy_test(path: pathlib.Path, options: argparse.Namespace, mode:
     if getattr(options, "exe_path", False):
         suite.scylla_exe = options.exe_path
     elif getattr(options, "exe_url", False):
-        suite.scylla_exe = await get_scylla_executable(options.exe_url)
+        suite.scylla_exe = fetch_and_install_scylla_version(url=options.exe_url)
     await suite.add_test(shortname=str(path.relative_to(suite.suite_path).with_suffix("")), casename=None)
     return suite.tests[-1]
