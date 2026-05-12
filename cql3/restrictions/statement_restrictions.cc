@@ -1554,7 +1554,7 @@ size_t statement_restrictions::clustering_columns_restrictions_size() const {
 }
 
 bool statement_restrictions::clustering_key_restrictions_need_filtering() const {
-    if (contains_multi_column_restriction(_clustering_columns_restrictions)) {
+    if (_has_multi_column) {
         return false;
     }
 
