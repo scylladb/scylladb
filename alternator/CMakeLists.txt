@@ -21,6 +21,7 @@ target_sources(alternator
     ttl.cc
     parsed_expression_cache.cc
     http_compression.cc
+    export.cc
     ${cql_grammar_srcs})
 target_include_directories(alternator
   PUBLIC
