@@ -14,6 +14,7 @@
 #include "tombstone_gc-internals.hh"
 #include "locator/token_metadata.hh"
 #include "exceptions/exceptions.hh"
+#include "db/system_keyspace.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -269,18 +270,27 @@ void shared_tombstone_gc_state::insert_pending_repair_time_update(table_id id,
     _pending_updates[id].push_back(range_repair_time{range, repair_time, shard});
 }
 
-future<> shared_tombstone_gc_state::flush_pending_repair_time_update(replica::database& db) {
+future<> shared_tombstone_gc_state::flush_pending_repair_time_update(sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks) {
     auto pending_updates = std::exchange(_pending_updates, {});
 
-    co_await db.container().invoke_on_all([&pending_updates] (replica::database &localdb) -> future<> {
+    co_await sys_ks.invoke_on_all([&pending_updates, &db] (db::system_keyspace& local_sys_ks) -> future<> {
+        auto& localdb = db.local();
         auto& shared_gc_state = localdb.get_compaction_manager().get_shared_tombstone_gc_state();
         auto shard_maps = make_lw_shared<per_table_history_maps>(shared_gc_state.get_reconcile_history_maps());
         for (auto& x : pending_updates) {
             auto& table = x.first;
+            db::replay_position high_rp;
+            auto t = localdb.get_tables_metadata().get_table_if_exists(table);
+            if (t) {
+                high_rp = t->highest_flushed_replay_position();
+            }
             for (auto& update : x.second) {
                 co_await coroutine::maybe_yield();
                 if (update.shard == this_shard_id()) {
-                    do_update_repair_time(*shard_maps, table, update.range, update.time, {});
+                    if (high_rp.valid()) {
+                        co_await local_sys_ks.save_commitlog_cleanup_record(table, update.range, high_rp);
+                    }
+                    do_update_repair_time(*shard_maps, table, update.range, update.time, high_rp);
                     dblog.debug("Flush pending repair time for tombstone gc: table={} range={} repair_time={}",
                             table, update.range, update.time);
                 }

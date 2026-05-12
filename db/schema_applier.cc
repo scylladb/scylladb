@@ -1156,7 +1156,7 @@ future<> schema_applier::finalize_tables_and_views() {
     if (_tablet_hint) {
         auto& db = sharded_db.local();
         co_await db.get_compaction_manager().get_shared_tombstone_gc_state().
-                flush_pending_repair_time_update(db);
+                flush_pending_repair_time_update(sharded_db, _sys_ks);
         _ss.local().wake_up_topology_state_machine();
     }
 

@@ -125,7 +125,7 @@ public:
     void drop_repair_history_for_table(const table_id& id);
 
     void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
-    future<> flush_pending_repair_time_update(replica::database& db);
+    future<> flush_pending_repair_time_update(sharded<replica::database>&, sharded<db::system_keyspace>&);
 
     tombstone_gc_state_snapshot snapshot() const noexcept;
 };
