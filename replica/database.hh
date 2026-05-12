@@ -1430,6 +1430,10 @@ public:
     future<compaction_reenablers_and_lock_holders> get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
             const service::frozen_topology_guard& guard, dht::token_range range);
     future<uint64_t> estimated_partitions_in_range(dht::token_range tr) const;
+
+    bool ready_for_writes() const {
+        return !_readonly;
+    }
 };
 
 lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);
