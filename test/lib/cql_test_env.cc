@@ -1030,12 +1030,12 @@ private:
             });
 
             _cm.invoke_on_all([&](compaction::compaction_manager& cm) {
-                cm.get_shared_tombstone_gc_state().set_gc_time_min_source([this](const table_id& id) {
+                cm.get_shared_tombstone_gc_state().set_gc_time_min_source([this](const table_id& id, const db::replay_position& rp) {
                     auto t = _db.local().get_tables_metadata().get_table_if_exists(id);
                     if (t && t->ready_for_writes()) {
                         auto* cl = t->commitlog();
                         if (cl) {
-                            return cl->min_gc_time(id);
+                            return cl->min_gc_time(id, rp);
                         }
                     }
                     return gc_clock::time_point::max();

@@ -9,8 +9,10 @@
 #pragma once
 
 #include <span>
+#include <tuple>
 #include <seastar/core/shared_ptr.hh>
 #include "gc_clock.hh"
+#include "db/commitlog/replay_position.hh"
 #include "dht/token.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/token_metadata.hh"
@@ -47,7 +49,7 @@ using per_table_history_maps = std::unordered_map<table_id, repair_history_map_p
 
 class tombstone_gc_options;
 
-using gc_time_min_source = std::function<gc_clock::time_point(const table_id&)>;
+using gc_time_min_source = std::function<gc_clock::time_point(const table_id&, const db::replay_position&)>;
 
 struct range_repair_time {
     dht::token_range range;
@@ -91,8 +93,8 @@ public:
         _gc_min_source = std::move(src);
     }
 
-    gc_clock::time_point get_gc_min_time(const table_id& tid) const noexcept {
-        return _gc_min_source ? _gc_min_source(tid) : gc_clock::time_point::max();
+    gc_clock::time_point get_gc_min_time(const table_id& tid, const db::replay_position& rp = {}) const noexcept {
+        return _gc_min_source ? _gc_min_source(tid, rp) : gc_clock::time_point::max();
     }
 
     void set_table_rf_one(table_id id) {
@@ -108,7 +110,8 @@ public:
         return _rf_one_tables.contains(id);
     }
 
-    void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
+    using opt_rp = std::optional<db::replay_position>;
+    void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, opt_rp = {});
 
     // A single (range, repair_time) pair used by batch_update_repair_time.
     using repair_time_update = std::pair<dht::token_range, gc_clock::time_point>;
@@ -148,7 +151,7 @@ private:
     bool _check_commitlog{true};
 
 private:
-    [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
+    [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point, const db::replay_position& = {}) const;
 
     [[nodiscard]] repair_history_map_ptr get_repair_history_for_table(const table_id& id) const;
 

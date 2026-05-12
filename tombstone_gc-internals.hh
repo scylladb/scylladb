@@ -6,7 +6,21 @@
 #include "tombstone_gc.hh"
 #include <boost/icl/interval_map.hpp>
 
-using repair_history_map = boost::icl::interval_map<dht::token, gc_clock::time_point, boost::icl::partial_absorber, std::less, boost::icl::inplace_max>;
+/**
+ * Holds a repair history entry for a given token range.
+ * Timestamp is time of last repair, replay_position is an
+ * optional flush mark for the table in question which is
+ * also marked in the commitlog cleanup table. I.e. the 
+ * lowest known position for which a replay might occur.
+ */
+struct repair_history_entry {
+    gc_clock::time_point timestamp;
+    db::replay_position replay_position;
+
+    auto operator<=>(const repair_history_entry&) const noexcept = default;
+};
+
+using repair_history_map = boost::icl::interval_map<dht::token, repair_history_entry, boost::icl::partial_absorber, std::less, boost::icl::inplace_max>;
 
 class repair_history_map_ptr {
     lw_shared_ptr<repair_history_map> _ptr;
