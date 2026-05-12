@@ -178,6 +178,7 @@ private:
 
     bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
     bool _has_multi_column; ///< True iff _clustering_columns_restrictions has a multi-column restriction.
+    bool _ck_is_on_collection = false; ///< True iff _clustering_columns_restrictions has a collection restriction (CONTAINS/CONTAINS_KEY).
 
     std::vector<expr::expression> _where; ///< The entire WHERE clause (factorized).
 

@@ -75,9 +75,6 @@ inline bool has_slice_or_needs_filtering(const expression& e) {
     return find_binop(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
 }
 
-/// True iff binary_operator involves a collection.
-extern bool is_on_collection(const binary_operator&);
-
 bool contains_multi_column_restriction(const expression&);
 
 bool has_only_eq_binops(const expression&);
@@ -795,16 +792,6 @@ static std::pair<std::optional<secondary_index::index>, expr::expression> do_fin
         allow_local_index allow_local);
 
 
-bool is_on_collection(const binary_operator& b) {
-    if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
-        return true;
-    }
-    if (auto tuple = expr::as_if<tuple_constructor>(&b.lhs)) {
-        return std::ranges::any_of(tuple->elements, [] (const expression& v) { return expr::is<subscript>(v); });
-    }
-    return false;
-}
-
 bool is_empty_restriction(const expression& e) {
     bool contains_non_conjunction = recurse_until(e, [&](const expression& e) -> bool {
         return !is<conjunction>(e);
@@ -894,6 +881,7 @@ statement_restrictions::statement_restrictions(private_tag,
     bool ck_is_empty = true;
     bool has_mc_clustering = false;
     bool ck_has_slice = false;
+    bool ck_is_on_collection = false;
     const column_definition* ck_last_column = nullptr;
     const predicate* first_mc_pred = nullptr;
     bool pk_is_empty = true;
@@ -1062,6 +1050,9 @@ statement_restrictions::statement_restrictions(private_tag,
                 if (pred.is_slice) {
                     ck_has_slice = true;
                 }
+                if (pred.op == oper_t::CONTAINS || pred.op == oper_t::CONTAINS_KEY) {
+                    ck_is_on_collection = true;
+                }
                 if (ck_last_column == nullptr || schema->position(*new_column) > schema->position(*ck_last_column)) {
                     ck_last_column = new_column;
                 }
@@ -1122,6 +1113,7 @@ statement_restrictions::statement_restrictions(private_tag,
         }
     }
     _has_multi_column = has_mc_clustering;
+    _ck_is_on_collection = ck_is_on_collection;
     if (_check_indexes) {
         auto cf = db.find_column_family(schema);
         auto& sim = cf.get_index_manager();
@@ -1188,7 +1180,7 @@ statement_restrictions::statement_restrictions(private_tag,
     if (_uses_secondary_indexing || clustering_key_restrictions_need_filtering()) {
         _index_restrictions.push_back(_clustering_columns_restrictions);
         search_groups.push_back({sc_ck_pred_vectors, _clustering_columns_restrictions});
-    } else if (find_binop(_clustering_columns_restrictions, is_on_collection)) {
+    } else if (_ck_is_on_collection) {
         fail(unimplemented::cause::INDEXES);
     }
 
@@ -1590,7 +1582,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
         return;
     }
 
-    if (find_binop(_clustering_columns_restrictions, is_on_collection)
+    if (_ck_is_on_collection
         && !_has_queriable_ck_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
