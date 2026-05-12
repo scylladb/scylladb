@@ -1342,7 +1342,7 @@ schema_ptr system_keyspace::client_routes() {
 }
 
 future<system_keyspace::local_info> system_keyspace::load_local_info() {
-    auto msg = co_await execute_cql(format("SELECT host_id, cluster_name, data_center, rack FROM system.{} WHERE key=?", LOCAL), sstring(LOCAL));
+    auto msg = co_await execute_cql(format("SELECT host_id, cluster_name, data_center, rack FROM system.{} WHERE key=? LIMIT 1", LOCAL), sstring(LOCAL));
 
     local_info ret;
     if (!msg->empty()) {
@@ -2538,7 +2538,7 @@ future<> system_keyspace::get_repair_task(tasks::task_id task_uuid, repair_task_
 }
 
 future<gms::generation_type> system_keyspace::increment_and_get_generation() {
-    auto req = format("SELECT gossip_generation FROM system.{} WHERE key='{}'", LOCAL, LOCAL);
+    auto req = format("SELECT gossip_generation FROM system.{} WHERE key='{}' LIMIT 1", LOCAL, LOCAL);
     auto rs = co_await _qp.execute_internal(req, cql3::query_processor::cache_internal::yes);
     gms::generation_type generation;
     if (rs->empty() || !rs->one().has("gossip_generation")) {
@@ -3732,7 +3732,7 @@ future<std::vector<sstring>> system_keyspace::query_all_dict_names() const {
 }
 
 future<netw::shared_dict> system_keyspace::query_dict(std::string_view name) const {
-    static sstring query = format("SELECT * FROM {}.{} WHERE name = ?;", NAME, DICTS);
+    static sstring query = format("SELECT * FROM {}.{} WHERE name = ? LIMIT 1;", NAME, DICTS);
     auto result_set = co_await _qp.execute_internal(
         query, db::consistency_level::ONE, internal_system_query_state(), {name}, cql3::query_processor::cache_internal::yes);
     if (!result_set->empty()) {
@@ -3753,7 +3753,7 @@ future<netw::shared_dict> system_keyspace::query_dict(std::string_view name) con
 }
 
 future<std::optional<db_clock::time_point>> system_keyspace::query_dict_timestamp(std::string_view name) const {
-    static sstring query = format("SELECT timestamp FROM {}.{} WHERE name = ?;", NAME, DICTS);
+    static sstring query = format("SELECT timestamp FROM {}.{} WHERE name = ? LIMIT 1;", NAME, DICTS);
     auto result_set = co_await _qp.execute_internal(
         query, db::consistency_level::ONE, internal_system_query_state(), {name}, cql3::query_processor::cache_internal::yes);
     if (!result_set->empty()) {

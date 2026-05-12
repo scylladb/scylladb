@@ -984,7 +984,7 @@ static future<>
 do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp, tablet_map& tmap, const tablet_metadata_change_hint::table_hint& hint) {
     for (const auto token : hint.tokens) {
         auto res = co_await qp.execute_internal(
-                "select * from system.tablets where table_id = ? and last_token = ?",
+                "select * from system.tablets where table_id = ? and last_token = ? LIMIT 1",
                 db::consistency_level::ONE,
                 {data_value(hint.table_id.uuid()), data_value(dht::token::to_int64(token))},
                 cql3::query_processor::cache_internal::yes);
@@ -1166,7 +1166,7 @@ future<std::optional<tablet_transition_stage>> read_tablet_transition_stage(cql3
     if (auto base_table = co_await read_base_table(qp, tid)) {
         tid = *base_table;
     }
-    auto rs = co_await qp.execute_internal("select stage from system.tablets where table_id = ? and last_token = ?",
+    auto rs = co_await qp.execute_internal("select stage from system.tablets where table_id = ? and last_token = ? LIMIT 1",
             {tid.uuid(), dht::token::to_int64(last_token)}, cql3::query_processor::cache_internal::no);
     if (rs->empty() || !rs->one().has("stage")) {
         co_return std::nullopt;

@@ -269,7 +269,7 @@ future<std::optional<sstring>> password_authenticator::get_password_hash(std::st
     // obsolete prepared statements pretty quickly.
     // Rely on query processing caching statements instead, and lets assume
     // that a map lookup string->statement is not gonna kill us much.
-    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ?",
+    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ? LIMIT 1",
                 SALTED_HASH,
                 db::system_keyspace::NAME,
                 meta::roles_table::name,

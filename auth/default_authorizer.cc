@@ -61,7 +61,7 @@ default_authorizer::authorize(const role_or_anonymous& maybe_role, const resourc
         co_return permissions::NONE;
     }
 
-    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ? AND {} = ?",
+    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ? AND {} = ? LIMIT 1",
             PERMISSIONS_NAME,
             db::system_keyspace::NAME,
             PERMISSIONS_CF,

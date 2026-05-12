@@ -335,7 +335,7 @@ system_distributed_keyspace::cdc_desc_exists(
 
     // At this point replicas know the schema, we can perform the actual read...
     co_return co_await _qp.execute_internal(
-            format("SELECT time FROM {}.{} WHERE key = ? AND time = ?", NAME, CDC_TIMESTAMPS),
+            format("SELECT time FROM {}.{} WHERE key = ? AND time = ? LIMIT 1", NAME, CDC_TIMESTAMPS),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
             { CDC_TIMESTAMPS_KEY, streams_ts },

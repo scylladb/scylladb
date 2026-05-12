@@ -132,7 +132,7 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
     utils::UUID snapshot_id = id_row.get_as<utils::UUID>("snapshot_id");
 
     // Fetch raft log index and term for the latest snapshot descriptor
-    static const auto load_snp_info_cql = format("SELECT idx, term FROM system.{} WHERE shard = ? AND group_id = ?",
+    static const auto load_snp_info_cql = format("SELECT idx, term FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1",
         db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
     ::shared_ptr<cql3::untyped_result_set> snp_rs = co_await _qp.execute_internal(load_snp_info_cql, {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
     // Should be only one matching row, since each individual server can only

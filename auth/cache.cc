@@ -153,7 +153,7 @@ future<lw_shared_ptr<cache::role_record>> cache::fetch_role(const role_name_t& r
     };
     // roles
     {
-        static const sstring q = format("SELECT * FROM {}.{} WHERE role = ?", db::system_keyspace::NAME, meta::roles_table::name);
+        static const sstring q = format("SELECT * FROM {}.{} WHERE role = ? LIMIT 1", db::system_keyspace::NAME, meta::roles_table::name);
         auto rs = co_await fetch(q);
         if (!rs->empty()) {
             auto& r = rs->one();
