@@ -67,8 +67,6 @@ inline bool needs_filtering(oper_t op) {
            (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
 }
 
-bool has_only_eq_binops(const expression&);
-
 static
 value_set
 solve(const predicate& ac, const query_options& options) {
@@ -796,16 +794,6 @@ bool is_empty_restriction(const expression& e) {
     return !contains_non_conjunction;
 }
 
-bool has_only_eq_binops(const expression& e) {
-    const expr::binary_operator* non_eq_binop = find_in_expression<expr::binary_operator>(e,
-        [](const expr::binary_operator& binop) {
-            return binop.op != expr::oper_t::EQ;
-        }
-    );
-
-    return non_eq_binop == nullptr;
-}
-
 statement_restrictions::statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering)
     : _schema(schema)
     , _partition_range_is_simple(true)
@@ -846,9 +834,11 @@ statement_restrictions::statement_restrictions(private_tag,
     bool has_mc_clustering = false;
     bool ck_has_slice = false;
     bool ck_is_on_collection = false;
+    bool ck_is_all_eq = true;
     const column_definition* ck_last_column = nullptr;
     const predicate* first_mc_pred = nullptr;
     bool pk_is_empty = true;
+    bool pk_is_all_eq = true;
     bool pk_has_slice_or_needs_filtering = false;
     bool has_token = false;
     std::optional<predicate> token_pred;
@@ -876,6 +866,9 @@ statement_restrictions::statement_restrictions(private_tag,
                 mc_ck_preds.push_back(pred);
                 if (pred.is_slice) {
                     ck_has_slice = true;
+                }
+                if (!pred.equality) {
+                    ck_is_all_eq = false;
                 }
             } else {
 
@@ -919,6 +912,7 @@ statement_restrictions::statement_restrictions(private_tag,
                     _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
                     mc_ck_preds.push_back(pred);
                     ck_has_slice = true;
+                    ck_is_all_eq = false;
                 } else {
                     throw exceptions::invalid_request_exception(format("Unsupported multi-column relation: ", pred.filter));
                 }
@@ -938,6 +932,9 @@ statement_restrictions::statement_restrictions(private_tag,
             _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, pred.filter);
             pk_is_empty = false;
             has_token = true;
+            if (!pred.equality) {
+                pk_is_all_eq = false;
+            }
             if (token_pred) {
                 token_pred = make_conjunction(std::move(*token_pred), pred);
             } else {
@@ -978,6 +975,9 @@ statement_restrictions::statement_restrictions(private_tag,
                 _partition_range_is_simple &= !pred.is_in;
                 if (pred.is_slice || (pred.op && needs_filtering(*pred.op))) {
                     pk_has_slice_or_needs_filtering = true;
+                }
+                if (!pred.equality) {
+                    pk_is_all_eq = false;
                 }
             } else if (def->is_clustering_key()) {
                 if (has_mc_clustering) {
@@ -1020,6 +1020,9 @@ statement_restrictions::statement_restrictions(private_tag,
                 }
                 if (pred.op == oper_t::CONTAINS || pred.op == oper_t::CONTAINS_KEY) {
                     ck_is_on_collection = true;
+                }
+                if (!pred.equality) {
+                    ck_is_all_eq = false;
                 }
                 if (ck_last_column == nullptr || schema->position(*new_column) > schema->position(*ck_last_column)) {
                     ck_last_column = new_column;
@@ -1083,6 +1086,8 @@ statement_restrictions::statement_restrictions(private_tag,
     }
     _has_multi_column = has_mc_clustering;
     _ck_is_on_collection = ck_is_on_collection;
+    _ck_is_all_eq = ck_is_all_eq;
+    _pk_is_all_eq = pk_is_all_eq;
     _pk_has_slice_or_needs_filtering = pk_has_slice_or_needs_filtering;
     if (_check_indexes) {
         auto cf = db.find_column_family(schema);
@@ -1271,7 +1276,7 @@ statement_restrictions::clustering_key_restrictions_has_IN() const {
 
 bool
 statement_restrictions::clustering_key_restrictions_has_only_eq() const {
-    return has_only_eq_binops(_clustering_columns_restrictions);
+    return _ck_is_all_eq;
 }
 
 bool
@@ -1504,7 +1509,7 @@ bool statement_restrictions::partition_key_restrictions_is_empty() const {
 }
 
 bool statement_restrictions::partition_key_restrictions_is_all_eq() const {
-    return has_only_eq_binops(_partition_key_restrictions);
+    return _pk_is_all_eq;
 }
 
 size_t statement_restrictions::partition_key_restrictions_size() const {
