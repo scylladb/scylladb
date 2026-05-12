@@ -1145,10 +1145,24 @@ private:
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             _db.local().check_rf_rack_validity(_token_metadata.local().get());
 
+            auto make_auth_cfg = [&] {
+                return auth::config {
+                    .auth_superuser_name = cfg->auth_superuser_name(),
+                    .auth_superuser_salted_password = cfg->auth_superuser_salted_password(),
+                    .saslauthd_socket_path = cfg->saslauthd_socket_path(),
+                    .auth_certificate_role_queries = cfg->auth_certificate_role_queries(),
+                    .ldap_url_template = cfg->ldap_url_template(),
+                    .ldap_attr_role = cfg->ldap_attr_role(),
+                    .ldap_bind_dn = cfg->ldap_bind_dn(),
+                    .ldap_bind_passwd = cfg->ldap_bind_passwd(),
+                    .permissions_update_interval_in_ms = cfg->permissions_update_interval_in_ms,
+                };
+            };
             _auth_service.start(std::ref(_qp), std::ref(group0_client),
                     auth::make_authorizer_factory(cfg->authorizer(), _qp),
                     auth::make_authenticator_factory(cfg->authenticator(), _qp, group0_client, _mm, _auth_cache),
                     auth::make_role_manager_factory(cfg->role_manager(), _qp, group0_client, _mm, _auth_cache),
+                    sharded_parameter(make_auth_cfg),
                     maintenance_socket_enabled::no, std::ref(_auth_cache)).get();
 
             _auth_service.invoke_on_all([this] (auth::service& auth) {

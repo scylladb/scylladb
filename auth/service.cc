@@ -104,17 +104,17 @@ service::service(
         authorizer_factory authorizer_factory,
         authenticator_factory authenticator_factory,
         role_manager_factory role_manager_factory,
+        config cfg,
         maintenance_socket_enabled used_by_maintenance_socket,
         cache& cache)
-            : service(
-                      cache,
-                      qp,
-                      g0,
-                      authorizer_factory(),
-                      authenticator_factory(),
-                      role_manager_factory(),
-                      used_by_maintenance_socket) {
-}
+            : _cache(cache)
+            , _qp(qp)
+            , _group0_client(g0)
+            , _cfg(std::move(cfg))
+            , _authorizer(authorizer_factory())
+            , _authenticator(authenticator_factory(_cfg))
+            , _role_manager(role_manager_factory(_cfg))
+            , _used_by_maintenance_socket(used_by_maintenance_socket) {}
 
 future<> service::create_legacy_keyspace_if_missing(::service::migration_manager& mm) const {
     SCYLLA_ASSERT(this_shard_id() == 0); // once_among_shards makes sure a function is executed on shard 0 only
@@ -369,7 +369,7 @@ future<std::vector<cql3::description>> service::describe_roles(bool with_hashed_
 
     const bool authenticator_uses_password_hashes = _authenticator->uses_password_hashes();
 
-    const auto default_su = cql3::util::maybe_quote(default_superuser(_qp));
+    const auto default_su = cql3::util::maybe_quote(_cfg.auth_superuser_name);
 
     auto produce_create_statement = [&default_su, with_hashed_passwords] (const sstring& formatted_role_name,
             const std::optional<sstring>& maybe_hashed_password, bool can_login, bool is_superuser) {
@@ -826,23 +826,23 @@ authenticator_factory make_authenticator_factory(
     std::string_view short_name = get_short_name(name);
 
     if (boost::iequals(short_name, "AllowAllAuthenticator")) {
-        return [&qp, &g0, &mm, &auth_cache] {
+        return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
             return std::make_unique<allow_all_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
         };
     } else if (boost::iequals(short_name, "PasswordAuthenticator")) {
-        return [&qp, &g0, &mm, &auth_cache] {
+        return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
             return std::make_unique<password_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
         };
     } else if (boost::iequals(short_name, "CertificateAuthenticator")) {
-        return [&qp, &g0, &mm, &auth_cache] {
+        return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
             return std::make_unique<certificate_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
         };
     } else if (boost::iequals(short_name, "SaslauthdAuthenticator")) {
-        return [&qp, &g0, &mm, &auth_cache] {
+        return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
             return std::make_unique<saslauthd_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
         };
     } else if (boost::iequals(short_name, "TransitionalAuthenticator")) {
-        return [&qp, &g0, &mm, &auth_cache] {
+        return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
             return std::make_unique<transitional_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
         };
     }
@@ -858,11 +858,11 @@ role_manager_factory make_role_manager_factory(
     std::string_view short_name = get_short_name(name);
 
     if (boost::iequals(short_name, "CassandraRoleManager")) {
-        return [&qp, &g0, &mm, &auth_cache] {
+        return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
             return std::make_unique<standard_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
         };
     } else if (boost::iequals(short_name, "LDAPRoleManager")) {
-        return [&qp, &g0, &mm, &auth_cache] {
+        return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
             return std::make_unique<ldap_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
         };
     }
@@ -874,7 +874,7 @@ authenticator_factory make_maintenance_socket_authenticator_factory(
         ::service::raft_group0_client& g0,
         sharded<::service::migration_manager>& mm,
         sharded<cache>& auth_cache) {
-    return [&qp, &g0, &mm, &auth_cache] {
+    return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
         return std::make_unique<maintenance_socket_authenticator>(qp.local(), g0, mm.local(), auth_cache.local());
     };
 }
@@ -890,7 +890,7 @@ role_manager_factory make_maintenance_socket_role_manager_factory(
         ::service::raft_group0_client& g0,
         sharded<::service::migration_manager>& mm,
         sharded<cache>& auth_cache) {
-    return [&qp, &g0, &mm, &auth_cache] {
+    return [&qp, &g0, &mm, &auth_cache] (const config& cfg) {
         return std::make_unique<maintenance_socket_role_manager>(qp.local(), g0, mm.local(), auth_cache.local());
     };
 }
