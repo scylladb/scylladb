@@ -62,8 +62,12 @@ public:
     operator const request_type&() const {
         return request();
     }
+    std::string_view body() const {
+        return _body;
+    }
 protected:
     request_type _req;
+    std::string _body;
 };
 
 /**
@@ -152,7 +156,7 @@ struct redacted {
     }
 };
 
-using redacted_request_type = redacted<httpclient::request_type, http_log_filter::body_type::request>;
+using redacted_request_type = redacted<request_wrapper, http_log_filter::body_type::request>;
 using redacted_result_type  = redacted<httpclient::result_type, http_log_filter::body_type::response>;
 
 using key_value = std::pair<std::string_view, std::string_view>;
@@ -198,8 +202,15 @@ future<> send_request(std::string_view uri
 }
 
 template <>
-struct fmt::formatter<rest::httpclient::request_type> : fmt::formatter<std::string_view> {
-    auto format(const rest::httpclient::request_type&, fmt::format_context& ctx) const -> decltype(ctx.out());
+struct fmt::formatter<rest::request_wrapper> : fmt::formatter<std::string_view> {
+    auto format(const rest::request_wrapper&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<rest::httpclient> : fmt::formatter<rest::request_wrapper> {
+    auto format(const rest::httpclient& c, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+        return fmt::formatter<rest::request_wrapper>::format(c, ctx);
+    }
 };
 
 template <>

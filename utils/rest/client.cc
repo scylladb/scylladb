@@ -40,6 +40,7 @@ void rest::request_wrapper::method(method_type type) {
 }
 
 void rest::request_wrapper::content(std::string_view content_type, std::string_view content) {
+    _body = content;
     _req.write_body(sstring(content_type), sstring(content));
 }
 
@@ -249,12 +250,13 @@ future<> rest::send_request(std::string_view uri
 constexpr auto linesep = '\n';
 
 auto 
-fmt::formatter<rest::httpclient::request_type>::format(const rest::httpclient::request_type& r, fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    auto os = fmt::format_to(ctx.out(), "{} {} HTTP/{}{}", r._method, r._url, r._version, linesep);
-    for (auto& [k, v] : r._headers) {
+fmt::formatter<rest::request_wrapper>::format(const rest::request_wrapper& r, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    const auto& req = r.request();
+    auto os = fmt::format_to(ctx.out(), "{} {} HTTP/{}{}", req._method, req._url, req._version, linesep);
+    for (auto& [k, v] : req._headers) {
         os = fmt::format_to(os, "{}: {}{}", k, v, linesep);
     }
-    os = fmt::format_to(os, "{}{}", linesep, r.content);
+    os = fmt::format_to(os, "{}{}", linesep, r.body());
     return os;
 }
 
@@ -278,11 +280,13 @@ fmt::formatter<seastar::http::reply>::format(const seastar::http::reply& r, fmt:
 auto
 fmt::formatter<rest::redacted_request_type>::format(const rest::redacted_request_type& rr, fmt::format_context& ctx) const -> decltype(ctx.out()) {
     const auto& r = rr.original;
-    auto os = fmt::format_to(ctx.out(), "{} {} HTTP/{}{}", r._method, r._url, r._version, linesep);
-    for (auto& [k, v] : r._headers) {
+    const auto& req = r.request();
+    auto os = fmt::format_to(ctx.out(), "{} {} HTTP/{}{}", req._method, req._url, req._version, linesep);
+    for (auto& [k, v] : req._headers) {
         os = fmt::format_to(os, "{}: {}{}", k, rr.filter_header(k, v).value_or(v), linesep);
     }
-    os = fmt::format_to(os, "{}{}", linesep, rr.filter_body(r.content).value_or(r.content));
+    auto body = r.body();
+    os = fmt::format_to(os, "{}{}", linesep, rr.filter_body(body).value_or(std::string(body)));
     return os;
 }
 

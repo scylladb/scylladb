@@ -325,7 +325,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
     req.add_header("Content-Length", std::to_string(req.request().content_length));
 
     gcp_storage.trace("Sending: {}", redacted_request_type {
-        req.request(),
+        req,
         bearer_filter()
     });
 
