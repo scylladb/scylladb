@@ -140,37 +140,44 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
     co_return rjson::print(std::move(response));
 }
 
-// expiration_service is a sharded service responsible for cleaning up expired
-// items in all tables with per-item expiration enabled. Currently, this means
-// Alternator tables with TTL configured via an UpdateTimeToLive request.
+// expiration_service is a sharded service that cleans up expired items in all
+// tables with per-item expiration enabled. Currently, this includes Alternator
+// tables with TTL configured via UpdateTimeToLive and CQL tables using
+// per-row TTL.
 //
 // Here is a brief overview of how the expiration service works:
 //
-// An expiration thread on each shard periodically scans the items (i.e.,
-// rows) owned by this shard, looking for items whose chosen expiration-time
-// attribute indicates they are expired, and deletes those items.
-// The expiration-time "attribute" can be either an actual Scylla column
-// (must be numeric) or an Alternator "attribute" - i.e., an element in
-// the ATTRS_COLUMN_NAME map<utf8,bytes> column where the numeric expiration
-// time is encoded in DynamoDB's JSON encoding inside the bytes value.
-// To avoid scanning the same items RF times in RF replicas, only one node is
-// responsible for scanning a token range at a time. Normally, this is the
-// node owning this range as a "primary range" (the first node in the ring
-// with this range), but when this node is down, the secondary owner (the
-// second in the ring) may take over.
-// An expiration thread is responsible for all tables which need expiration
-// scans. Currently, the different tables are scanned sequentially (not in
-// parallel).
-// The expiration thread scans item using CL=QUORUM to ensures that it reads
-// a consistent expiration-time attribute. This means that the items are read
-// locally and in addition QUORUM-1 additional nodes (one additional node
-// when RF=3) need to read the data and send digests.
-// When the expiration thread decides that an item has expired and wants
-// to delete it, it does it using a CL=QUORUM write. This allows this
-// deletion to be visible for consistent (quorum) reads. The deletion,
-// like user deletions, will also appear on the CDC log and therefore
-// Alternator Streams if enabled - currently as ordinary deletes (the
-// userIdentity flag is currently missing this is issue #11523).
+// On each shard, an expiration thread periodically scans items (rows) owned by
+// that shard, checks their configured expiration-time attribute, and deletes
+// expired items.
+//
+// The expiration-time attribute can be either:
+// 1) a real Scylla column (must be numeric), or
+// 2) an Alternator attribute stored in ATTRS_COLUMN_NAME (map<utf8, bytes>),
+//    where the numeric expiration time is encoded using DynamoDB JSON inside
+//    the bytes value.
+//
+// An expiration thread handles all tables that require expiration scans.
+// Tables are currently scanned sequentially (not in parallel).
+//
+// Scans and deletes are done with CL=LOCAL_QUORUM:
+// - Scans use LOCAL_QUORUM so expiration decisions are based on a consistent
+//   value (for RF=3, this means the scanning thread reads the local replica
+//   plus asking one additional replica for a digest).
+// - Deletes use LOCAL_QUORUM so they are visible to LOCAL_QUORUM readers.
+//
+// TTL deletions are also written to CDC as system-originated expiration
+// deletions (not user-initiated deletes). In Alternator Streams, these events
+// include userIdentity.
+//
+// To avoid scanning each item RF times, exactly one node scans a token range
+// at a time. Normally this is the global primary owner (first replica in ring
+// order). If that node is down, the global secondary owner (second replica)
+// may temporarily take over.
+//
+// "Primary"/"secondary" ownership here is global (cluster-wide), not per DC,
+// so each item is scanned once per cluster. Resulting deletes are replicated
+// to other DCs by normal replication.
 expiration_service::expiration_service(data_dictionary::database db, service::storage_proxy& proxy, gms::gossiper& g)
         : _db(db)
         , _proxy(proxy)
@@ -240,8 +247,8 @@ static bool is_expired(const rjson::value& expiration_time, gc_clock::time_point
 }
 
 // expire_item() expires an item - i.e., deletes it as appropriate for
-// expiration - with CL=QUORUM and (FIXME!) in a way Alternator Streams
-// understands it is an expiration event - not a user-initiated deletion.
+// expiration - with CL=LOCAL_QUORUM, and in a way Alternator Streams
+// understands is an expiration event - not a user-initiated deletion.
 static future<> expire_item(service::storage_proxy& proxy,
                             const service::query_state& qs,
                             const std::vector<managed_bytes_opt>& row,
@@ -297,6 +304,8 @@ static future<> expire_item(service::storage_proxy& proxy,
         db::allow_per_partition_rate_limit::no,
         false,
         cdc::per_request_options{
+            // tell Alternator Streams to report this deletion as a TTL
+            // expiration, not a user-initiated DeleteItem request.
             .is_system_originated = true,
         }
     );
@@ -384,15 +393,23 @@ static future<std::vector<std::pair<dht::token_range, locator::host_id>>> get_se
 // the tokens owned by it, so we want the secondary owner to take over its
 // primary ranges.
 //
-// FIXME: need to decide how to choose primary ranges in multi-DC setup!
-// We could call get_primary_ranges_within_dc() below instead of get_primary_ranges().
+// Multi-DC design choice: We use get_primary_ranges() (global primary) rather
+// than get_primary_ranges_within_dc() (DC-local primary). This means each
+// token range is scanned by exactly one node in the entire cluster - not once
+// per DC. Deletions done with CL=LOCAL_QUORUM are replicated to all DCs by
+// the normal replication mechanism. A known limitation is that if an entire DC
+// goes down, some token ranges may not be scanned promptly: if both the global
+// primary and global secondary for a range are in the same down DC, expiration
+// of items in that range will be delayed until the DC comes back up.
+//
 // NOTICE: Iteration currently starts from a random token range in order to improve
 // the chances of covering all ranges during a scan when restarts occur.
 // A more deterministic way would be to regularly persist the scanning state,
 // but that incurs overhead that we want to avoid if not needed.
 //
-// FIXME: Check if this algorithm is safe with tablet migration.
-// https://github.com/scylladb/scylladb/issues/16567
+// Note: this class is only used for the vnode path; the tablet path in
+// scan_table() is handled separately but follows the same multi-DC design
+// decisions described above.
 
 // ranges_holder_primary holds just the primary ranges themselves
 class ranges_holder_primary {
@@ -540,9 +557,6 @@ struct scan_ranges_context {
         tracing::trace_state_ptr trace_state;
         // NOTICE: empty_service_permit is used because the TTL service has fixed parallelism
         query_state_ptr = std::make_unique<service::query_state>(internal_client_state, trace_state, empty_service_permit());
-        // FIXME: What should we do on multi-DC? Will we run the expiration on the same ranges on all
-        // DCs or only once for each range? If the latter, we need to change the CLs in the
-        // scanner and deleter.
         db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
         query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
         query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
@@ -774,6 +788,10 @@ static future<bool> scan_table(
     if (s->table().uses_tablets()) {
         locator::effective_replication_map_ptr erm = s->table().get_effective_replication_map();
         auto my_host_id = erm->get_topology().my_host_id();
+        // tablet_map is snapshotted once. If a tablet migrates away during the
+        // scan we may do a redundant (but harmless and idempotent) expiration;
+        // if one migrates to us mid-scan we miss it this pass but catch it next
+        // period. Both cases are safe.
         const auto &tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s->id());
         for (std::optional tablet = tablet_map.first_tablet(); tablet; tablet = tablet_map.next_tablet(*tablet)) {
             auto tablet_primary_replica = tablet_map.get_primary_replica(*tablet, erm->get_topology());
