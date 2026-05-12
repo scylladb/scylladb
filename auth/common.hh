@@ -45,8 +45,6 @@ constexpr std::string_view PERMISSIONS_CF = "role_permissions";
 constexpr std::string_view ROLE_MEMBERS_CF = "role_members";
 constexpr std::string_view ROLE_ATTRIBUTES_CF = "role_attributes";
 
-std::string default_superuser(cql3::query_processor& qp);
-
 template <class Task>
 future<> once_among_shards(Task&& f) {
     if (this_shard_id() == 0u) {
