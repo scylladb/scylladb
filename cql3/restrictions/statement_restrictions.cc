@@ -1092,7 +1092,8 @@ statement_restrictions::statement_restrictions(private_tag,
                 if (found == sc_ck_preds.end()) {
                     break;
                 }
-                if (find_needs_filtering(found->second.filter)) {
+                const auto& preds = sc_ck_pred_vectors[&col];
+                if (std::ranges::any_of(preds, [](const predicate& p) { return p.op && needs_filtering(*p.op); })) {
                     break;
                 }
                 prefix.push_back(found->second);
