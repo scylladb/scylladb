@@ -254,6 +254,52 @@ simple as `dnf install java-11`. On Fedora 42, to install java-11 alongside
 the system's default Java you need to ask to install it from Fedora 41:
 `dnf install --releasever=41 java-11-openjdk-headless.x86_64`
 
+Alternatively, if you cannot or do not want to install an older Java on your
+system, run-cassandra can run Cassandra (and Java) entirely from Docker:
+
+**`--docker[=CASSANDRA_VERSION]`** (recommended): uses the official
+`cassandra` Docker image, which bundles both Cassandra and the right Java
+version. No local Cassandra installation is required at all. The per-test
+configuration and data are written to a subdirectory of `$TMPDIR` (defaulting
+to `/tmp`) that is bind-mounted into the container. This is also efficient:
+the official `cassandra:4.1` and `cassandra:5` images share their Ubuntu and
+Java base layers, so those are downloaded only once regardless of how many
+Cassandra versions you test.
+
+```
+test/cqlpy/run-cassandra --docker          # default is latest 5 release
+test/cqlpy/run-cassandra --docker=4.1      # latest 4.1 patch release
+test/cqlpy/run-cassandra --docker=4.1.11   # specific patch release
+test/cqlpy/run-cassandra --docker=3.11
+```
+
+A small number of tests invoke `nodetool` (set via the `NODETOOL` environment
+variable). When using `--docker` there is no local `nodetool` binary, so you
+need to supply one - we haven't yet implemented the ability to use the one in
+Docker. For now, you'll need to point `NODETOOL` at the `nodetool` script from
+a downloaded Cassandra tarball (see _Precompiled Cassandra_ below) - you do
+not need to run that Cassandra, you only need the script:
+
+```
+export NODETOOL=/tmp/apache-cassandra-5.0.3/bin/nodetool
+test/cqlpy/run-cassandra --docker test_file.py
+```
+
+**`--java-docker[=JAVA_VERSION]`**: a lighter alternative for when you have a
+local Cassandra installation but lack a suitable Java version on the host.
+The local Cassandra installation is bind-mounted into a Docker container that
+provides the requested Java version, and both the Cassandra startup script and
+Java run inside that container:
+
+```
+export CASSANDRA=/tmp/apache-cassandra-4.1.4/bin/cassandra
+test/cqlpy/run-cassandra --java-docker       # defaults to Java 11
+test/cqlpy/run-cassandra --java-docker=11
+```
+
+In both cases Docker must be installed and running. On the first run, Docker
+pulls the required image automatically and caches it for subsequent runs.
+
 ## Precompiled Cassandra
 The easiest way to get Cassandra is to get a pre-compiled tar.
 Go to [Cassandra's download page](https://cassandra.apache.org/_/download.html)
