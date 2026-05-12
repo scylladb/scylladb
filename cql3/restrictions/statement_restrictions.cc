@@ -302,13 +302,6 @@ to_predicates(
                 .on = on_row{},
         });
     };
-    static auto cannot_solve_on_column = [] (const expression& e, const column_definition* cdef) -> std::vector<predicate> {
-        return to_vector(predicate{
-                .solve_for = nullptr,
-                .filter = e,
-                .on = on_column{cdef},
-        });
-    };
     return expr::visit(overloaded_functor{
             [] (const constant& constant_val) -> std::vector<predicate> {
                 std::optional<bool> bool_val = get_bool_value(constant_val);
@@ -402,7 +395,12 @@ to_predicates(
                                     .op = oper.op,
                                 });
                             }
-                            return cannot_solve_on_column(oper, col.col);
+                            return to_vector(predicate{
+                                .solve_for = nullptr,
+                                .filter = oper,
+                                .on = on_column{col.col},
+                                .op = oper.op,
+                            });
                         },
                         [&] (const subscript& s) -> std::vector<predicate> {
                             const column_value& col = get_subscripted_column(s);
@@ -433,7 +431,13 @@ to_predicates(
                                     .is_subscript = true,
                                 });
                             }
-                            return cannot_solve_on_column(oper, col.col);
+                            return to_vector(predicate{
+                                .solve_for = nullptr,
+                                .filter = oper,
+                                .on = on_column{col.col},
+                                .op = oper.op,
+                                .is_subscript = true,
+                            });
                         },
                         [&] (const tuple_constructor& tuple) -> std::vector<predicate> {
                             auto columns = tuple.elements
