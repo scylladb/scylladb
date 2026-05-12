@@ -958,6 +958,16 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         if (https_port || https_port_proxy_protocol) {
             set_routes(_https_server._routes);
             _https_server.set_content_streaming(true);
+            // Run TLS handshakes in the sl:driver scheduling group (low
+            // priority, batch workload) so that CPU-intensive TLS negotiation
+            // does not compete with ongoing query processing. This mirrors
+            // what the CQL server does in cql_server::get_scheduling_group_for_new_connection().
+            _https_server.set_new_connection_scheduling_group_cb([this] () -> scheduling_group {
+                if (_sl_controller.has_service_level(qos::service_level_controller::driver_service_level_name)) {
+                    return _sl_controller.get_scheduling_group(qos::service_level_controller::driver_service_level_name);
+                }
+                return default_scheduling_group();
+            });
 
             if (this_shard_id() == 0) {
                 _credentials = creds->build_reloadable_server_credentials([this](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
