@@ -16,7 +16,7 @@
 #include "serializer_impl.hh"
 #include "idl/raft.dist.hh"
 #include "idl/raft_util.dist.hh"
-#include "utils/composite_abort_source.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/error_injection.hh"
 #include <seastar/core/shared_future.hh>
 
@@ -480,19 +480,17 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
         }
         timeout->value = lowres_clock::now() + std::chrono::milliseconds(_group_server.default_op_timeout_in_ms->get());
     }
-    utils::composite_abort_source composite_as;
 
-    abort_on_expiry<> expiry{*timeout->value};
-    composite_as.add(expiry.abort_source());
+    abort_on_expiry<> operation_as{*timeout->value};
+    [[maybe_unused]] const auto timeout_sub = as ? utils::chain_abort_source(operation_as.abort_source(), *as) : std::nullopt;
 
-    if (as) {
-        composite_as.add(*as);
-    }
+    // Early return.
+    operation_as.abort_source().check();
 
     try {
-        co_return co_await op(&composite_as.abort_source());
+        co_return co_await op(&operation_as.abort_source());
     } catch (const raft::request_aborted& e) {
-        if (!expiry.abort_source().abort_requested() || (as && as->abort_requested())) {
+        if (!operation_as.abort_source().abort_requested() || (as && as->abort_requested())) {
             throw;
         }
         sstring quorum_message;
