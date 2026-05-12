@@ -686,6 +686,7 @@ scylla_tests = set([
     'test/manual/streaming_histogram_test',
     'test/manual/bti_cassandra_compatibility_test',
     'test/manual/sstable_scan_footprint_test',
+    'test/manual/s3_storage_roundtrip_test',
     'test/perf/memory_footprint_test',
     'test/perf/perf_cache_eviction',
     'test/perf/perf_commitlog',
