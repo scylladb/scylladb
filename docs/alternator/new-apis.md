@@ -207,3 +207,27 @@ in the CreateTable operation. The value of this tag can be:
 The `system:initial_tablets` tag only has any effect while creating
 a new table with CreateTable - changing it later has no effect.
 
+## Replication factor
+
+By default, Alternator creates each table's keyspace with a replication
+factor (RF) of 3 in each datacenter, or RF=1 when the cluster has fewer
+than 3 nodes. The replication factor controls how many copies of each row
+are stored across the cluster.
+
+To override this default for a specific table, set the
+`system:replication_factor` tag to a positive integer in the CreateTable
+operation. For example, on a cluster with 5 racks you might set this tag
+to `5` so that each rack holds a full replica of the data.
+
+The value must be a positive integer. The maximum allowed RF depends on
+the table's replication mode: for tables using tablets (the default), RF
+must not exceed the number of racks in any datacenter; for tables using
+vnodes, RF must not exceed the number of nodes in any datacenter.
+Exceeding the limit causes a `ValidationException`.
+
+The `system:replication_factor` tag can only be set during CreateTable.
+Attempting to add, change, or remove it via TagResource or UntagResource
+after the table has been created will result in a `ValidationException`.
+Support for changing a table's replication factor after creation may be
+added in a future version.
+

@@ -27,7 +27,7 @@ import threading
 import random
 import re
 
-from test.cluster.util import get_replication
+from test.cluster.util import get_replication, get_replica_count
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
 from test.pylib.rest_client import inject_error
@@ -1513,3 +1513,199 @@ async def test_deferred_stream_enablement_on_tablets(manager: ManagerClient):
     finally:
         table.delete()
         table.meta.client.get_waiter('table_not_exists').wait(TableName=table.name)
+
+async def test_alternator_rf_on_5_racks(manager: ManagerClient):
+    """Test that when an Alternator cluster is started with 5 nodes each on a
+       separate rack, the RF on the keyspace created for a new Alternator table
+       is correct:
+       - By default (no tag), RF=3 regardless of the number of racks.
+       - When the system:replication_factor tag is set to 5, RF=5 (one replica
+         per rack, so each rack holds a full copy of the data).
+       - Similarly, system:replication_factor = 1 is also allowed.
+       - When the system:replication_factor tag is set to 6 (more than the
+         number of nodes or racks), CreateTable fails with a ValidationException.
+    """
+    # Start 5 nodes in dc1, each in its own rack (rack1...rack5), one node per rack.
+    servers = await manager.servers_add(5, config=alternator_config, auto_rack_dc='dc1')
+    alternator = get_alternator(servers[0].ip_addr)
+    cql = manager.get_cql()
+    for (tags, expected_rf) in [
+        ([], 3),
+        ([{'Key': 'system:replication_factor', 'Value': '1'}], 1),
+        ([{'Key': 'system:replication_factor', 'Value': '5'}], 5),
+    ]:
+        table = alternator.create_table(TableName=unique_table_name(),
+            Tags=tags,
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'N'},
+            ])
+        try:
+            ks = f'alternator_{table.name}'
+            repl = get_replication(cql, ks)
+            assert 'dc1' in repl
+            assert get_replica_count(repl['dc1']) == expected_rf
+        finally:
+            table.delete()
+    # RF=6 exceeds the number of racks (5) in dc1, so CreateTable should fail.
+    with pytest.raises(ClientError, match='ValidationException.*system:replication_factor.*number of racks'):
+        alternator.create_table(TableName=unique_table_name(),
+            Tags=[{'Key': 'system:replication_factor', 'Value': '6'}],
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'N'},
+            ])
+    # Non-integer, non-positive, and partially-numeric values must be rejected
+    # with a ValidationException. In particular, "5abc" must not be silently
+    # accepted as 5.
+    for bad_rf in ['abc', '5abc', '5.0', '5e1', '0', '-1']:
+        with pytest.raises(ClientError, match='ValidationException.*system:replication_factor.*positive integer'):
+            alternator.create_table(TableName=unique_table_name(),
+                Tags=[{'Key': 'system:replication_factor', 'Value': bad_rf}],
+                BillingMode='PAY_PER_REQUEST',
+                KeySchema=[
+                    {'AttributeName': 'p', 'KeyType': 'HASH'},
+                ],
+                AttributeDefinitions=[
+                    {'AttributeName': 'p', 'AttributeType': 'N'},
+                ])
+
+async def test_alternator_replication_factor_tag_immutable(manager: ManagerClient):
+    """Test that the system:replication_factor tag cannot be added or changed
+    after a table is created via TagResource/UntagResource.
+
+    Currently, changing this tag after table creation has no effect on the
+    actual replication factor. To avoid silently accepting a tag change that
+    does nothing, we reject such changes with a ValidationException.
+
+    As explained in issue #5092, eventually we should implement support for
+    changing the RF of an existing table (which is fairly easy, actually,
+    already implemented for CQL's ALTER TABLE). At that point this restriction
+    would be lifted and the tag change would trigger an actual RF update - and
+    this test will need to be rewritten to check the correct operation of that RF
+    change. Until then, rejecting the change is the safest behaviour so the user
+    knows it is not yet supported.
+    """
+    # A single node is sufficient for this test.
+    servers = await manager.servers_add(1, config=alternator_config)
+    alternator = get_alternator(servers[0].ip_addr)
+
+    def make_table(tags):
+        return alternator.create_table(
+            TableName=unique_table_name(),
+            Tags=tags,
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}],
+        )
+
+    # Table created without the tag: adding it afterwards must fail.
+    table_no_tag = make_table([])
+    try:
+        with pytest.raises(ClientError, match='ValidationException.*system:replication_factor'):
+            table_no_tag.meta.client.tag_resource(
+                ResourceArn=table_no_tag.meta.client.describe_table(
+                    TableName=table_no_tag.name)['Table']['TableArn'],
+                Tags=[{'Key': 'system:replication_factor', 'Value': '1'}],
+            )
+    finally:
+        table_no_tag.delete()
+
+    # Table created with the tag set to '1':
+    table_rf1 = make_table([{'Key': 'system:replication_factor', 'Value': '1'}])
+    try:
+        arn = table_rf1.meta.client.describe_table(
+            TableName=table_rf1.name)['Table']['TableArn']
+        # Changing the value (1 -> 2) must fail.
+        with pytest.raises(ClientError, match='ValidationException.*system:replication_factor'):
+            table_rf1.meta.client.tag_resource(
+                ResourceArn=arn,
+                Tags=[{'Key': 'system:replication_factor', 'Value': '2'}],
+            )
+        # "Changing" to the same value (1 -> 1) must succeed (it is a no-op).
+        table_rf1.meta.client.tag_resource(
+            ResourceArn=arn,
+            Tags=[{'Key': 'system:replication_factor', 'Value': '1'}],
+        )
+        # Deleting the tag must also fail.
+        with pytest.raises(ClientError, match='ValidationException.*system:replication_factor'):
+            table_rf1.meta.client.untag_resource(
+                ResourceArn=arn,
+                TagKeys=['system:replication_factor'],
+            )
+    finally:
+        table_rf1.delete()
+
+async def test_alternator_rf_exceeds_racks_or_nodes(manager: ManagerClient):
+    """Test the RF constraints on a 6-node, 3-rack cluster (2 nodes per rack):
+       - RF=4 with vnodes: exceeds the rack count (3) but not the node count (6),
+         so it should succeed - NetworkTopologyStrategy handles RF > rack count
+         by placing multiple replicas per rack.
+       - RF=4 with tablets: fails because tablets enforce RF <= rack count (3).
+       - RF=7 with vnodes: exceeds the node count (6), so it fails even for vnodes.
+    """
+    # Start 6 nodes in dc1, 2 nodes per rack (rack1, rack2, rack3).
+    servers = await manager.servers_add(6, config=alternator_config, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    alternator = get_alternator(servers[0].ip_addr)
+    cql = manager.get_cql()
+    # RF=4 with vnodes: exceeds the number of racks (3) but not nodes (6) - should succeed.
+    table = alternator.create_table(TableName=unique_table_name(),
+        Tags=[
+            {'Key': 'system:replication_factor', 'Value': '4'},
+            {'Key': 'system:initial_tablets', 'Value': 'none'},
+        ],
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH'},
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'N'},
+        ])
+    try:
+        ks = f'alternator_{table.name}'
+        repl = get_replication(cql, ks)
+        assert 'dc1' in repl
+        assert get_replica_count(repl['dc1']) == 4
+    finally:
+        table.delete()
+    # RF=4 with tablets: tablets enforce RF <= rack count (3), so this should fail.
+    with pytest.raises(ClientError, match='ValidationException.*system:replication_factor.*number of racks'):
+        alternator.create_table(TableName=unique_table_name(),
+            Tags=[
+                {'Key': 'system:replication_factor', 'Value': '4'},
+                {'Key': 'system:initial_tablets', 'Value': '1'},
+            ],
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'N'},
+            ])
+    # RF=7 with vnodes: exceeds the number of nodes (6), so CreateTable should fail even for vnodes.
+    with pytest.raises(ClientError, match='ValidationException.*system:replication_factor.*number of nodes'):
+        alternator.create_table(TableName=unique_table_name(),
+            Tags=[
+                {'Key': 'system:replication_factor', 'Value': '7'},
+                {'Key': 'system:initial_tablets', 'Value': 'none'},
+            ],
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'N'},
+            ])
