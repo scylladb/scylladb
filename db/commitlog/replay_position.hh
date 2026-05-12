@@ -55,6 +55,10 @@ struct replay_position {
 
     template <typename Describer>
     auto describe_type(sstables::sstable_version_types v, Describer f) { return f(id, pos); }
+
+    bool valid() const {
+        return id != 0 && pos != 0;
+    }
 };
 
 class commitlog;
