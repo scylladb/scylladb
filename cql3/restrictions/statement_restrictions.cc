@@ -2600,11 +2600,11 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
             // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
             break;
         }
-        const auto any_binop = find_binop(e.filter, [] (auto&&) { return true; });
-        if (!any_binop) {
+        auto* on_col = std::get_if<on_column>(&e.on);
+        if (!on_col) {
             break;
         }
-        const auto col = expr::as<column_value>(any_binop->lhs).col;
+        const auto col = on_col->column;
         auto col_in_index = idx_tbl_schema.get_column_definition(col->name());
         auto replaced = replace_column_def(e.filter, col_in_index);
         auto a = to_predicate_on_column(replaced, col_in_index, &idx_tbl_schema);
