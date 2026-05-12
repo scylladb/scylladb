@@ -121,13 +121,34 @@ private:
         --_key_count;
     }
 
-    // Update counters and remove an entry from the B+tree.
-    void erase_entry(partitions_type::iterator it) noexcept {
-        on_entry_removed(*it);
-        if (_cache_tracker) {
-            _cache_tracker->evict(*it);
+    auto make_entry_disposer() noexcept {
+        return [this] (primary_index_entry* e) noexcept {
+            if (_cache_tracker) {
+                _cache_tracker->evict(*e);
+            }
+            on_entry_removed(*e);
+        };
+    }
+
+    future<> erase_range_gently(partitions_type::iterator begin, auto&& end_fn) {
+        static constexpr size_t chunk_size = 1024;
+        auto dispose = make_entry_disposer();
+        while (true) {
+            auto end = end_fn();
+
+            auto chunk_end = begin;
+            for (size_t i = 0; i < chunk_size && chunk_end != end; ++i, ++chunk_end);
+
+            if (chunk_end == end) {
+                _partitions.erase_and_dispose(begin, chunk_end, dispose);
+                co_return;
+            }
+
+            auto next_key = chunk_end->key();
+            _partitions.erase_and_dispose(begin, chunk_end, dispose);
+            co_await coroutine::maybe_yield();
+            begin = _partitions.lower_bound(next_key, dht::ring_position_comparator(*_schema));
         }
-        it.erase(dht::raw_token_less_comparator{});
     }
 
 public:
@@ -155,14 +176,6 @@ public:
                 co_await coroutine::maybe_yield();
             }
         }
-    }
-
-    future<> clear() {
-        co_await drain_cache();
-
-        _partitions.clear();
-        _key_count = 0;
-        _memory_usage = 0;
     }
 
     utils::phased_barrier::operation start_read() const {
@@ -234,7 +247,7 @@ public:
     bool erase(const primary_index_key& key, log_location loc) {
         auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
         if (it != _partitions.end() && it->_e.location == loc) {
-            erase_entry(it);
+            it.erase_and_dispose(dht::raw_token_less_comparator{}, make_entry_disposer());
             return true;
         }
         return false;
@@ -242,13 +255,23 @@ public:
 
     future<> erase(const dht::partition_range& pr) {
         dht::ring_position_comparator cmp(*_schema);
-        auto it = _partitions.lower_bound(dht::ring_position_view::for_range_start(pr), cmp);
-        auto end_it = _partitions.lower_bound(dht::ring_position_view::for_range_end(pr), cmp);
-        while (it != end_it) {
-            auto prev = it;
-            ++it;
-            erase_entry(prev);
-            co_await coroutine::maybe_yield();
+        auto begin_pos = dht::ring_position_view::for_range_start(pr);
+        auto end_pos = dht::ring_position_view::for_range_end(pr);
+
+        co_await erase_range_gently(
+                _partitions.lower_bound(begin_pos, cmp),
+                [this, &cmp, end_pos] { return _partitions.lower_bound(end_pos, cmp); }
+            );
+    }
+
+    future<> clear() {
+        co_await erase_range_gently(
+                _partitions.begin(),
+                [this] { return _partitions.end(); }
+            );
+
+        if (_key_count != 0 || _memory_usage != 0) {
+            on_internal_error(logstor_logger, format("primary_index::clear ended with key_count {} and memory_usage {}", _key_count, _memory_usage));
         }
     }
 
