@@ -1056,7 +1056,64 @@ query_processor::execute_with_params(
     auto statement = p->statement;
 
     auto msg = co_await coroutine::try_future(execute_maybe_with_guard(query_state, std::move(statement), opts, &query_processor::do_execute_with_params));
-    co_return ::make_shared<untyped_result_set>(msg);
+
+    // Check if there are more pages. If so, loop and collect all pages.
+    auto has_more = [](const ::shared_ptr<result_message>& msg) -> bool {
+        if (!msg) {
+            return false;
+        }
+        class paging_visitor : public result_message::visitor_base {
+        public:
+            bool more = false;
+            void visit(const result_message::rows& rmrs) override {
+                auto& rs = rmrs.rs();
+                more = rs.get_metadata().paging_state()
+                    && rs.get_metadata().flags().contains<cql3::metadata::flag::HAS_MORE_PAGES>();
+            }
+        };
+        paging_visitor v;
+        msg->accept(v);
+        return v.more;
+    };
+
+    if (!has_more(msg)) {
+        // Common case: single page or no results. No overhead.
+        co_return ::make_shared<untyped_result_set>(msg);
+    }
+
+    // Multiple pages: collect all result_messages and build a combined result.
+    // Reuse the same prepared statement from the first page to preserve
+    // cache_internal semantics (the caller may have used cache_internal::no).
+    std::vector<::shared_ptr<result_message>> pages;
+    pages.push_back(msg);
+
+    auto stmt = p->statement;
+    auto current_opts = std::make_unique<query_options>(std::move(opts));
+
+    while (has_more(pages.back())) {
+        // Extract paging state from the last page and create new options.
+        class state_visitor : public result_message::visitor_base {
+        public:
+            lw_shared_ptr<service::pager::paging_state> paging;
+            void visit(const result_message::rows& rmrs) override {
+                auto& rs = rmrs.rs();
+                if (rs.get_metadata().paging_state()) {
+                    paging = make_lw_shared<service::pager::paging_state>(*rs.get_metadata().paging_state());
+                }
+            }
+        };
+        state_visitor sv;
+        pages.back()->accept(sv);
+
+        current_opts = std::make_unique<query_options>(std::move(current_opts), std::move(sv.paging));
+
+        // Execute subsequent pages through the same guarded/try_future path as page 1.
+        auto next_msg = co_await coroutine::try_future(
+            execute_maybe_with_guard(query_state, stmt, *current_opts, &query_processor::do_execute_with_params));
+        pages.push_back(std::move(next_msg));
+    }
+
+    co_return ::make_shared<untyped_result_set>(std::move(pages));
 }
 
 future<::shared_ptr<result_message>>

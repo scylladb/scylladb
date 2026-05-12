@@ -160,6 +160,9 @@ public:
 
     untyped_result_set(::shared_ptr<cql_transport::messages::result_message>);
     untyped_result_set(const schema&, foreign_ptr<lw_shared_ptr<query::result>>, const cql3::selection::selection&, const query::partition_slice&);
+    /// Construct from multiple pages of results (auto-depagination).
+    /// All result messages must come from the same query (identical metadata).
+    untyped_result_set(std::vector<::shared_ptr<cql_transport::messages::result_message>> pages);
     untyped_result_set(untyped_result_set&&) = default;
     ~untyped_result_set();
 
@@ -191,6 +194,7 @@ private:
     using storage = std::variant<std::monostate
         , ::shared_ptr<cql_transport::messages::result_message>
         , qr_tuple
+        , std::vector<::shared_ptr<cql_transport::messages::result_message>>
     >;
     struct visitor;
 

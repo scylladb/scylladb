@@ -447,7 +447,7 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
         }
     }
     const auto qo = qp.make_internal_options(ps_ptr, values, db::consistency_level::ONE,
-        -1, service::node_local_only::yes);
+        1000, service::node_local_only::yes);
     const auto st = ps_ptr->statement;
 
     const auto result_ptr = co_await st->execute(qp, qs, qo, std::nullopt);

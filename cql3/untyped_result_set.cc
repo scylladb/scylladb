@@ -141,6 +141,32 @@ cql3::untyped_result_set::untyped_result_set(const schema& s, foreign_ptr<lw_sha
     query::result_view::consume(*qres, slice, vv);
 }
 
+cql3::untyped_result_set::untyped_result_set(std::vector<::shared_ptr<result_message>> pages)
+    : _storage(std::move(pages))
+{
+    auto& msgs = std::get<std::vector<::shared_ptr<result_message>>>(_storage);
+    for (auto& msg : msgs) {
+        if (!msg) {
+            continue;
+        }
+        class meta_visitor : public result_message::visitor_base {
+        public:
+            const cql3::result* res = nullptr;
+            void visit(const result_message::rows& rmrs) override {
+                res = &rmrs.rs();
+            }
+        };
+        meta_visitor mv;
+        msg->accept(mv);
+        if (mv.res) {
+            if (!_index) {
+                _index = make_index(mv.res->get_metadata());
+            }
+            mv.res->visit(visitor{_rows, mv.res->get_metadata(), *_index});
+        }
+    }
+}
+
 cql3::untyped_result_set::~untyped_result_set() = default;
 
 const cql3::untyped_result_set_row& cql3::untyped_result_set::one() const {
