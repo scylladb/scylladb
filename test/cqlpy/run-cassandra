@@ -9,19 +9,57 @@
 
 import sys
 import os
+import argparse
 import shutil
 import subprocess
 import re
 
 import run   # run.py in this directory
 
+# Parse options specific to run-cassandra from sys.argv and build a filtered
+# argument list to pass to pytest (which doesn't know about these options).
+# --docker[=CASSANDRA_VERSION]: run both Cassandra and Java from
+#   Docker using the official 'cassandra' image (e.g., cassandra:4.1 or
+#   cassandra:5).  No local Cassandra installation is needed.  The per-test
+#   configuration/data directory (a subdirectory of $TMPDIR) is bind-mounted
+#   so Cassandra inside the container reads the config we write and stores
+#   data on the host.  CASSANDRA_VERSION defaults to 5.
+# --java-docker[=JAVA_VERSION]: run a locally-installed Cassandra using Java
+#   from Docker.  The local Cassandra installation is bind-mounted into a
+#   Docker container that provides the requested Java version, and the
+#   Cassandra startup script runs inside that container.  JAVA_VERSION
+#   defaults to 11.
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument('--docker', default=None)
+parser.add_argument('--java-docker', default=None)
+# Expand bare --docker / --java-docker (without =) to their defaults. We can't
+# do this with argparse directly, because it would consume the next positional
+# argument as a value, and cause "run-cassandra --docker test_file.py" to think
+# that "test_file.py" is the Docker version.
+argv = ['--docker=5' if a == '--docker' else
+        '--java-docker=11' if a == '--java-docker' else a
+        for a in sys.argv[1:]]
+args, pytest_argv = parser.parse_known_args(argv)
+
+if args.java_docker and args.docker:
+    print("Error: --java-docker and --docker cannot be used together. "
+          "Use --docker to run both Cassandra and Java from Docker, "
+          "or --java-docker to run only Java from Docker with a local Cassandra.")
+    exit(1)
+
 def find_cassandra():
+    # When running Cassandra via Docker the image already contains the
+    # cassandra binary, so no local installation is needed.
+    if args.docker:
+        return None
     # By default, we assume 'cassandra' is in the user's path. A specific
     # cassandra script can be chosen by setting the CASSANDRA variable.
     cassandra = os.getenv('CASSANDRA', 'cassandra')
     cassandra_path = shutil.which(cassandra)
     if cassandra_path is None:
-        print("Error: Can't find {}. Please set the CASSANDRA environment variable to the path of the Cassandra startup script.".format(cassandra))
+        print("Error: Can't find {}. Please set the CASSANDRA environment "
+              "variable to the path of the Cassandra startup script, or use "
+              "'--docker' to automatically get Cassandra and Java from Docker.".format(cassandra))
         exit(1)
     return cassandra_path
 
@@ -47,6 +85,9 @@ def java_major_version(java):
         return major
 
 def find_java():
+    # If the user requested Docker-based Java (either option), skip the local search entirely.
+    if args.java_docker or args.docker:
+        return None
     # Look for the Java in one of several places known to host the Java
     # executable, and return the first one that works and has the appropriate
     # version. The first attempt is just "java" in the path, which is
@@ -117,10 +158,12 @@ def run_cassandra_cmd(pid, dir):
           }
     # By default, Cassandra's startup script runs "java". We can override this
     # choice with the JAVA_HOME environment variable based on the Java we
-    # found earlier in find_java().
-    if java and java.startswith('/'):
-        env['JAVA_HOME'] = os.path.dirname(os.path.dirname(java))
-        print('JAVA_HOME: ' + env['JAVA_HOME'])
+    # found earlier in find_java().  In docker modes, java comes from the
+    # container image, so no JAVA_HOME override is needed.
+    if not args.docker and not args.java_docker:
+        if java and java.startswith('/'):
+            env['JAVA_HOME'] = os.path.dirname(os.path.dirname(java))
+            print('JAVA_HOME: ' + env['JAVA_HOME'])
     # On JVM 11, Cassandra requires a bunch of configuration options in
     # conf/jvm11-server.options, or it fails loading classes because of JPMS.
     # The following options were copied from Cassandra's jvm11-server.options.
@@ -177,10 +220,125 @@ def run_cassandra_cmd(pid, dir):
               '--add-opens java.base/java.net=ALL-UNNAMED\n'
               '--add-opens java.rmi/sun.rmi.transport.tcp=ALL-UNNAMED\n'
               ,file=f)
+    # Cassandra 4.x's cassandra.in.sh greps two separate files: a base
+    # "jvm-server.options" (common to all JVM versions) and then a
+    # version-specific "jvm11-server.options" or "jvm17-server.options".
+    # We put all our options into the version-specific files above, so the
+    # base file can be empty.  Cassandra 3.x uses "jvm.options" instead.
+    # All must exist or the startup script prints grep warnings.
+    open(os.path.join(confdir, 'jvm-server.options'), 'w').close()
+    open(os.path.join(confdir, 'jvm.options'), 'w').close()
     # Current versions of Cassandra 5 refuse to run on Java 21
     # without this environment variable.
     env['CASSANDRA_JDK_UNSUPPORTED'] = 'true'
-    return ([cassandra, '-f'], env)
+    if args.docker:
+        return run_cassandra_cmd_docker(ip, dir, env)
+    elif args.java_docker:
+        return run_cassandra_cmd_java_docker(ip, dir, env)
+    else:
+        return ([cassandra, '-f'], env)
+
+# Generate command line and environment variables to run Cassandra from the
+# official Docker image, which bundles both Cassandra and the appropriate Java
+# version. No local Cassandra installation is needed. The per-test temporary
+# directory 'dir' (a subdirectory of $TMPDIR) is bind-mounted so the config we
+# wrote above is visible inside the container at the same paths.
+def run_cassandra_cmd_docker(ip, dir, env):
+    docker = shutil.which('docker')
+    if not docker:
+        print('Error: docker executable not found in PATH.')
+        exit(1)
+    del env['CASSANDRA_INCLUDE']
+    del env['CASSANDRA_HOME']
+    # The official cassandra Docker image's entrypoint overrides
+    # listen_address in cassandra.yaml with the container's detected IP
+    # (via "hostname -i"), which with --network host resolves to the
+    # host's primary interface rather than the loopback alias we assigned.
+    # Pass CASSANDRA_LISTEN_ADDRESS so the entrypoint uses the right IP.
+    env['CASSANDRA_LISTEN_ADDRESS'] = ip
+    image = f'cassandra:{args.docker}'
+    print(f'Running Cassandra {args.docker} from Docker (image: {image})')
+    # We could just run docker directly and the image will be downloaded
+    # automatically, but we want a nice "Pulling Docker image..." message
+    # while waiting, and also to print the Cassandra and Java versions
+    # after the wait, so we do something more elaborate here:
+    if subprocess.call([docker, 'image', 'inspect', image],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+        print(f'Pulling Docker image {image}...')
+        try:
+            subprocess.check_call([docker, 'pull', '-q', image],
+                                  stdout=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            print(f'Error: Failed to pull Docker image {image} for Cassandra {args.docker!r}. '
+                  f'Try versions like 5, 5.1 or 5.1.1.')
+            exit(1)
+    image_env = subprocess.check_output(
+        [docker, 'image', 'inspect', '--format',
+        '{{range .Config.Env}}{{println .}}{{end}}',
+        image], stderr=subprocess.DEVNULL).decode('UTF-8')
+    cassandra_version = next((line.split('=', 1)[1] for line in image_env.splitlines()
+                              if line.startswith('CASSANDRA_VERSION=')), '(unknown)')
+    jv_out = subprocess.check_output(
+        [docker, 'run', '--rm', image, 'java', '-version'],
+        stderr=subprocess.STDOUT).decode('UTF-8')
+    m = re.search(r'"([^"]+)"', jv_out)
+    java_version = m.group(1) if m else '(unknown)'
+    print(f'Docker Cassandra version: {cassandra_version}, Java: {java_version}')
+    # The official cassandra image's default CMD is 'cassandra -f', which
+    # is exactly what we want.
+    docker_cmd = [docker, 'run', '--rm', '--network', 'host',
+                  '--user', f'{os.getuid()}:{os.getgid()}',
+                  '--security-opt', 'label=disable',
+                  '-v', f'{dir}:{dir}']
+    for k, v in env.items():
+        docker_cmd += ['-e', f'{k}={v}']
+    docker_cmd += [image]
+    return (docker_cmd, {})
+
+# Generate command line and environment variables to run the user's local
+# Cassandra inside Docker containing the requested Java version.
+# The local Cassandra installation is bind-mounted at its own absolute path so
+# that the startup script finds its JARs and config at the same paths it
+# would expect on the host.  We use realpath() so the mount point inside the
+# container is unambiguous (no symlinks).
+def run_cassandra_cmd_java_docker(ip, dir, env):
+    cassandra_real = os.path.realpath(cassandra)
+    cassandra_home = os.path.dirname(os.path.dirname(cassandra_real))
+    image = f'eclipse-temurin:{args.java_docker}-jre'
+    print(f'Running Cassandra with Docker Java {args.java_docker} (image: {image})')
+    docker = shutil.which('docker')
+    if not docker:
+        print('Error: docker executable not found in PATH.')
+        exit(1)
+    # We could just run docker directly and the image will be downloaded
+    # automatically, but we want a nice "Pulling Docker image..." message
+    # while waiting, and also to print the Java version after the wait,
+    # so we do something more elaborate here:
+    if subprocess.call([docker, 'image', 'inspect', image],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+        print(f'Pulling Docker image {image}...')
+        try:
+            subprocess.check_call([docker, 'pull', '-q', image])
+        except subprocess.CalledProcessError:
+            print(f'Error: Failed to pull Docker image {image} for Java {args.java_docker!r}. '
+                  f'Try versions like 11, or 17.')
+            exit(1)
+    java_version = subprocess.check_output(
+        [docker, 'image', 'inspect', '--format',
+        '{{range .Config.Env}}{{println .}}{{end}}',
+        image], stderr=subprocess.DEVNULL).decode('UTF-8')
+    java_version = next((line.split('=',1)[1] for line in java_version.splitlines()
+                        if line.startswith('JAVA_VERSION=')), '(unknown)')
+    print(f'Docker Java version: {java_version}')
+    docker_cmd = [docker, 'run', '--rm', '--network', 'host',
+                  '--user', f'{os.getuid()}:{os.getgid()}',
+                  '--security-opt', 'label=disable',
+                  '-v', f'{dir}:{dir}',
+                  '-v', f'{cassandra_home}:{cassandra_home}:ro']
+    for k, v in env.items():
+        docker_cmd += ['-e', f'{k}={v}']
+    docker_cmd += [image, cassandra_real, '-f']
+    return (docker_cmd, {})
 
 # Same as run_cassandra_cmd, just use SSL encryption for the CQL port (same
 # port number as default - replacing the unencrypted server).
@@ -201,9 +359,10 @@ def run_cassandra_ssl_cmd(pid, dir):
     # The command and environment variables to run Cassandra are the same,
     return (cmd, env)
 
-print('Cassandra is: ' + cassandra + '.')
+if cassandra:
+    print(f'Cassandra is: {cassandra}.')
 
-if '--ssl' in sys.argv:
+if '--ssl' in pytest_argv:
     cmd = run_cassandra_ssl_cmd
     check_cql = run.check_ssl_cql
 else:
@@ -214,7 +373,7 @@ pid = run.run_with_temporary_dir(cmd)
 ip = run.pid_to_ip(pid)
 
 run.wait_for_services(pid, [lambda: check_cql(ip)])
-success = run.run_pytest(sys.path[0], ['-o', 'xfail_strict=false', '--host', ip] + sys.argv[1:])
+success = run.run_pytest(sys.path[0], ['-o', 'xfail_strict=false', '--host', ip] + pytest_argv)
 
 run.summary = 'Cassandra tests pass' if success else 'Cassandra tests failure'
 
