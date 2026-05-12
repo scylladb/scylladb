@@ -13,8 +13,11 @@
 #include <memory>
 #include <span>
 #include <vector>
+#include <variant>
 #include <seastar/core/future.hh>
 #include "utils/rjson.hh"
+
+namespace s3 { class client; }
 
 namespace alternator {
 
@@ -83,14 +86,26 @@ public:
     bool is_write_flushed() const { return _write_flushed; }
 };
 
-// Create in-memory sink pipeline for a single file
-// You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
-// you need to complete sink pipeline first, then create and run source pipeline.
-std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_memory_test_storage&);
+struct in_memory_target_config {
+    in_memory_test_storage &storage;
+};
+struct s3_target_config {
+    seastar::shared_ptr<s3::client> client;
+    seastar::sstring object_name;
+};
+// Create sink pipeline for a single file. Depending on the configuration:
+// - in_memory_target_config - creates in-memory sink pipeline for testing.
+//   You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
+//   you need to complete sink pipeline first, then create and run source pipeline.
+// - s3_target_config - creates sink pipeline that will write to S3 object. The object will be created if it doesn't exist, or overwritten if it does.
+std::unique_ptr<export_pipeline_interface> create_sink_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config);
 
-// Create in-memory source pipeline for a single file
-// You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
-// you need to complete sink pipeline first, then create and run source pipeline.
-std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage &, std::function<seastar::future<>(rjson::value)> on_item);
+// Create source pipeline for a single file. Depending on the configuration:
+// - in_memory_target_config - creates in-memory source pipeline for testing.
+//   You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
+//   you need to complete sink pipeline first, then create and run source pipeline.
+// - s3_target_config - creates source pipeline that will read from S3 object.
+std::unique_ptr<import_pipeline_interface> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<seastar::future<>(rjson::value)> on_item);
+
 
 } // namespace alternator
