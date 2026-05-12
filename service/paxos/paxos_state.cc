@@ -446,8 +446,12 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
             on_internal_error(paxos_state::logger, "prepared statement is null");
         }
     }
+    // Use an explicit page size to avoid inflating the non-paged reads metric.
+    // Each paxos state query returns at most one row, so paging never kicks in.
+    // LIMIT 1 in the query causes may_need_paging() to short-circuit to false
+    // (row_limit <= 1), avoiding pager allocation overhead entirely.
     const auto qo = qp.make_internal_options(ps_ptr, values, db::consistency_level::ONE,
-        -1, service::node_local_only::yes);
+        1000, service::node_local_only::yes);
     const auto st = ps_ptr->statement;
 
     const auto result_ptr = co_await st->execute(qp, qs, qo, std::nullopt);
@@ -530,7 +534,7 @@ future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema
     // FIXME: we need execute_cql_with_now()
     (void)now;
     const auto results = co_await execute_cql_with_timeout(
-        format("SELECT * FROM \"{}\".\"{}\" WHERE row_key = ?{}", 
+        format("SELECT * FROM \"{}\".\"{}\" WHERE row_key = ?{} LIMIT 1", 
             state_schema->ks_name(), state_schema->cf_name(), 
             paxos_state_cf_filter(*s, *state_schema)
         ),
