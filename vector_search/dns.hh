@@ -41,6 +41,7 @@ public:
     void hosts(std::vector<seastar::sstring> hosts) {
         _addresses.clear();
         _hosts = std::move(hosts);
+        _last_refresh = {};  // reset throttle so the refresh happens immediately
         trigger_refresh();
     }
 
