@@ -1775,6 +1775,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Sets the maximum difference in percentages between the most loaded and least loaded nodes, below which the load balancer considers nodes balanced.")
     , minimal_tablet_size_for_balancing(this, "minimal_tablet_size_for_balancing", liveness::LiveUpdate, value_status::Used, service::default_target_tablet_size / 100,
         "Sets the minimal tablet size for the load balancer. For any tablet smaller than this, the balancer will use this size instead of the actual tablet size.")
+    , effective_capacity_smoothing_threshold(this, "effective_capacity_smoothing_threshold", liveness::LiveUpdate, value_status::Used, 0.005,
+        "Sets the threshold for smoothing effective_capacity changes reported to the load balancer. "
+        "New effective_capacity values are suppressed unless they differ from the previously reported "
+        "value by more than this fraction (e.g. 0.005 = 0.5%). This prevents load balancer oscillations "
+        "caused by small fluctuations in available disk space. Set to 0 to disable smoothing.")
     /**
     * @Group Ungrouped properties
     */
