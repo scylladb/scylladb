@@ -244,18 +244,21 @@ class TestLimits(Tester):
             size <<= 1
             self._do_test_max_batch_size(session, node, size - 1)
 
-    def _do_test_max_cell_count(self, session, cells):
-        print("Testing max cells count for %i" % cells)
-        keys = ""
+    def _create_max_cell_count_table(self, session):
         keys_create = ""
-        columns = MAX_CELLS_COLUMNS
-        for i in range(columns):
-            keys += "key" + str(i) + ", "
+        for i in range(MAX_CELLS_COLUMNS):
             keys_create += "key" + str(i) + " int, "
-        values = "1, " * columns
 
         c = """CREATE TABLE test1 (%s blub int PRIMARY KEY,)""" % keys_create
         session.execute(c)
+
+    def _do_test_max_cell_count(self, session, cells):
+        print("Testing max cells count for %i" % cells)
+        keys = ""
+        columns = MAX_CELLS_COLUMNS
+        for i in range(columns):
+            keys += "key" + str(i) + ", "
+        values = "1, " * columns
 
         batch_size = MAX_CELLS_BATCH_SIZE
         rows = cells // columns
@@ -267,7 +270,7 @@ class TestLimits(Tester):
                 session.execute(c)
                 c = "BEGIN UNLOGGED  BATCH\n"
 
-        session.execute("""DROP TABLE test1""")
+        session.execute("""TRUNCATE test1""")
 
     def test_max_cells(self):
         if self.cluster.scylla_mode == "debug":
@@ -279,6 +282,7 @@ class TestLimits(Tester):
 
         session = self.patient_cql_connection(node)
         create_ks(session, "ks", 1)
+        self._create_max_cell_count_table(session)
 
         cells = MAX_CELLS_COLUMNS
         while cells <= MAX_CELLS:
