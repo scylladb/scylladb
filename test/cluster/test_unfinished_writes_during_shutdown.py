@@ -25,7 +25,6 @@ from test.cluster.conftest import skip_mode
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="SCYLLADB-1842")
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """ Test a simultaneous topology change and write query during shutdown,
