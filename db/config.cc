@@ -1785,6 +1785,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Sets the maximum difference in percentages between the most loaded and least loaded nodes, below which the load balancer considers nodes balanced.")
     , minimal_tablet_size_for_balancing(this, "minimal_tablet_size_for_balancing", liveness::LiveUpdate, value_status::Used, service::default_target_tablet_size / 100,
         "Sets the minimal tablet size for the load balancer. For any tablet smaller than this, the balancer will use this size instead of the actual tablet size.")
+    , effective_capacity_rise_decay_period_in_seconds(this, "effective_capacity_rise_decay_period_in_seconds", liveness::LiveUpdate, value_status::Used, 300,
+        "Time constant (in seconds) for smoothing rising effective_capacity reported to the load balancer. "
+        "Decreases in capacity are reported immediately, while increases are damped with an exponential "
+        "moving average using this decay period, chosen larger than the fluctuation/tablet-migration time "
+        "scale. This prevents load balancer oscillations caused by fluctuations in available disk space "
+        "without ever overestimating capacity. Set to 0 to disable smoothing.")
     /**
     * @Group Ungrouped properties
     */
