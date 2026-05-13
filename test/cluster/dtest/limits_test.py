@@ -252,23 +252,24 @@ class TestLimits(Tester):
         c = """CREATE TABLE test1 (%s blub int PRIMARY KEY,)""" % keys_create
         session.execute(c)
 
-    def _do_test_max_cell_count(self, session, cells):
-        print("Testing max cells count for %i" % cells)
+    def _prepare_max_cell_count_insert(self, session):
         keys = ""
         columns = MAX_CELLS_COLUMNS
         for i in range(columns):
             keys += "key" + str(i) + ", "
-        values = "1, " * columns
 
-        batch_size = MAX_CELLS_BATCH_SIZE
+        values = "?, " * columns
+        c = "insert into ks.test1 (%s blub) values (%s ?)" % (keys, values)
+        return session.prepare(c)
+
+    def _do_test_max_cell_count(self, session, stmt, cells):
+        print("Testing max cells count for %i" % cells)
+        columns = MAX_CELLS_COLUMNS
+        values = (1,) * columns
+
         rows = cells // columns
-        c = "BEGIN UNLOGGED  BATCH\n"
         for i in range(rows):
-            c += "insert into ks.test1  (%s blub) values (%s %i);\n" % (keys, values, i)
-            if i == rows - 1 or (i + 1) % batch_size == 0:
-                c += "APPLY BATCH;\n"
-                session.execute(c)
-                c = "BEGIN UNLOGGED  BATCH\n"
+            session.execute(stmt, values + (i,))
 
         session.execute("""TRUNCATE test1""")
 
@@ -283,8 +284,9 @@ class TestLimits(Tester):
         session = self.patient_cql_connection(node)
         create_ks(session, "ks", 1)
         self._create_max_cell_count_table(session)
+        stmt = self._prepare_max_cell_count_insert(session)
 
         cells = MAX_CELLS_COLUMNS
         while cells <= MAX_CELLS:
-            self._do_test_max_cell_count(session, cells - 1)
+            self._do_test_max_cell_count(session, stmt, cells - 1)
             cells <<= 1
