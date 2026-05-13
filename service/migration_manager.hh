@@ -153,6 +153,14 @@ public:
     // hashing code.
     future<> ensure_group0_schema_version_is_set();
 
+    // Ensure all non-system tables have committed_by_group0 = true in
+    // system_schema.scylla_tables. Tables created before the
+    // GROUP0_SCHEMA_VERSIONING feature was enabled will have this column
+    // as null, causing their version to be deleted by maybe_delete_schema_version()
+    // and forcing hash-based version computation. This fixup stamps them
+    // so we can eventually remove the legacy hashing code.
+    future<> ensure_committed_by_group0();
+
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
     // Parameters:
