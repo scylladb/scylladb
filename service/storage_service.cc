@@ -1732,6 +1732,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     }
 
     co_await _group0->finish_setup_after_join(*this, _qp, _migration_manager.local());
+    co_await _migration_manager.local().ensure_committed_by_group0();
 
     // Initializes monitor only after updating local topology.
     start_tablet_split_monitor();
