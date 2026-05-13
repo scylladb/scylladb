@@ -789,6 +789,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , large_partition_fail_threshold_mb(this, "large_partition_fail_threshold_mb", liveness::LiveUpdate, value_status::Used, 0,
         "Reject writes targeting a partition whose on-disk size already exceeds this threshold in MB, as recorded in any SSTable's large data records. "
         "Set to 0 to disable.")
+    , rows_count_fail_threshold(this, "rows_count_fail_threshold", liveness::LiveUpdate, value_status::Used, 0,
+        "Reject writes targeting a partition whose on-disk row count already exceeds this threshold, as recorded in any SSTable's large data records. "
+        "Set to 0 to disable.")
     , compaction_rows_count_warning_threshold(this, "compaction_rows_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 100000,
         "Log a warning when writing a number of rows larger than this value.")
     , compaction_collection_elements_count_warning_threshold(this, "compaction_collection_elements_count_warning_threshold", liveness::LiveUpdate, value_status::Used, 10000,
