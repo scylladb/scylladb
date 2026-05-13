@@ -432,6 +432,10 @@ large_partition_fail_threshold_mb: 2000
 # Log a warning when writing rows larger than this value
 # compaction_large_row_warning_threshold_mb: 10
 
+# Reject writes to rows whose on-disk size exceeds this threshold (MB).
+# Set to 0 to disable.
+large_row_fail_threshold_mb: 20
+
 # Log a warning when writing cells larger than this value
 # compaction_large_cell_warning_threshold_mb: 1
 
