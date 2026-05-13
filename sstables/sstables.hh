@@ -1101,6 +1101,10 @@ public:
         return _large_data_records;
     }
 
+    std::optional<scylla_metadata::large_data_records>& get_large_data_records() noexcept {
+        return _large_data_records;
+    }
+
     // Return the extended timestamp statistics map.
     // Some or all entries may be missing if not present in scylla_metadata
     scylla_metadata::ext_timestamp_stats::map_type get_ext_timestamp_stats() const noexcept;

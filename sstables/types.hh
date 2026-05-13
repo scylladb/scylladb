@@ -17,6 +17,7 @@
 #include "mutation/tombstone.hh"
 #include "utils/streaming_histogram.hh"
 #include "utils/estimated_histogram.hh"
+#include <boost/intrusive/set.hpp>
 #include "sstables/key.hh"
 #include "sstables/file_writer.hh"
 #include "db/commitlog/replay_position.hh"
@@ -613,6 +614,11 @@ struct large_data_record {
     // Partition-level auxiliary fields (meaningful only for partition_size records, 0 otherwise):
     uint64_t range_tombstones;              // number of range tombstones in the partition
     uint64_t dead_rows;                     // number of dead rows in the partition
+
+    // Runtime hook for large_data_record_index.  Not serialized.
+    using index_hook_type = boost::intrusive::set_member_hook<
+        boost::intrusive::link_mode<boost::intrusive::auto_unlink>>;
+    index_hook_type _index_hook;
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
