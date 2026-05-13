@@ -7973,4 +7973,113 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
     return make_ready_future<>();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_effective_capacity_smoothing) {
+    // Verifies storage_service::smooth_effective_capacity(): capacity
+    // decreases are reported immediately, while increases are damped with a
+    // time-decay (EWMA) filter to prevent load balancer oscillations without
+    // ever overestimating capacity.
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& ss = e.get_storage_service().local();
+
+        const auto period = std::chrono::seconds(300);
+        const uint64_t base = 1'000'000'000; // 1 GB
+        lowres_clock::time_point t0{};
+
+        // First call: no cached value, should accept new value verbatim.
+        auto result = ss.smooth_effective_capacity(base, period, t0);
+        BOOST_REQUIRE_EQUAL(result, base);
+
+        // A decrease is reported immediately and fully, regardless of dt.
+        uint64_t drop = base - base / 100; // -1%
+        result = ss.smooth_effective_capacity(drop, period, t0 + std::chrono::seconds(1));
+        BOOST_REQUIRE_EQUAL(result, drop);
+
+        // Even a tiny decrease is applied immediately.
+        result = ss.smooth_effective_capacity(drop - 1, period, t0 + std::chrono::seconds(2));
+        BOOST_REQUIRE_EQUAL(result, drop - 1);
+
+        // An increase with dt == period reaches ~63.2% (1 - 1/e) of the gap.
+        {
+            uint64_t prev = drop - 1;
+            uint64_t target = prev + 100'000'000; // +100 MB
+            auto now = t0 + std::chrono::seconds(2) + period;
+            result = ss.smooth_effective_capacity(target, period, now);
+            double expected = prev + (1.0 - std::exp(-1.0)) * (target - prev);
+            BOOST_REQUIRE_LT(result, target); // damped, not snapped
+            BOOST_REQUIRE_GT(result, prev);
+            BOOST_REQUIRE_CLOSE(double(result), expected, 0.01);
+        }
+
+        // Reset to a known state for the remaining sub-cases.
+        result = ss.smooth_effective_capacity(base, period, t0 + std::chrono::hours(1));
+        BOOST_REQUIRE_EQUAL(result, base); // drop below current -> immediate
+
+        // An increase with dt much smaller than the period moves only a small
+        // fraction toward the target.
+        {
+            uint64_t target = base + 200'000'000;
+            auto now = t0 + std::chrono::hours(1) + std::chrono::seconds(3);
+            result = ss.smooth_effective_capacity(target, period, now);
+            double alpha = 1.0 - std::exp(-3.0 / 300.0);
+            double expected = base + alpha * (target - base);
+            BOOST_REQUIRE_CLOSE(double(result), expected, 0.01);
+            // Moved less than 2% of the way.
+            BOOST_REQUIRE_LT(result - base, (target - base) / 50);
+        }
+
+        // Convergence: repeated large steps of dt == period converge to target.
+        {
+            uint64_t target = base + 500'000'000;
+            auto now = t0 + std::chrono::hours(2);
+            for (int i = 0; i < 50; ++i) {
+                now += period;
+                result = ss.smooth_effective_capacity(target, period, now);
+            }
+            // After 50 time constants the value is effectively at the target.
+            BOOST_REQUIRE_CLOSE(double(result), double(target), 0.001);
+        }
+
+        // Irregular cadence: one step of 2*period advances more than a single
+        // step of period would (time-proportional response, not per-call).
+        {
+            uint64_t start = ss.smooth_effective_capacity(0, period, t0 + std::chrono::hours(3));
+            // Above forced an immediate drop to 0; now rise with a big gap.
+            uint64_t target = 1'000'000'000;
+            auto now = t0 + std::chrono::hours(3) + 2 * period;
+            uint64_t r_double = ss.smooth_effective_capacity(target, period, now);
+            double alpha2 = 1.0 - std::exp(-2.0);
+            double expected2 = start + alpha2 * (target - start);
+            BOOST_REQUIRE_CLOSE(double(r_double), expected2, 0.01);
+        }
+
+        // Oscillating input settles near the trough (never overestimates):
+        // alternating rise/drop keeps the reported value pinned to the low
+        // envelope because drops apply immediately and rises lag.
+        {
+            uint64_t low = 800'000'000;
+            uint64_t high = 1'000'000'000;
+            auto now = t0 + std::chrono::hours(4);
+            // Establish the low as the current value.
+            ss.smooth_effective_capacity(low, period, now);
+            for (int i = 0; i < 20; ++i) {
+                now += std::chrono::seconds(30); // dt << period
+                ss.smooth_effective_capacity(high, period, now); // small rise
+                now += std::chrono::seconds(30);
+                result = ss.smooth_effective_capacity(low, period, now); // full drop
+            }
+            // The reported value tracks the low, never drifting up to high.
+            BOOST_REQUIRE_EQUAL(result, low);
+        }
+
+        // decay_period == 0 disables smoothing entirely.
+        {
+            auto now = t0 + std::chrono::hours(5);
+            result = ss.smooth_effective_capacity(base, std::chrono::seconds(0), now);
+            BOOST_REQUIRE_EQUAL(result, base);
+            result = ss.smooth_effective_capacity(base + 123, std::chrono::seconds(0), now);
+            BOOST_REQUIRE_EQUAL(result, base + 123);
+        }
+    }).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
