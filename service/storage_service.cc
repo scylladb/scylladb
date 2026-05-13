@@ -1730,6 +1730,8 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         throw std::runtime_error(err);
     }
 
+    co_await _migration_manager.local().ensure_committed_by_group0();
+
     // Initializes monitor only after updating local topology.
     start_tablet_split_monitor();
 
