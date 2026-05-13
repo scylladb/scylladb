@@ -847,7 +847,7 @@ future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id,
         try {
             streaming::stream_files_request req;
             req.ops_id = ops_id;
-            req.keyspace_name = table.schema()->ks_name(),
+            req.keyspace_name = table.schema()->ks_name();
             req.table_name = table.schema()->cf_name();
             req.table = table.schema()->id();
             req.range = range;
