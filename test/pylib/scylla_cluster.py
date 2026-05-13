@@ -557,7 +557,7 @@ class ScyllaServer:
     async def install_and_start(self,
                                 api: ScyllaRESTAPIClient,
                                 expected_error: Optional[str] = None,
-                                expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED) -> None:
+                                expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> None:
         """Setup and start this server."""
 
         await self.install()
@@ -762,28 +762,29 @@ class ScyllaServer:
             contact_points=[self.rpc_address]
         connected = False
         cql_queried = False
+        cluster_kwargs = dict(
+            execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+            contact_points=contact_points,
+            protocol_version=4,  # This is the latest version Scylla supports
+            control_connection_timeout=self.TOPOLOGY_TIMEOUT,
+            auth_provider=self.auth_provider,
+        )
         try:
             # In a cluster setup, it's possible that the CQL
             # here is directed to a node different from the initial contact
             # point, so make sure we execute the checks strictly via
             # this connection
-            with Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-                         contact_points=contact_points,
-                         # This is the latest version Scylla supports
-                         protocol_version=4,
-                         control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                         auth_provider=self.auth_provider) as cluster:
+            with Cluster(**cluster_kwargs) as cluster:
                 with cluster.connect() as session:
                     connected = True
                     # See the comment above about `auth::standard_role_manager`. We execute
                     # a 'real' query to ensure that the auth service has finished initializing.
                     session.execute("SELECT key FROM system.local where key = 'local'")
-                    self.control_cluster = Cluster(execution_profiles=
-                                                        {EXEC_PROFILE_DEFAULT: profile},
-                                                   contact_points=contact_points,
-                                                   control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                                                   auth_provider=self.auth_provider)
-                    self.control_connection = self.control_cluster.connect()
+                    # Only create the persistent control connection once; re-creating it on
+                    # every successful CQL check would leak driver connections.
+                    if self.control_connection is None:
+                        self.control_cluster = Cluster(**cluster_kwargs)
+                        self.control_connection = self.control_cluster.connect()
                     cql_queried = True
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
             self.logger.debug("Exception when checking if CQL is up: %s", exc)
@@ -831,17 +832,18 @@ class ScyllaServer:
                     message = data.decode('utf-8', errors='replace')
                     if 'STATUS=serving' in message:
                         logger.debug("Received sd_notify 'serving' message")
-                        loop.call_soon_threadsafe(f.set_result, True)
+                        loop.call_soon_threadsafe(lambda: f.done() or f.set_result(True))
                         return
                     if 'STATUS=entering maintenance mode' in message:
-                        logger.debug("Receive sd_notify 'entering maintenance mode'")
-                        break
+                        logger.debug("Received sd_notify 'entering maintenance mode' message")
+                        loop.call_soon_threadsafe(lambda: f.done() or f.set_result(True))
+                        return
                 except socket.timeout:
                     pass
                 except Exception as e:
                     logger.debug("Error reading from notify socket: %s", e)
                     break
-            loop.call_soon_threadsafe(f.set_result, False)
+            loop.call_soon_threadsafe(lambda: f.done() or f.set_result(False))
 
         self.serving_signal = loop.create_future()
         t = threading.Thread(target=poll_status, args=[self.notify_socket, self.serving_signal, self.logger], daemon=True)
@@ -871,7 +873,7 @@ class ScyllaServer:
         if self.serving_signal.done():
             self._received_serving = self.serving_signal.result()
             self.serving_signal = None
-        return False
+        return self._received_serving
 
     async def try_get_host_id(self, api: ScyllaRESTAPIClient) -> Optional[HostID]:
         """Try to get the host id (also tests Scylla REST API is serving)"""
@@ -897,7 +899,7 @@ class ScyllaServer:
     async def start(self,
                     api: ScyllaRESTAPIClient,
                     expected_error: Optional[str] = None,
-                    expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED,
+                    expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                     cmdline_options_override: list[str] | None = None,
                     append_env_override: dict[str, str] | None = None) -> None:
         """Start an installed server.
@@ -970,9 +972,16 @@ class ScyllaServer:
             if await self.try_get_host_id(api):
                 if server_up_state == ServerUpState.PROCESS_STARTED:
                     server_up_state = ServerUpState.HOST_ID_QUERIED
-                server_up_state = await self.get_cql_alternator_up_state() or server_up_state
-                # Check for SERVING state (sd_notify "serving" message)
-                if server_up_state >= ServerUpState.CQL_ALTERNATOR_QUERIED and self.check_serving_notification():
+                # Only poll CQL/Alternator until they are known to be up.
+                # Once CQL_ALTERNATOR_QUERIED is reached, skip the poll to avoid
+                # repeatedly recreating driver connections while waiting for sd_notify.
+                if server_up_state < ServerUpState.CQL_ALTERNATOR_QUERIED:
+                    server_up_state = await self.get_cql_alternator_up_state() or server_up_state
+                # Check for SERVING state via sd_notify. This is authoritative: Scylla sends
+                # STATUS=serving once all configured listeners are ready, and
+                # STATUS=entering maintenance mode once the maintenance socket is ready.
+                # Both mean the server is fully started and we don't need to wait further.
+                if self.check_serving_notification():
                     server_up_state = ServerUpState.SERVING
                 if server_up_state >= expected_server_up_state:
                     if expected_error is not None:
@@ -1267,7 +1276,7 @@ class ScyllaCluster:
                          seeds: Optional[List[IPAddress]] = None,
                          server_encryption: str = "none",
                          expected_error: Optional[str] = None,
-                         expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED) -> ServerInfo:
+                         expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
@@ -1507,7 +1516,7 @@ class ScyllaCluster:
                            server_id: ServerNum,
                            expected_error: str | None = None,
                            seeds: list[IPAddress] | None = None,
-                           expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED,
+                           expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None,
                            auth_provider: dict[str, str] | None = None) -> None:
@@ -1990,7 +1999,7 @@ class ScyllaClusterManager:
             server_id=server_id,
             expected_error=data.get("expected_error"),
             seeds=data.get("seeds"),
-            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_ALTERNATOR_QUERIED")),
+            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "SERVING")),
             cmdline_options_override=data.get("cmdline_options_override"),
             append_env_override=data.get("append_env_override"),
             auth_provider=data.get("auth_provider"),
@@ -2025,7 +2034,7 @@ class ScyllaClusterManager:
             seeds=data.get("seeds"),
             server_encryption=data.get("server_encryption", "none"),
             expected_error=data.get("expected_error"),
-            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_ALTERNATOR_QUERIED")),
+            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "SERVING")),
         )
         return s_info.as_dict()
 
