@@ -294,22 +294,6 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
     }
 }
 
-void vector_index::check_cdc_not_explicitly_disabled(const schema& schema) const {
-    auto cdc_options = schema.cdc_options();
-    if (cdc_options.is_enabled_set() && !cdc_options.enabled()) {
-        // If CDC is explicitly disabled by the user, we cannot create the vector index.
-        throw exceptions::invalid_request_exception(format(
-            "Cannot create the vector index when CDC is explicitly disabled.\n"
-                "Please enable CDC with the required parameters first.\n"
-                "CDC's TTL must be at least {} seconds (24 hours), "
-                "and the CDC's delta mode must be set to 'full' or postimage must be enabled "
-                "to enable Vector Search.\n"
-                "Check documentation on how to setup CDC's parameters - "
-                "https://docs.scylladb.com/manual/branch-2025.2/features/cdc/cdc-intro.html#cdc-parameters",
-                VS_TTL_SECONDS));
-    }
-}
-
 void vector_index::check_cdc_options(const schema& schema) {
     auto cdc_options = schema.cdc_options();
     if (cdc_options.enabled()) {
@@ -363,7 +347,6 @@ void vector_index::validate(const schema &schema, const cql3::statements::index_
 {
     check_uses_tablets(schema, db);
     check_target(schema, targets);
-    check_cdc_not_explicitly_disabled(schema);
     check_cdc_options(schema);
     check_index_options(properties);
 }
