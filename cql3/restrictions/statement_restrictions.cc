@@ -1186,7 +1186,6 @@ statement_restrictions::statement_restrictions(private_tag,
         if (idx_result.index) {
             _idx_opt = std::make_unique<secondary_index::index>(std::move(*idx_result.index));
         }
-        _idx_restrictions = std::move(idx_result.restrictions);
         _idx_column_predicates = std::move(idx_result.indexed_column_predicates);
     }
 
@@ -1401,9 +1400,9 @@ static do_find_idx_result do_find_idx(
     return {chosen_index, chosen_index_restrictions, std::move(chosen_index_predicates)};
 }
 
-std::pair<std::optional<secondary_index::index>, expr::expression>
+std::optional<secondary_index::index>
 statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
-    return {_idx_opt ? std::optional<secondary_index::index>(*_idx_opt) : std::nullopt, _idx_restrictions};
+    return _idx_opt ? std::optional<secondary_index::index>(*_idx_opt) : std::nullopt;
 }
 
 bool statement_restrictions::has_eq_restriction_on_column(const column_definition& column) const {

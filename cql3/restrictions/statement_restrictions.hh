@@ -227,7 +227,6 @@ private:
     std::vector<const column_definition*> _column_defs_for_filtering;
     schema_ptr _view_schema;
     std::unique_ptr<secondary_index::index> _idx_opt;
-    expr::expression _idx_restrictions = expr::conjunction({});
     std::vector<predicate> _idx_column_predicates; ///< Predicates for the chosen index's target column.
     get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
     get_clustering_bounds_fn_t _get_clustering_bounds_fn;
@@ -344,9 +343,8 @@ public:
      * Determines the index to be used with the restriction.
      * @param db - the data_dictionary::database context (for extracting index manager)
      * @return If an index can be used, an optional containing this index, otherwise an empty optional.
-     * In case the index is returned, second parameter returns the index restriction it uses.
      */
-    std::pair<std::optional<secondary_index::index>, expr::expression> find_idx(const secondary_index::secondary_index_manager& sim) const;
+    std::optional<secondary_index::index> find_idx(const secondary_index::secondary_index_manager& sim) const;
 
     /**
      * Checks if the partition key has some unrestricted components.
