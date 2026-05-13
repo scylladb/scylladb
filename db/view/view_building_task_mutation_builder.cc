@@ -14,7 +14,17 @@ namespace db {
 namespace view {
 
 utils::UUID view_building_task_mutation_builder::new_id() {
+<<<<<<< HEAD
     return utils::UUID_gen::get_time_UUID();
+||||||| parent of 2561cc1546 (db/view/view_building_task_mutation_builder: make uuid generator optional)
+    return _uuid_gen();
+=======
+    if (_uuid_gen) {
+        return (*_uuid_gen)();
+    } else {
+        utils::on_internal_error("view_building_task_mutation_builder: cannot generate new id without uuid generator");
+    }
+>>>>>>> 2561cc1546 (db/view/view_building_task_mutation_builder: make uuid generator optional)
 }
 
 clustering_key view_building_task_mutation_builder::get_ck(utils::UUID id) {

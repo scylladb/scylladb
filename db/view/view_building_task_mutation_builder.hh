@@ -19,11 +19,23 @@ namespace view {
 // Factory for mutations to `system.view_building_tasks` table.
 class view_building_task_mutation_builder {
     api::timestamp_type _ts;
+<<<<<<< HEAD
+||||||| parent of 2561cc1546 (db/view/view_building_task_mutation_builder: make uuid generator optional)
+    task_uuid_generator _uuid_gen;
+=======
+    std::optional<task_uuid_generator> _uuid_gen;
+>>>>>>> 2561cc1546 (db/view/view_building_task_mutation_builder: make uuid generator optional)
     schema_ptr _s;
     mutation _m;
 
 public:
+<<<<<<< HEAD
     view_building_task_mutation_builder(api::timestamp_type ts)
+||||||| parent of 2561cc1546 (db/view/view_building_task_mutation_builder: make uuid generator optional)
+    view_building_task_mutation_builder(api::timestamp_type ts, task_uuid_generator uuid_gen)
+=======
+    view_building_task_mutation_builder(api::timestamp_type ts, std::optional<task_uuid_generator> uuid_gen = std::nullopt)
+>>>>>>> 2561cc1546 (db/view/view_building_task_mutation_builder: make uuid generator optional)
             : _ts(ts)
             , _s(db::system_keyspace::view_building_tasks())
             , _m(_s, partition_key::from_single_value(*_s, data_value("view_building").serialize_nonnull()))
