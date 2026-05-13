@@ -349,6 +349,7 @@ add_scylla_test(combined_tests
     group0_voter_calculator_test.cc
     index_with_paging_test.cc
     json_cql_query_test.cc
+    large_data_guardrail_test.cc
     large_paging_state_test.cc
     loading_cache_test.cc
     memtable_test.cc
