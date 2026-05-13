@@ -76,6 +76,82 @@ future<> large_data_handler::unplug_system_keyspace() noexcept {
     co_await _sys_ks.unplug();
 }
 
+void large_data_record_index::register_sstable(sstables::shared_sstable sst) {
+    auto& records_opt = sst->get_large_data_records();
+    if (!records_opt) {
+        return;
+    }
+    for (auto& rec : records_opt->elements) {
+        switch (rec.type) {
+        case sstables::large_data_type::partition_size:
+        case sstables::large_data_type::rows_in_partition:
+            _partitions.insert(rec);
+            break;
+        case sstables::large_data_type::row_size:
+            _rows.insert(rec);
+            break;
+        case sstables::large_data_type::elements_in_collection:
+            _collections.insert(rec);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+void large_data_record_index::rebuild(
+        const std::unordered_set<sstables::shared_sstable>& sstables) {
+    _partitions.clear();
+    _rows.clear();
+    _collections.clear();
+    for (const auto& sst : sstables) {
+        register_sstable(sst);
+    }
+}
+
+std::optional<large_data_record_index::partition_entry>
+large_data_record_index::lookup_partition(bytes_view pk_bytes) const {
+    lookup_key lk{pk_bytes, {}, {}};
+    auto [begin, end] = _partitions.equal_range(lk, _partitions.key_comp());
+    if (begin == end) {
+        return std::nullopt;
+    }
+    partition_entry result;
+    for (auto it = begin; it != end; ++it) {
+        result.partition_size = std::max(result.partition_size, it->value);
+        result.rows = std::max(result.rows, it->elements_count);
+    }
+    return result;
+}
+
+std::optional<uint64_t> large_data_record_index::lookup_row(bytes_view pk_bytes,
+        bytes_view ck_bytes) const {
+    lookup_key lk{pk_bytes, ck_bytes, {}};
+    auto [begin, end] = _rows.equal_range(lk, _rows.key_comp());
+    if (begin == end) {
+        return std::nullopt;
+    }
+    uint64_t result = 0;
+    for (auto it = begin; it != end; ++it) {
+        result = std::max(result, it->value);
+    }
+    return result;
+}
+
+std::optional<uint64_t> large_data_record_index::lookup_collection(bytes_view pk_bytes,
+        bytes_view ck_bytes, bytes_view column_name) const {
+    lookup_key lk{pk_bytes, ck_bytes, column_name};
+    auto [begin, end] = _collections.equal_range(lk, _collections.key_comp());
+    if (begin == end) {
+        return std::nullopt;
+    }
+    uint64_t result = 0;
+    for (auto it = begin; it != end; ++it) {
+        result = std::max(result, it->elements_count);
+    }
+    return result;
+}
+
 sstring large_data_handler::sst_filename(const sstables::sstable& sst) {
     return sst.component_basename(sstables::component_type::Data);
 }
