@@ -11,6 +11,7 @@
 #include <concepts>
 #include <cstdint>
 #include <optional>
+#include <seastar/core/shared_ptr.hh>
 #include <boost/intrusive/set.hpp>
 #include "bytes.hh"
 #include "schema/schema_fwd.hh"
@@ -28,6 +29,7 @@ class key;
 }
 
 class partition_key_view;
+class mutation_partition;
 
 namespace db {
 
@@ -109,6 +111,64 @@ private:
     record_set<record_type::partition> _partitions;
     record_set<record_type::row> _rows;
     record_set<record_type::collection> _collections;
+};
+
+struct guardrail_config {
+    utils::updateable_value<uint32_t> partition_size_fail_threshold_mb;
+    utils::updateable_value<uint32_t> partition_size_warn_threshold_mb;
+    utils::updateable_value<uint32_t> rows_count_fail_threshold;
+    utils::updateable_value<uint32_t> rows_count_warn_threshold;
+    utils::updateable_value<uint32_t> row_size_fail_threshold_mb;
+    utils::updateable_value<uint32_t> row_size_warn_threshold_mb;
+    utils::updateable_value<uint32_t> collection_elements_fail_threshold;
+    utils::updateable_value<uint32_t> collection_elements_warn_threshold;
+};
+
+// Each replica::table holds a unique_ptr to either a real guardrail or a
+// noop.  The guardrail owns the per-table large_data_record_index, so
+// noop tables pay no index-maintenance cost.
+class large_data_guardrail_base {
+public:
+    virtual ~large_data_guardrail_base() = default;
+    virtual void check(const schema& s, const mutation_partition& mp,
+                       partition_key_view pk) const = 0;
+    virtual void register_sstable(sstables::shared_sstable sst) = 0;
+    virtual void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) = 0;
+};
+
+class noop_large_data_guardrail final : public large_data_guardrail_base {
+public:
+    static shared_ptr<large_data_guardrail_base> instance() {
+        static thread_local auto inst = make_shared<noop_large_data_guardrail>();
+        return inst;
+    }
+    void check(const schema&, const mutation_partition&,
+               partition_key_view) const override {}
+    void register_sstable(sstables::shared_sstable) override {}
+    void rebuild(const std::unordered_set<sstables::shared_sstable>&) override {}
+};
+
+class large_data_guardrail final : public large_data_guardrail_base {
+public:
+    explicit large_data_guardrail(guardrail_config cfg) noexcept
+        : _cfg(std::move(cfg)) {}
+
+    void check(const schema& s, const mutation_partition& mp,
+               partition_key_view pk) const override;
+    void register_sstable(sstables::shared_sstable sst) override;
+    void rebuild(const std::unordered_set<sstables::shared_sstable>& sstables) override;
+
+private:
+    void check_partition(const schema& s, bytes_view pk_bytes, partition_key_view pk) const;
+    void check_rows_and_collections(const schema& s, bytes_view pk_bytes, const mutation_partition& mp, partition_key_view pk) const;
+    void check_row_size(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+            bytes_view ck_bytes, const clustering_key_prefix* ck) const;
+    void check_collection_element_count(const schema& s, bytes_view pk_bytes, partition_key_view pk,
+            const column_definition& cdef, bytes_view ck_bytes,
+            const clustering_key_prefix* ck) const;
+
+    guardrail_config _cfg;
+    large_data_record_index _index;
 };
 
 class large_data_handler {
