@@ -28,6 +28,7 @@
 #include "service/session.hh"
 #include "dht/boot_strapper.hh"
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <optional>
 #include <fmt/ranges.h>
@@ -6174,10 +6175,41 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
         for (const auto& ts : tablet_sizes_per_shard) {
             sum_tablet_sizes += ts.size;
         }
-        tls.effective_capacity = si.available + sum_tablet_sizes;
+        uint64_t new_effective_capacity = si.available + sum_tablet_sizes;
+
+        const auto decay_period = std::chrono::seconds(
+                _db.local().get_config().effective_capacity_rise_decay_period_in_seconds());
+        tls.effective_capacity = smooth_effective_capacity(new_effective_capacity, decay_period);
     }
 
     co_return std::move(load_stats);
+}
+
+uint64_t storage_service::smooth_effective_capacity(uint64_t new_value,
+        std::chrono::seconds decay_period, lowres_clock::time_point now) {
+    if (!_smoothed_effective_capacity || decay_period.count() == 0) {
+        _smoothed_effective_capacity = new_value;
+        _last_capacity_sample_time = now;
+        return new_value;
+    }
+    if (new_value <= *_smoothed_effective_capacity) {
+        // Report decreases immediately: never overestimate available capacity.
+        _smoothed_effective_capacity = new_value;
+    } else {
+        // Dampen increases with an exponential moving average over the real
+        // elapsed time since the previous sample (samples are pulled by the
+        // topology coordinator at an irregular cadence).
+        // alpha = 1 - exp(-dt / decay_period), same form as utils::moving_average.
+        const double dt = std::chrono::duration_cast<std::chrono::duration<double>>(
+                now - _last_capacity_sample_time).count();
+        const double period = std::chrono::duration_cast<std::chrono::duration<double>>(
+                decay_period).count();
+        const double alpha = dt <= 0 ? 0.0 : 1.0 - std::exp(-dt / period);
+        const double prev = double(*_smoothed_effective_capacity);
+        _smoothed_effective_capacity = uint64_t(prev + alpha * (double(new_value) - prev) + 0.5);
+    }
+    _last_capacity_sample_time = now;
+    return *_smoothed_effective_capacity;
 }
 
 future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {

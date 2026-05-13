@@ -32,6 +32,7 @@
 #include "dht/token_range_endpoints.hh"
 #include "gms/application_state.hh"
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/gate.hh>
 #include "replica/database_fwd.hh"
 #include "streaming/stream_reason.hh"
@@ -1087,6 +1088,14 @@ private:
 
     utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
 
+    // State for asymmetric time-decay smoothing of effective_capacity.
+    // Capacity decreases are reported immediately, while increases are damped
+    // with an exponential moving average. This prevents load balancer
+    // oscillations caused by fluctuations in available disk space without ever
+    // overestimating capacity.
+    std::optional<uint64_t> _smoothed_effective_capacity;
+    lowres_clock::time_point _last_capacity_sample_time;
+
     strong_consistency::groups_manager& _groups_manager;
 
 public:
@@ -1098,6 +1107,19 @@ public:
     future<std::vector<std::byte>> train_dict(utils::chunked_vector<temporary_buffer<char>> sample);
     future<> publish_new_sstable_dict(table_id, std::span<const std::byte>, service::raft_group0_client&);
     void set_train_dict_callback(decltype(_train_dict));
+
+    /// Smooth effective_capacity to prevent load-balancer oscillations.
+    /// Capacity decreases are reported immediately; increases are damped with
+    /// an exponential moving average whose time constant is \p decay_period,
+    /// computed from the real elapsed time since the previous sample.
+    ///
+    /// \param new_value     newly measured capacity
+    /// \param decay_period  EWMA time constant (0 disables smoothing)
+    /// \param now           current time (injectable for testing)
+    /// \returns smoothed capacity value
+    uint64_t smooth_effective_capacity(uint64_t new_value,
+            std::chrono::seconds decay_period,
+            lowres_clock::time_point now = lowres_clock::now());
     seastar::future<> notify_client_routes_change(const client_routes_service::client_route_keys& client_route_keys);
 
     // Alters the given table's min/max tablet count hints. Only the engaged
