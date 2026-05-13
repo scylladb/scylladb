@@ -8,6 +8,7 @@
 
 #include "modification_statement.hh"
 
+#include "db/consistency_level_type.hh"
 #include "db/timeout_clock.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
@@ -34,10 +35,18 @@ future<shared_ptr<result_message>> modification_statement::execute(query_process
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<result_message>>);
 }
 
+static void validate_consistency_level(const db::consistency_level& cl) {
+    if (cl != db::consistency_level::QUORUM && cl != db::consistency_level::LOCAL_QUORUM) {
+        throw exceptions::invalid_request_exception("Strongly consistent writes must use QUORUM/LOCAL_QUORUM consistency level");
+    }
+}
+
 future<shared_ptr<result_message>> modification_statement::execute_without_checking_exception_message(
         query_processor& qp, service::query_state& qs, const query_options& options,
         std::optional<service::group0_guard> guard) const
 {
+    validate_consistency_level(options.get_consistency());
+
     auto timeout = db::timeout_clock::now() + _statement->get_timeout(qs.get_client_state(), options);
     auto json_cache = base_statement::json_cache_opt{};
     const auto keys = _statement->build_partition_keys(options, json_cache);
