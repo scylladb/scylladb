@@ -14,7 +14,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import reconnect_driver
-from test.pylib.object_storage import format_tuples, keyspace_options
+from test.pylib.object_storage import format_tuples, keyspace_options, GSFront
 from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace
@@ -22,6 +22,16 @@ from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.skip_types import skip_bug
 
 logger = logging.getLogger(__name__)
+
+
+
+async def assert_registry_empty_on_all_nodes(cql, hosts, table_id, action):
+    """Verify that sstables registry has no entries for the given table_id on all nodes."""
+    for h in hosts:
+        res = await cql.run_async(
+            SimpleStatement(f"SELECT * FROM system_distributed.sstables WHERE table_id = {table_id} ALLOW FILTERING",
+                            consistency_level=ConsistencyLevel.ONE), host=h)
+        assert not res, f'Unexpected entries in registry on {h.address} after {action}'
 
 
 @pytest.mark.parametrize('replication_factor', [1, 3])
@@ -103,12 +113,36 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
         have_res = {x.name: x.value for x in res}
         assert have_res == rows, f'Unexpected table content: {have_res}'
 
-        print('Drop table')
-        cql.execute(f"DROP TABLE {ks}.test;")
-        # Check that the ownership table is de-populated
-        res = cql.execute(SimpleStatement("SELECT * FROM system_distributed.sstables;", consistency_level=ConsistencyLevel.ONE))
-        rows = "\n".join(f"{row.table_id} {row.status}" for row in res)
-        assert not rows, 'Unexpected entries in registry'
+        # Get CQL hosts for querying from all nodes
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        print('Truncate table and verify registry is cleaned up on all nodes')
+        await cql.run_async(f"TRUNCATE {ks}.test;")
+        await assert_registry_empty_on_all_nodes(cql, hosts, tid.id, 'TRUNCATE')
+
+        # Re-populate the table for the DROP TABLE test
+        for k in range(4):
+            await cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});")
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        print('Drop table and verify registry is cleaned up on all nodes')
+        await cql.run_async(f"DROP TABLE {ks}.test;")
+        await assert_registry_empty_on_all_nodes(cql, hosts, tid.id, 'DROP TABLE')
+
+        # Re-create and populate a table so the DROP KEYSPACE has entries to clean up
+        await cql.run_async(f"CREATE TABLE {ks}.test2 (pk int PRIMARY KEY, v int)")
+        for k in range(4):
+            await cql.run_async(f"INSERT INTO {ks}.test2 (pk, v) VALUES ({k}, {k})")
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+        tid2 = (await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test2'"))[0].id
+
+    # After new_test_keyspace context manager drops the keyspace, verify
+    # registry cleanup is visible on all nodes.
+    print('Verify registry is cleaned up on all nodes after DROP KEYSPACE')
+    await assert_registry_empty_on_all_nodes(cql, hosts, tid2, 'DROP KEYSPACE')
 
 @pytest.mark.asyncio
 async def test_garbage_collect(manager: ManagerClient, object_storage):
@@ -454,6 +488,8 @@ async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, objec
     the migration retries successfully, data remains intact, and no stale
     "creating" entries are left in the sstables registry.
     """
+    if isinstance(object_storage, GSFront):
+        skip_bug("https://scylladb.atlassian.net/browse/SCYLLADB-2044")
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': object_storage.create_endpoint_conf(),
            'experimental_features': ['keyspace-storage-options']}
