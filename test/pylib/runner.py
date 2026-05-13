@@ -13,7 +13,7 @@ import pathlib
 import platform
 import random
 import sys
-from argparse import BooleanOptionalAction
+from argparse import ArgumentTypeError, BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count
 from functools import cache, cached_property
@@ -22,13 +22,25 @@ from random import randint
 from typing import TYPE_CHECKING, Callable
 
 import pytest
+import universalasync
 import xdist
 import yaml
 from _pytest.junitxml import xml_key
+from _pytest.reports import TestReport
+from _pytest.runner import CallInfo
 
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, HOST_ID
+from test.pylib.scylla_resource_scheduler import (
+    SCYLLA_RESOURCE_METADATA_PREFIX,
+    ScyllaResourceScheduler,
+    scylla_resource_budget_failure,
+    scylla_resource_budget_from_config,
+    scylla_resource_metadata_for_item,
+    write_scylla_resource_metadata,
+)
 from test.pylib.scylla_cluster import merge_cmdline_options
+from test.pylib.session_services import SessionServiceManager, apply_session_service_environment
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
@@ -63,6 +75,41 @@ logger = logging.getLogger(__name__)
 
 # Store pytest config globally so we can access it in hooks that only receive report
 _pytest_config: pytest.Config | None = None
+
+
+def _use_session_service_planner(config: pytest.Config) -> bool:
+    return config.getoption("--scylla-resource-scheduler") != "off"
+
+
+def _ensure_session_service_manager(config: pytest.Config) -> SessionServiceManager:
+    manager = getattr(config, "_scylla_session_service_manager", None)
+    if manager is None:
+        manager = SessionServiceManager(
+            tempdir_base=pathlib.Path(config.getoption("--tmpdir")).absolute(),
+            toxiproxy_byte_limit=config.getoption("--byte-limit"),
+        )
+        config._scylla_session_service_manager = manager
+    if getattr(TestSuite, "artifacts", None) is not None and not getattr(manager, "_cleanup_registered", False):
+        TestSuite.artifacts.add_exit_artifact(None, manager.stop_all)
+        manager._cleanup_registered = True
+    return manager
+
+
+def _run_async(awaitable) -> None:
+    loop = universalasync.get_event_loop()
+    if loop.is_running():
+        raise RuntimeError("Cannot switch session services while an event loop is running")
+    loop.run_until_complete(awaitable)
+
+
+def _positive_int_option(value: str) -> int:
+    try:
+        result = int(value)
+    except ValueError as exc:
+        raise ArgumentTypeError("must be a positive integer") from exc
+    if result <= 0:
+        raise ArgumentTypeError("must be a positive integer")
+    return result
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -101,6 +148,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--cluster-pool-size", type=int,
                      help="Set the pool_size for PythonTest and its descendants.  Alternatively environment variable "
                           "CLUSTER_POOL_SIZE can be used to achieve the same")
+    parser.addoption("--scylla-resource-scheduler", choices=("auto", "on", "off"), default="auto",
+                     help="Use an xdist scheduler that limits concurrent Scylla-backed tests by CPU and memory resources")
+    parser.addoption("--scylla-resource-cpus", type=_positive_int_option,
+                     help="CPU budget for the Scylla resource scheduler. Defaults to the current CPU affinity")
+    parser.addoption("--scylla-resource-memory",
+                     help="Memory budget for the Scylla resource scheduler, e.g. 32G. Defaults to system memory minus reserve")
     parser.addoption("--extra-scylla-cmdline-options", default='',
                      help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
                           " '--logger-log-level raft=trace --default-log-level error'")
@@ -118,6 +171,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--exe-url', default=False,
                      dest="exe_url", action="store",
                      help="URL to download the relocatable executable. Not working with `mode`")
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_make_scheduler(config: pytest.Config, log):
+    if config.getoption("--scylla-resource-scheduler") == "off":
+        return None
+
+    from xdist.workermanage import parse_tx_spec_config
+
+    return ScyllaResourceScheduler(config=config, numnodes=len(parse_tx_spec_config(config)), log=log, service_manager=_ensure_session_service_manager(config))
+
 
 @pytest.fixture(autouse=True)
 def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]:
@@ -175,10 +239,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Confi
 
     items.sort(key=sort_key)
 
+    if os.environ.get("PYTEST_XDIST_WORKER") is not None and config.getoption("--scylla-resource-scheduler") != "off":
+        resource_metadata = {
+            item.nodeid: scylla_resource_metadata_for_item(
+                item=item,
+                suite_config=item.stash[TEST_SUITE],
+                build_mode=item.stash[BUILD_MODE],
+                is_debug_mode=item.stash[BUILD_MODE] in DEBUG_MODES,
+            )
+            for item in items
+        }
+        write_scylla_resource_metadata(config=config, items=items, metadata=resource_metadata)
+
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    # test.py starts S3 mock and create/cleanup testlog by itself. Also, if we run with --collect-only option,
-    # we don't need this stuff.
+    # test.py-compatible pytest sessions prepare test logs and, unless the service planner is active, legacy
+    # third-party services. With --collect-only we don't need this setup.
     if TEST_RUNNER != "pytest" or session.config.getoption("--collect-only"):
         return
 
@@ -191,6 +267,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # Run stuff just once for the main pytest process (not in xdist workers).
     if not is_xdist_worker:
         temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
+        use_service_planner = _use_session_service_planner(session.config)
 
         prepare_environment(
             tempdir_base=temp_dir,
@@ -198,7 +275,66 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             gather_metrics=session.config.getoption("--gather-metrics"),
             save_log_on_success=session.config.getoption("--save-log-on-success"),
             toxiproxy_byte_limit=session.config.getoption("--byte-limit"),
+            start_services=not use_service_planner,
         )
+        if use_service_planner:
+            _ensure_session_service_manager(session.config)
+
+
+def _scylla_resource_budget_failure_for_item(item: pytest.Item) -> str | None:
+    if item.config.getoption("--collect-only"):
+        return None
+    if item.config.getoption("--scylla-resource-scheduler") == "off":
+        return None
+
+    metadata = scylla_resource_metadata_for_item(
+        item=item,
+        suite_config=item.stash[TEST_SUITE],
+        build_mode=item.stash[BUILD_MODE],
+        is_debug_mode=item.stash[BUILD_MODE] in DEBUG_MODES,
+    )
+    return scylla_resource_budget_failure(item.nodeid, metadata.resources, scylla_resource_budget_from_config(item.config))
+
+
+def _emit_scylla_resource_budget_failure(item: pytest.Item, failure: str) -> None:
+    item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+
+    setup_call = CallInfo.from_call(lambda: None, when="setup")
+    item.ihook.pytest_runtest_logreport(report=TestReport.from_item_and_call(item, setup_call))
+
+    call = CallInfo.from_call(lambda: pytest.fail(failure, pytrace=False), when="call")
+    item.ihook.pytest_runtest_logreport(report=TestReport.from_item_and_call(item, call))
+
+    teardown_call = CallInfo.from_call(lambda: None, when="teardown")
+    item.ihook.pytest_runtest_logreport(report=TestReport.from_item_and_call(item, teardown_call))
+
+    item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> bool | None:
+    failure = _scylla_resource_budget_failure_for_item(item)
+    if failure is None:
+        return None
+
+    _emit_scylla_resource_budget_failure(item, failure)
+    return True
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    if item.config.getoption("--collect-only"):
+        return
+
+    if _use_session_service_planner(item.config):
+        apply_session_service_environment(item.config.getoption("--tmpdir"))
+        if os.environ.get("PYTEST_XDIST_WORKER") is None:
+            metadata = scylla_resource_metadata_for_item(
+                item=item,
+                suite_config=item.stash[TEST_SUITE],
+                build_mode=item.stash[BUILD_MODE],
+                is_debug_mode=item.stash[BUILD_MODE] in DEBUG_MODES,
+            )
+            _run_async(_ensure_session_service_manager(item.config).ensure_services(metadata.services))
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -256,12 +392,9 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         pathlib.Path(_pytest_config.stash[PYTEST_LOG_FILE]).unlink(missing_ok=True)
 
 
-    # Check if this is an xdist worker - workers should not clean up (only the main process should)
-    # Check if test.py has already prepared the environment, so it should clean up
-
-    if is_xdist_worker:
-        return
-    # we only clean up when running with pure pytest
+    # xdist workers own their own TestSuite artifacts, so each worker must clean up its local registry.
+    if not is_xdist_worker and (manager := getattr(session.config, "_scylla_session_service_manager", None)):
+        _run_async(manager.stop_all())
     if getattr(TestSuite, "artifacts", None) is not None:
         asyncio.run(TestSuite.artifacts.cleanup_before_exit())
 
@@ -276,6 +409,14 @@ def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
 
+    config.addinivalue_line(
+        "markers",
+        "scylla_cluster(nodes, config=None, cmdline=None, property_file=None, auto_rack_dc=None, server_encryption='none', reuse='sequential'): "
+        "declare a reusable topology-test cluster profile",
+    )
+    config.addinivalue_line("markers", "prepare_3_nodes_cluster: prepare and reuse a default 3-node cluster")
+    config.addinivalue_line("markers", "prepare_3_racks_cluster: prepare and reuse a default 3-node, 3-rack cluster")
+
     pytest_log_dir = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_LOG_FOLDER
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
     # If this is an xdist worker, set up logging to a separate file for this worker. Otherwise, set up logging for the main process.
@@ -289,6 +430,9 @@ def pytest_configure(config: pytest.Config) -> None:
                 # This will help in case framework tests are executed with test.py event if it's the wrong way to run them.
                 # test_no_bare_skip_markers_in_collection uses a subprocess to run a collection that has lead to race
                 # condition, especially with repeat.
+                file.unlink(missing_ok=True)
+        else:
+            for file in pytest_log_dir.glob(f"{SCYLLA_RESOURCE_METADATA_PREFIX}*.json"):
                 file.unlink(missing_ok=True)
 
         _pytest_config.stash[PYTEST_LOG_FILE] = f"{pytest_log_dir}/pytest_main_{HOST_ID}.log"

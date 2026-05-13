@@ -45,6 +45,19 @@ from test.pylib.util import LogPrefixAdapter, get_configured_modes
 
 launch_time = time.monotonic()
 
+AUTO_JOBS_MULTIPLIER = 4
+
+
+def raise_nofile_limit() -> None:
+    """Raise the soft file-descriptor limit when the environment allows it."""
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if hard > soft:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+    except (OSError, ValueError):
+        pass
+
+
 class ThreadsCalculator:
     """
     The ThreadsCalculator class calculates the number of jobs that can be run concurrently based on system
@@ -87,8 +100,9 @@ class ThreadsCalculator:
 
     def get_number_of_threads(self, nr_cpus: int) -> int:
         default_num_jobs_cpu = max(1, math.ceil(nr_cpus / self.cpus_per_test_job))
-        return min(self.default_num_jobs_mem, default_num_jobs_cpu)
-
+        # Oversubscribe the auto-sized worker count on this branch so the
+        # integration suite can better saturate the available resources.
+        return min(self.default_num_jobs_mem, default_num_jobs_cpu) * AUTO_JOBS_MULTIPLIER
 
 
 def parse_cmd_line() -> argparse.Namespace:
@@ -179,6 +193,12 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--cluster-pool-size", action="store", default=None, type=int,
                         help="Set the pool_size for PythonTest and its descendants. Alternatively environment variable "
                              "CLUSTER_POOL_SIZE can be used to achieve the same")
+    parser.add_argument("--scylla-resource-scheduler", choices=("auto", "on", "off"), default="auto",
+                        help="Use an xdist scheduler that limits concurrent Scylla-backed tests by CPU and memory resources")
+    parser.add_argument("--scylla-resource-cpus", action="store", default=None, type=int,
+                        help="CPU budget for the Scylla resource scheduler. Defaults to the current CPU affinity")
+    parser.add_argument("--scylla-resource-memory", action="store", default=None,
+                        help="Memory budget for the Scylla resource scheduler, e.g. 32G. Defaults to system memory minus reserve")
     parser.add_argument('--manual-execution', action='store_true', default=False,
                         help='Let me manually run the test executable at the moment this script would run it')
     parser.add_argument('--byte-limit', action="store", default=randint(0, 2000), type=int,
@@ -209,6 +229,8 @@ def parse_cmd_line() -> argparse.Namespace:
 
     if args.skip_patterns and args.k:
         parser.error(palette.fail('arguments --skip and -k are mutually exclusive, please use only one of them'))
+    if args.scylla_resource_cpus is not None and args.scylla_resource_cpus <= 0:
+        parser.error(palette.fail('argument --scylla-resource-cpus must be a positive integer'))
 
     if not args.modes:
         try:
@@ -363,6 +385,13 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append(f'-k={options.k}')
     if options.extra_scylla_cmdline_options:
         args.append(f'--extra-scylla-cmdline-options={options.extra_scylla_cmdline_options}')
+    if options.cluster_pool_size is not None:
+        args.append(f'--cluster-pool-size={options.cluster_pool_size}')
+    args.append(f'--scylla-resource-scheduler={options.scylla_resource_scheduler}')
+    if options.scylla_resource_cpus is not None:
+        args.append(f'--scylla-resource-cpus={options.scylla_resource_cpus}')
+    if options.scylla_resource_memory is not None:
+        args.append(f'--scylla-resource-memory={options.scylla_resource_memory}')
     if not options.save_log_on_success:
         args.append('--allure-no-capture')
     else:
@@ -667,6 +696,7 @@ async def process_coverage(options):
 
 if __name__ == "__main__":
     colorama.init()
+    raise_nofile_limit()
     # gh-16583: ignore the inherited client host's ScyllaDB environment,
     # since it may break the tests
     if "SCYLLA_CONF" in os.environ:

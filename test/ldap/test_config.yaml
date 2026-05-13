@@ -1,4 +1,6 @@
 # Custom command line arguments for some of the tests
 custom_args: {}
+requires_services:
+  - ldap
 extra_scylla_cmdline_options:
   - '--reactor-backend=linux-aio'

@@ -28,12 +28,9 @@ import yaml
 from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, TEST_DIR, TEST_RUNNER
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
-from test.pylib.ldap_server import start_ldap
-from test.pylib.minio_server import MinioServer
 from test.pylib.resource_gather import get_resource_gather, setup_cgroup
-from test.pylib.s3_proxy import S3ProxyServer
-from test.pylib.s3_server_mock import MockS3Server
-from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
+from test.pylib.session_services import SESSION_SERVICES, SessionServiceManager
+from test.pylib.util import get_xdist_worker_id
 from test.pylib.scylla_cluster import get_scylla_executable
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -522,9 +519,10 @@ def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) 
 
 @universalasync.async_to_sync_wraps
 async def prepare_environment(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool,
-                        toxiproxy_byte_limit: int) -> None:
+                        toxiproxy_byte_limit: int, start_services: bool = True) -> None:
     prepare_dirs(tempdir_base, modes, gather_metrics, save_log_on_success=save_log_on_success)
-    await start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
+    if start_services:
+        await start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
 
 def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool = False) -> None:
     setup_cgroup(gather_metrics)
@@ -543,73 +541,11 @@ def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: b
             prepare_dir(tempdir_base / mode / "pytest", "*", save_log_on_success)
 
 
-def _make_service_logger(logger_name: str, log_file: pathlib.Path) -> logging.Logger:
-    """Return a logger that writes exclusively to *log_file*.
-
-    Disables propagation to the root logger so service start/stop messages
-    never appear on the console.
-    """
-    svc_logger = logging.getLogger(logger_name)
-    svc_logger.propagate = False
-    svc_logger.setLevel(logging.DEBUG)
-    if not svc_logger.handlers:
-        handler = logging.FileHandler(log_file)
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-        svc_logger.addHandler(handler)
-    return svc_logger
-
-
 @universalasync.async_to_sync_wraps
 async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_limit: int):
-    hosts = HostRegistry()
-
-    finalize = start_ldap(
-        host=await hosts.lease_host(),
-        port=5000,
-        instance_root=tempdir_base / 'ldap_instances',
-        toxiproxy_byte_limit=toxiproxy_byte_limit)
-    async def make_async_finalize():
-        finalize()
-
-    TestSuite.artifacts.add_exit_artifact(None, make_async_finalize)
-    ms = MinioServer(
-        tempdir_base=str(tempdir_base),
-        address=await hosts.lease_host(),
-        logger=LogPrefixAdapter(
-            logger=_make_service_logger("minio", tempdir_base / "minio.log"),
-            extra={"prefix": "minio"},
-        ),
-    )
-    await ms.start()
-    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
-
-    TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
-
-    mock_s3_server = MockS3Server(
-        host=await hosts.lease_host(),
-        port=2012,
-        logger=LogPrefixAdapter(
-            logger=_make_service_logger("s3_mock", tempdir_base / "s3_mock.log"),
-            extra={"prefix": "s3_mock"},
-        ),
-    )
-    await mock_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
-
-    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
-    proxy_s3_server = S3ProxyServer(
-        host=await hosts.lease_host(),
-        port=9002,
-        minio_uri=minio_uri,
-        max_retries=3,
-        seed=int(time.time()),
-        logger=LogPrefixAdapter(
-            logger=_make_service_logger("s3_proxy", tempdir_base / "s3_proxy.log"),
-            extra={"prefix": "s3_proxy"},
-        ),
-    )
-    await proxy_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
+    manager = SessionServiceManager(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
+    TestSuite.artifacts.add_exit_artifact(None, manager.stop_all)
+    await manager.ensure_services(SESSION_SERVICES)
 
 def find_suite_config(path: pathlib.Path, config_filename: str) -> pathlib.Path:
     for directory in (path.joinpath("_") if path.is_dir() else path).absolute().relative_to(TEST_DIR).parents:

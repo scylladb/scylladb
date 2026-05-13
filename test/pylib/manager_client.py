@@ -70,6 +70,7 @@ class ManagerClient:
         self.test_finished_event = asyncio.Event()
         self.ignore_log_patterns = []  # patterns to ignore in server logs when checking for errors
         self.ignore_cores_log_patterns = []  # patterns to ignore in server logs when checking for core files
+        self.current_cluster_str: str | None = None
 
     @property
     def client(self):
@@ -153,7 +154,8 @@ class ManagerClient:
             logger.debug("refresh driver node list")
             self.ccluster.control_connection.refresh_node_list_and_token_map()
 
-    async def before_test(self, test_case_name: str, test_log: Path) -> None:
+    async def before_test(self, test_case_name: str, test_log: Path,
+                          cluster_profile: dict[str, object] | None = None) -> None:
         # Add handler to the root logger to intercept all logs produced by pytest process
         test_logger = logging.getLogger()
         self.test_log_fh = logging.FileHandler(test_log, mode='w+')
@@ -168,10 +170,19 @@ class ManagerClient:
         if dirty:
             self.driver_close()  # Close driver connection to old cluster
         try:
+            data: dict[str, object] = {}
+            if cluster_profile is not None:
+                data["cluster_profile"] = cluster_profile
             cluster_str = await self.client.put_json(f"/cluster/before-test/{test_case_name}", timeout=600,
+                                                     data=data or None,
                                                      response_type = "json")
+            self.current_cluster_str = cluster_str
             logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
-        except aiohttp.ClientError as exc:
+        except Exception as exc:
+            logging.getLogger().removeHandler(self.test_log_fh)
+            self.test_log_fh.close()
+            pathlib.Path(self.test_log_fh.baseFilename).unlink(missing_ok=True)
+            self.current_cluster_str = None
             raise RuntimeError(f"Failed before test check {exc}") from exc
         servers = await self.running_servers()
         if self.cql is None and servers:
@@ -184,6 +195,7 @@ class ManagerClient:
         self.test_finished_event.set()
         _client = self.client_for_asyncio_loop.get(asyncio.get_running_loop())
         logging.getLogger().removeHandler(self.test_log_fh)
+        self.test_log_fh.close()
         pathlib.Path(self.test_log_fh.baseFilename).unlink()
         logger.debug("after_test for %s (success: %s)", test_case_name, success)
         cluster_status = await _client.put_json(f"/cluster/after-test/{success}",
@@ -347,6 +359,23 @@ class ManagerClient:
            To be used when a current cluster wants to be reused."""
         await self.client.put_json("/cluster/mark-clean")
 
+    async def set_scylla_resource_limit(
+            self,
+            cores: int | None,
+            memory: str | int | float | None,
+            allow_memory_override: bool,
+            enforce_usage_limits: bool = True) -> None:
+        """Set Scylla resource limits for the current test case."""
+        await self.client.put_json(
+            "/cluster/scylla-resource-limit",
+            {
+                "cores": cores,
+                "memory": memory,
+                "allow_memory_override": allow_memory_override,
+                "enforce_usage_limits": enforce_usage_limits,
+            },
+        )
+
     async def server_stop(self, server_id: ServerNum) -> None:
         """Stop specified server"""
         logger.debug("ManagerClient stopping %s", server_id)
@@ -369,6 +398,7 @@ class ManagerClient:
             raise Exception("No running servers")
         # Any server will do, it's a group0 operation
         await self.api.disable_tablet_balancing(servers[0].ip_addr)
+        await self.mark_dirty()
 
     async def enable_tablet_balancing(self):
         """
@@ -379,6 +409,7 @@ class ManagerClient:
             raise Exception("No running servers")
         # Any server will do, it's a group0 operation
         await self.api.enable_tablet_balancing(servers[0].ip_addr)
+        await self.mark_dirty()
 
     async def server_start(self,
                            server_id: ServerNum,
@@ -392,7 +423,8 @@ class ManagerClient:
                            expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED,
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None,
-                           auth_provider: dict[str, str] | None = None) -> None:
+                           auth_provider: dict[str, str] | None = None,
+                           has_scylla_memory_override: bool | None = None) -> None:
         """Start specified server and optionally wait for it to learn of other servers.
 
         Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
@@ -416,6 +448,7 @@ class ManagerClient:
             "cmdline_options_override": cmdline_options_override,
             "append_env_override": append_env_override,
             "auth_provider": auth_provider,
+            "has_scylla_memory_override": has_scylla_memory_override,
         }
         await self.client.put_json(f"/cluster/server/{server_id}/start", data, timeout=timeout)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)

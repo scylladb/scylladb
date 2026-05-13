@@ -762,6 +762,7 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires_service('s3')
 async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
     # Define configuration for the servers.
     objconf = s3_storage.create_endpoint_conf()
@@ -963,4 +964,3 @@ async def test_decommision_waits_for_backup(manager: ManagerClient, object_stora
         await asyncio.gather(manager.decommission_node(server.server_id), finish_backup())
 
     await do_test_backup_helper(manager, object_storage, "backup_task_pre_upload", decommission_and_check, 2)
-

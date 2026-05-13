@@ -1,5 +1,20 @@
 extra_scylla_cmdline_options:
     - '--reactor-backend=linux-aio'
+requires_services:
+    aws_error_injection_test:
+        - s3
+    object_storage_upload_test:
+        - s3
+    rest_client_test:
+        - s3
+    s3_test:
+        - s3
+    sstable_compaction_test:
+        - s3
+    sstable_datafile_test:
+        - s3
+    sstable_resharding_test:
+        - s3
 # A list of long tests, which should be started early
 run_first:
     - index_with_paging_test

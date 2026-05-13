@@ -258,8 +258,8 @@ class S3ProxyServer:
         if not self.is_running:
             self.logger.info('Starting S3 proxy server on %s', self.server.server_address)
             self._set_environ()
-            loop = asyncio.get_running_loop()
-            self.server_thread = loop.run_in_executor(None, self.server.serve_forever)
+            self.server_thread = threading.Thread(target=self.server.serve_forever, name="s3-proxy-server", daemon=True)
+            self.server_thread.start()
             self.is_running = True
 
     async def stop(self):
@@ -267,7 +267,8 @@ class S3ProxyServer:
             self.logger.info('Stopping S3 proxy server')
             self._unset_environ()
             self.server.shutdown()
-            await self.server_thread
+            self.server_thread.join()
+            self.server_thread = None
             self.is_running = False
 
     async def run(self):

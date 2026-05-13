@@ -18,7 +18,14 @@ from typing import TYPE_CHECKING
 from scripts import coverage
 from test import path_to
 from test.pylib.pool import Pool
-from test.pylib.scylla_cluster import ScyllaCluster, ScyllaServer, merge_cmdline_options, get_current_version_description
+from test.pylib.scylla_cluster import (
+    SCYLLA_CMDLINE_OPTIONS,
+    ScyllaCluster,
+    ScyllaServer,
+    get_current_version_description,
+    merge_cmdline_options,
+    scylla_cmdline_has_memory_override,
+)
 from test.pylib.suite.base import Test, TestSuite, read_log, run_test
 from test.pylib.util import LogPrefixAdapter
 
@@ -34,6 +41,7 @@ class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla instance"""
 
     test_file_ext = ".py"
+    default_scylla_cmdline_options = ["--smp", "1"]
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
@@ -75,12 +83,24 @@ class PythonTestSuite(TestSuite):
         self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
 
     def get_cluster_factory(self, cluster_size: int, options: argparse.Namespace) -> Callable[..., Awaitable]:
+        def build_test_cmdline_options(cmdline_from_test: list[str]) -> list[str]:
+            extra_cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
+            if type(extra_cmdline_options) == str:
+                extra_cmdline_options = [extra_cmdline_options]
+            cmdline_options = merge_cmdline_options(self.default_scylla_cmdline_options, extra_cmdline_options)
+            cmdline_options = merge_cmdline_options(cmdline_options, cmdline_from_test)
+            return merge_cmdline_options(cmdline_options, options.extra_scylla_cmdline_options.split())
+
+        def build_resource_cmdline_options(cmdline_from_test: list[str], version) -> list[str]:
+            version = version or get_current_version_description(self.scylla_exe)
+            cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
+            return merge_cmdline_options(cmdline_options, build_test_cmdline_options(cmdline_from_test))
+
+        def has_memory_override(cmdline_from_test: list[str], version) -> bool:
+            return scylla_cmdline_has_memory_override(build_test_cmdline_options(cmdline_from_test))
+
         def create_server(create_cfg: ScyllaCluster.CreateServerParams):
-            cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
-            if type(cmdline_options) == str:
-                cmdline_options = [cmdline_options]
-            cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
-            cmdline_options = merge_cmdline_options(cmdline_options, options.extra_scylla_cmdline_options.split())
+            cmdline_options = build_test_cmdline_options(create_cfg.cmdline_from_test)
             # There are multiple sources of config options, with increasing priority
             # (if two sources provide the same config option, the higher priority one wins):
             # 1. the defaults
@@ -111,7 +131,7 @@ class PythonTestSuite(TestSuite):
             return server
 
         async def create_cluster(logger: Union[logging.Logger, logging.LoggerAdapter]) -> ScyllaCluster:
-            cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server)
+            cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server, build_resource_cmdline_options, has_memory_override)
 
             async def stop() -> None:
                 await cluster.stop()

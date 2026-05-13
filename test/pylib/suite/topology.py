@@ -23,6 +23,8 @@ class TopologyTestSuite(PythonTestSuite):
        are done per test case.
     """
 
+    default_scylla_cmdline_options = []
+
     async def add_test(self, shortname: str, casename: str) -> None:
         """Add test to suite"""
         test = TopologyTest(self.next_id((shortname, 'topology', self.mode)), shortname, casename, self)

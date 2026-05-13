@@ -22,6 +22,7 @@ import logging
 from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
 from test.pylib.manager_client import NoSuchProcess
+from test.pylib.scylla_cluster import scylla_cmdline_has_memory_override
 
 if TYPE_CHECKING:
     from test.pylib.internal_types import ServerInfo
@@ -464,6 +465,7 @@ class ScyllaNode:
             cmdline_options_override=scylla_args,
             append_env_override=scylla_env,
             connect_driver=False,
+            has_scylla_memory_override=scylla_cmdline_has_memory_override(jvm_args),
         )
 
         if wait_for_binary_proto is None:

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import ssl
 import tempfile
 import platform
@@ -24,6 +25,8 @@ from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
+from test.pylib.scylla_cluster_profile import scylla_cluster_profile_from_node
+from test.pylib.scylla_resources import scylla_resource_limit_from_markers
 from test.pylib.scylla_cluster import ScyllaClusterManager, ScyllaVersionDescription, get_scylla_2025_1_description
 from test.pylib.suite.base import get_testpy_test
 from test.pylib.suite.python import add_cql_connection_options
@@ -253,7 +256,19 @@ async def manager(request: pytest.FixtureRequest,
     test_py_log_test = suite_testpy_log.parent / f"{test_log.stem}_cluster.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
-    await manager_client.before_test(test_case_name, test_log)
+    cluster_profile = scylla_cluster_profile_from_node(request.node, testpy_test.suite)
+    resource_limit = scylla_resource_limit_from_markers(request.node)
+    try:
+        if resource_limit is not None:
+            await manager_client.set_scylla_resource_limit(**resource_limit.as_manager_kwargs())
+        await manager_client.before_test(
+            test_case_name,
+            test_log,
+            cluster_profile=cluster_profile.as_manager_payload() if cluster_profile is not None else None,
+        )
+    except Exception:
+        await manager_client.stop()
+        raise
     yield manager_client
     # `request.node.stash` contains a report stored in `pytest_runtest_makereport` from where we can retrieve
     # test failure.
@@ -392,6 +407,8 @@ async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> Asy
 @pytest.fixture(scope="function", params=list(KeyProvider))
 async def key_provider(request, tmpdir, scylla_binary):
     """Encryption providers fixture"""
+    if request.param == KeyProvider.kmip and not os.environ.get("ENABLE_KMIP_TEST"):
+        skip_env(reason="ENABLE_KMIP_TEST is not set")
     async with make_key_provider_factory(request.param, tmpdir, scylla_binary) as res:
         yield res
 

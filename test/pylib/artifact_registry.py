@@ -32,8 +32,6 @@ class ArtifactRegistry:
     async def cleanup_before_exit(self) -> None:
         logging.info("Cleaning up before exit...")
         for artifacts in self.suite_artifacts.values():
-            for artifact in artifacts:
-                artifact.close()
             await asyncio.gather(*artifacts, return_exceptions=True)
         self.suite_artifacts = {}
         for artifacts in self.exit_artifacts.values():

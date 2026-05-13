@@ -93,7 +93,6 @@ def update_with_value_if_different(table, key, expression_variable, value, updat
 
 # Helper function to get the number of shards from metrics.
 # It looks for the 'shard' label in the metrics and returns the maximum shard number found.
-# If no shards are found, it returns 2 by default (as tests are run with "--smp 2" by default).
 @cache
 def scylla_shard_count(metrics):
     import re

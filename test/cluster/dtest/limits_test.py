@@ -271,6 +271,7 @@ class TestLimits(Tester):
 
         session.execute("""DROP TABLE test1""")
 
+    @pytest.mark.scylla_resources(cpu=1, mem="2G")
     def test_max_cells(self):
         if self.cluster.scylla_mode == "debug":
             skip_env("client times out in debug mode")

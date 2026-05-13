@@ -39,11 +39,9 @@ def disable_compression():
 # processed.
 # This test depends on the current configuration. The assumptions are:
 # 1. Scylla has 1GB memory total
-# 2. The memory is split among 2 shards
-# 3. Total memory reserved for CQL requests is 10% of the total - 50MiB
+# 2. The memory is split among the configured shards
+# 3. Total memory reserved for CQL requests is 10% of per-shard memory
 # 4. The memory estimate for a request is 2*(raw size) + 8KiB
-# 5. Hence, a 30MiB request will be estimated to take around 60MiB RAM,
-#    which is enough to trigger shedding.
 # See also #8193.
 #
 # We check that there are no unexpected protocol_errors using Scylla Prometheus API.
@@ -57,7 +55,7 @@ def test_shed_too_large_request(cql, table1, scylla_only):
     initial_metrics = ScyllaMetrics.query(cql)
 
     # See comments above
-    expected_shard_count = 2
+    expected_shard_count = cql.execute("SELECT shard_count FROM system.topology").one().shard_count
     expected_limit = initial_metrics.get('scylla_memory_total_memory') / expected_shard_count / 10
     request_size_limit = (expected_limit - 8 * 1024) / 2
     request_size = int(request_size_limit + 1024)

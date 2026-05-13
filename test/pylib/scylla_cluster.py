@@ -12,6 +12,7 @@ import concurrent.futures
 from asyncio.subprocess import Process
 from contextlib import asynccontextmanager
 from collections import ChainMap
+from dataclasses import dataclass
 import itertools
 import threading
 import logging
@@ -31,6 +32,8 @@ from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
+from test.pylib.scylla_cluster_profile import ScyllaClusterNodeProfile, ScyllaClusterProfile
+from test.pylib.scylla_resources import parse_scylla_memory
 from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, scale_timeout_by_mode
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
@@ -75,6 +78,22 @@ class ReplaceConfig(NamedTuple):
     use_host_id: bool
     ignore_dead_nodes: list[IPAddress | HostID] = []
     wait_replaced_dead: bool = True
+
+
+@dataclass
+class ClusterProfileState:
+    profile: ScyllaClusterProfile
+    consumed_nodes: int = 0
+
+    def requested_nodes_match(self, requested_nodes: list[dict[str, object]]) -> bool:
+        begin = self.consumed_nodes
+        end = begin + len(requested_nodes)
+        if end > len(self.profile.nodes):
+            return False
+        return requested_nodes == [node.to_json() for node in self.profile.nodes[begin:end]]
+
+    def consume(self, node_count: int) -> None:
+        self.consumed_nodes += node_count
 
 
 def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str,
@@ -349,6 +368,75 @@ def merge_cmdline_options(
 
     return run()
 
+
+def _cmdline_option_value(cmdline: list[str], names: set[str], default: str | None = None) -> str | None:
+    i = 0
+    while i < len(cmdline):
+        arg = cmdline[i]
+        if arg in names:
+            if i + 1 >= len(cmdline):
+                return default
+            value = cmdline[i + 1]
+            i += 2
+            if value.startswith('-'):
+                return default
+            default = value
+            continue
+        if arg.startswith('--') and '=' in arg:
+            name, _, value = arg.partition('=')
+            if name in names:
+                default = value
+        elif '-m' in names and arg.startswith('-m') and arg != '-m':
+            default = arg[2:]
+        i += 1
+    return default
+
+
+def scylla_cmdline_has_memory_override(cmdline: list[str] | None) -> bool:
+    if not cmdline:
+        return False
+    for i, arg in enumerate(cmdline):
+        if arg in ('-m', '--memory'):
+            return i + 1 < len(cmdline)
+        if arg.startswith('--memory='):
+            return True
+        if arg.startswith('-m') and arg != '-m':
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class ScyllaResourceUsage:
+    cores: int = 0
+    memory_bytes: int = 0
+
+    def __add__(self, other: 'ScyllaResourceUsage') -> 'ScyllaResourceUsage':
+        return ScyllaResourceUsage(
+            cores=self.cores + other.cores,
+            memory_bytes=self.memory_bytes + other.memory_bytes,
+        )
+
+    def __mul__(self, multiplier: int) -> 'ScyllaResourceUsage':
+        return ScyllaResourceUsage(
+            cores=self.cores * multiplier,
+            memory_bytes=self.memory_bytes * multiplier,
+        )
+
+
+@dataclass(frozen=True)
+class ScyllaResourceLimit:
+    cores: int | None = None
+    memory_bytes: int | None = None
+    allow_memory_override: bool = False
+    enforce_usage_limits: bool = True
+
+
+def scylla_resource_usage_from_cmdline(cmdline: list[str]) -> ScyllaResourceUsage:
+    smp = _cmdline_option_value(cmdline, {'--smp'}, default='2')
+    memory = _cmdline_option_value(cmdline, {'-m', '--memory'}, default='1G')
+    assert smp is not None
+    assert memory is not None
+    return ScyllaResourceUsage(cores=int(smp), memory_bytes=parse_scylla_memory(memory))
 
 
 def start_stop_lock(func):
@@ -1023,6 +1111,32 @@ class ScyllaServer:
             self.control_cluster = None
         self._cleanup_notify_socket()
 
+    async def _wait_for_process_exit(self, timeout: float | None = None) -> int | None:
+        assert self.cmd is not None
+
+        try:
+            wait_task = self.cmd.wait()
+            if timeout is None:
+                return await wait_task
+            return await asyncio.wait_for(wait_task, timeout=timeout)
+        except RuntimeError as exc:
+            if "attached to a different loop" not in str(exc):
+                raise
+
+            pid = self.cmd.pid
+            loop = asyncio.get_running_loop()
+
+            def wait_for_pid() -> int | None:
+                try:
+                    return psutil.Process(pid).wait(timeout=timeout)
+                except psutil.NoSuchProcess:
+                    return self.cmd.returncode
+
+            try:
+                return await loop.run_in_executor(io_executor, wait_for_pid)
+            except psutil.TimeoutExpired as timeout_exc:
+                raise asyncio.TimeoutError() from timeout_exc
+
     @stop_event
     @start_stop_lock
     async def stop(self) -> None:
@@ -1059,7 +1173,7 @@ class ScyllaServer:
             # be considered as a failure.
             pass
         else:
-            await self.cmd.wait()
+            await self._wait_for_process_exit()
         finally:
             self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
@@ -1080,14 +1194,13 @@ class ScyllaServer:
             pass
         else:
             STOP_TIMEOUT_SECONDS = 120
-            wait_task = self.cmd.wait()
             try:
-                await asyncio.wait_for(wait_task, timeout=STOP_TIMEOUT_SECONDS)
-                if self.cmd.returncode != 0:
-                    raise RuntimeError(f"Server {self} exited with non-zero exit code: {self.cmd.returncode}")
+                returncode = await self._wait_for_process_exit(timeout=STOP_TIMEOUT_SECONDS)
+                if returncode != 0:
+                    raise RuntimeError(f"Server {self} exited with non-zero exit code: {returncode}")
             except asyncio.TimeoutError:
                 self.cmd.kill()
-                await self.cmd.wait()
+                await self._wait_for_process_exit()
                 raise RuntimeError(
                     f"Stopping server {self} gracefully took longer than {STOP_TIMEOUT_SECONDS}s")
         finally:
@@ -1163,13 +1276,17 @@ class ScyllaCluster:
 
     def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
                  host_registry: HostRegistry, replicas: int,
-                 create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
+                 create_server: Callable[[CreateServerParams], ScyllaServer],
+                 build_cmdline_options: Callable[[list[str], Optional[ScyllaVersionDescription]], list[str]] | None = None,
+                 has_memory_override: Callable[[list[str], Optional[ScyllaVersionDescription]], bool] | None = None) -> None:
         self.logger = logger
         self.host_registry = host_registry
         self.leased_ips = set[IPAddress]()
         self.name = str(uuid.uuid1())
         self.replicas = replicas
         self.create_server = create_server
+        self.build_cmdline_options = build_cmdline_options or self._default_build_cmdline_options
+        self.has_memory_override = has_memory_override or self._default_has_memory_override
         # Every ScyllaServer is in one of self.running, self.stopped.
         # These dicts are disjoint.
         # A server ID present in self.removed may be either in self.running or in self.stopped.
@@ -1188,7 +1305,58 @@ class ScyllaCluster:
         self.keyspace_count = 0
         self.api = ScyllaRESTAPIClient()
         self.stop_lock = asyncio.Lock()
+        self.resource_limit: ScyllaResourceLimit | None = None
+        self.server_resources: dict[ServerNum, ScyllaResourceUsage] = {}
+        self.cluster_profile_key: str | None = None
+        self.cluster_profile_name: str | None = None
+        self.cluster_reuse: str | None = None
         self.logger.info("Created new cluster %s", self.name)
+
+    def _default_build_cmdline_options(self, cmdline_from_test: list[str], version: Optional[ScyllaVersionDescription]) -> list[str]:
+        cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv if version else [])
+        return merge_cmdline_options(cmdline_options, cmdline_from_test)
+
+    def _default_has_memory_override(self, cmdline_from_test: list[str], version: Optional[ScyllaVersionDescription]) -> bool:
+        return scylla_cmdline_has_memory_override(cmdline_from_test)
+
+    def set_resource_limit(self, resource_limit: ScyllaResourceLimit | None) -> None:
+        self.resource_limit = resource_limit
+        if resource_limit is not None:
+            self._check_resource_limit(ScyllaResourceUsage(), has_memory_override=False)
+
+    def _resource_usage_from_test_cmdline(self, cmdline: list[str] | None, version: Optional[ScyllaVersionDescription]) -> ScyllaResourceUsage:
+        return scylla_resource_usage_from_cmdline(self.build_cmdline_options(cmdline or [], version))
+
+    def _has_memory_override_from_test_cmdline(self, cmdline: list[str] | None, version: Optional[ScyllaVersionDescription]) -> bool:
+        return self.has_memory_override(cmdline or [], version)
+
+    def _resource_usage_from_start_cmdline(self, server: ScyllaServer, cmdline_options_override: list[str] | None) -> ScyllaResourceUsage:
+        if cmdline_options_override is None:
+            return scylla_resource_usage_from_cmdline(server.cmdline_options)
+        return scylla_resource_usage_from_cmdline(cmdline_options_override)
+
+    def _current_resource_usage(self) -> ScyllaResourceUsage:
+        usage = ScyllaResourceUsage()
+        for server_id, server in itertools.chain(self.running.items(), self.starting.items()):
+            usage += self.server_resources.get(server_id, scylla_resource_usage_from_cmdline(server.cmdline_options))
+        return usage
+
+    def _check_resource_limit(self, additional: ScyllaResourceUsage, has_memory_override: bool) -> None:
+        if has_memory_override and (self.resource_limit is None or not self.resource_limit.allow_memory_override):
+            raise RuntimeError("Scylla memory overrides (-m/--memory) require @pytest.mark.scylla_resources(cpu=..., mem=...)")
+        if self.resource_limit is None or not self.resource_limit.enforce_usage_limits:
+            return
+
+        current = self._current_resource_usage()
+        requested = current + additional
+        if self.resource_limit.cores is not None and requested.cores > self.resource_limit.cores:
+            raise RuntimeError(
+                f"Scylla core limit exceeded: current={current.cores}, requested additional={additional.cores}, "
+                f"limit={self.resource_limit.cores}")
+        if self.resource_limit.memory_bytes is not None and requested.memory_bytes > self.resource_limit.memory_bytes:
+            raise RuntimeError(
+                f"Scylla memory limit exceeded: current={current.memory_bytes}, requested additional={additional.memory_bytes}, "
+                f"limit={self.resource_limit.memory_bytes}")
 
     async def install_and_start(self) -> None:
         """Setup initial servers and start them.
@@ -1241,6 +1409,7 @@ class ScyllaCluster:
                 await gather_safely(*(server.stop() for server in self.running.values()))
                 self.stopped.update(self.running)
                 self.running.clear()
+                self.server_resources.clear()
 
     async def stop_gracefully(self) -> None:
         """Stop all running servers in a clean way"""
@@ -1252,6 +1421,7 @@ class ScyllaCluster:
             await gather_safely(*(server.stop_gracefully() for server in self.running.values()))
             self.stopped.update(self.running)
             self.running.clear()
+            self.server_resources.clear()
 
     def _seeds(self) -> List[IPAddress]:
         # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
@@ -1274,6 +1444,10 @@ class ScyllaCluster:
 
         assert start or not expected_error, \
             f"add_server: cannot add a stopped server and expect an error"
+
+        resource_usage = self._resource_usage_from_test_cmdline(cmdline, version)
+        has_memory_override = self._has_memory_override_from_test_cmdline(cmdline, version)
+        self._check_resource_limit(resource_usage if start else ScyllaResourceUsage(), has_memory_override)
 
         extra_config: dict[str, Any] = config.copy() if config else {}
         if replace_cfg:
@@ -1329,11 +1503,15 @@ class ScyllaCluster:
             if not replace_cfg or not replace_cfg.reuse_ip_addr:
                 self.leased_ips.remove(ip_addr)
                 await self.host_registry.release_host(Host(ip_addr))
-            self.stopped[server.server_id] = server
+            if server is not None:
+                self.stopped[server.server_id] = server
+                self.server_resources.pop(server.server_id, None)
 
         try:
             server = self.create_server(params)
             self.starting[server.server_id] = server
+            if start:
+                self.server_resources[server.server_id] = resource_usage
             self.logger.info("Cluster %s adding server...", self)
             if start:
                 await server.install_and_start(self.api, expected_error, expected_server_up_state)
@@ -1346,7 +1524,8 @@ class ScyllaCluster:
             await handle_join_failure()
             raise
         finally:
-            del self.starting[server.server_id]
+            if server is not None:
+                del self.starting[server.server_id]
 
         if expected_error:
             await handle_join_failure()
@@ -1379,6 +1558,10 @@ class ScyllaCluster:
             else:
                 assert type(property_file) is list and len(property_file) == servers_num
                 return property_file[i]
+
+        resource_usage = self._resource_usage_from_test_cmdline(cmdline, version)
+        has_memory_override = self._has_memory_override_from_test_cmdline(cmdline, version)
+        self._check_resource_limit((resource_usage * servers_num) if start else ScyllaResourceUsage(), has_memory_override)
 
         return await gather_safely(*(self.add_server(None, cmdline, config, version, get_property_file(i), start, seeds, server_encryption, expected_error)
                                       for i in range(servers_num)))
@@ -1448,7 +1631,6 @@ class ScyllaCluster:
             # Mark as dirty so further test cases don't try to reuse this cluster.
             self.is_dirty = True
             raise Exception(f'Exception when starting cluster {self}:\n{self.start_exception}')
-
         for server in self.running.values():
             server.write_log_marker(f"------ Starting test {name} ------\n")
 
@@ -1496,12 +1678,15 @@ class ScyllaCluster:
         if server_id in self.running:
             self.running.pop(server_id)
             self.stopped[server_id] = server
+            self.server_resources.pop(server_id, None)
         else:
             self.starting.pop(server_id)
+            self.server_resources.pop(server_id, None)
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
         """Mark server as removed."""
         self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
+        self.is_dirty = True
         self.removed.add(server_id)
 
     async def server_start(self,
@@ -1511,7 +1696,8 @@ class ScyllaCluster:
                            expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED,
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None,
-                           auth_provider: dict[str, str] | None = None) -> None:
+                           auth_provider: dict[str, str] | None = None,
+                           has_scylla_memory_override: bool | None = None) -> None:
         """Start a server.
 
         Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
@@ -1523,7 +1709,13 @@ class ScyllaCluster:
             return
         assert server_id in self.stopped, f"Server {server_id} unknown"
         self.is_dirty = True
-        server = self.stopped.pop(server_id)
+        server = self.stopped[server_id]
+        resource_usage = self._resource_usage_from_start_cmdline(server, cmdline_options_override)
+        has_memory_override = has_scylla_memory_override
+        if has_memory_override is None:
+            has_memory_override = scylla_cmdline_has_memory_override(cmdline_options_override)
+        self._check_resource_limit(resource_usage, has_memory_override)
+        self.stopped.pop(server_id)
         self.logger.info("Cluster %s starting server %s ip %s", self,
                          server_id, server.ip_addr)
         if not seeds:
@@ -1534,6 +1726,7 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
+        self.server_resources[server_id] = resource_usage
 
         def instance_auth_provider(desc: dict):
             module_path, class_name = desc["authenticator"].rsplit('.', 1)
@@ -1553,6 +1746,7 @@ class ScyllaCluster:
         if expected_error is not None:
             self.running.pop(server_id)
             self.stopped[server_id] = server
+            self.server_resources.pop(server_id, None)
 
     def server_pause(self, server_id: ServerNum) -> None:
         """Pause a running server process."""
@@ -1626,6 +1820,7 @@ class ScyllaCluster:
            Marks the cluster as dirty.
            Fails if the server cannot be found."""
         assert server_id in self.servers, f"Server {server_id} unknown"
+        self._check_resource_limit(ScyllaResourceUsage(), scylla_cmdline_has_memory_override(cmdline_options))
         self.is_dirty = True
         self.servers[server_id].update_cmdline(cmdline_options)
 
@@ -1713,6 +1908,8 @@ class ScyllaClusterManager:
         self.is_running: bool = False
         self.is_before_test_ok: bool = False
         self.is_after_test_ok: bool = False
+        self.current_cluster_profile_state: ClusterProfileState | None = None
+        self.current_resource_limit: ScyllaResourceLimit | None = None
         # API
         # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
         # Put the socket in /tmp, not base_dir, to avoid going over the length
@@ -1736,6 +1933,216 @@ class ScyllaClusterManager:
             out += f"\n{val}:\t\t{repr(key)}"
         return out
 
+    @staticmethod
+    def _cluster_is_empty(cluster: ScyllaCluster) -> bool:
+        return not cluster.running and not cluster.stopped and not cluster.starting and not cluster.removed
+
+    @staticmethod
+    def _cluster_profile_node_from_payload(node: object) -> ScyllaClusterNodeProfile:
+        if not isinstance(node, dict):
+            raise RuntimeError(f"Invalid cluster profile node: {node!r}")
+        config = node.get("config") or {}
+        cmdline = node.get("cmdline") or []
+        property_file = node.get("property_file")
+        server_encryption = node.get("server_encryption", "none")
+        if not isinstance(config, dict):
+            raise RuntimeError(f"Invalid cluster profile node config: {config!r}")
+        if not isinstance(cmdline, list) or not all(isinstance(item, str) for item in cmdline):
+            raise RuntimeError(f"Invalid cluster profile node cmdline: {cmdline!r}")
+        if property_file is not None and not isinstance(property_file, dict):
+            raise RuntimeError(f"Invalid cluster profile node property_file: {property_file!r}")
+        if not isinstance(server_encryption, str):
+            raise RuntimeError(f"Invalid cluster profile node server_encryption: {server_encryption!r}")
+        return ScyllaClusterNodeProfile(
+            config=dict(config),
+            cmdline=list(cmdline),
+            property_file=dict(property_file) if property_file is not None else None,
+            server_encryption=server_encryption,
+        )
+
+    @staticmethod
+    def _cluster_profile_from_payload(payload: dict[str, object]) -> ScyllaClusterProfile:
+        key = payload.get("key")
+        name = payload.get("name")
+        reuse = payload.get("reuse", "sequential")
+        nodes = payload.get("nodes")
+        if not isinstance(key, str):
+            raise RuntimeError(f"Invalid cluster profile key: {key!r}")
+        if not isinstance(name, str):
+            raise RuntimeError(f"Invalid cluster profile name: {name!r}")
+        if not isinstance(reuse, str):
+            raise RuntimeError(f"Invalid cluster profile reuse: {reuse!r}")
+        if reuse != "sequential":
+            raise RuntimeError(f"Unsupported cluster profile reuse mode: {reuse!r}")
+        if not isinstance(nodes, list) or not nodes:
+            raise RuntimeError(f"Invalid cluster profile nodes: {nodes!r}")
+        return ScyllaClusterProfile(
+            key=key,
+            name=name,
+            reuse=reuse,
+            nodes=tuple(ScyllaClusterManager._cluster_profile_node_from_payload(node) for node in nodes),
+        )
+
+    @staticmethod
+    def _resource_limit_from_payload(payload: dict[str, object] | None) -> ScyllaResourceLimit | None:
+        if payload is None:
+            return None
+        cores = payload.get("cores")
+        memory = payload.get("memory")
+        return ScyllaResourceLimit(
+            cores=int(cores) if cores is not None else None,
+            memory_bytes=parse_scylla_memory(memory) if memory is not None else None,
+            allow_memory_override=bool(payload.get("allow_memory_override", False)),
+            enforce_usage_limits=bool(payload.get("enforce_usage_limits", True)),
+        )
+
+    def _clear_current_test_limits(self) -> None:
+        self.current_resource_limit = None
+        if self.cluster is not None:
+            self.cluster.set_resource_limit(None)
+
+    def _apply_current_resource_limit(self) -> None:
+        assert self.cluster is not None
+        self.cluster.set_resource_limit(self.current_resource_limit)
+
+    def _cluster_matches_profile(self, cluster: ScyllaCluster, profile: ScyllaClusterProfile) -> bool:
+        return (
+            cluster.cluster_profile_key == profile.key
+            and cluster.cluster_reuse == profile.reuse
+            and len(cluster.running) == len(profile.nodes)
+            and not cluster.stopped
+            and not cluster.starting
+            and not cluster.removed
+        )
+
+    def _cluster_candidate_for_profile(self, cluster: ScyllaCluster, profile: ScyllaClusterProfile | None) -> bool:
+        if cluster.is_dirty:
+            return False
+        if profile is None:
+            return cluster.cluster_profile_key is None and self._cluster_is_empty(cluster)
+
+        if self._cluster_matches_profile(cluster, profile):
+            return True
+        return cluster.cluster_profile_key is None and self._cluster_is_empty(cluster)
+
+    async def _borrow_cluster_for_profile(self, profile: ScyllaClusterProfile | None) -> ScyllaCluster:
+        while True:
+            cluster = await self.clusters.get_if(lambda candidate: self._cluster_candidate_for_profile(candidate, profile), self.logger)
+            if self._cluster_candidate_for_profile(cluster, profile):
+                return cluster
+            self.logger.info("Discarding clean Scylla cluster %s because it does not match the requested profile", cluster.name)
+            await self.clusters.put(cluster, is_dirty=True)
+
+    async def _select_cluster_for_test(self, profile: ScyllaClusterProfile | None) -> None:
+        assert self.cluster is not None
+        if self._cluster_candidate_for_profile(self.cluster, profile):
+            return
+        if self.cluster.is_dirty:
+            await self.clusters.put(self.cluster, is_dirty=True)
+        else:
+            await self.clusters.put(self.cluster, is_dirty=False)
+        self.cluster = await self._borrow_cluster_for_profile(profile)
+
+    async def _provision_cluster_profile(self, profile: ScyllaClusterProfile) -> None:
+        assert self.cluster is not None
+        if self.cluster.cluster_profile_key == profile.key:
+            return
+        if not self._cluster_is_empty(self.cluster):
+            self.cluster.is_dirty = True
+            raise RuntimeError(f"Cannot provision profile {profile.name} on non-empty cluster {self.cluster.name}")
+
+        self.logger.info("Provisioning Scylla cluster %s with profile %s", self.cluster.name, profile.name)
+        try:
+            for node in profile.nodes:
+                await self.cluster.add_server(
+                    cmdline=node.cmdline or None,
+                    config=node.config or None,
+                    property_file=node.property_file,
+                    server_encryption=node.server_encryption,
+                )
+            self.cluster.cluster_profile_key = profile.key
+            self.cluster.cluster_profile_name = profile.name
+            self.cluster.cluster_reuse = profile.reuse
+            self.cluster.keyspace_count = self.cluster._get_keyspace_count()
+            self.cluster.is_dirty = False
+        except Exception:
+            self.cluster.is_dirty = True
+            raise
+
+    def _check_cluster_profile_resource_limit(self, profile: ScyllaClusterProfile) -> None:
+        assert self.cluster is not None
+        additional = ScyllaResourceUsage()
+        has_memory_override = False
+        for node in profile.nodes:
+            additional += self.cluster._resource_usage_from_test_cmdline(node.cmdline, None)
+            has_memory_override |= self.cluster._has_memory_override_from_test_cmdline(node.cmdline, None)
+
+        if self._cluster_matches_profile(self.cluster, profile):
+            additional = ScyllaResourceUsage()
+
+        self.cluster._check_resource_limit(additional, has_memory_override)
+
+    @staticmethod
+    def _profile_add_request_allowed(data: dict[str, object]) -> bool:
+        if any(key in data for key in ("replace_cfg", "version", "seeds", "expected_error")):
+            return False
+        if data.get("start", True) is not True:
+            return False
+        return data.get("expected_server_up_state", "CQL_ALTERNATOR_QUERIED") == "CQL_ALTERNATOR_QUERIED"
+
+    @staticmethod
+    def _node_from_add_data(data: dict[str, object], property_file: object | None) -> dict[str, object] | None:
+        config = data.get("config") or {}
+        cmdline = data.get("cmdline") or []
+        server_encryption = data.get("server_encryption", "none")
+        if not isinstance(config, dict):
+            return None
+        if not isinstance(cmdline, list) or not all(isinstance(item, str) for item in cmdline):
+            return None
+        if property_file is not None and not isinstance(property_file, dict):
+            return None
+        if not isinstance(server_encryption, str):
+            return None
+        return {
+            "config": dict(config),
+            "cmdline": list(cmdline),
+            "property_file": dict(property_file) if property_file is not None else None,
+            "server_encryption": server_encryption,
+        }
+
+    def _nodes_from_addservers_data(self, data: dict[str, object]) -> list[dict[str, object]] | None:
+        if not self._profile_add_request_allowed(data):
+            return None
+        servers_num = int(data.get("servers_num", 1))
+        property_file = data.get("property_file")
+        if isinstance(property_file, list):
+            if len(property_file) != servers_num:
+                return None
+            property_files = property_file
+        else:
+            property_files = [property_file for _ in range(servers_num)]
+        nodes = [self._node_from_add_data(data, property_files[i]) for i in range(servers_num)]
+        if any(node is None for node in nodes):
+            return None
+        return [node for node in nodes if node is not None]
+
+    def _profile_servers_for_add_request(self, requested_nodes: list[dict[str, object]] | None) -> list[dict[str, object]] | None:
+        state = self.current_cluster_profile_state
+        if requested_nodes is None or state is None or self.cluster is None:
+            return None
+        if self.cluster.is_dirty or self.cluster.cluster_profile_key != state.profile.key:
+            return None
+        if not state.requested_nodes_match(requested_nodes):
+            return None
+        begin = state.consumed_nodes
+        end = begin + len(requested_nodes)
+        servers = list(self.cluster.running.values())
+        if len(servers) < end:
+            return None
+        state.consume(len(requested_nodes))
+        self.logger.info("Satisfied initial cluster profile provisioning request with existing servers %s", [server.server_id for server in servers[begin:end]])
+        return [server.server_info().as_dict() for server in servers[begin:end]]
+
     async def start(self) -> None:
         """Get first cluster, setup API"""
         if self.is_running:
@@ -1749,7 +2156,8 @@ class ScyllaClusterManager:
         await self.site.start()
         self.is_running = True
 
-    async def _before_test(self, test_case_name: str) -> str:
+    async def _before_test(self, test_case_name: str,
+                           cluster_profile: ScyllaClusterProfile | None = None) -> str:
         self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
         root_logger = logging.getLogger()
         # file handler file name should be consistent with topology/conftest.py:manager test_py_log_test variable
@@ -1761,17 +2169,30 @@ class ScyllaClusterManager:
         self.test_case_log_fh.setFormatter(root_logger.handlers[0].formatter)
         root_logger.addHandler(self.test_case_log_fh)
         self.logger.info("Setting up %s", self.current_test_case_full_name)
-        if self.cluster.is_dirty:
-            self.logger.info(f"Current cluster %s is dirty after test %s, replacing with a new one...",
-                             self.cluster.name, self.current_test_case_full_name)
-            self.cluster = await self.clusters.replace_dirty(self.cluster, self.logger)
-            self.logger.info("Got new Scylla cluster: %s", self.cluster.name)
-        self.cluster.setLogger(self.logger)
-        self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
-        self.cluster.before_test(self.current_test_case_full_name)
-        self.is_before_test_ok = True
-        self.cluster.take_log_savepoint()
-        return str(self.cluster)
+        assert self.cluster is not None
+        try:
+            await self._select_cluster_for_test(cluster_profile)
+            assert self.cluster is not None
+            self.cluster.setLogger(self.logger)
+            self._apply_current_resource_limit()
+            if cluster_profile is not None:
+                self._check_cluster_profile_resource_limit(cluster_profile)
+                if self.cluster.cluster_profile_key != cluster_profile.key:
+                    await self._provision_cluster_profile(cluster_profile)
+            self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
+            self.cluster.before_test(self.current_test_case_full_name)
+            self.current_cluster_profile_state = ClusterProfileState(cluster_profile) if cluster_profile is not None else None
+            self.is_before_test_ok = True
+            self.cluster.take_log_savepoint()
+            return str(self.cluster)
+        except Exception:
+            self._clear_current_test_limits()
+            self.current_cluster_profile_state = None
+            logging.getLogger().removeHandler(self.test_case_log_fh)
+            self.test_case_log_fh.close()
+            pathlib.Path(self.test_case_log_fh.baseFilename).unlink(missing_ok=True)
+            self.current_test_case_full_name = ''
+            raise
 
     async def stop(self) -> None:
         """Stop, cycle last cluster if not dirty and present"""
@@ -1788,6 +2209,8 @@ class ScyllaClusterManager:
                                 self.cluster, self.test_uname)
                 await self.clusters.put(self.cluster, is_dirty=True)
             self.cluster = None
+        self.current_cluster_profile_state = None
+        self._clear_current_test_limits()
         if os.path.exists(self.manager_dir):
             await async_rmtree(self.manager_dir)
         self.is_running = False
@@ -1839,6 +2262,7 @@ class ScyllaClusterManager:
         add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
         add_put('/cluster/before-test/{test_case_name}', self._before_test_req)
         add_put('/cluster/after-test/{success}', self._after_test)
+        add_put('/cluster/scylla-resource-limit', self._set_scylla_resource_limit)
         add_put('/cluster/mark-dirty', self._mark_dirty)
         add_put('/cluster/mark-clean', self._mark_clean)
         add_put('/cluster/server/{server_id}/stop', self._cluster_server_stop)
@@ -1908,8 +2332,22 @@ class ScyllaClusterManager:
         return await server.get_host_id(self.cluster.api)
 
     async def _before_test_req(self, request) -> str:
-        cluster_str = await self._before_test(request.match_info['test_case_name'])
-        return cluster_str
+        try:
+            data: dict[str, object] = {}
+            if request.can_read_body:
+                data = await request.json()
+            cluster_profile_payload = data.get("cluster_profile")
+            if cluster_profile_payload is not None and not isinstance(cluster_profile_payload, dict):
+                raise RuntimeError(f"Invalid cluster_profile payload: {cluster_profile_payload!r}")
+            cluster_profile = self._cluster_profile_from_payload(cluster_profile_payload) if cluster_profile_payload is not None else None
+            cluster_str = await self._before_test(
+                request.match_info['test_case_name'],
+                cluster_profile=cluster_profile,
+            )
+            return cluster_str
+        except Exception:
+            self._clear_current_test_limits()
+            raise
 
     async def _after_test(self, _request) -> dict[str, bool]:
         assert self.cluster is not None
@@ -1940,11 +2378,19 @@ class ScyllaClusterManager:
             self.cluster.after_test(self.current_test_case_full_name, success)
         finally:
             logging.getLogger().removeHandler(self.test_case_log_fh)
+            self.test_case_log_fh.close()
             if success:
                 pathlib.Path(self.test_case_log_fh.baseFilename).unlink()
             self.current_test_case_full_name = ''
+            self.current_cluster_profile_state = None
+            self._clear_current_test_limits()
         self.is_after_test_ok = True
         cluster_str = str(self.cluster)
+        if success and self.cluster.is_dirty:
+            self.logger.info("Discarding dirty Scylla cluster %s after successful test", self.cluster.name)
+            await self.clusters.put(self.cluster, is_dirty=True)
+            self.cluster = await self._borrow_cluster_for_profile(None)
+            self.cluster.setLogger(self.logger)
 
         return {"cluster_str":cluster_str, "server_broken":self.server_broken_event.is_set(), "message": self.server_broken_reason }
 
@@ -1964,6 +2410,11 @@ class ScyllaClusterManager:
         assert self.cluster
         self.cluster.is_dirty = False
         self.cluster.keyspace_count = self.cluster._get_keyspace_count()
+
+    async def _set_scylla_resource_limit(self, request: aiohttp.web.Request) -> None:
+        """Set Scylla resource limits for the current test case."""
+        data = await request.json()
+        self.current_resource_limit = self._resource_limit_from_payload(data)
 
     async def _server_stop(self, request: aiohttp.web.Request, gracefully: bool) -> None:
         """Stop a server. No-op if already stopped."""
@@ -1995,6 +2446,7 @@ class ScyllaClusterManager:
             cmdline_options_override=data.get("cmdline_options_override"),
             append_env_override=data.get("append_env_override"),
             auth_provider=data.get("auth_provider"),
+            has_scylla_memory_override=data.get("has_scylla_memory_override"),
         )
 
     async def _cluster_server_pause(self, request) -> None:
@@ -2014,6 +2466,11 @@ class ScyllaClusterManager:
         assert self.cluster
 
         data = await request.json()
+        requested_node = self._node_from_add_data(data, data.get("property_file")) if self._profile_add_request_allowed(data) else None
+        profile_servers = self._profile_servers_for_add_request([requested_node] if requested_node is not None else None)
+        if profile_servers is not None:
+            assert len(profile_servers) == 1
+            return profile_servers[0]
         replace_cfg = ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None
         version = ScyllaVersionDescription(**data["version"]) if "version" in data else None
         s_info = await self.cluster.add_server(
@@ -2034,6 +2491,9 @@ class ScyllaClusterManager:
         """Add new servers concurrently"""
         assert self.cluster
         data = await request.json()
+        profile_servers = self._profile_servers_for_add_request(self._nodes_from_addservers_data(data))
+        if profile_servers is not None:
+            return profile_servers
         version = ScyllaVersionDescription(**data["version"]) if "version" in data else None
         s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'), version,
                                                  data.get('property_file'), data.get('start', True),

@@ -2233,7 +2233,7 @@ def configure_abseil(build_dir, mode, mode_config, compiler_cache=None):
     os.makedirs(abseil_build_dir, exist_ok=True)
     subprocess.check_call(abseil_cmd, shell=False, cwd=abseil_build_dir)
 
-abseil_libs = ['absl/' + lib for lib in [
+abseil_libs = [
     'container/libabsl_hashtablez_sampler.a',
     'container/libabsl_raw_hash_set.a',
     'synchronization/libabsl_synchronization.a',
@@ -2243,14 +2243,11 @@ abseil_libs = ['absl/' + lib for lib in [
     'debugging/libabsl_symbolize.a',
     'debugging/libabsl_debugging_internal.a',
     'debugging/libabsl_demangle_internal.a',
-    'debugging/libabsl_demangle_rust.a',
-    'debugging/libabsl_decode_rust_punycode.a',
-    'debugging/libabsl_utf8_for_code_point.a',
-    'debugging/libabsl_borrowed_fixup_buffer.a',
     'time/libabsl_time.a',
     'time/libabsl_time_zone.a',
     'numeric/libabsl_int128.a',
     'hash/libabsl_hash.a',
+    'hash/libabsl_low_level_hash.a',
     'hash/libabsl_city.a',
     'base/libabsl_malloc_internal.a',
     'base/libabsl_spinlock_wait.a',
@@ -2259,7 +2256,16 @@ abseil_libs = ['absl/' + lib for lib in [
     'profiling/libabsl_exponential_biased.a',
     'strings/libabsl_strings.a',
     'strings/libabsl_strings_internal.a',
-    'base/libabsl_throw_delegate.a']]
+    'base/libabsl_throw_delegate.a']
+
+if os.path.exists('abseil/absl/debugging/internal/demangle_rust.cc'):
+    abseil_libs += [
+        'debugging/libabsl_demangle_rust.a',
+        'debugging/libabsl_decode_rust_punycode.a',
+        'debugging/libabsl_utf8_for_code_point.a',
+        'debugging/libabsl_borrowed_fixup_buffer.a']
+
+abseil_libs = ['absl/' + lib for lib in abseil_libs]
 
 
 def query_seastar_flags(pc_file, use_shared_libs, link_static_cxx=False):

@@ -22,21 +22,18 @@ class SStablesStats:
     output: list[dict] = field(default_factory=list)
 
 
-def waitAndGetCompleteCompactionHistory(rest_api, table):
-    # cql-pytest/run.py::run_scylla_cmd() passes "--smp 2" to scylla, so we
-    # use this value to ensure compaction results from all shards arrived
-    # to the table.
-    SCYLLA_SMP_COUNT = 2
+def waitAndGetCompleteCompactionHistory(cql, rest_api, table):
+    shard_count = cql.execute("SELECT shard_count FROM system.topology").one().shard_count
     ks, cf = table.split('.')
     while True:
         response = rest_api.send("GET", "compaction_manager/compaction_history")
         assert response.status_code == requests.codes.ok
 
         table_entry_count = sum(1 for data in response.json() if data["ks"] == ks and data["cf"] == cf)
-        if table_entry_count == SCYLLA_SMP_COUNT:
+        if table_entry_count == shard_count:
             return response
 
-        assert table_entry_count < SCYLLA_SMP_COUNT
+        assert table_entry_count < shard_count
         time.sleep(0.2)
 
 
@@ -119,7 +116,7 @@ def test_compactionhistory_rows_merged_null_compaction_strategy(cql, rest_api):
             response = rest_api.send("POST", f"storage_service/keyspace_compaction/{ks}")
             assert response.status_code == requests.codes.ok
 
-            response = waitAndGetCompleteCompactionHistory(rest_api, cf)
+            response = waitAndGetCompleteCompactionHistory(cql, rest_api, cf)
             assert extractRowsMergedAsSortedList(response, ks) == [{"key": 1, "value": 27}, {"key": 2, "value": 10}]
 
 
@@ -150,7 +147,7 @@ def test_compactionhistory_rows_merged_time_window_compaction_strategy(cql, rest
             response = rest_api.send("POST", f"storage_service/keyspace_compaction/{ks}")
             assert response.status_code == requests.codes.ok
 
-            response = waitAndGetCompleteCompactionHistory(rest_api, cf)
+            response = waitAndGetCompleteCompactionHistory(cql, rest_api, cf)
             assert extractRowsMergedAsSortedList(response, ks) == [{"key": 1, "value": 27}, {"key": 2, "value": 10}]
 
 
@@ -174,7 +171,7 @@ def test_compactionhistory_tombstone_purge_statistics(cql, rest_api):
             response = rest_api.send("POST", f"storage_service/keyspace_compaction/{ks}")
             assert response.status_code == requests.codes.ok
 
-            response = waitAndGetCompleteCompactionHistory(rest_api, cf)
+            response = waitAndGetCompleteCompactionHistory(cql, rest_api, cf)
             stats = extractTombstonePurgeStatistics(response, ks)
             assert stats == TombstonePurgeStats(4, 0, 0)
 
@@ -206,7 +203,7 @@ def test_compactionhistory_tombstone_purge_statistics_overlapping_with_memtable(
             response = rest_api.send("POST", f"storage_service/keyspace_compaction/{ks}", {"flush_memtables": "false"})
             assert response.status_code == requests.codes.ok
 
-            response = waitAndGetCompleteCompactionHistory(rest_api, cf)
+            response = waitAndGetCompleteCompactionHistory(cql, rest_api, cf)
             stats = extractTombstonePurgeStatistics(response, ks)
             assert stats == TombstonePurgeStats(4, 1, 0)
 
@@ -236,7 +233,7 @@ def test_compactionhistory_tombstone_purge_statistics_overlapping_with_other_sst
             response = rest_api.send("POST", "storage_service/flush")
             assert response.status_code == requests.codes.ok
 
-            response = waitAndGetCompleteCompactionHistory(rest_api, cf)
+            response = waitAndGetCompleteCompactionHistory(cql, rest_api, cf)
 
             stats = extractTombstonePurgeStatistics(response, ks)
             assert stats == TombstonePurgeStats(4, 0, 1)

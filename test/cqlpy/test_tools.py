@@ -229,6 +229,7 @@ def upload_folder_to_s3(folder_path, s3_server):
 
 @pytest.mark.parametrize("what", ["index", "compression-info", "summary", "statistics", "scylla-metadata"])
 @pytest.mark.parametrize("where", ["s3", "mixed"])
+@pytest.mark.requires_service("s3")
 def test_scylla_sstable_dump_component_with_s3(skip_s3_tests, cql, test_keyspace, scylla_path, scylla_data_dir,
                                                scylla_home_dir, what,
                                                where, s3_server):
@@ -250,6 +251,7 @@ def test_scylla_sstable_dump_component_with_s3(skip_s3_tests, cql, test_keyspace
 
 
 @pytest.mark.parametrize("where", ["s3", "mixed"])
+@pytest.mark.requires_service("s3")
 def test_scylla_sstable_dump_data_with_s3(skip_s3_tests, cql, test_keyspace, scylla_path, scylla_data_dir,
                                           scylla_home_dir, where,
                                           s3_server):
@@ -1521,10 +1523,7 @@ def _simple_table_with_keys(cql, keyspace: str, keys: Iterable[int]) -> tuple[st
 
 
 def test_scylla_sstable_shard_of_vnodes(cql, test_keyspace_vnodes, scylla_path, scylla_data_dir) -> None:
-    # cqlpy/run.py::run_scylla_cmd() passes "--smp 2" to scylla, so we
-    # need to be consistent with it to get the correct sstable-shard mapping
-    scylla_option_smp = 2
-    shards = scylla_option_smp
+    shards = cql.execute("SELECT shard_count FROM system.topology").one().shard_count
     num_keys = 1
     for shard_id in range(shards):
         all_keys_for_shard = _generate_key_for_shard(scylla_path, shards, shard_id)

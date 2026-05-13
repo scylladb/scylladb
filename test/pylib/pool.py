@@ -95,6 +95,29 @@ class Pool(Generic[T]):
 
         return await self._build_and_get(*args, **kwargs)
 
+    async def get_if(self, predicate: Callable[[T], bool], *args, **kwargs) -> T:
+        """Borrow an object, preferring a clean pooled object that matches predicate.
+
+           If no pooled object matches and the pool has capacity, a new object is built.
+           If the pool is full, a non-matching pooled object is returned so the caller can
+           decide whether to reuse, clean, or destroy it.
+        """
+        build_new = False
+        async with self.cond:
+            await self.cond.wait_for(lambda: self.pool or self.total < self.max_size)
+            for index, obj in enumerate(self.pool):
+                if predicate(obj):
+                    return self.pool.pop(index)
+
+            if self.total < self.max_size:
+                self.total += 1
+                build_new = True
+            else:
+                return self.pool.pop()
+
+        assert build_new
+        return await self._build_and_get(*args, **kwargs)
+
     async def put(self, obj: T, is_dirty: bool):
         """Return a previously borrowed object to the pool
            if it's not dirty, otherwise destroy the object

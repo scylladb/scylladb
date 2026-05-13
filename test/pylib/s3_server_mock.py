@@ -283,8 +283,8 @@ class MockS3Server:
         if not self.is_running:
             self.logger.info('Starting S3 mock server on %s', self.server.server_address)
             self._set_environ()
-            loop = asyncio.get_running_loop()
-            self.server_thread = loop.run_in_executor(None, self.server.serve_forever)
+            self.server_thread = threading.Thread(target=self.server.serve_forever, name="s3-mock-server", daemon=True)
+            self.server_thread.start()
             self.is_running = True
 
     async def stop(self):
@@ -292,7 +292,8 @@ class MockS3Server:
             self.logger.info('Stopping S3 mock server')
             self._unset_environ()
             self.server.shutdown()
-            await self.server_thread
+            self.server_thread.join()
+            self.server_thread = None
             self.is_running = False
 
     async def run(self):
