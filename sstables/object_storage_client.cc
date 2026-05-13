@@ -112,6 +112,9 @@ public:
         auto& epc = ep.get_s3_storage();
         _client->update_config_sync(epc.region, epc.iam_role_arn);
     }
+    void update_connections_per_shard(unsigned connections_per_shard) override {
+        _client->update_connections_per_shard(connections_per_shard);
+    }
     future<> close() override {
         return _client->close();
     }
@@ -310,6 +313,9 @@ public:
                 .finally([old_client = std::move(old_client), h = std::move(holder)] {
                     osclog.info("Old GCS client cleanup done, use_count={}", old_client.use_count());
                 });
+    }
+    void update_connections_per_shard(unsigned) override {
+        // GCS client does not support per-scheduling-group connection budgeting
     }
     future<> close() override {
         osclog.info("Closing GCS client...");
