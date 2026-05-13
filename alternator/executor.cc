@@ -180,7 +180,7 @@ void executor::maybe_audit(
     }
 }
 
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type,
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, api::timestamp_type,
         const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode);
 
 static const column_definition& attrs_column(const schema& schema) {
@@ -1712,7 +1712,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         auto group0_guard = co_await _mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
-        auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
+        auto ksm = create_keyspace_metadata(keyspace_name, _proxy, ts, tags_map, _proxy.features(), tablets_mode);
         locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
         const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
@@ -4482,10 +4482,30 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     co_return rjson::print(std::move(response));
 }
 
-static locator::replication_strategy_config_options get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
+static locator::replication_strategy_config_options get_network_topology_options(service::storage_proxy& sp, std::string_view keyspace_name, bool use_tablets, int rf = 3) {
     locator::replication_strategy_config_options options;
-    for (const auto& dc : sp.get_token_metadata_ptr()->get_datacenter_racks_token_owners() | std::views::keys) {
-        options.emplace(dc, std::to_string(rf));
+    for (const auto& [dc, racks] : sp.get_token_metadata_ptr()->get_datacenter_racks_token_owners()) {
+        // For tablets, RF cannot exceed the number of racks in a DC.
+        // For vnodes, RF cannot exceed the number of nodes in a DC.
+        int capacity;
+        if (use_tablets) {
+            capacity = (int)racks.size();
+        } else {
+            capacity = 0;
+            for (const auto& [rack, owners] : racks) {
+                capacity += owners.size();
+            }
+        }
+        int dc_rf = rf;
+        if (dc_rf > capacity) {
+            dc_rf = capacity;
+            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} in DC '{}' "
+                         "instead of the desired RF={} because it only has {} {}.",
+                         keyspace_name, dc_rf, dc, rf, capacity,
+                         use_tablets ? (capacity == 1 ? "rack" : "racks")
+                                     : (capacity == 1 ? "node" : "nodes"));
+        }
+        options.emplace(dc, std::to_string(dc_rf));
     }
     return options;
 }
@@ -4521,12 +4541,13 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 
 // Create the metadata for the keyspace in which we put the alternator
 // table if it doesn't already exist.
-// Currently, we automatically configure the keyspace based on the number
-// of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
-// A smaller cluster (presumably, a test only), gets RF=1. The user may
-// manually create the keyspace to override this predefined behavior.
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
-            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
+// The replication factor for each DC is min(3, racks_in_dc) when using
+// tablets, or min(3, nodes_in_dc) when using vnodes. This means a small
+// cluster or DC gets a lower (possibly unsafe) RF, while a DC with 3 or
+// more racks/nodes gets the full RF=3. The user may manually create the
+// keyspace to override this predefined behavior.
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, api::timestamp_type ts,
+        const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
     // Whether to use tablets for the table (actually for the keyspace of the
     // table) is determined by tablets_mode (taken from the configuration
     // option "tablets_mode_for_new_keyspaces"), as well as the presence and
@@ -4567,14 +4588,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
         }
     }
 
-    int endpoint_count = gossiper.num_endpoints();
-    int rf = 3;
-    if (endpoint_count < rf) {
-        rf = 1;
-        elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
-                     keyspace_name, rf, endpoint_count);
-    }
-    auto opts = get_network_topology_options(sp, gossiper, rf);
+    auto opts = get_network_topology_options(sp, keyspace_name, initial_tablets.has_value());
     cql3::statements::ks_prop_defs props;
     opts["class"] = sstring("NetworkTopologyStrategy");
     props.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, opts);
