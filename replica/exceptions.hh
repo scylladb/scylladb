@@ -80,6 +80,25 @@ public:
     virtual const char* what() const noexcept override { return _message.c_str(); }
 };
 
+class large_data_exception final : public replica_exception {
+    seastar::sstring _ks_name;
+    seastar::sstring _cf_name;
+    seastar::sstring _message;
+public:
+    large_data_exception(std::string_view ks_name, std::string_view cf_name, std::string_view detail) noexcept
+        : replica_exception()
+        , _ks_name(ks_name)
+        , _cf_name(cf_name)
+        , _message(seastar::format("Write rejected for {}.{}: {}", ks_name, cf_name, detail))
+    { }
+
+    const seastar::sstring& ks_name() const { return _ks_name; }
+    const seastar::sstring& cf_name() const { return _cf_name; }
+    const seastar::sstring& message() const { return _message; }
+
+    virtual const char* what() const noexcept override { return _message.c_str(); }
+};
+
 using abort_requested_exception = seastar::abort_requested_exception;
 
 struct exception_variant {
@@ -88,7 +107,8 @@ struct exception_variant {
             rate_limit_exception,
             stale_topology_exception,
             abort_requested_exception,
-            critical_disk_utilization_exception
+            critical_disk_utilization_exception,
+            large_data_exception
     > reason;
 
     exception_variant()
