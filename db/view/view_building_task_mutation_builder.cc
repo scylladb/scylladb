@@ -14,7 +14,11 @@ namespace db {
 namespace view {
 
 utils::UUID view_building_task_mutation_builder::new_id() {
-    return _uuid_gen();
+    if (_uuid_gen) {
+        return (*_uuid_gen)();
+    } else {
+        utils::on_internal_error("view_building_task_mutation_builder: cannot generate new id without uuid generator");
+    }
 }
 
 clustering_key view_building_task_mutation_builder::get_ck(utils::UUID id) {
