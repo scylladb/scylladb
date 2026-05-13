@@ -139,6 +139,7 @@
 #include "idl/join_node.dist.impl.hh"
 #include "idl/tasks.dist.impl.hh"
 #include "idl/forward_cql.dist.impl.hh"
+#include "idl/strong_consistency/groups_manager.dist.impl.hh"
 #include "gms/feature_service.hh"
 #include "idl/sstables_loader.dist.impl.hh"
 
@@ -737,6 +738,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::WORK_ON_VIEW_BUILDING_TASKS:
     case messaging_verb::SNAPSHOT_WITH_TABLETS:
     case messaging_verb::RESTORE_TABLET:
+    case messaging_verb::WAIT_FOR_RAFT_GROUPS_TO_START:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:

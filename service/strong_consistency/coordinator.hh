@@ -81,6 +81,11 @@ public:
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as);
+
+    // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
+    // until the raft groups for those tablets are started and ready to serve queries.
+    // For the local node, waits directly without an RPC.
+    future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 };
 
 }

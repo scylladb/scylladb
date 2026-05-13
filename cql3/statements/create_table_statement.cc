@@ -18,6 +18,7 @@
 
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/cql_config.hh"
 
@@ -33,6 +34,7 @@
 #include "compaction/time_window_compaction_strategy.hh"
 #include "db/tags/extension.hh"
 #include "db/tags/utils.hh"
+#include "replica/database.hh"
 #include "alternator/ttl_tag.hh"
 
 namespace cql3 {
@@ -445,6 +447,23 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     }
 
     return std::make_unique<prepared_statement>(audit_info(), stmt, std::move(stmt_warnings));
+}
+
+future<::shared_ptr<messages::result_message>>
+create_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
+    auto result = co_await schema_altering_statement::execute(qp, state, options, std::move(guard));
+
+    auto& db = qp.proxy().local_db();
+    if (strong_consistency::is_strongly_consistent(db.as_data_dictionary(), keyspace())) {
+        auto& cf = db.find_column_family(keyspace(), column_family());
+        try {
+            co_await qp.wait_for_table_raft_groups_on_all_hosts(cf.schema()->id(), lowres_clock::now() + state.get_client_state().get_timeout_config().other_timeout);
+        } catch (...) {
+            result->add_warning(format("Failed to wait for raft groups of {}.{} to start on all hosts: {}", keyspace(), column_family(), std::current_exception()));
+        }
+    }
+
+    co_return result;
 }
 
 data_type create_table_statement::raw_statement::get_type_and_remove(column_map_type& columns, ::shared_ptr<column_identifier> t)
