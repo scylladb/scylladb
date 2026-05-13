@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <random>
 #include <ranges>
+#include <set>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -1226,6 +1227,101 @@ future<> migration_manager::ensure_group0_schema_version_is_set() {
             co_return;
         } catch (const group0_concurrent_modification&) {
             mlogger.info("Concurrent schema change detected while setting group0_schema_version, retrying");
+        }
+        co_await sleep_abortable(std::chrono::milliseconds(std::uniform_int_distribution<>(0, 500)(random_engine)), _as);
+    }
+}
+
+future<> migration_manager::ensure_committed_by_group0() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+
+    // Find non-system tables where committed_by_group0 is not true in scylla_tables.
+    // This includes tables that have no row in scylla_tables at all (very old tables).
+    auto find_tables_missing_flag = [this]() -> future<std::vector<std::pair<sstring, sstring>>> {
+        // Collect all non-system tables with committed_by_group0 = true from scylla_tables
+        auto rs = co_await db::system_keyspace::query(
+            _storage_proxy.get_db(), db::schema_tables::NAME, db::schema_tables::v3::SCYLLA_TABLES);
+        std::set<std::pair<sstring, sstring>> already_committed;
+        for (auto& row : rs->rows()) {
+            auto ks_name = row.get_nonnull<sstring>("keyspace_name");
+            if (is_system_keyspace(ks_name)) {
+                continue;
+            }
+            auto committed = row.get<bool>("committed_by_group0");
+            if (committed && *committed) {
+                auto table_name = row.get_nonnull<sstring>("table_name");
+                already_committed.emplace(std::move(ks_name), std::move(table_name));
+            }
+        }
+
+        // Now find all non-system tables in-memory that are not in the committed set
+        std::vector<std::pair<sstring, sstring>> result;
+        auto db = _storage_proxy.data_dictionary();
+        for (auto& ks : db.get_all_keyspaces()) {
+            if (is_system_keyspace(ks)) {
+                continue;
+            }
+            for (auto& [name, schema] : db.find_keyspace(ks).metadata()->cf_meta_data()) {
+                if (!already_committed.contains({ks, name})) {
+                    result.emplace_back(ks, name);
+                }
+            }
+        }
+        co_return result;
+    };
+
+    auto tables = co_await find_tables_missing_flag();
+    if (tables.empty()) {
+        mlogger.info("All non-system tables have committed_by_group0 set");
+        co_return;
+    }
+
+    mlogger.info("Found {} table(s) missing committed_by_group0, performing fixup", tables.size());
+
+    while (true) {
+        auto guard = co_await start_group0_operation();
+
+        if (!guard.with_raft()) {
+            mlogger.info("Not in raft mode (e.g. RECOVERY), skipping committed_by_group0 fixup");
+            co_return;
+        }
+
+        // Re-check after raft barrier — another node may have fixed it.
+        tables = co_await find_tables_missing_flag();
+        if (tables.empty()) {
+            mlogger.info("All tables now have committed_by_group0 set (fixed by another node)");
+            co_return;
+        }
+
+        auto timestamp = guard.write_timestamp();
+        auto db = _storage_proxy.data_dictionary();
+        auto scylla_tables_schema = db::schema_tables::scylla_tables();
+        utils::chunked_vector<mutation> mutations;
+
+        for (auto& [ks_name, table_name] : tables) {
+            try {
+                auto s = db.find_schema(ks_name, table_name);
+                auto pkey = partition_key::from_singular(*scylla_tables_schema, ks_name);
+                auto ckey = clustering_key::from_singular(*scylla_tables_schema, table_name);
+                mutation m(scylla_tables_schema, pkey);
+                m.set_clustered_cell(ckey, "version", s->version().uuid(), timestamp);
+                // committed_by_group0 will be stamped by add_committed_by_group0_flag() in announce()
+                mutations.emplace_back(std::move(m));
+            } catch (const data_dictionary::no_such_column_family&) {
+                mlogger.debug("Table {}.{} not found (dropped concurrently?), skipping", ks_name, table_name);
+            }
+        }
+
+        if (mutations.empty()) {
+            co_return;
+        }
+
+        mlogger.info("Setting committed_by_group0 for {} table(s)", mutations.size());
+        try {
+            co_await announce<schema_change>(std::move(mutations), std::move(guard), "ensure committed_by_group0");
+            co_return;
+        } catch (const group0_concurrent_modification&) {
+            mlogger.info("Concurrent schema change detected while setting committed_by_group0, retrying");
         }
         co_await sleep_abortable(std::chrono::milliseconds(std::uniform_int_distribution<>(0, 500)(random_engine)), _as);
     }
