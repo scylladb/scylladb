@@ -4136,6 +4136,58 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_asymmetric_node_capacity) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_drain_with_forced_capacity_based_balancing_with_incomplete_data) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->force_capacity_based_balancing.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+        topology_builder topo(e);
+
+        auto host1 = topo.add_node(node_state::removing, 8);
+        e.get_storage_service().local().mark_excluded({host1}).get();
+        auto host2 = topo.add_node(node_state::normal, 1);
+        auto host3 = topo.add_node(node_state::normal, 7);
+
+        const uint64_t capacity_unit = 100UL * 1024UL * 1024UL * 1024UL;
+        topo.get_shared_load_stats().set_capacity(host2, capacity_unit);
+        topo.get_shared_load_stats().set_capacity(host3, capacity_unit * 7);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(16);
+            for (auto tid: tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica {host1, 0},
+                    }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto until_nodes_drained = [] (const migration_plan& plan) {
+            return !plan.has_nodes_to_drain();
+        };
+
+        auto& stm = e.shared_token_metadata().local();
+
+        rebalance_tablets(e, &topo.get_shared_load_stats(), {}, until_nodes_drained);
+
+        load_sketch load(stm.get());
+        load.populate().get();
+
+        for (auto h: {host2, host3}) {
+            testlog.info("Checking host {}", h);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(h), 2); // 16 tablets / 8 shards = 2 tablets / shard
+            BOOST_REQUIRE_EQUAL(load.get_shard_tablet_count_imbalance(h), 0);
+        }
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
