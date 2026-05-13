@@ -20,12 +20,12 @@ namespace view {
 // Factory for mutations to `system.view_building_tasks` table.
 class view_building_task_mutation_builder {
     api::timestamp_type _ts;
-    task_uuid_generator _uuid_gen;
+    std::optional<task_uuid_generator> _uuid_gen;
     schema_ptr _s;
     mutation _m;
 
 public:
-    view_building_task_mutation_builder(api::timestamp_type ts, task_uuid_generator uuid_gen)
+    view_building_task_mutation_builder(api::timestamp_type ts, std::optional<task_uuid_generator> uuid_gen = std::nullopt)
             : _ts(ts)
             , _uuid_gen(std::move(uuid_gen))
             , _s(db::system_keyspace::view_building_tasks())
@@ -47,6 +47,7 @@ public:
     view_building_task_mutation_builder& del_all_tasks();
     // Sets the static column min_task_id to `id`.
     view_building_task_mutation_builder& set_min_task_id(utils::UUID id);
+    view_building_task_mutation_builder& set_task(db::view::view_building_task& task);
 
     mutation build() {
         return std::move(_m);

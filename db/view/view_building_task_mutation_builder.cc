@@ -14,7 +14,11 @@ namespace db {
 namespace view {
 
 utils::UUID view_building_task_mutation_builder::new_id() {
-    return _uuid_gen();
+    if (_uuid_gen) {
+        return (*_uuid_gen)();
+    } else {
+        utils::on_internal_error("view_building_task_mutation_builder: cannot generate new id without uuid generator");
+    }
 }
 
 clustering_key view_building_task_mutation_builder::get_ck(utils::UUID id) {
@@ -73,6 +77,19 @@ view_building_task_mutation_builder& view_building_task_mutation_builder::del_al
 
 view_building_task_mutation_builder& view_building_task_mutation_builder::set_min_task_id(utils::UUID id) {
     _m.set_static_cell("min_task_id", data_value(id), _ts);
+    return *this;
+}
+
+view_building_task_mutation_builder& view_building_task_mutation_builder::set_task(db::view::view_building_task& task) {
+    auto id = task.id;
+    set_type(id, task.type);
+    set_aborted(id, task.aborted);
+    set_base_id(id, task.base_id);
+    if (task.view_id) {
+        set_view_id(id, *task.view_id);
+    }
+    set_last_token(id, task.last_token);
+    set_replica(id, task.replica);
     return *this;
 }
 
