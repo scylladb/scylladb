@@ -724,44 +724,6 @@ future<> raft_group0::setup_group0(
     co_await sys_ks.save_group0_upgrade_state("use_post_raft_procedures");
 }
 
-future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm) {
-    if (joined_group0()) {
-        group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
-        auto my_id = load_my_id();
-        if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
-            if (!_feat.group0_limited_voters) {
-                // limited voters feature not enabled yet
-                // - need to become a voter in here
-                group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
-                // Just bootstrapped and joined as non-voter. Become a voter.
-                auto pause_shutdown = _shutdown_gate.hold();
-                raft::server_address my_addr{my_id, {}};
-                co_await run_op_with_retry(_abort_source, [this, my_addr]() -> future<operation_result> {
-                    try {
-                        co_await _raft_gr.group0().modify_config({{my_addr, raft::is_voter::yes}}, {}, &_abort_source);
-                    } catch (const raft::commit_status_unknown& e) {
-                        group0_log.info("finish_setup_after_join({}): modify_config returned \"{}\", retrying", my_addr, e);
-                        co_return operation_result::failure;
-                    }
-                    co_return operation_result::success;
-                }, "finish_setup_after_join->modify_config", {});
-                group0_log.info("finish_setup_after_join: became a group 0 voter.");
-            }
-
-            // No need to run `upgrade_to_group0()` since we must have bootstrapped with Raft
-            // (that's the only way to join as non-voter today).
-            co_return;
-        }
-    } else {
-        // We're either upgrading or in recovery mode.
-    }
-
-    if (!_feat.supports_raft_cluster_mgmt) {
-        throw std::runtime_error("finish_setup_after_join: SUPPORTS_RAFT feature not yet enabled, but was expected to be enabled at this point."
-            " If you are trying to upgrade a node pf a cluster that is not using Raft yet, this is no longer supported.");
-    }
-}
-
 bool raft_group0::is_member(raft::server_id id, bool include_voters_only) {
     if (!joined_group0()) {
         on_internal_error(group0_log, "called is_member before we joined group 0");

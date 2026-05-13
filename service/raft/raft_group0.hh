@@ -198,13 +198,6 @@ public:
     //
     future<> setup_group0_if_exist(db::system_keyspace&, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
 
-    // Call at the end of the startup procedure, after the node entered NORMAL state.
-    // `setup_group0()` must have finished earlier.
-    //
-    // If the node has just bootstrapped, causes the group 0 server to become a voter.
-    //
-    future<> finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
-
     // Check whether the given Raft server is a member of group 0 configuration
     // according to our current knowledge.
     //
