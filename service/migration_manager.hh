@@ -113,6 +113,14 @@ public:
     //              `group0_raft_op_timeout_in_ms`, which defaults to one minute).
     future<group0_guard> start_group0_operation(std::optional<raft_timeout> timeout = std::nullopt);
 
+    // Ensure all non-system tables have committed_by_group0 = true in
+    // system_schema.scylla_tables. Tables created before the
+    // GROUP0_SCHEMA_VERSIONING feature was enabled will have this column
+    // as null, causing their version to be deleted by maybe_delete_schema_version()
+    // and forcing hash-based version computation. This fixup stamps them
+    // so we can eventually remove the legacy hashing code.
+    future<> ensure_committed_by_group0();
+
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
     // Parameters:
