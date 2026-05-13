@@ -280,7 +280,7 @@ class TestLimits(Tester):
         session = self.patient_cql_connection(node)
         create_ks(session, "ks", 1)
 
-        cells = 1
-        for i in range(int(math.log(MAX_CELLS, 2))):
-            cells <<= 1
+        cells = MAX_CELLS_COLUMNS
+        while cells <= MAX_CELLS:
             self._do_test_max_cell_count(session, cells - 1)
+            cells <<= 1
