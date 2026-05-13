@@ -1086,6 +1086,12 @@ private:
 
     utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
 
+    // Cached effective_capacity for smoothing. Updated only when the new value
+    // differs from the cached one by more than the configured threshold.
+    // This prevents load balancer oscillations caused by small filesystem
+    // fluctuations in available disk space.
+    std::optional<uint64_t> _cached_effective_capacity;
+
     strong_consistency::groups_manager& _groups_manager;
 
 public:
@@ -1097,6 +1103,15 @@ public:
     future<std::vector<std::byte>> train_dict(utils::chunked_vector<temporary_buffer<char>> sample);
     future<> publish_new_sstable_dict(table_id, std::span<const std::byte>, service::raft_group0_client&);
     void set_train_dict_callback(decltype(_train_dict));
+
+    /// Suppress small fluctuations in effective_capacity to prevent load
+    /// balancer oscillations. Updates _cached_effective_capacity only when
+    /// the relative change exceeds the threshold.
+    ///
+    /// \param new_value  newly measured capacity
+    /// \param threshold  relative threshold (0 disables smoothing)
+    /// \returns smoothed capacity value
+    uint64_t smooth_effective_capacity(uint64_t new_value, double threshold);
     seastar::future<> notify_client_routes_change(const client_routes_service::client_route_keys& client_route_keys);
 
     // Alters the given table's min/max tablet count hints. Only the engaged
