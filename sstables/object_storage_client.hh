@@ -85,6 +85,7 @@ public:
     virtual future<> upload_file(std::filesystem::path path, object_name, utils::upload_progress& up, seastar::abort_source* = nullptr) = 0;
 
     virtual void update_config_sync(const db::object_storage_endpoint_param&) = 0;
+    virtual void update_connections_per_shard(unsigned) = 0;
 
     virtual future<> close() = 0;
 };

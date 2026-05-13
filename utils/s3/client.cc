@@ -150,6 +150,20 @@ void client::update_config_sync(std::string region, std::string ira) {
     });
 }
 
+void client::update_connections_per_shard(unsigned connections_per_shard) {
+    if (_config_update_gate.is_closed()) {
+        s3l.info("config update gate is closed");
+        return;
+    }
+    auto holder = _config_update_gate.hold();
+    (void)with_semaphore(_rebalance_sem, 1, [this, connections_per_shard] {
+        _cfg->connections_per_shard = connections_per_shard;
+        return rebalance_connections();
+    }).handle_exception([holder = std::move(holder)](auto ex) {
+        s3l.warn("Failed to rebalance connections after config update: {}", ex);
+    });
+}
+
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf) {
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
 }

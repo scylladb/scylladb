@@ -230,6 +230,7 @@ public:
                          seastar::abort_source* = nullptr);
 
     void update_config_sync(std::string reg, std::string ira);
+    void update_connections_per_shard(unsigned connections_per_shard);
 
     struct handle {
         std::string _host;
