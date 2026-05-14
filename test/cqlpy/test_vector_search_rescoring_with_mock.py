@@ -212,3 +212,27 @@ def test_wildcard_select_is_correctly_rescored(cql, test_keyspace, vector_store_
             for row, d_row in zip(rows, expected):
                 assert list(row.embedding) == pytest.approx(d_row.embedding)
             assert len(rows[0]) == 2
+
+
+# Verifies that when the similarity function argument in SELECT differs from the
+# ANN ordering vector, the correct similarity values are computed. Uses a
+# prepared statement so the argument difference is only visible at execution time.
+def test_select_similarity_function_other_than_ann_ordering(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data) as table:
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+
+        prepared = cql.prepare(
+            f"SELECT id, similarity_cosine(embedding, ?) AS similarity FROM {table} "
+            f"ORDER BY embedding ANN OF ? LIMIT 2")
+        # Compute similarity to data[1].embedding while ordering by ANN_QUERY_VECTOR.
+        rows = list(cql.execute(prepared, [data[1].embedding, ANN_QUERY_VECTOR]))
+
+        expected = data[:2]
+        assert [row.id for row in rows] == [d_row.id for d_row in expected]
+        # Similarity is computed against data[1].embedding, not the ANN query vector.
+        # id=1 (rescored rank 0): similarity(data[0].embedding, data[1].embedding) = 0.97.
+        # id=2 (rescored rank 1): similarity(data[1].embedding, data[1].embedding) = 1 (self-similarity).
+        assert rows[0].similarity == pytest.approx(0.97, abs=0.01)
+        assert rows[1].similarity == pytest.approx(1, abs=0.01)
+        assert len(rows[0]) == 2
