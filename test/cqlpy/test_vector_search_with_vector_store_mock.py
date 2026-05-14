@@ -58,6 +58,11 @@ class VectorStoreMock:
         with self._lock:
             self._next_ann_response = Response(status=status, body=body)
 
+    def reset(self) -> None:
+        with self._lock:
+            self._ann_requests.clear()
+            self._next_ann_response = Response()
+
     def _handle_ann(self, request: Request, send_response: Callable[[Response], None]) -> None:
         with self._lock:
             self._ann_requests.append(request)
@@ -99,8 +104,8 @@ class VectorStoreMock:
             self._thread.join()
 
 
-@pytest.fixture
-def vector_store_mock(cql):
+@pytest.fixture(scope="module")
+def _vector_store_mock_session(cql):
     mock = VectorStoreMock()
     if not is_scylla(cql):
         # Yield a mock without starting the HTTP server so tests can run
@@ -117,6 +122,12 @@ def vector_store_mock(cql):
             yield mock
     finally:
         mock.stop()
+
+
+@pytest.fixture
+def vector_store_mock(_vector_store_mock_session):
+    _vector_store_mock_session.reset()
+    yield _vector_store_mock_session
 
 
 # Verify that partition key IN restriction is forwarded to the vector store.
