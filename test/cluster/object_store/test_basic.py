@@ -436,3 +436,90 @@ async def test_tablet_migration_with_encryption(manager: ManagerClient, s3_serve
         )
     finally:
         await cql.run_async(f"DROP KEYSPACE IF EXISTS {ks}")
+
+@pytest.mark.asyncio
+async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, object_storage):
+    """Verify that aborting a blob stream on object storage cleans up
+    partial SSTable components instead of leaving orphaned S3 objects.
+
+    When tablet migration streaming fails mid-transfer, the receiving side
+    calls sstable_stream_sink_impl::abort() to clean up the partial SSTable
+    component. Before the fix, abort() used remove_file() with a local
+    filesystem path. On object storage this silently fails (the exception
+    is caught and logged), leaving the partially-uploaded S3 object
+    orphaned. The fix uses unlink_component() which delegates to the
+    correct storage backend (e.g., S3 delete_object).
+
+    This test triggers a streaming failure via error injection and verifies
+    the migration retries successfully, data remains intact, and no stale
+    "creating" entries are left in the sstables registry.
+    """
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': object_storage.create_endpoint_conf(),
+           'experimental_features': ['keyspace-storage-options']}
+
+    servers = []
+    for rack_num in range(2):
+        s = await manager.server_add(config=cfg,
+                                     property_file={"dc": "dc1", "rack": f"r{rack_num}"})
+        servers.append(s)
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=1)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+        for i in range(20):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, {i})")
+        await asyncio.gather(*[manager.api.flush_keyspace(s.ip_addr, ks)
+                                for s in servers])
+
+        # Find which server holds the tablet and which doesn't
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, "test")
+        tablet = tablets[0]
+        src_host, src_shard = tablet.replicas[0]
+
+        host_ids = {await manager.get_host_id(s.server_id): s for s in servers}
+        dst_server = [s for hid, s in host_ids.items() if hid != src_host][0]
+        dst_host = await manager.get_host_id(dst_server.server_id)
+
+        # Arm error injection on the destination to fail blob streaming on
+        # the first data write. This triggers abort() on the partial SSTable.
+        await manager.api.enable_injection(dst_server.ip_addr,
+                                           "stream_blob_rx_data_error", True)
+
+        logger.info("Moving tablet from %s to %s with abort injection armed",
+                     src_host, dst_host)
+
+        # The migration should eventually succeed: the first streaming
+        # attempt will fail (triggering abort()), and the tablet migration
+        # machinery will retry.
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test",
+                                      src_host, src_shard,
+                                      dst_host, 0, tablet.last_token)
+
+        # Verify tablet moved to the destination
+        tablets_after = await get_all_tablet_replicas(manager, servers[0],
+                                                     ks, "test")
+        moved = [t for t in tablets_after
+                 if t.last_token == tablet.last_token]
+        assert len(moved) == 1
+        new_host = moved[0].replicas[0][0]
+        assert new_host == dst_host, \
+            f"Tablet not on expected host: {new_host} != {dst_host}"
+
+        # Verify data integrity
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test")
+        result = {r.pk: r.v for r in rows}
+        expected = {i: i for i in range(20)}
+        assert result == expected, f"Data mismatch: {result}"
+
+        # Verify no stale registry entries from the failed streaming
+        # attempt. Before the fix, abort() did not clean up the registry
+        # entry, leaving a stale "creating" entry for the partial SSTable.
+        table_id = await manager.get_table_id(ks, "test")
+        registry = await cql.run_async(
+            f"SELECT status FROM system.sstables WHERE owner = {table_id}")
+        stale = [r for r in registry if r.status != "sealed"]
+        assert not stale, (
+            f"Found stale registry entries after migration: "
+            f"{[r.status for r in stale]}")

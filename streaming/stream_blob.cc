@@ -305,6 +305,7 @@ future<> stream_blob_handler(replica::database& db,
                     status->check_valid_stream();
                     if (!data->empty()) {
                         co_await fstream->write((char*)data->data(), data->size());
+                        utils::get_local_injector().inject("stream_blob_rx_data_error", [] { throw std::runtime_error("stream_blob_rx_data_error injection"); });
                     }
                 }
             }

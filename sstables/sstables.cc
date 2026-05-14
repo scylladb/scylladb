@@ -4272,12 +4272,14 @@ class sstable_stream_sink_impl : public sstable_stream_sink {
     component_type _type;
     bool _last_component;
     bool _leave_unsealed;
+    bool _is_object_storage;
 public:
-    sstable_stream_sink_impl(shared_sstable sst, component_type type, sstable_stream_sink_cfg cfg)
+    sstable_stream_sink_impl(shared_sstable sst, component_type type, sstable_stream_sink_cfg cfg, bool is_object_storage)
         : _sst(std::move(sst))
         , _type(type)
         , _last_component(cfg.last_component)
         , _leave_unsealed(cfg.leave_unsealed)
+        , _is_object_storage(is_object_storage)
     {}
 private:
     future<> load_metadata() const {
@@ -4345,10 +4347,13 @@ public:
         if (!_sst) {
             co_return;
         }
-        auto filename = fmt::to_string(_sst->filename(_type));
         // TODO: if we are the last component (or really always), should we remove all component files?
         // For now, this remains the responsibility of calling code (see handle_tablet_migration etc)
-        co_await remove_file(filename);
+        co_await _sst->_storage->unlink_component(*_sst, _type);
+        if (_is_object_storage) {
+            co_await _sst->manager().sstables_registry().delete_entry(
+                    _sst->get_schema()->id(), _sst->generation());
+        }
     }
 };
 
@@ -4367,7 +4372,7 @@ std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstab
         type = component_type::TemporaryTOC;
     }
 
-    return std::make_unique<sstable_stream_sink_impl>(std::move(sst), type, cfg);
+    return std::make_unique<sstable_stream_sink_impl>(std::move(sst), type, cfg, s_opts.is_object_storage_type());
 }
 
 generation_type
