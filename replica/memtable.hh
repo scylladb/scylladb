@@ -22,6 +22,7 @@
 #include "utils/double-decker.hh"
 #include "readers/empty.hh"
 #include "readers/mutation_source.hh"
+#include "db/large_data_handler.hh"
 
 class frozen_mutation;
 class row_cache;
@@ -236,8 +237,11 @@ public:
     // Applies mutation to this memtable.
     // The mutation is upgraded to current schema.
     void apply(const mutation& m, db::rp_handle&& = {});
-    // The mutation is upgraded to current schema.
-    void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& = {});
+    void apply(const frozen_mutation& m, const schema_ptr& m_schema,
+               const db::large_data_guardrail_base& guardrails, db::rp_handle&& = {});
+    void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
+        apply(m, m_schema, *db::noop_large_data_guardrail::instance(), std::move(h));
+    }
     void evict_entry(memtable_entry& e, mutation_cleaner& cleaner) noexcept;
 
     static memtable& from_region(logalloc::region& r) noexcept {

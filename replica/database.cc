@@ -1612,6 +1612,16 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.data_listeners = &db.data_listeners();
     cfg.enable_compacting_data_for_streaming_and_repair = db_config.enable_compacting_data_for_streaming_and_repair;
     cfg.enable_tombstone_gc_for_streaming_and_repair = db_config.enable_tombstone_gc_for_streaming_and_repair;
+    cfg.guardrail_config = db::guardrail_config{
+        .partition_size_fail_threshold_mb = db_config.large_partition_fail_threshold_mb,
+        .partition_size_warn_threshold_mb = db_config.compaction_large_partition_warning_threshold_mb,
+        .rows_count_fail_threshold = db_config.rows_count_fail_threshold,
+        .rows_count_warn_threshold = db_config.compaction_rows_count_warning_threshold,
+        .row_size_fail_threshold_mb = db_config.large_row_fail_threshold_mb,
+        .row_size_warn_threshold_mb = db_config.compaction_large_row_warning_threshold_mb,
+        .collection_elements_fail_threshold = db_config.large_collection_elements_fail_threshold,
+        .collection_elements_warn_threshold = db_config.compaction_collection_elements_count_warning_threshold,
+    };
 
     return cfg;
 }
@@ -2150,20 +2160,29 @@ std::vector<replica::shared_memtable> memtable_list::clear_and_add() {
     return std::exchange(_memtables, std::move(new_memtables));
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h,
+                                     db::timeout_clock::time_point timeout,
+                                     shared_ptr<db::large_data_guardrail_base> guardrails) {
     auto& cf = find_column_family(m.column_family_id());
 
     data_listeners().on_write(m_schema, m);
 
     if (m.representation().size() > 128*1024) {
-        return unfreeze_gently(m, std::move(m_schema)).then([&cf, h = std::move(h), timeout] (auto m) mutable {
+        // Big mutation: unfreeze_gently (yields), then check guardrails on
+        // the already-deserialized mutation before applying.
+        auto pk = m.key();
+        return unfreeze_gently(m, std::move(m_schema)).then(
+                [&cf, h = std::move(h), timeout, guardrails, pk] (auto m) mutable {
+            guardrails->check(*m.schema(), m.partition(), pk);
             return do_with(std::move(m), [&cf, h = std::move(h), timeout] (auto& m) mutable {
                 return cf.apply(m, std::move(h), timeout);
             });
         });
     }
 
-    return cf.apply(m, std::move(m_schema), std::move(h), timeout);
+    // Small mutation: forward guardrails to memtable::apply which will check
+    // after partition_builder deserializes — no redundant unfreeze.
+    return cf.apply(m, std::move(m_schema), std::move(h), timeout, std::move(guardrails));
 }
 
 future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
@@ -2344,13 +2363,14 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
     auto handles = co_await cl->add_entries(std::move(writers), timeout);
 
     // FIXME: Memtable application is not atomic so reads may observe mutations partially applied until restart.
+    auto noop = db::noop_large_data_guardrail::instance();
     for (size_t i = 0; i < muts.size(); ++i) {
         auto s = local_schema_registry().get(muts[i].schema_version());
-        co_await apply_in_memory(muts[i], s, std::move(handles[i]), timeout);
+        co_await apply_in_memory(muts[i], s, std::move(handles[i]), timeout, noop);
     }
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info) {
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails) {
     ++_stats->total_writes;
     // assume failure until proven otherwise
     auto update_writes_failed = defer([&] { ++_stats->total_writes_failed; });
@@ -2378,6 +2398,10 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
         ++_stats->total_writes_rejected_due_to_out_of_space_prevention;
         co_await coroutine::return_exception(replica::critical_disk_utilization_exception{"rejected write mutation"});
     }
+
+    auto guardrails = skip_large_data_guardrails
+        ? db::noop_large_data_guardrail::instance()
+        : cf.get_large_data_guardrail();
 
     if (!std::holds_alternative<std::monostate>(rate_limit_info) && can_apply_per_partition_rate_limit(*s, db::operation_type::write)) {
         auto table_limit = *s->per_partition_rate_limit_options().get_max_writes_per_second();
@@ -2437,7 +2461,8 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
             co_await coroutine::exception(std::move(ex));
         }
     }
-    auto f = co_await coroutine::as_future(this->apply_in_memory(m, s, std::move(h), timeout));
+    auto f = co_await coroutine::as_future(
+        this->apply_in_memory(m, s, std::move(h), timeout, std::move(guardrails)));
     if (f.failed()) {
       auto ex = f.get_exception();
       if (try_catch<mutation_reordered_with_truncate_exception>(ex)) {
@@ -2501,7 +2526,7 @@ void database::update_write_metrics_for_rejected_writes() {
     ++_stats->total_writes_rejected_due_to_out_of_space_prevention;
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
@@ -2512,7 +2537,7 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply mutation using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
-    return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync, rate_limit_info);
+    return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, sync, rate_limit_info, skip_large_data_guardrails);
 }
 
 future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
@@ -2522,7 +2547,7 @@ future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::t
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply hint using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
     }
-    return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no, std::monostate{});
+    return _apply_stage(this, std::move(s), seastar::cref(m), std::move(tr_state), timeout, db::commitlog::force_sync::no, std::monostate{}, false);
 }
 
 keyspace::config

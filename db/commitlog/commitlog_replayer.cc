@@ -282,7 +282,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
                     return db.apply_in_memory(m, cf, db::rp_handle(), db::no_timeout);
                 });
             } else {
-                return db.apply_in_memory(fm, cf.schema(), db::rp_handle(), db::no_timeout);
+                return db.apply_in_memory(fm, cf.schema(), db::rp_handle(), db::no_timeout, db::noop_large_data_guardrail::instance());
             }
         }).then_wrapped([s] (future<> f) {
             try {

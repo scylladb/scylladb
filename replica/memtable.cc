@@ -9,6 +9,7 @@
 #include "utils/assert.hh"
 #include "memtable.hh"
 #include "replica/database.hh"
+#include "replica/exceptions.hh"
 #include "mutation/frozen_mutation.hh"
 #include "replica/partition_snapshot_reader.hh"
 #include "partition_builder.hh"
@@ -16,6 +17,8 @@
 #include "readers/empty.hh"
 #include "readers/forwardable.hh"
 #include "sstables/types.hh"
+#include "keys/keys.hh"
+#include "db/large_data_handler.hh"
 
 namespace replica {
 
@@ -797,13 +800,15 @@ memtable::apply(const mutation& m, db::rp_handle&& h) {
 }
 
 void
-memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h) {
-    with_allocator(allocator(), [this, &m, &m_schema] {
+memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema,
+                const db::large_data_guardrail_base& guardrails, db::rp_handle&& h) {
+    with_allocator(allocator(), [this, &m, &m_schema, &guardrails] {
         _table_shared_data.allocating_section(*this, [&, this] {
-            auto& p = find_or_create_partition_slow(m.key());
             mutation_partition mp(*m_schema);
             partition_builder pb(*m_schema, mp);
             m.partition().accept(*m_schema, pb);
+            guardrails.check(*m_schema, mp, m.key());
+            auto& p = find_or_create_partition_slow(m.key());
             _stats_collector.update(*m_schema, mp);
             p.apply(region(), cleaner(), *_schema, std::move(mp), *m_schema, _table_stats.memtable_app_stats);
         });

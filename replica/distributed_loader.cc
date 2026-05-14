@@ -518,7 +518,11 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
         if (!is_system_keyspace(ks_name)) {
             co_await smp::invoke_on_all([&] {
                 auto s = gtable->schema();
-                db.local().find_column_family(s).mark_ready_for_writes(db.local().commitlog_for(s));
+                auto& cf = db.local().find_column_family(s);
+                // Populate the large data caches from SSTable metadata
+                // before the table becomes writable.
+                cf.rebuild_large_data_index();
+                cf.mark_ready_for_writes(db.local().commitlog_for(s));
             });
         }
     });
