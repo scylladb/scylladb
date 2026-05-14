@@ -194,3 +194,21 @@ def test_similarity_function_returns_correctly_rescored_results(cql, test_keyspa
                 for row, d_row in zip(rows, expected):
                     assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
                 assert len(rows[0]) == 2
+
+
+# Verifies that SELECT * with rescoring returns rows in the correct similarity
+# order with correct embedding values. Tests a slightly different processing
+# path compared to the explicit column SELECT in test_result_returned_by_vector_store_is_rescored.
+def test_wildcard_select_is_correctly_rescored(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    for func_name, data in TEST_DATA.items():
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"similarity_function": func_name}) as table:
+            vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+            rows = list(cql.execute(
+                f"SELECT * FROM {table} ORDER BY embedding ANN OF {ANN_QUERY_VECTOR_LITERAL} LIMIT 2"))
+
+            expected = data[:2]
+            assert [row.id for row in rows] == [d_row.id for d_row in expected]
+            for row, d_row in zip(rows, expected):
+                assert list(row.embedding) == pytest.approx(d_row.embedding)
+            assert len(rows[0]) == 2
