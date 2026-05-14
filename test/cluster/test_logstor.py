@@ -86,6 +86,13 @@ async def test_basic_write_and_read(manager: ManagerClient):
         assert rows[0].pk == 2
         assert rows[0].v == 150
 
+        # test conflict resolution by timestamp
+        await cql.run_async(f"INSERT INTO {ks}.test_int (pk, v) VALUES (3, 300) USING TIMESTAMP 1000")
+        await cql.run_async(f"INSERT INTO {ks}.test_int (pk, v) VALUES (3, 200) USING TIMESTAMP 900")
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_int WHERE pk = 3")
+        assert rows[0].pk == 3
+        assert rows[0].v == 300
+
         # test frozen map value
 
         await cql.run_async(f"CREATE TABLE {ks}.test_map (pk int PRIMARY KEY, v frozen<map<text, text>>) WITH storage_engine = 'logstor'")

@@ -9,9 +9,10 @@
 
 #include <cstdint>
 #include <fmt/format.h>
-#include "mutation/canonical_mutation.hh"
 #include "replica/logstor/utils.hh"
 #include "dht/decorated_key.hh"
+#include "mutation/canonical_mutation.hh"
+#include "mutation/timestamp.hh"
 
 namespace replica::logstor {
 
@@ -34,19 +35,18 @@ struct primary_index_key {
     dht::decorated_key dk;
 };
 
-using record_generation = generation_base<uint16_t>;
 using segment_generation = generation_base<uint16_t>;
 
 struct index_entry {
     log_location location;
-    record_generation generation;
+    api::timestamp_type timestamp;
 
     bool operator==(const index_entry& other) const noexcept = default;
 };
 
 struct log_record_header {
     primary_index_key key;
-    record_generation generation;
+    api::timestamp_type timestamp;
     table_id table;
 };
 

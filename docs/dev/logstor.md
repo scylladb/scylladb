@@ -205,7 +205,7 @@ zero_padding         -- to align to record_alignment (8 bytes)
 
 The `header_size` bytes immediately following the record header are the IDL-serialized form of `log_record_header`, which contains:
 - `key`: the partition key (`primary_index_key`), including a `decorated_key` with a token and partition key bytes.
-- `generation`: a 16-bit write generation number, used during recovery to resolve conflicts when the same key appears in multiple segments.
+- `timestamp`: the timestamp of the record, used to resolve conflicts by keeping the record with the latest timestamp.
 - `table`: UUID of the table this record belongs to.
 
 **Mutation Data**:

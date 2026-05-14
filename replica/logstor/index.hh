@@ -14,6 +14,7 @@
 #include "utils/bptree.hh"
 #include "utils/double-decker.hh"
 #include "utils/phased_barrier.hh"
+#include <utility>
 
 namespace replica::logstor {
 
@@ -100,20 +101,6 @@ public:
         }
     }
 
-    std::optional<index_entry> exchange(const primary_index_key& key, index_entry new_entry) {
-        partitions_type::bound_hint hint;
-        auto i = _partitions.lower_bound(key.dk, dht::ring_position_comparator(*_schema), hint);
-        if (hint.match) {
-            auto old_entry = i->_e;
-            i->_e = std::move(new_entry);
-            return old_entry;
-        } else {
-            _partitions.emplace_before(i, key.dk.token().raw(), hint, key.dk, std::move(new_entry));
-            ++_key_count;
-            return std::nullopt;
-        }
-    }
-
     bool update_record_location(const primary_index_key& key, log_location old_location, log_location new_location) {
         auto it = _partitions.find(key.dk, dht::ring_position_comparator(*_schema));
         if (it != _partitions.end()) {
@@ -125,11 +112,17 @@ public:
         return false;
     }
 
-    std::pair<bool, std::optional<index_entry>> insert_if_newer(const primary_index_key& key, index_entry new_entry, bool prefer_on_tie) {
+    using entry_cmp_fn = std::function<std::strong_ordering(const index_entry&, const index_entry&)>;
+
+    static std::strong_ordering default_entry_cmp(const index_entry& a, const index_entry& b) noexcept {
+        return a.timestamp <=> b.timestamp;
+    }
+
+    std::pair<bool, std::optional<index_entry>> insert(const primary_index_key& key, index_entry new_entry, entry_cmp_fn cmp = default_entry_cmp) {
         partitions_type::bound_hint hint;
         auto i = _partitions.lower_bound(key.dk, dht::ring_position_comparator(*_schema), hint);
         if (hint.match) {
-            if (i->_e.generation < new_entry.generation || (i->_e.generation == new_entry.generation && prefer_on_tie)) {
+            if (cmp(i->_e, new_entry) <= 0) {
                 auto old_entry = i->_e;
                 i->_e = std::move(new_entry);
                 return {true, std::make_optional(old_entry)};

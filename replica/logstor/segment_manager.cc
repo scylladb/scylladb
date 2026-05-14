@@ -1956,22 +1956,17 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
     auto& desc = get_segment_descriptor(segment_id);
     desc.reset(_cfg.segment_size);
 
-    auto seg_hdr = co_await read_segment_header(segment_id);
-    if (!seg_hdr) {
-        logstor_logger.trace("Segment {} has invalid header, skipping", segment_id);
-        co_return;
-    }
-    desc.seg_gen = seg_hdr->seg_gen;
-    bool is_full_segment = seg_hdr->kind == segment_kind::full;
-    logstor_logger.trace("Recovering segment {} with generation {}", segment_id, desc.seg_gen);
-
-    co_await for_each_record(segment_id,
-        [this, &desc, &db, is_full_segment] (log_location loc, const log_record_header& header) -> want_data {
-            logstor_logger.trace("Recovery: read record at {} gen {}", loc, header.generation);
+    co_await scan_segment(segment_id,
+        [segment_id] (const segment_header& seg_hdr) {
+            logstor_logger.trace("Recovering segment {} with generation {}", segment_id, seg_hdr.seg_gen);
+            return make_ready_future<>();
+        },
+        [this, &desc, &db] (log_location loc, const log_record_header& header) -> want_data {
+            logstor_logger.trace("Recovery: read record at {} key {} ts {}", loc, header.key, header.timestamp);
 
             index_entry new_entry {
                 .location = loc,
-                .generation = header.generation
+                .timestamp = header.timestamp
             };
 
             try {
@@ -1979,7 +1974,7 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
                 if (!t.uses_logstor()) {
                     return want_data::no;
                 }
-                auto [inserted, prev_entry] = t.logstor_index().insert_if_newer(header.key, new_entry, is_full_segment);
+                auto [inserted, prev_entry] = t.logstor_index().insert(header.key, new_entry);
                 if (inserted) {
                     desc.on_write(loc);
                     if (prev_entry) {
