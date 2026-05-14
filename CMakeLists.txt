@@ -275,6 +275,9 @@ else()
 endif()
 
 add_library(scylla-main STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(scylla-main REUSE_FROM scylla-precompiled-header)
+endif()
 
 target_sources(scylla-main
   PRIVATE
