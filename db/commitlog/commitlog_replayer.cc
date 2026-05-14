@@ -27,6 +27,7 @@
 #include "commitlog_entry.hh"
 #include "validation.hh"
 #include "mutation/mutation_partition_view.hh"
+#include <seastar/core/on_internal_error.hh>
 
 static logging::logger rlogger("commitlog_replayer");
 
@@ -81,8 +82,9 @@ public:
         return _column_mappings.stop();
     }
 
-    future<> process(stats*, commitlog::buffer_and_replay_position buf_rp) const;
+    future<> process(stats*, detail::commitlog_entry_serialization_format, commitlog::buffer_and_replay_position buf_rp) const;
     future<stats> recover(const commitlog::descriptor&, const commitlog::replay_state&) const;
+    detail::commitlog_entry_serialization_format get_entry_format(const commitlog::descriptor&) const;
 
     typedef std::unordered_map<table_id, replay_position> rp_map;
     typedef std::unordered_map<unsigned, rp_map> shard_rpm_map;
@@ -185,9 +187,10 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
 
     auto s = make_lw_shared<stats>();
     auto& exts = _db.local().extensions();
+    auto entry_format = get_entry_format(d);
 
     return db::commitlog::read_log_file(rpstate, f, d.filename_prefix,
-            std::bind(&impl::process, this, s.get(), std::placeholders::_1),
+            std::bind(&impl::process, this, s.get(), entry_format, std::placeholders::_1),
             p, &exts).then_wrapped([s](future<> f) {
         try {
             f.get();
@@ -204,23 +207,39 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
     });
 }
 
-future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_replay_position buf_rp) const {
+detail::commitlog_entry_serialization_format db::commitlog_replayer::impl::get_entry_format(const commitlog::descriptor& d) const {
+    if (!d.descriptor_tag.empty()) {
+        SCYLLA_ASSERT(d.descriptor_tag == detail::variant_format_tag);
+        return detail::commitlog_entry_serialization_format::variant;
+    }
+    return detail::commitlog_entry_serialization_format::mutation;
+}
+
+future<> db::commitlog_replayer::impl::process(
+        stats* s, detail::commitlog_entry_serialization_format entry_format, commitlog::buffer_and_replay_position buf_rp) const {
     auto&& buf = buf_rp.buffer;
     auto&& rp = buf_rp.position;
     try {
 
-        commitlog_mutation_entry_reader cer(buf);
-        auto& fm = cer.mutation();
+        commitlog_entry_reader cer(buf, entry_format);
+        const auto& read_entry = cer.entry().item;
+
+        if (std::holds_alternative<raft_commitlog_entry>(read_entry)) {
+            rlogger.debug("Skipping raft log entry");
+        } else if (std::holds_alternative<mutation_entry>(read_entry)) {
+        const auto& mut_entry = std::get<mutation_entry>(read_entry);
+
+        auto& fm = mut_entry.mutation();
 
         auto& local_cm = _column_mappings.local().map;
         auto cm_it = local_cm.find(fm.schema_version());
         if (cm_it == local_cm.end()) {
-            if (!cer.get_column_mapping()) {
+            if (!mut_entry.mapping()) {
                 rlogger.debug("replaying at {} v={} at {}", fm.column_family_id(), fm.schema_version(), rp);
                 throw std::runtime_error(format("unknown schema version {}, table={}", fm.schema_version(), fm.column_family_id()));
             }
             rlogger.debug("new schema version {} in entry {}", fm.schema_version(), rp);
-            cm_it = local_cm.emplace(fm.schema_version(), *cer.get_column_mapping()).first;
+            cm_it = local_cm.emplace(fm.schema_version(), *mut_entry.mapping()).first;
         }
         const column_mapping& src_cm = cm_it->second;
 
@@ -301,6 +320,9 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
             s->skipped_mutations++;
         } else {
             co_await seastar::parallel_for_each(shards, apply);
+        }
+        } else {
+            on_fatal_internal_error(rlogger, fmt::format("Unknown variant type in commitlog entry at replay position {}", rp));
         }
     } catch (replica::no_such_column_family&) {
         // No such CF now? Origin just ignores this.

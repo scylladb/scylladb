@@ -889,6 +889,11 @@ public:
     void forget_schema_versions() {
         _known_schema_versions.clear();
     }
+    // Tags can currently only be set for segments using the 'variant' entry format,
+    // where commitlog items may be either mutations or Raft log entries.
+    auto descriptor_tag() const {
+        return _segment_manager->cfg.descriptor_tag;
+    }
 
     void release_cf_count(const cf_id_type& cf) {
         mark_clean(cf, 1);
@@ -3123,7 +3128,7 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
             return _writer.schema()->id();
         }
         size_t size(segment& seg) override {
-            _writer.set_with_schema(!seg.is_schema_version_known(_writer.schema()));
+            _writer.setup_for_segment(seg.descriptor_tag(), !seg.is_schema_version_known(_writer.schema()));
             return _writer.size();
         }
         size_t size(segment& seg, size_t) override {
@@ -3178,7 +3183,7 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_mutation_entry_writer
                 if (!known) {
                     _known.emplace(i->schema()->version());
                 }
-                i->set_with_schema(!known);
+                i->setup_for_segment(seg.descriptor_tag(), !known);
                 res += i->size();
             }
             _sizes_computed = &seg;
@@ -3187,7 +3192,7 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_mutation_entry_writer
         size_t size(segment& seg, size_t i) override {
             auto& w = _writers.at(i);
             if (_sizes_computed != &seg) {
-                w.set_with_schema(!seg.is_schema_version_known(w.schema()));
+                w.setup_for_segment(seg.descriptor_tag(), !seg.is_schema_version_known(w.schema()));
             }
             return w.size();
         }

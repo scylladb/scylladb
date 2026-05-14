@@ -23,6 +23,9 @@ namespace seastar { class file; }
 
 #include "seastarx.hh"
 
+class commitlog_mutation_entry_writer;
+class commitlog_raft_log_entry_writer;
+
 namespace db {
 
 class config;
@@ -82,7 +85,7 @@ public:
     enum class sync_mode {
         PERIODIC, BATCH
     };
-    using force_sync = commitlog_mutation_entry_writer::force_sync;
+    using force_sync = db::commitlog_force_sync;
     struct config {
         config() = default;
         config(const config&) = default;
@@ -225,12 +228,14 @@ public:
      */
     future<rp_handle> add_entry(const cf_id_type& id, const commitlog_mutation_entry_writer& entry_writer, db::timeout_clock::time_point timeout);
 
+
     /**
      * Add N entries to the commit log as a single operation (in a single segment).
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writers a vector of writers responsible for writing respective entry
      */
-    future<utils::chunked_vector<rp_handle>> add_entries(utils::chunked_vector<commitlog_mutation_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
+    future<utils::chunked_vector<rp_handle>> add_entries(
+            utils::chunked_vector<commitlog_mutation_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position

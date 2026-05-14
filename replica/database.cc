@@ -918,6 +918,13 @@ database::init_commitlog() {
     if (features().fragmented_commitlog_entries) {
         config.allow_fragmented_entries = true;
     }
+    // TODO: When removing the experimental flag, this must be replaced by a
+    // proper cluster feature gate so that the variant format is only used once
+    // all nodes in the cluster have been upgraded. Otherwise rolling back to
+    // an older version would leave unreadable commitlog segments on disk.
+    if (_cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+        config.descriptor_tag = detail::variant_format_tag;
+    }
     return db::commitlog::create_commitlog(config).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
 
