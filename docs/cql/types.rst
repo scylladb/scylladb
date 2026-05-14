@@ -507,7 +507,7 @@ For example::
 
   CREATE TABLE superheroes (
        name frozen<full_name> PRIMARY KEY,
-       home address
+       home frozen<address>
   );
 
 .. note::

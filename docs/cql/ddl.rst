@@ -415,7 +415,7 @@ An empty list is allowed, and it's equivalent to numeric replication factor of 0
 .. code-block:: cql
 
   ALTER KEYSPACE Excelsior
-   WITH replication = { 'class' : 'NetworkTopologyStrategy', dc2' : []};
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc2' : []};
 
 
 Altering from a rack list to a numeric replication factor is not supported.
@@ -1017,11 +1017,11 @@ For example:
 
     CREATE TABLE customer_data (
         cust_id uuid,
-        cust_first-name text,
-        cust_last-name text,
+        "cust_first-name" text,
+        "cust_last-name" text,
         cust_phone text,
-        cust_get-sms text,
-        PRIMARY KEY (customer_id)
+        "cust_get-sms" text,
+        PRIMARY KEY (cust_id)
     ) WITH cdc = { 'enabled' : 'true', 'preimage' : 'true' };
 
 .. _cql-caching-options:
