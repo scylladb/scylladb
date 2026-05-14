@@ -118,8 +118,8 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     return c;
 }
 
-db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v, sstring fname)
-        : _filename(std::move(fname)), id(i), ver(v), filename_prefix(fname_prefix) {
+db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v, sstring fname, std::string t)
+        : _filename(std::move(fname)), id(i), ver(v), filename_prefix(fname_prefix), descriptor_tag(std::move(t)) {
 }
 
 db::commitlog::descriptor::descriptor(replay_position p, const std::string& fname_prefix)
@@ -131,12 +131,16 @@ const std::string db::commitlog::descriptor::FILENAME_PREFIX("CommitLog" + SEPAR
 const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
 
 static const boost::regex allowed_prefix("[a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR);
-static const boost::regex filename_match("(?:Recycled-)?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR + ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
+// Matches filenames like "CommitLog-4-12345.log" or "CommitLog-4-12345.variant.log"
+// Groups: (1) prefix e.g. "CommitLog-", (2) version, (3) segment id, (4) optional tag e.g. "variant"
+static const boost::regex filename_match("(?:Recycled-)?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR +
+                                         ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?(?:\\.([a-zA-Z]+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
 
 db::commitlog::descriptor::descriptor(const std::string& filename, const std::string& fname_prefix)
     : descriptor([&filename, &fname_prefix]() {
         boost::smatch m;
         // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
+        // Also matches tagged files like CommitLog-4-12345.variant.log
         auto cbegin = filename.cbegin();
         auto pos = filename.rfind('/');
         if (pos != std::string::npos) {
@@ -155,8 +159,9 @@ db::commitlog::descriptor::descriptor(const std::string& filename, const std::st
 
         segment_id_type id = std::stoull(m[3].str());
         uint32_t ver = std::stoul(m[2].str());
+        auto tag = m[4].str(); // e.g. "variant" or ""
 
-        return descriptor(id, fname_prefix, ver, filename);
+        return descriptor(id, fname_prefix, ver, filename, std::move(tag));
     }()) {
 }
 
@@ -164,8 +169,13 @@ sstring db::commitlog::descriptor::filename() const {
     if (!_filename.empty()) {
         return _filename;
     }
-    return filename_prefix + std::to_string(ver) + SEPARATOR
-            + std::to_string(id) + FILENAME_EXTENSION;
+    auto name = filename_prefix + std::to_string(ver) + SEPARATOR
+            + std::to_string(id);
+    if (!descriptor_tag.empty()) {
+        name += "." + descriptor_tag;
+    }
+    name += FILENAME_EXTENSION;
+    return name;
 }
 
 db::commitlog::descriptor::operator db::replay_position() const {
@@ -2447,7 +2457,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment() {
     for (;;) {
-        descriptor d(next_id(), cfg.fname_prefix);
+        descriptor d(next_id(), cfg.fname_prefix, descriptor::current_version, {}, cfg.descriptor_tag);
         auto dst = filename(d);
         auto flags = open_flags::wo;
         if (cfg.use_o_dsync) {

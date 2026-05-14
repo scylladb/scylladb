@@ -105,6 +105,10 @@ public:
 
         sync_mode mode = sync_mode::PERIODIC;
         std::string fname_prefix = descriptor::FILENAME_PREFIX;
+        // Optional tag appended before the file extension
+        // (e.g. entry_tag="variant" produces "CommitLog-4-12345.variant.log").
+        // When non-empty, the entry format is determined by the tag.
+        std::string descriptor_tag;
 
         bool use_o_dsync = false;
         bool warn_about_segments_left_on_disk_after_shutdown = true;
@@ -140,7 +144,7 @@ public:
 
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;
-        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = current_version, sstring = {});
+        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = current_version, sstring = {}, std::string tag = {});
         descriptor(replay_position p, const std::string& fname_prefix = FILENAME_PREFIX);
         descriptor(const std::string& filename, const std::string& fname_prefix = FILENAME_PREFIX);
 
@@ -150,6 +154,7 @@ public:
         const segment_id_type id;
         const uint32_t ver;
         const std::string filename_prefix = FILENAME_PREFIX;
+        const std::string descriptor_tag;
     };
 
     commitlog(commitlog&&) noexcept;
