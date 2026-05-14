@@ -51,8 +51,8 @@ auto make_unexpected(const auto& err) {
 
 } // namespace
 
-clients::clients(
-        logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> request_timeout_in_ms, truststore& truststore)
+clients::clients(logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms,
+        truststore& truststore)
     : _producer([&]() -> future<clients_vec> {
         return try_with_gate(_gate, [this] -> future<clients_vec> {
             _trigger_refresh();
@@ -63,7 +63,7 @@ clients::clients(
     , _trigger_refresh(std::move(trigger_refresh))
     , _timeout(WAIT_FOR_CLIENT_TIMEOUT)
     , _logger(logger)
-    , _request_timeout_in_ms(std::move(request_timeout_in_ms))
+    , _unreachable_node_detection_time_in_ms(std::move(unreachable_node_detection_time_in_ms))
     , _truststore(truststore) {
 }
 
@@ -172,7 +172,7 @@ future<> clients::close_old_clients() {
 
 seastar::future<seastar::lw_shared_ptr<client>> clients::make_client(const uri& uri_, const seastar::net::inet_address& addr_) {
     auto creds = uri_.schema == uri::schema_type::https ? co_await _truststore.get() : nullptr;
-    auto c = make_lw_shared<client>(_logger, client::endpoint_type{uri_.host, uri_.port, addr_}, _request_timeout_in_ms, creds);
+    auto c = make_lw_shared<client>(_logger, client::endpoint_type{uri_.host, uri_.port, addr_}, _unreachable_node_detection_time_in_ms, creds);
     co_return c;
 }
 

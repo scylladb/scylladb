@@ -70,15 +70,15 @@ class client_connection_factory : public http::experimental::connection_factory 
     shared_ptr<tls::certificate_credentials> _creds;
 
 public:
-    explicit client_connection_factory(
-            client::endpoint_type endpoint, shared_ptr<tls::certificate_credentials> creds, utils::updateable_value<uint32_t> connect_timeout_in_ms)
+    explicit client_connection_factory(client::endpoint_type endpoint, shared_ptr<tls::certificate_credentials> creds,
+            utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms)
         : _endpoint(std::move(endpoint))
         , _creds(std::move(creds))
-        , _connect_timeout_in_ms(std::move(connect_timeout_in_ms)) {
+        , _unreachable_node_detection_time_in_ms(std::move(unreachable_node_detection_time_in_ms)) {
     }
 
     future<connected_socket> make([[maybe_unused]] abort_source* as) override {
-        auto t = timeout();
+        auto t = std::chrono::milliseconds(_unreachable_node_detection_time_in_ms.get());
         auto socket = co_await connect(t, as);
         socket.set_nodelay(true);
         socket.set_keepalive_parameters(get_keepalive_parameters(t));
@@ -109,16 +109,7 @@ private:
         co_return co_await std::move(f);
     }
 
-    std::chrono::milliseconds timeout() const {
-        constexpr std::chrono::milliseconds MIN_TIMEOUT = 5s;
-        auto timeout_ms = std::chrono::milliseconds(_connect_timeout_in_ms.get());
-        if (timeout_ms < MIN_TIMEOUT) {
-            timeout_ms = MIN_TIMEOUT;
-        }
-        return timeout_ms;
-    }
-
-    utils::updateable_value<uint32_t> _connect_timeout_in_ms;
+    utils::updateable_value<uint32_t> _unreachable_node_detection_time_in_ms;
 };
 
 bool is_server_unavailable(std::exception_ptr& err) {
@@ -144,12 +135,12 @@ auto constexpr BACKOFF_RETRY_MIN_TIME = 100ms;
 
 } // namespace
 
-client::client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> request_timeout_in_ms,
+client::client(logging::logger& logger, endpoint_type endpoint_, utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms,
         ::shared_ptr<seastar::tls::certificate_credentials> credentials)
     : _endpoint(std::move(endpoint_))
-    , _http_client(std::make_unique<client_connection_factory>(_endpoint, std::move(credentials), request_timeout_in_ms))
+    , _http_client(std::make_unique<client_connection_factory>(_endpoint, std::move(credentials), unreachable_node_detection_time_in_ms))
     , _logger(logger)
-    , _request_timeout(std::move(request_timeout_in_ms)) {
+    , _unreachable_node_detection_time_in_ms(std::move(unreachable_node_detection_time_in_ms)) {
 }
 
 seastar::future<client::request_result> client::request(
@@ -237,7 +228,7 @@ bool client::is_checking_status_in_progress() const {
 }
 
 std::chrono::milliseconds client::backoff_retry_max() const {
-    std::chrono::milliseconds ret{_request_timeout.get()};
+    std::chrono::milliseconds ret{_unreachable_node_detection_time_in_ms.get()};
     return ret * 2;
 }
 

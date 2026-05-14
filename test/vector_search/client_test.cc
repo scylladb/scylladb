@@ -27,7 +27,7 @@ namespace {
 
 logging::logger client_test_logger("client_test");
 
-const auto REQUEST_TIMEOUT = utils::updateable_value<uint32_t>{100};
+const auto UNREACHABLE_NODE_DETECTION_WINDOW = utils::updateable_value<uint32_t>{std::chrono::milliseconds(test::vector_search::STANDARD_WAIT).count()};
 constexpr auto PATH = "/api/v1/indexes/ks/idx/ann";
 constexpr auto CONTENT = R"({"vector": [0.1, 0.2, 0.3], "limit": 10})";
 
@@ -47,7 +47,7 @@ future<std::unique_ptr<vs_mock_server>> make_available(std::unique_ptr<unavailab
 
 SEASTAR_TEST_CASE(is_up_after_construction) {
     auto server = co_await make_vs_mock_server();
-    client client{client_test_logger, make_endpoint(server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
+    client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     BOOST_CHECK(client.is_up());
 
@@ -58,7 +58,7 @@ SEASTAR_TEST_CASE(is_up_after_construction) {
 SEASTAR_TEST_CASE(is_up_when_server_returned_ok_status) {
     abort_source_timeout as;
     auto server = co_await make_vs_mock_server();
-    client client{client_test_logger, make_endpoint(server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
+    client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
@@ -73,7 +73,7 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_client_error_status) {
     abort_source_timeout as;
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::bad_request, "Bad request"});
-    client client{client_test_logger, make_endpoint(server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
+    client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
@@ -89,7 +89,7 @@ SEASTAR_TEST_CASE(is_up_when_request_is_aborted) {
     abort_source as;
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::ok, "{}"});
-    client client{client_test_logger, make_endpoint(server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
+    client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     as.request_abort();
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as);
@@ -107,7 +107,7 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_server_error_status) {
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::internal_server_error, "Internal Server Error"});
 
-    client client{client_test_logger, make_endpoint(server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
+    client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
@@ -124,7 +124,7 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_service_unavailable_status) {
     auto server = co_await make_vs_mock_server();
     server->next_ann_response(vs_mock_server::response{seastar::http::reply::status_type::service_unavailable, "Service Unavailable"});
 
-    client client{client_test_logger, make_endpoint(server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
+    client client{client_test_logger, make_endpoint(server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
@@ -139,7 +139,7 @@ SEASTAR_TEST_CASE(is_up_when_server_returned_service_unavailable_status) {
 SEASTAR_TEST_CASE(is_down_when_server_is_not_available) {
     abort_source_timeout as;
     auto down_server = co_await make_unavailable_server();
-    client client{client_test_logger, make_endpoint(down_server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
+    client client{client_test_logger, make_endpoint(down_server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
 
@@ -154,7 +154,7 @@ SEASTAR_TEST_CASE(is_down_when_server_is_not_available) {
 SEASTAR_TEST_CASE(becomes_up_when_server_status_is_serving) {
     abort_source_timeout as;
     auto down_server = co_await make_unavailable_server();
-    client client{client_test_logger, make_endpoint(down_server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
+    client client{client_test_logger, make_endpoint(down_server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
     auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
     auto server = co_await make_available(down_server);
@@ -179,7 +179,7 @@ SEASTAR_TEST_CASE(remains_down_when_server_status_is_not_serving) {
     };
     for (auto const& status : non_serving_statuses) {
         auto down_server = co_await make_unavailable_server();
-        client client{client_test_logger, make_endpoint(down_server), REQUEST_TIMEOUT, shared_ptr<seastar::tls::certificate_credentials>{}};
+        client client{client_test_logger, make_endpoint(down_server), UNREACHABLE_NODE_DETECTION_WINDOW, shared_ptr<seastar::tls::certificate_credentials>{}};
 
         co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
         auto server = co_await make_available(down_server);
@@ -214,32 +214,42 @@ SEASTAR_TEST_CASE(is_down_when_connection_times_out) {
     co_await client.close();
 }
 
-SEASTAR_TEST_CASE(connection_timeout_cannot_be_smaller_than_5s) {
-    abort_source_timeout as;
-    auto unreachable = co_await make_unreachable_socket();
-    client client{client_test_logger, client::endpoint_type{unreachable.host, unreachable.port, seastar::net::inet_address(unreachable.host)},
-            utils::updateable_value<uint32_t>{1000}, shared_ptr<seastar::tls::certificate_credentials>{}};
-
-
-    auto start = std::chrono::steady_clock::now();
-    auto res = co_await client.request(operation_type::POST, PATH, CONTENT, as.reset());
-    auto duration = std::chrono::steady_clock::now() - start;
-
-    BOOST_CHECK(duration >= 5s);
-
-    co_await unreachable.close();
-    co_await client.close();
-}
-
 BOOST_AUTO_TEST_CASE(test_get_keepalive_parameters) {
 
-    auto params1 = get_keepalive_parameters(10s);
-    BOOST_CHECK_EQUAL(params1.idle.count(), 4);
-    BOOST_CHECK_EQUAL(params1.interval.count(), 2);
-    BOOST_CHECK_EQUAL(params1.count, 3);
+    auto params_10s = get_keepalive_parameters(10s);
+    BOOST_CHECK_EQUAL(params_10s.idle.count(), 4);
+    BOOST_CHECK_EQUAL(params_10s.interval.count(), 2);
+    BOOST_CHECK_EQUAL(params_10s.count, 3);
 
-    auto params2 = get_keepalive_parameters(5s);
-    BOOST_CHECK_EQUAL(params2.idle.count(), 2);
-    BOOST_CHECK_EQUAL(params2.interval.count(), 1);
-    BOOST_CHECK_EQUAL(params2.count, 3);
+    auto params_5s = get_keepalive_parameters(5s);
+    BOOST_CHECK_EQUAL(params_5s.idle.count(), 2);
+    BOOST_CHECK_EQUAL(params_5s.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_5s.count, 3);
+
+    auto params_3s = get_keepalive_parameters(3s);
+    BOOST_CHECK_EQUAL(params_3s.idle.count(), 1);
+    BOOST_CHECK_EQUAL(params_3s.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_3s.count, 2);
+
+    auto params_2s = get_keepalive_parameters(2s);
+    BOOST_CHECK_EQUAL(params_2s.idle.count(), 1);
+    BOOST_CHECK_EQUAL(params_2s.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_2s.count, 1);
+
+    auto params_1s = get_keepalive_parameters(1s);
+    BOOST_CHECK_EQUAL(params_1s.idle.count(), 0);
+    BOOST_CHECK_EQUAL(params_1s.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_1s.count, 1);
+
+    // For timeout < 1s the function should return minimal valid parameters.
+    auto params_500ms = get_keepalive_parameters(std::chrono::milliseconds(500));
+    BOOST_CHECK_GE(params_500ms.idle.count(), 0);
+    BOOST_CHECK_GE(params_500ms.interval.count(), 1);
+    BOOST_CHECK_GE(static_cast<int>(params_500ms.count), 1);
+
+    // For timeout < 1s the function should return minimal valid parameters.
+    auto params_0ms = get_keepalive_parameters(std::chrono::milliseconds(0));
+    BOOST_CHECK_GE(params_0ms.idle.count(), 0);
+    BOOST_CHECK_GE(params_0ms.interval.count(), 1);
+    BOOST_CHECK_GE(static_cast<int>(params_0ms.count), 1);
 }

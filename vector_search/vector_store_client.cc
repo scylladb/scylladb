@@ -245,7 +245,7 @@ struct vector_store_client::impl {
     clients _secondary_clients;
 
     impl(utils::config_file::named_value<sstring> primary_uris, utils::config_file::named_value<sstring> secondary_uris,
-            utils::config_file::named_value<uint32_t> read_request_timeout_in_ms,
+            utils::config_file::named_value<uint32_t> unreachable_node_detection_time_in_ms,
             utils::config_file::named_value<utils::config_file::string_map> encryption_options, invoke_on_others_func invoke_on_others)
         : _primary_uri_observer(primary_uris.observe([this](seastar::sstring uris_csv) {
             handle_uris_changed(std::move(uris_csv), _primary_uris, _primary_clients);
@@ -272,14 +272,14 @@ struct vector_store_client::impl {
                   [this]() {
                       dns.trigger_refresh();
                   },
-                  read_request_timeout_in_ms, _truststore)
+                  unreachable_node_detection_time_in_ms, _truststore)
 
         , _secondary_clients(
                   vslogger,
                   [this]() {
                       dns.trigger_refresh();
                   },
-                  read_request_timeout_in_ms, _truststore) {
+                  unreachable_node_detection_time_in_ms, _truststore) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
@@ -354,7 +354,7 @@ struct vector_store_client::impl {
 };
 
 vector_store_client::vector_store_client(config const& cfg)
-    : _impl(std::make_unique<impl>(cfg.vector_store_primary_uri, cfg.vector_store_secondary_uri, cfg.read_request_timeout_in_ms,
+    : _impl(std::make_unique<impl>(cfg.vector_store_primary_uri, cfg.vector_store_secondary_uri, cfg.vector_store_unreachable_node_detection_time_in_ms,
               cfg.vector_store_encryption_options, [this](auto func) {
                   return container().invoke_on_others([func = std::move(func)](auto& self) {
                       return func(*self._impl);

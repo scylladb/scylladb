@@ -923,7 +923,7 @@ SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failu
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_request_timeout_cfg) {
+SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_connection_timeout_cfg) {
     auto unavail_s = co_await make_unavailable_server();
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://unavail.node:{}", unavail_s->port()));
@@ -936,7 +936,7 @@ SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_request
                 vs.start_background_tasks();
 
                 // Set request timeout to 100ms, hence max backoff time is 2x100ms = 200ms.
-                cfg.db_config->read_request_timeout_in_ms.set(100);
+                cfg.db_config->vector_store_unreachable_node_detection_time_in_ms.set(100);
                 // Trigger status checking by making ANN request to unavailable server.
                 co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
                 co_await repeat_until([&unavail_s]() -> future<bool> {
@@ -1184,8 +1184,9 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_unreachable) {
     auto cfg = make_config();
     cfg.db_config->vector_store_primary_uri.set(format("http://unreachable.node:{}", unreachable.port));
     cfg.db_config->vector_store_secondary_uri.set(format("http://server.node:{}", server->port()));
-    cfg.db_config->request_timeout_in_ms.set(5000);                   // connection timeout to the vector store
-    cfg.query_timeout = make_query_timeout(std::chrono::seconds(10)); // CQL SELECT query timeout longer than connection timeout
+    cfg.db_config->vector_store_unreachable_node_detection_time_in_ms.set(3000); // unreachable node detection time for vector store
+    cfg.query_timeout = make_query_timeout(
+            std::chrono::seconds(4)); // CQL query timeout longer than vector store unreachable node detection time, to allow for fallback to secondary URI
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "test");
@@ -1196,10 +1197,11 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_unreachable) {
                 auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
 
                 // Execute an ANN SELECT. The primary URI points to an unreachable socket,
-                // so the client's connection attempt to the primary will fail (request_timeout_in_ms = 5000).
+                // so the client's connection attempt to the primary will fail (vector_store_unreachable_node_detection_time_in_ms = 3000).
                 // The client is expected to transparently fall back to the secondary URI and
                 // complete the request successfully. The entire operation must complete within
-                // the configured CQL query timeout (10s), so the test expects a normal rows result.
+                // the configured CQL query timeout (4s: 3s for the timeout on primary + 1s buffer for the request to the secondary),
+                // so the test expects a normal rows result.
                 auto msg = co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;");
 
                 BOOST_CHECK(dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg));

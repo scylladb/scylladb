@@ -350,6 +350,7 @@ public:
     named_value<string_map> request_scheduler_options;
     named_value<sstring> vector_store_primary_uri;
     named_value<sstring> vector_store_secondary_uri;
+    named_value<uint32_t> vector_store_unreachable_node_detection_time_in_ms;
     named_value<string_map> vector_store_encryption_options;
     named_value<sstring> authenticator;
     named_value<sstring> internode_authenticator;
