@@ -1,3 +1,10 @@
+#
+# Copyright (C) 2014-present The Apache Software Foundation
+# Copyright (C) 2025-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
 import logging
 import uuid
 from collections import namedtuple
@@ -10,14 +17,11 @@ from cassandra.util import Date, SortedSet, Time, uuid_from_time
 from dtest_class import Tester, create_ks
 from tools.assertions import assert_one_prepared
 from tools.data import prepare_statement
-from tools.marks import issue_open, require, with_feature
 
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestCQL(Tester):
     def prepare(self, options=None):
         if options is None:
@@ -137,7 +141,6 @@ class TestCQL(Tester):
             assert_one_prepared(session, stmt, [True, init_val], query_args)
             assert_one_prepared(session, stmt, [False, upd_v], query_args)
 
-    @pytest.mark.lwt
     def test_lwt_update_prepared(self):
         """
         Test that the most common IF condition patterns with parameter markers work as expected
@@ -208,7 +211,6 @@ class TestCQL(Tester):
             ret = "frozen<" + ret + ">"
         return ret
 
-    @pytest.mark.lwt
     def test_lwt_update_prepared_listlike_and_tuples(self):
         """
         Test that the most common IF condition patterns with parameter markers work as expected
@@ -271,7 +273,6 @@ class TestCQL(Tester):
                     additional_test_data = {"collection_type": collection_type}
                     self._lwt_execute_single_type_update_case(session, self._build_collection_typename(column_type, is_frozen, collection_type), {**test_data, **additional_test_data})
 
-    @require("#5855")
     def test_lwt_compare_collection_with_null(self):
         """
         Test that comparing empty collection to null yields correct results.
@@ -280,6 +281,8 @@ class TestCQL(Tester):
         Tested situations include the following:
          * empty non-frozen collection ~ null
          * empty frozen collection != null
+
+        Ref: https://github.com/scylladb/scylladb/issues/5855
         """
 
         session = self.prepare()
@@ -383,7 +386,6 @@ class TestCQL(Tester):
             assert_one_prepared(session, ti.frozen_stmt, [True, None], {"update_val": ti.non_empty, "v": None})
             assert_one_prepared(session, ti.frozen_stmt, [False, ti.non_empty], {"update_val": ti.empty, "v": ti.empty})
 
-    @pytest.mark.lwt
     def test_lwt_nested_collections_list_set(self):
         """
         Test that nested collections are working with parameter markers.
@@ -451,7 +453,6 @@ class TestCQL(Tester):
         )
         assert_one_prepared(session, stmt, [True, [SortedSet([5, 6, 7]), SortedSet([7, 8, 9])]], {"update_val": [SortedSet([5, 6, 7]), SortedSet([7, 8, 9])], "v": [SortedSet([3, 4]), SortedSet([4, 5])]})
 
-    @pytest.mark.lwt
     def test_lwt_nested_collections_set_list(self):
         """
         Test that nested collections are working with parameter markers.
