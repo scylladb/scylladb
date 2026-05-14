@@ -338,6 +338,7 @@ schema_ptr scylla_tables(schema_features features) {
         sb.with_column("tablets", map_type_impl::get_instance(utf8_type, utf8_type, false));
 
         sb.with_column("storage_engine", utf8_type);
+        sb.with_column("large_data_guardrails_enabled", boolean_type);
 
         sb.with_hash_version();
         s = sb.build();
@@ -1702,6 +1703,17 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     if (table->logstor_enabled()) {
         m.set_clustered_cell(ckey, "storage_engine", "logstor", timestamp);
     }
+    // Write the large_data_guardrails_enabled column only when enabled.
+    // When disabled (the default), omit the cell entirely so that old nodes
+    // that don't know this column can still read the SSTable during rolling
+    // upgrade or rollback.  The CQL validation gate ensures that 'true' can
+    // only be set once all nodes support the column, so it is safe to write
+    // the live cell at that point.
+    if (table->large_data_guardrails_enabled()) {
+        auto& guardrails_cdef = *scylla_tables()->get_column_definition("large_data_guardrails_enabled");
+        m.set_clustered_cell(ckey, guardrails_cdef,
+                             atomic_cell::make_live(*boolean_type, timestamp, boolean_type->decompose(true)));
+    }
     // In-memory tables are deprecated since scylla-2024.1.0
     // FIXME: delete the column when there's no live version supporting it anymore.
     // Writing it here breaks upgrade rollback to versions that do not support the in_memory schema_feature
@@ -1935,6 +1947,23 @@ utils::chunked_vector<mutation> make_update_table_mutations(service::storage_pro
     utils::chunked_vector<mutation> mutations;
     add_table_or_view_to_schema_mutation(new_table, timestamp, false, mutations);
     make_update_indices_mutations(sp, old_table, new_table, timestamp, mutations);
+
+    // When large_data_guardrails_enabled transitions from true to false,
+    // write a tombstone to override the previous live cell in scylla_tables.
+    // make_scylla_tables_mutation only writes a live cell when enabled, so
+    // the tombstone must be added here where we have the old schema.
+    // This is safe because the CQL feature gate ensures all nodes are
+    // upgraded before the property can be set to true.
+    if (old_table->large_data_guardrails_enabled() && !new_table->large_data_guardrails_enabled()) {
+        schema_ptr s = tables();
+        auto pkey = partition_key::from_singular(*s, new_table->ks_name());
+        auto ckey = clustering_key::from_singular(*s, new_table->cf_name());
+        mutation m(scylla_tables(), pkey);
+        auto& guardrails_cdef = *scylla_tables()->get_column_definition("large_data_guardrails_enabled");
+        m.set_clustered_cell(ckey, guardrails_cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
+        mutations.emplace_back(std::move(m));
+    }
+
     make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, mutations);
 
     warn(unimplemented::cause::TRIGGERS);
@@ -2194,6 +2223,8 @@ static void prepare_builder_from_scylla_tables_row(const schema_ctxt& ctxt, sche
             throw std::invalid_argument(format("Invalid value for storage_engine: {}", *storage_engine));
         }
     }
+    auto guardrails_enabled = table_row.get<bool>("large_data_guardrails_enabled");
+    builder.set_large_data_guardrails_enabled(guardrails_enabled.value_or(false));
 }
 
 schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, const data_dictionary::user_types_storage& user_types, schema_ptr cdc_schema, std::optional<table_schema_version> version)

@@ -612,6 +612,7 @@ private:
         // schema digest. It is also not set locally on a schema tables.
         std::reference_wrapper<const dht::static_sharder> _sharder;
         bool _in_memory = false;
+        bool _large_data_guardrails_enabled = false;
         std::optional<raw_view_info> _view_info;
 
         user_properties _props;
@@ -812,6 +813,10 @@ public:
 
     const db::per_partition_rate_limit_options& per_partition_rate_limit_options() const {
         return _raw._per_partition_rate_limit_options;
+    }
+
+    bool large_data_guardrails_enabled() const {
+        return _raw._large_data_guardrails_enabled;
     }
 
     const ::speculative_retry& speculative_retry() const {

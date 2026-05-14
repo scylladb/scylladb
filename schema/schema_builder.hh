@@ -251,6 +251,10 @@ public:
         _raw._in_memory = in_memory;
         return *this;
     }
+    schema_builder& set_large_data_guardrails_enabled(bool enabled) {
+        _raw._large_data_guardrails_enabled = enabled;
+        return *this;
+    }
 
     schema_builder& set_tablet_options(std::map<sstring, sstring>&& hints);
 

@@ -711,6 +711,7 @@ table_schema_version schema::calculate_digest(const schema::raw_schema& r) {
     }
 
     feed_hash(h, r._props.tablet_options);
+    feed_hash(h, r._large_data_guardrails_enabled);
 
     return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
