@@ -223,20 +223,28 @@ void cache_tracker::touch(rows_entry& e) {
 
 void cache_tracker::insert(cache_entry& entry) {
     insert(entry.partition());
-    ++_stats.partition_insertions;
-    ++_stats.partitions;
+    on_partition_insert();
     // partition_range_cursor depends on this to detect invalidation of _end
     _region.allocator().invalidate_references();
 }
 
 void cache_tracker::on_partition_erase() noexcept {
-    --_stats.partitions;
-    ++_stats.partition_removals;
+    on_partition_remove();
     allocator().invalidate_references();
 }
 
 void cache_tracker::on_partition_merge() noexcept {
     ++_stats.partition_merges;
+}
+
+void cache_tracker::on_partition_insert() noexcept {
+    ++_stats.partition_insertions;
+    ++_stats.partitions;
+}
+
+void cache_tracker::on_partition_remove() noexcept {
+    --_stats.partitions;
+    ++_stats.partition_removals;
 }
 
 void cache_tracker::on_partition_hit() noexcept {
