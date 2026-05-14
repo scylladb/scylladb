@@ -103,6 +103,26 @@ def assert_one(session, query, expected, cl=None):
     assert list_res == [expected], f"Expected {[expected]} from {query}, but got {list_res}"
 
 
+def assert_one_prepared(session, stmt, expected, parameters, cl=ConsistencyLevel.ONE, timeout=60):
+    """
+    Assert a prepared statement returns one row with expected results.
+    @param session Session to use
+    @param stmt Prepared statement to execute
+    @param expected Expected results from query
+    @param parameters Named parameters dict to bind to the prepared statement
+    @param cl Optional Consistency Level setting. Default ONE
+    @param timeout Optional query timeout in seconds. Default 60
+
+    Examples:
+    assert_one_prepared(session, stmt, [True, 'value'], {'v': 'value'})
+    """
+    from test.cluster.dtest.tools.data import rows_to_list  # to avoid cyclic dependency
+
+    res = session.execute(stmt, parameters=parameters, timeout=timeout)
+    list_res = rows_to_list(res)
+    assert list_res == [expected], f'Expected {[expected]} from prepared statement, but got {list_res}'
+
+
 @retrying(num_attempts=1, sleep_time=10)
 def assert_all(
     session,

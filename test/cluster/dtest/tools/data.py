@@ -20,6 +20,16 @@ from test.cluster.dtest.tools import assertions
 logger = logging.getLogger(__name__)
 
 
+def prepare_statement(session, query, cl=ConsistencyLevel.ONE):
+    """
+    Prepare CQL query into statement and assign given consistency level to it.
+    """
+    logger.debug("Preparing statement: %s", query)
+    res = session.prepare(query)
+    res.consistency_level = cl
+    return res
+
+
 def create_c1c2_table(session, cf="cf", read_repair=None, debug_query=True, compaction=None, caching=True, speculative_retry=None):  # noqa: PLR0913
     create_cf(session, cf, columns={"c1": "text", "c2": "text"}, read_repair=read_repair, debug_query=debug_query, compaction=compaction, caching=caching, speculative_retry=speculative_retry)
 
