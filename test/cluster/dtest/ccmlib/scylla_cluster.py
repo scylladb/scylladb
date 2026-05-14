@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -229,6 +230,15 @@ class ScyllaCluster:
 
     def flush(self) -> None:
         self.nodetool("flush")
+
+    @staticmethod
+    def remove_dir_with_retry(path: str) -> None:
+        """Remove a file or directory."""
+        import shutil
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        elif os.path.exists(path):
+            os.remove(path)
 
     @staticmethod
     def debug(message: str) -> None:
