@@ -236,3 +236,49 @@ def test_select_similarity_function_other_than_ann_ordering(cql, test_keyspace, 
         assert rows[0].similarity == pytest.approx(0.97, abs=0.01)
         assert rows[1].similarity == pytest.approx(1, abs=0.01)
         assert len(rows[0]) == 2
+
+
+# Verifies that rescoring filters out results with invalid similarity scores.
+# Inserts rows with a NULL embedding, a NaN component, an Infinity component,
+# and a zero vector, then checks that only rows with valid similarity scores
+# are returned. The expected set of surviving rows depends on the similarity
+# function because some invalid inputs produce valid (non-NaN) scores for
+# certain functions (e.g. [INFINITY, 0.1] gives 0 for euclidean, [0,0] gives
+# 0.5 for dot_product via the (dot+1)/2 formula).
+#
+# This also reproduces SCYLLADB-456: zero vectors in the table used to cause
+# an error during cosine rescoring; now similarity_cosine returns NaN for them.
+#
+# Reproduces SCYLLADB-2231
+@pytest.mark.xfail(reason="SCYLLADB-2231 rescoring does not yet filter rows with invalid similarity scores (NaN)")
+def test_filters_invalid_similarity_scores_in_rescored_results(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    for func_name, data in TEST_DATA.items():
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"similarity_function": func_name}) as table:
+            # table already contains valid rows from TEST_DATA (id: 1-4);
+            # insert additional rows with invalid similarity scores.
+            cql.execute(f"INSERT INTO {table} (id, embedding) VALUES (17, NULL)")
+            cql.execute(f"INSERT INTO {table} (id, embedding) VALUES (16, [0.1, NaN])")
+            cql.execute(f"INSERT INTO {table} (id, embedding) VALUES (15, [INFINITY, 0.1])")
+            cql.execute(f"INSERT INTO {table} (id, embedding) VALUES (14, [0, 0])")
+
+            # Mock returns a non-existing id (55), the four invalid rows, and id=1 (the only
+            # valid row from the mock response). The expected surviving set depends on the
+            # similarity function.
+            vector_store_mock.set_next_ann_response(200, json.dumps({
+                "primary_keys": {"id": [55, 17, 16, 15, 14, 1]},
+                "similarity_scores": [0, 0, 0, 0, 0, 0],
+            }))
+            rows = list(cql.execute(
+                f"SELECT id FROM {table} ORDER BY embedding ANN OF {ANN_QUERY_VECTOR_LITERAL} LIMIT 4"))
+
+            if func_name == "euclidean":
+                # [INFINITY, 0.1] produces a valid 0 similarity score for euclidean.
+                assert [row.id for row in rows] == [1, 14, 15]
+            elif func_name == "cosine":
+                # [0, 0] produces NaN for cosine; only id=1 survives.
+                assert [row.id for row in rows] == [1]
+            else:
+                # dot_product: [0, 0] produces 0.5 (valid); [INFINITY, ..] is invalid.
+                assert [row.id for row in rows] == [1, 14]
+            assert len(rows[0]) == 1

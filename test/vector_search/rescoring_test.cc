@@ -107,43 +107,6 @@ struct print_log_value<std::vector<float>> {
 };
 }
 
-// Rescoring does not filter out NULL embeddings yet, but they should be sorted as last.
-// So this test is expected to report error on result set size, but passes if the first element is correct.
-SEASTAR_TEST_CASE(no_nulls_in_rescored_results, *boost::unit_test::expected_failures(3)) {
-
-    for (const auto& params : test_data) {
-        auto server = co_await make_vs_mock_server();
-        co_await do_with_cql_env(
-                [&](cql_test_env& env) -> future<> {
-                    configure(env.local_qp().vector_store_client()).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
-                    env.local_qp().vector_store_client().start_background_tasks();
-                    co_await create_index_and_insert_data(env, params);
-                    co_await env.execute_cql(fmt::format("INSERT INTO ks.cf (id, embedding) VALUES (17, NULL)"));
-                    co_await env.execute_cql(fmt::format("INSERT INTO ks.cf (id, embedding) VALUES (16, [0.1, NaN])"));
-                    co_await env.execute_cql(fmt::format("INSERT INTO ks.cf (id, embedding) VALUES (15, [INFINITY, 0.1])"));
-
-                    // Mock Response: Return all keys but in REVERSE similarity order.
-                    server->next_ann_response({http::reply::status_type::ok, R"({
-                        "primary_keys": { "id": [55, 17, 16, 15, 2] },
-                        "similarity_scores": [0, 0, 0, 0, 0]
-                    })"});
-                    auto msg = co_await env.execute_cql("SELECT id FROM ks.cf ORDER BY embedding ANN OF [0.1, 0.1] LIMIT 3;");
-
-                    auto rms = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-                    BOOST_REQUIRE(rms);
-                    const auto& rows = rms->rs().result_set().rows();
-                    BOOST_REQUIRE(rows.size() >= 1);
-                    BOOST_CHECK_EQUAL(rows.size(), 1);
-                    BOOST_CHECK_EQUAL(rms->rs().result_set().get_metadata().column_count(), 1);
-                    BOOST_CHECK_EQUAL(get_id_col_value(rows.at(0)), 2);
-                },
-                make_config(format("http://server.node:{}", server->port())))
-                .finally(seastar::coroutine::lambda([&] -> future<> {
-                    co_await server->stop();
-                }));
-    }
-}
-
 // Reproducer for SCYLLADB-456
 SEASTAR_TEST_CASE(rescoring_with_zerovector_query) {
     for (const auto& params : test_data) {
