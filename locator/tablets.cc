@@ -1474,11 +1474,12 @@ public:
         return get_for_reading_helper(search_token);
     }
 
-    std::optional<tablet_routing_info> check_locality(const token& search_token, std::optional<tablet_replica> source_replica) const override {
+    std::optional<tablet_routing_info> check_locality(const token& search_token, std::optional<tablet_replica> source_replica, std::optional<tablet_replica> preferred_replica) const override {
         auto&& tablets = get_tablet_map();
         auto tid = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_info(tid);
         auto source = source_replica.value_or(tablet_replica{get_token_metadata().get_my_id(), this_shard_id()});
+        auto preferred_is_replica = preferred_replica && contains(info.replicas, *preferred_replica);
 
         auto make_tablet_routing_info = [&] {
             dht::token first_token;
@@ -1488,17 +1489,33 @@ public:
                 first_token = tablets.get_last_token(tablet_id(size_t(tid) - 1));
             }
             auto token_range = std::make_pair(first_token, tablets.get_last_token(tid));
-            return tablet_routing_info{info.replicas, token_range};
+            auto replicas = info.replicas;
+            if (preferred_is_replica) {
+                replicas.clear();
+                replicas.push_back(*preferred_replica);
+                for (auto&& r : info.replicas) {
+                    if (r != *preferred_replica) {
+                        replicas.push_back(r);
+                    }
+                }
+            }
+            return tablet_routing_info{std::move(replicas), token_range};
         };
 
         for (auto&& r : info.replicas) {
             if (r == source) {
+                if (preferred_is_replica && source != *preferred_replica) {
+                    return make_tablet_routing_info();
+                }
                 return std::nullopt; // routed correctly
             }
         }
 
         auto tinfo = tablets.get_tablet_transition_info(tid);
         if (tinfo && tinfo->pending_replica && *tinfo->pending_replica == source) {
+            if (preferred_is_replica && source != *preferred_replica) {
+                return make_tablet_routing_info();
+            }
             return std::nullopt; // routed correctly
         }
 

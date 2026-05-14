@@ -61,7 +61,7 @@ host_id_vector_replica_set local_effective_replication_map::get_replicas(const t
     return _replica_set;
 }
 
-std::optional<tablet_routing_info> local_effective_replication_map::check_locality(const token&, std::optional<tablet_replica>) const {
+std::optional<tablet_routing_info> local_effective_replication_map::check_locality(const token&, std::optional<tablet_replica>, std::optional<tablet_replica>) const {
     return std::nullopt;
 }
 

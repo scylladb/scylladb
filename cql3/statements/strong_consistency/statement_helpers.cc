@@ -11,7 +11,9 @@
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_processor.hh"
 #include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
+#include "service/client_state.hh"
 #include "service/strong_consistency/coordinator.hh"
 
 namespace cql3::statements::strong_consistency {
@@ -35,6 +37,19 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name) {
     const auto* tablet_aware_rs = db.find_keyspace(ks_name).get_replication_strategy().maybe_as_tablet_aware();
     return tablet_aware_rs && tablet_aware_rs->get_consistency() != data_dictionary::consistency_config_option::eventual;
+}
+
+std::optional<locator::tablet_replica> tablet_routing_source_replica(
+        const service::client_state& client_state,
+        const locator::effective_replication_map& erm) {
+    auto source_shard = client_state.get_tablet_routing_source_shard();
+    if (!source_shard) {
+        return std::nullopt;
+    }
+    return locator::tablet_replica{
+        client_state.get_tablet_routing_source_host().value_or(erm.get_token_metadata().get_my_id()),
+        *source_shard,
+    };
 }
 
 }

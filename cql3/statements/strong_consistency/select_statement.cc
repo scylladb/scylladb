@@ -51,6 +51,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
         options.get_timestamp(state));
     const auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
+    const auto token = key_ranges[0].start()->value().token();
     auto query_result = co_await coordinator.get().query(_query_schema, *read_command,
         key_ranges, state.get_trace_state(), timeout, state.get_client_state().get_abort_source());
 
@@ -60,8 +61,17 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
         co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats());
     }
 
-    co_return co_await process_results(get<lw_shared_ptr<query::result>>(std::move(query_result)),
+    auto result = co_await process_results(get<lw_shared_ptr<query::result>>(std::move(query_result)),
         read_command, options, now);
+    auto&& table = _query_schema->table();
+    if (_may_use_token_aware_routing && table.uses_tablets() && state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+        auto erm = table.get_effective_replication_map();
+        auto tablet_info = erm->check_locality(token, tablet_routing_source_replica(state.get_client_state(), *erm));
+        if (tablet_info) {
+            result->add_tablet_info(std::move(tablet_info->tablet_replicas), tablet_info->token_range);
+        }
+    }
+    co_return result;
 }
 
 }

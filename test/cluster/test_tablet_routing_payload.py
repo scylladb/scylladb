@@ -7,6 +7,8 @@
 import asyncio
 import socket
 import struct
+import time
+import uuid
 from dataclasses import dataclass
 
 import pytest
@@ -14,9 +16,10 @@ from cassandra import ConsistencyLevel
 
 from test.cluster.lwt.lwt_common import get_token_for_pk
 from test.cluster.util import new_test_keyspace
-from test.pylib.internal_types import ServerInfo
+from test.pylib.internal_types import HostID, ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replicas
+from test.pylib.util import wait_for
 
 CQL_VERSION = 0x04
 CQL_RESPONSE_VERSION = 0x84
@@ -26,6 +29,7 @@ OP_STARTUP = 0x01
 OP_READY = 0x02
 OP_OPTIONS = 0x05
 OP_SUPPORTED = 0x06
+OP_QUERY = 0x07
 OP_RESULT = 0x08
 OP_PREPARE = 0x09
 OP_EXECUTE = 0x0A
@@ -139,6 +143,34 @@ def _read_string_bytes_map(body: bytes, pos: int) -> tuple[dict[str, bytes], int
     return values, pos
 
 
+def _read_cql_value(body: bytes, pos: int) -> tuple[bytes, int]:
+    size = struct.unpack_from("!i", body, pos)[0]
+    pos += 4
+    assert size >= 0
+    value = body[pos:pos + size]
+    pos += size
+    return value, pos
+
+
+def _decode_tablet_routing_replicas(payload: bytes) -> list[tuple[uuid.UUID, int]]:
+    _first_token, pos = _read_cql_value(payload, 0)
+    _last_token, pos = _read_cql_value(payload, pos)
+    replicas_payload, pos = _read_cql_value(payload, pos)
+    assert pos == len(payload)
+
+    replica_count = struct.unpack_from("!i", replicas_payload, 0)[0]
+    pos = 4
+    replicas = []
+    for _ in range(replica_count):
+        replica_payload, pos = _read_cql_value(replicas_payload, pos)
+        host_id_payload, replica_pos = _read_cql_value(replica_payload, 0)
+        shard_payload, replica_pos = _read_cql_value(replica_payload, replica_pos)
+        assert replica_pos == len(replica_payload)
+        replicas.append((uuid.UUID(bytes=host_id_payload), struct.unpack("!i", shard_payload)[0]))
+    assert pos == len(replicas_payload)
+    return replicas
+
+
 async def _read_frame(reader: asyncio.StreamReader) -> CqlFrame:
     header = await reader.readexactly(9)
     version, flags, stream, opcode, body_len = struct.unpack("!BBhBI", header)
@@ -223,6 +255,11 @@ class RawCqlClient:
         assert response.opcode == OP_RESULT
         return response
 
+    async def query(self, query: str, consistency: int = ConsistencyLevel.ONE) -> CqlFrame:
+        response = await self.send(OP_QUERY, _write_long_string(query) + _write_query_parameters(consistency))
+        assert response.opcode == OP_RESULT
+        return response
+
 
 async def _open_connection(host: str, port: int) -> RawCqlClient:
     reader, writer = await asyncio.open_connection(host, port)
@@ -292,6 +329,31 @@ async def _prepared_response_has_tablet_info(
         await client.close()
 
 
+async def _get_table_raft_group_id(manager: ManagerClient, keyspace: str, table: str) -> str:
+    table_id = await manager.get_table_id(keyspace, table)
+    rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
+    assert rows
+    return str(rows[0].raft_group_id)
+
+
+async def _wait_for_tablet_raft_leader(
+        manager: ManagerClient,
+        servers_by_host_id: dict[str, ServerInfo],
+        replicas: list[tuple[HostID, int]],
+        group_id: str) -> uuid.UUID:
+    replica_servers = [servers_by_host_id[str(host_id)] for host_id, _shard in replicas]
+
+    async def get_leader_host_id() -> uuid.UUID | None:
+        for server in replica_servers:
+            result = await manager.api.get_raft_leader(server.ip_addr, group_id)
+            leader = uuid.UUID(result)
+            if leader.int != 0:
+                return leader
+        return None
+
+    return await wait_for(get_leader_host_id, time.time() + 60)
+
+
 @pytest.mark.asyncio
 async def test_tablet_routing_payload_for_lwt_and_serial_from_wrong_shard(manager: ManagerClient) -> None:
     """
@@ -338,3 +400,48 @@ async def test_tablet_routing_payload_for_lwt_and_serial_from_wrong_shard(manage
                 missing_payload.append(name)
 
     assert not missing_payload, f"missing tablet routing payload for {missing_payload}"
+
+
+@pytest.mark.asyncio
+async def test_strong_consistency_write_hint_prefers_leader(manager: ManagerClient) -> None:
+    servers = await manager.servers_add(3, config={
+        "experimental_features": ["strongly-consistent-tables"],
+        "tablets_mode_for_new_keyspaces": "enabled",
+        "native_shard_aware_transport_port": SHARD_AWARE_PORT,
+    }, cmdline=["--smp", "2"])
+    cql = manager.get_cql()
+
+    host_ids = await asyncio.gather(*[manager.get_host_id(server.server_id) for server in servers])
+    servers_by_host_id = {str(host_id): server for host_id, server in zip(host_ids, servers)}
+
+    async with new_test_keyspace(
+            manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as keyspace:
+        await cql.run_async(f"CREATE TABLE {keyspace}.test_tablet (pk int PRIMARY KEY, v int);")
+
+        token = await get_token_for_pk(cql, keyspace, "test_tablet", 1)
+        replicas = await get_tablet_replicas(manager, servers[0], keyspace, "test_tablet", token)
+        assert len(replicas) == 3
+
+        group_id = await _get_table_raft_group_id(manager, keyspace, "test_tablet")
+        leader_host_id = await _wait_for_tablet_raft_leader(manager, servers_by_host_id, replicas, group_id)
+        leader_replica = next(replica for replica in replicas if str(replica[0]) == str(leader_host_id))
+        non_leader_replica = next(replica for replica in replicas if str(replica[0]) != str(leader_host_id))
+
+        non_leader_server = servers_by_host_id[str(non_leader_replica[0])]
+        options = await _supported_options(str(non_leader_server.rpc_address), manager.port)
+        assert "TABLETS_ROUTING_V1" in options
+        nr_shards = int(options["SCYLLA_NR_SHARDS"][0])
+        shard_aware_port = int(options.get("SCYLLA_SHARD_AWARE_PORT", [SHARD_AWARE_PORT])[0])
+
+        client = await _connect_to_shard(str(non_leader_server.rpc_address), shard_aware_port, non_leader_replica[1], nr_shards)
+        try:
+            response = await client.query(
+                f"INSERT INTO {keyspace}.test_tablet (pk, v) VALUES (1, 13)",
+                ConsistencyLevel.QUORUM)
+            payload = _custom_payload(response)
+            assert TABLETS_ROUTING_V1_PAYLOAD in payload
+            replicas_from_hint = _decode_tablet_routing_replicas(payload[TABLETS_ROUTING_V1_PAYLOAD])
+            assert replicas_from_hint[0] == (uuid.UUID(str(leader_replica[0])), leader_replica[1])
+        finally:
+            await client.close()

@@ -62,8 +62,9 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
 
+    const auto token = keys[0].start()->value().token();
     const auto mutate_result = co_await coordinator.get().mutate(_statement->s,
-        keys[0].start()->value().token(),
+        token,
         [&](api::timestamp_type ts) {
             const auto prefetch_data = update_parameters::prefetch_data(_statement->s);
             const auto ttl = _statement->get_time_to_live(options);
@@ -86,7 +87,17 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         throw exceptions::mutation_write_timeout_exception{"", "", options.get_consistency(), 0, 0, db::write_type::SIMPLE};
     });
 
-    co_return seastar::make_shared<result_message::void_message>();
+    auto result = seastar::make_shared<result_message::void_message>();
+    auto&& table = _statement->s->table();
+    if (_statement->_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+        auto erm = table.get_effective_replication_map();
+        auto leader_replica = locator::tablet_replica{erm->get_token_metadata().get_my_id(), this_shard_id()};
+        auto tablet_info = erm->check_locality(token, tablet_routing_source_replica(qs.get_client_state(), *erm), leader_replica);
+        if (tablet_info) {
+            result->add_tablet_info(std::move(tablet_info->tablet_replicas), tablet_info->token_range);
+        }
+    }
+    co_return result;
 }
 
 future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {

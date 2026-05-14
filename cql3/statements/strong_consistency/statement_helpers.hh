@@ -11,7 +11,10 @@
 #include "cql3/cql_statement.hh"
 #include "locator/tablets.hh"
 
+#include <optional>
+
 namespace service::strong_consistency { struct stats; }
+namespace locator { class effective_replication_map; }
 
 namespace cql3::statements::strong_consistency {
 
@@ -24,5 +27,9 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
     service::strong_consistency::stats& stats);
 
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name);
+
+std::optional<locator::tablet_replica> tablet_routing_source_replica(
+    const service::client_state& client_state,
+    const locator::effective_replication_map& erm);
 
 }

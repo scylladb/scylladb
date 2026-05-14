@@ -112,7 +112,7 @@ host_id_vector_replica_set vnode_effective_replication_map::get_replicas_for_rea
     return *endpoints | std::ranges::to<host_id_vector_replica_set>();
 }
 
-std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token&, std::optional<tablet_replica>) const {
+std::optional<tablet_routing_info> vnode_effective_replication_map::check_locality(const token&, std::optional<tablet_replica>, std::optional<tablet_replica>) const {
     return {};
 }
 

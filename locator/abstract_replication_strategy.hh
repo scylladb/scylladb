@@ -309,7 +309,10 @@ public:
     std::optional<tablet_routing_info> check_locality(const token& token) const {
         return check_locality(token, std::nullopt);
     }
-    virtual std::optional<tablet_routing_info> check_locality(const token& token, std::optional<tablet_replica> source_replica) const = 0;
+    std::optional<tablet_routing_info> check_locality(const token& token, std::optional<tablet_replica> source_replica) const {
+        return check_locality(token, source_replica, std::nullopt);
+    }
+    virtual std::optional<tablet_routing_info> check_locality(const token& token, std::optional<tablet_replica> source_replica, std::optional<tablet_replica> preferred_replica) const = 0;
 
 
     /// Returns true if there are any pending ranges for this endpoint.
@@ -501,7 +504,7 @@ public: // effective_replication_map
     host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
     host_id_vector_replica_set get_replicas_for_reading(const token& token, bool is_vnode = false) const override;
     host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const override;
-    std::optional<tablet_routing_info> check_locality(const token& token, std::optional<tablet_replica> source_replica) const override;
+    std::optional<tablet_routing_info> check_locality(const token& token, std::optional<tablet_replica> source_replica, std::optional<tablet_replica> preferred_replica) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
@@ -613,7 +616,7 @@ public:
     host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
     host_id_vector_replica_set get_replicas_for_reading(const token& token, bool is_vnode = false) const override;
     host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const override;
-    std::optional<tablet_routing_info> check_locality(const token& token, std::optional<tablet_replica> source_replica) const override;
+    std::optional<tablet_routing_info> check_locality(const token& token, std::optional<tablet_replica> source_replica, std::optional<tablet_replica> preferred_replica) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
