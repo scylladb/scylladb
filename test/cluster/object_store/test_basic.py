@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 import pytest
 import shutil
 import logging
@@ -18,6 +19,7 @@ from test.cluster.test_config import wait_for_config
 from test.cluster.util import new_test_keyspace
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.skip_types import skip_bug
+from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
 
@@ -351,3 +353,102 @@ async def test_create_keyspace_after_config_update(manager: ManagerClient, objec
     rows = {r.name: r.value for r in cql.execute(f'SELECT * FROM random_ks.test;')}
     assert rows == {'test_key': 123, 'after_reconfig': 456}, f'Unexpected table content: {rows}'
 
+
+@pytest.mark.asyncio
+async def test_stream_sink_abort_on_object_storage(manager: ManagerClient, object_storage):
+    """Verify that aborting a blob stream on object storage cleans up
+    partial SSTable components instead of leaving orphaned S3 objects.
+
+    When tablet migration streaming fails mid-transfer, the receiving side
+    calls sstable_stream_sink_impl::abort() to clean up the partial SSTable
+    component. Before the fix, abort() used remove_file() with a local
+    filesystem path. On object storage this silently fails (the exception
+    is caught and logged), leaving the partially-uploaded S3 object
+    orphaned. The fix uses unlink_component() which delegates to the
+    correct storage backend (e.g., S3 delete_object).
+
+    This test triggers a streaming failure via error injection and verifies
+    the migration retries successfully, data remains intact, and the bucket
+    is left with no orphaned objects from the aborted attempt.
+    """
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': object_storage.create_endpoint_conf(),
+           'experimental_features': ['keyspace-storage-options']}
+
+    # Two servers are enough to migrate a tablet from one to the other.
+    servers = []
+    for _ in range(2):
+        servers.append(await manager.server_add(config=cfg))
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=1)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+        for i in range(20):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, {i})")
+        await asyncio.gather(*[manager.api.flush_keyspace(s.ip_addr, ks)
+                                for s in servers])
+
+        # Find which server holds the tablet and which doesn't
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, "test")
+        tablet = tablets[0]
+        src_host, src_shard = tablet.replicas[0]
+
+        host_ids = {await manager.get_host_id(s.server_id): s for s in servers}
+        dst_server = [s for hid, s in host_ids.items() if hid != src_host][0]
+        dst_host = await manager.get_host_id(dst_server.server_id)
+
+        # Arm error injection on the destination to fail streaming on
+        # the first data write. This triggers abort() on the partial SSTable.
+        await manager.api.enable_injection(dst_server.ip_addr,
+                                           "stream_blob_rx_data_error", True)
+
+        logger.info("Moving tablet from %s to %s with abort injection armed",
+                     src_host, dst_host)
+
+        # The migration should eventually succeed: the first streaming
+        # attempt will fail (triggering abort()), and tablet migration
+        # will retry.
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test",
+                                      src_host, src_shard,
+                                      dst_host, 0, tablet.last_token)
+
+        # Verify tablet moved to the destination
+        tablets_after = await get_all_tablet_replicas(manager, servers[0],
+                                                     ks, "test")
+        moved = [t for t in tablets_after
+                 if t.last_token == tablet.last_token]
+        assert len(moved) == 1
+        new_host = moved[0].replicas[0][0]
+        assert new_host == dst_host, \
+            f"Tablet not on expected host: {new_host} != {dst_host}"
+
+        # Verify data
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test")
+        result = {r.pk: r.v for r in rows}
+        expected = {i: i for i in range(20)}
+        assert result == expected, f"Data mismatch: {result}"
+
+        # The aborted streaming attempt failed while writing the TOC,
+        # so on object storage it left behind only
+        # a partial TOC.txt.tmp object and never wrote a Data.db.
+        # A fully streamed sstable always has a
+        # Data.db, so any generation in the bucket lacking one is an orphan.
+        #
+        # Poll until the bucket settles: the migrated-away source sstable may
+        # still be mid-wipe, but soon disappears entirely.
+        # With the fix the leaked TOC.txt.tmp is gone so the condition converges;
+        # without it the orphan persists and wait_for times out.
+        async def no_orphaned_objects():
+            objects = object_storage.get_resource().Bucket(
+                object_storage.bucket_name).objects.all()
+            components = {}
+            for o in objects:
+                generation, _, component = o.key.partition("/")
+                components.setdefault(generation, set()).add(component)
+            orphans = {gen for gen, comps in components.items()
+                       if "Data.db" not in comps}
+            return None if orphans else True
+
+        await wait_for(no_orphaned_objects, time.time() + 30,
+                       label="object storage bucket has no orphaned sstable components")
