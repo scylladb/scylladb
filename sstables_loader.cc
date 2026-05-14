@@ -16,6 +16,7 @@
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/rpc/rpc.hh>
+#include <seastar/util/short_streams.hh> 
 #include "sstables_loader.hh"
 #include "db/config.hh"
 #include "dht/auto_refreshing_sharder.hh"
