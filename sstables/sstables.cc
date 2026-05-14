@@ -4372,10 +4372,9 @@ public:
         if (!_sst) {
             co_return;
         }
-        auto filename = fmt::to_string(_sst->filename(_type));
         // TODO: if we are the last component (or really always), should we remove all component files?
         // For now, this remains the responsibility of calling code (see handle_tablet_migration etc)
-        co_await remove_file(filename);
+        co_await _sst->_storage->unlink_component(*_sst, _type);
     }
 };
 
