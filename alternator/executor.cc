@@ -1898,6 +1898,20 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             schema_builder builder(tab);
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
+            rjson::value* gsi_updates = rjson::find(request, "GlobalSecondaryIndexUpdates");
+            rjson::value* vector_index_updates = rjson::find(request, "VectorIndexUpdates");
+            // DynamoDB rejects combining a GSI or vector index create/delete
+            // with a stream change in the same UpdateTable request. Check this
+            // early, before processing either, so that the error is consistent
+            // regardless of which individual operation would fail on its own.
+            if (stream_specification && stream_specification->IsObject()) {
+                if (gsi_updates && gsi_updates->IsArray() && gsi_updates->Size()) {
+                    co_return api_error::validation("You cannot create or delete index while changing stream status");
+                }
+                if (vector_index_updates && vector_index_updates->IsArray() && vector_index_updates->Size()) {
+                    co_return api_error::validation("You cannot create or delete index while changing stream status");
+                }
+            }
             if (stream_specification && stream_specification->IsObject()) {
                 empty_request = false;
                 if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
@@ -1942,7 +1956,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             // Support VectorIndexUpdates to add or delete a vector index,
             // similar to GlobalSecondaryIndexUpdates above. We handle this
             // before builder.build() so we can use builder directly.
-            rjson::value* vector_index_updates = rjson::find(request, "VectorIndexUpdates");
             if (vector_index_updates) {
                 if (!vector_index_updates->IsArray()) {
                     co_return api_error::validation("VectorIndexUpdates must be an array");
@@ -2066,7 +2079,6 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             std::vector<view_ptr> new_views;
             std::vector<std::string> dropped_views;
 
-            rjson::value* gsi_updates = rjson::find(request, "GlobalSecondaryIndexUpdates");
             if (gsi_updates) {
                 if (!gsi_updates->IsArray()) {
                     co_return api_error::validation("GlobalSecondaryIndexUpdates must be an array");

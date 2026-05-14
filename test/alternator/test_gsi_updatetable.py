@@ -573,6 +573,29 @@ def test_gsi_updatetable_errors(dynamodb, table1):
                 { 'Delete': {  'IndexName': 'ind2' } }
             ])
 
+# Above in test_gsi_updatetable_errors we tested that a single UpdateTable
+# operation can't create or delete more than one GSI at a time. In general,
+# an UpdateTable operation should do just one change - of any kind. You're
+# also not allowed, for example, to create a GSI and enable streams.
+def test_gsi_updatetable_combined_with_streams(dynamodb, table1):
+    client = dynamodb.meta.client
+    gsi_ops = [
+        {'AttributeDefinitions': [{'AttributeName': 'x', 'AttributeType': 'S'}],
+         'GlobalSecondaryIndexUpdates': [{'Create': {'IndexName': 'ind',
+             'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+             'Projection': {'ProjectionType': 'ALL'}}}]},
+        {'GlobalSecondaryIndexUpdates': [{'Delete': {'IndexName': 'nonexistent'}}]},
+    ]
+    stream_specs = [
+        {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
+        {'StreamEnabled': False},
+    ]
+    for gsi_op in gsi_ops:
+        for stream_spec in stream_specs:
+            with pytest.raises(ClientError, match='ValidationException.*cannot create or delete index while changing stream status'):
+                client.update_table(TableName=table1.name,
+                    StreamSpecification=stream_spec, **gsi_op)
+
 # Whereas CreateTable rejects spurious entries in AttributeDefinitions
 # (entries which aren't used as a key of the table or any GSI or LSI),
 # as tested in test_table.py::test_create_table_spurious_attribute_definitions
