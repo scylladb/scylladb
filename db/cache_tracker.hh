@@ -110,6 +110,8 @@ public:
     void clear_continuity(cache_entry& ce) noexcept;
     void on_partition_erase() noexcept;
     void on_partition_merge() noexcept;
+    void on_partition_insert() noexcept;
+    void on_partition_remove() noexcept;
     void on_partition_hit() noexcept;
     void on_partition_miss() noexcept;
     void on_partition_eviction() noexcept;
