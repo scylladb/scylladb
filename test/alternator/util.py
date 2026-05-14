@@ -230,7 +230,13 @@ def client_no_transform(client):
         client.meta.events = old_events
 
 def is_aws(dynamodb):
-    return dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com')
+    try:
+        # Let's try first if dynamodb represents a client object
+        # `Client` object has `_endpoint.host` attribute, which we check for amazon domain
+        return dynamodb._endpoint.host.endswith('.amazonaws.com')
+    except AttributeError:
+        # If not, it must be a resource (table for example), which has meta.client object, which has the _endpoint.host attribute.
+        return dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com')
 
 # Return the AWS region name, or the Scylla data center name.
 def get_region(dynamodb):
