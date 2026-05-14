@@ -171,3 +171,26 @@ def test_f32_quantization_disables_rescoring(cql, test_keyspace, vector_store_mo
         expected = list(reversed(data))[:2]
         assert [row.id for row in rows] == [d_row.id for d_row in expected]
         assert len(rows[0]) == 1
+
+
+# Verifies that a similarity function in the SELECT clause is computed with
+# rescored (reordered) results.
+# Kept separate from test_result_returned_by_vector_store_is_rescored to ensure
+# the similarity-column and non-similarity-column code paths are both tested.
+def test_similarity_function_returns_correctly_rescored_results(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    for func_name, data in TEST_DATA.items():
+        with rescoring_test_table(cql, test_keyspace, data,
+                extra_options={"similarity_function": func_name}) as table:
+            # Tested with both argument orderings of the similarity function to cover both code paths.
+            for func_args in [f"embedding, {ANN_QUERY_VECTOR_LITERAL}",
+                              f"{ANN_QUERY_VECTOR_LITERAL}, embedding"]:
+                vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+                rows = list(cql.execute(
+                    f"SELECT id, similarity_{func_name}({func_args}) AS similarity FROM {table} "
+                    f"ORDER BY embedding ANN OF {ANN_QUERY_VECTOR_LITERAL} LIMIT 2"))
+
+                expected = data[:2]
+                assert [row.id for row in rows] == [d_row.id for d_row in expected]
+                for row, d_row in zip(rows, expected):
+                    assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
+                assert len(rows[0]) == 2
