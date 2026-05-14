@@ -648,7 +648,7 @@ future<> distributed_loader::populate_object_storage_keyspaces(sharded<replica::
             }
 
             dblog.info("Populating deferred object-storage keyspace {}", ks_name);
-            futures.emplace_back(distributed_loader::populate_keyspace(db, sys_ks, ks.second, ks_name, storage_mode, false, false));
+            futures.emplace_back(distributed_loader::populate_keyspace(db, sys_ks, ks.second, ks_name, storage_mode, false, false, db::consistency_level::ONE));
         }
 
         when_all_succeed(futures.begin(), futures.end()).discard_result().get();
