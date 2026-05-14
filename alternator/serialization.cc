@@ -15,6 +15,9 @@
 #include "types/json_utils.hh"
 #include "mutation/position_in_partition.hh"
 #include "alternator/executor_util.hh"
+#include "utils/bit_cast.hh"
+#include <seastar/net/byteorder.hh>
+#include <bit>
 
 static logging::logger slogger("alternator-serialization");
 
@@ -27,6 +30,7 @@ type_info type_info_from_string(std::string_view type) {
         {"B", {alternator_type::B, bytes_type}},
         {"BOOL", {alternator_type::BOOL, boolean_type}},
         {"N", {alternator_type::N, decimal_type}}, //FIXME: Replace with custom Alternator type when implemented
+        {float32vector_type_name, {alternator_type::FLOAT32VECTOR, nullptr}},
     };
     auto it = type_infos.find(type);
     if (it == type_infos.end()) {
@@ -41,6 +45,7 @@ type_representation represent_type(alternator_type atype) {
         {alternator_type::B, {"B", bytes_type}},
         {alternator_type::BOOL, {"BOOL", boolean_type}},
         {alternator_type::N, {"N", decimal_type}}, //FIXME: Replace with custom Alternator type when implemented
+        {alternator_type::FLOAT32VECTOR, {std::string(float32vector_type_name), nullptr}},
     };
     auto it = type_representations.find(atype);
     if (it == type_representations.end()) {
@@ -195,6 +200,27 @@ bytes serialize_item(const rjson::value& item) {
         return bytes{int8_t(type_info.atype)} + to_bytes(rjson::print(item));
     }
 
+    // FLOAT32VECTOR is serialized as a 1-byte type tag followed by the
+    // big-endian IEEE 754 float32 values. No explicit element count is stored:
+    // the count is implicitly len(remaining_bytes) / 4.
+    if (type_info.atype == alternator_type::FLOAT32VECTOR) {
+        const rjson::value& arr = it->value;
+        if (!arr.IsArray()) {
+            throw api_error::validation(format("FLOAT32VECTOR value must be an array: {}", item));
+        }
+        const auto& elements = arr.GetArray();
+        bytes out(bytes::initialized_later(), 1 + elements.Size() * sizeof(uint32_t));
+        out[0] = int8_t(alternator_type::FLOAT32VECTOR);
+        auto* p = out.data() + 1;
+        for (const rjson::value& element : elements) {
+            float f = element.GetFloat();
+            uint32_t bits = net::hton(std::bit_cast<uint32_t>(f));
+            write_unaligned<uint32_t>(p, bits);
+            p += sizeof(uint32_t);
+        }
+        return out;
+    }
+
     bytes_ostream bo;
     bo.write(bytes{int8_t(type_info.atype)});
     visit(*type_info.dtype, from_json_visitor{it->value, bo});
@@ -239,6 +265,21 @@ rjson::value deserialize_item(bytes_view bv) {
         slogger.trace("Non-optimal deserialization of alternator type {}", int8_t(atype));
         return rjson::parse(std::string_view(reinterpret_cast<const char *>(bv.data()), bv.size()));
     }
+
+    if (atype == alternator_type::FLOAT32VECTOR) {
+        if (bv.size() % sizeof(uint32_t) != 0) {
+            throw api_error::validation("FLOAT32VECTOR: byte length not a multiple of 4");
+        }
+        rjson::value arr(rapidjson::kArrayType);
+        while (!bv.empty()) {
+            uint32_t bits_be = read_unaligned<uint32_t>(bv.data());
+            bv.remove_prefix(sizeof(uint32_t));
+            rjson::push_back(arr, rjson::value(std::bit_cast<float>(net::ntoh(bits_be))));
+        }
+        rjson::add_with_string_name(deserialized, float32vector_type_name, std::move(arr));
+        return deserialized;
+    }
+
     type_representation type_representation = represent_type(atype);
     visit(*type_representation.dtype, to_json_visitor{deserialized, type_representation.ident, bv});
 

@@ -22,8 +22,18 @@ class position_in_partition;
 namespace alternator {
 
 enum class alternator_type : int8_t {
-    S, B, BOOL, N, NOT_SUPPORTED_YET
+    // Do not reorder or delete entries in this enum, because these values are
+    // written to disk as part of the item encoding.
+    S, B, BOOL, N, NOT_SUPPORTED_YET, FLOAT32VECTOR
 };
+
+// FLOAT32VECTOR is an Alternator-only extension to DynamoDB's JSON type
+// system. It takes a JSON array of numbers (not quoted strings as the N type
+// does) and states that for these numbers, only the precision and range of
+// 32-bit floats is guaranteed. This allows Alternator to store these vectors
+// much more efficiently than if they were a JSON array of N's - we store
+// them as big-endian 32-bit IEEE 754 floats, exactly 4 bytes each.
+inline constexpr std::string_view float32vector_type_name = "FLOAT32VECTOR";
 
 struct type_info {
     alternator_type atype;

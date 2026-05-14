@@ -1221,6 +1221,89 @@ calculate_bounds_condition_expression(schema_ptr schema,
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
+// Parses a vector value (of type "FLOAT32VECTOR" or "L"-of-"N") into an
+// std::vector<float>. Throws api_error::validation if the value is invalid
+// or the vector's length doesn't match the required dimensions.
+static std::vector<float> parse_vector(const rjson::value& value, int dimensions, std::string_view source) {
+    std::vector<float> out;
+    if (!value.IsObject() || value.MemberCount() != 1) {
+        throw api_error::validation(format("{} must be a value with type 'FLOAT32VECTOR' or 'L'", source));
+    }
+    const rjson::value* v = rjson::find(value, float32vector_type_name);
+    if (v) {
+        // "FLOAT32VECTOR" type: array of JSON floating-point numbers.
+        if (!v->IsArray()) {
+            throw api_error::validation(
+                format("{} FLOAT32VECTOR must be a list of numbers", source));
+        }
+        const auto& arr = v->GetArray();
+        if ((int)arr.Size() != dimensions) {
+            throw api_error::validation(
+                format("{} length {} does not match index Dimensions {}",
+                    source, arr.Size(), dimensions));
+        }
+        out.reserve(arr.Size());
+        for (const rjson::value& elem : arr) {
+            if (!elem.IsNumber()) {
+                throw api_error::validation(
+                    format("{} must contain only numbers", source));
+            }
+            float f = static_cast<float>(elem.GetDouble());
+            if (!std::isfinite(f)) {
+                throw api_error::validation(
+                    format("{} element '{}' cannot be represented as a 32-bit float",
+                        source, elem.GetDouble()));
+            }
+            out.push_back(f);
+        }
+    } else {
+        // "L" type: list of "N" numbers.
+        const rjson::value* qv_list = rjson::find(value, "L");
+        if (!qv_list || !qv_list->IsArray()) {
+            throw api_error::validation(
+                format("{} must be a list of numbers", source));
+        }
+        const auto& arr = qv_list->GetArray();
+        if ((int)arr.Size() != dimensions) {
+            throw api_error::validation(
+                format("{} length {} does not match index Dimensions {}",
+                    source, arr.Size(), dimensions));
+        }
+        out.reserve(arr.Size());
+        for (const rjson::value& elem : arr) {
+            if (!elem.IsObject()) {
+                throw api_error::validation(
+                    format("{} must contain only numbers", source));
+            }
+            const rjson::value* n_val = rjson::find(elem, "N");
+            if (!n_val || !n_val->IsString()) {
+                throw api_error::validation(
+                    format("{} must contain only numbers", source));
+            }
+            std::string_view num_str = rjson::to_string_view(*n_val);
+            float f;
+            auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), f);
+            if (ec != std::errc{} || ptr != num_str.data() + num_str.size() || !std::isfinite(f)) {
+                throw api_error::validation(
+                    format("{} element '{}' is not a valid number", source, num_str));
+            }
+            out.push_back(f);
+        }
+    }
+    return out;
+}
+
+// Converts a similarity score (float) to a JSON value. JSON does not support
+// infinite or NaN values, so if the score is infinite (which can happen with
+// the DOT_PRODUCT similarity function on non-normalized vectors) we clamp to
+// the nearest representable finite float.
+static rjson::value similarity_to_json(float s) {
+    if (!std::isfinite(s)) {
+        s = s > 0 ? std::numeric_limits<float>::max() : std::numeric_limits<float>::lowest();
+    }
+    return rjson::value(s);
+}
+
 static future<executor::request_return_type> query_vector(
         service::storage_proxy& proxy,
         vector_search::vector_store_client& vsc,
@@ -1234,6 +1317,7 @@ static future<executor::request_return_type> query_vector(
         parsed::expression_cache& parsed_expr_cache) {
     schema_ptr base_schema = get_table(proxy, request);
     get_stats_from_schema(proxy, *base_schema)->api_operations.query++;
+    stats.vector_search.query++;
     tracing::add_alternator_table_name(trace_state, base_schema->cf_name());
 
     // If vector search is requested, IndexName must be given and must
@@ -1276,49 +1360,18 @@ static future<executor::request_return_type> query_vector(
         co_return api_error::validation(
             "VectorSearch requires a VectorSearch parameter");
     }
+    // QueryVector should be a DynamoDB value of type "L" (a list of "N"
+    // numbers) or the Alternator-specific "FLOAT32VECTOR" type (an array of
+    // JSON floats). The number of elements must be exactly the "dimensions"
+    // defined for this vector index. We'll now validate all these assumptions
+    // and parse all the numbers in the vector into an std::vector<float>
+    // query_vec - the type that ann() wants.
     const rjson::value* query_vector = rjson::find(*vector_search, "QueryVector");
-    if (!query_vector || !query_vector->IsObject()) {
+    if (!query_vector) {
         co_return api_error::validation(
             "VectorSearch requires a QueryVector parameter");
     }
-    // QueryVector should be is a DynamoDB value, which must be of type "L"
-    // (a list), containing only elements of type "N" (numbers). The number
-    // of these elements must be exactly the "dimensions" defined for this
-    // vector index. We'll now validate all these assumptions and parse
-    // all the numbers in the vector into an std::vector<float> query_vec -
-    // the type that ann() wants.
-    const rjson::value* qv_list = rjson::find(*query_vector, "L");
-    if (!qv_list || !qv_list->IsArray()) {
-        co_return api_error::validation(
-            "VectorSearch QueryVector must be a list of numbers");
-    }
-    const auto& arr = qv_list->GetArray();
-    if ((int)arr.Size() != dimensions) {
-        co_return api_error::validation(
-            format("VectorSearch QueryVector length {} does not match index Dimensions {}",
-                arr.Size(), dimensions));
-    }
-    std::vector<float> query_vec;
-    query_vec.reserve(arr.Size());
-    for (const rjson::value& elem : arr) {
-        if (!elem.IsObject()) {
-            co_return api_error::validation(
-                "VectorSearch QueryVector must contain only numbers");
-        }
-        const rjson::value* n_val = rjson::find(elem, "N");
-        if (!n_val || !n_val->IsString()) {
-            co_return api_error::validation(
-                "VectorSearch QueryVector must contain only numbers");
-        }
-        std::string_view num_str = rjson::to_string_view(*n_val);
-        float f;
-        auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), f);
-        if (ec != std::errc{} || ptr != num_str.data() + num_str.size() || !std::isfinite(f)) {
-            co_return api_error::validation(
-                format("VectorSearch QueryVector element '{}' is not a valid number", num_str));
-        }
-        query_vec.push_back(f);
-    }
+    std::vector<float> query_vec = parse_vector(*query_vector, dimensions, "VectorSearch QueryVector");
 
     // Limit is mandatory for vector search: it defines k, the number of
     // nearest neighbors to return.
@@ -1350,6 +1403,23 @@ static future<executor::request_return_type> query_vector(
             "VectorSearch does not support ScanIndexForward");
     }
 
+    // VectorSearch.ReturnScores: if set to SIMILARITY, the response will
+    // include a Scores[] array parallel to Items[], containing the
+    // similarity score for each returned item. Defaults to NONE.
+    bool return_scores = false;
+    if (const rjson::value* rsv = rjson::find(*vector_search, "ReturnScores")) {
+        if (!rsv->IsString()) {
+            co_return api_error::validation("VectorSearch ReturnScores must be a string");
+        }
+        std::string_view rsv_str = rjson::to_string_view(*rsv);
+        if (rsv_str == "SIMILARITY") {
+            return_scores = true;
+        } else if (rsv_str != "NONE") {
+            co_return api_error::validation(
+                "VectorSearch ReturnScores must be NONE or SIMILARITY");
+        }
+    }
+
     std::unordered_set<std::string> used_attribute_names;
     std::unordered_set<std::string> used_attribute_values;
     // Parse the Select parameter and determine which attributes to return.
@@ -1361,6 +1431,10 @@ static future<executor::request_return_type> query_vector(
     // the vector index - these additional attributes will also be usable for
     // filtering). COUNT returns only the count without items.
     select_type select = parse_select(request, table_or_view_type::vector_index);
+    if (return_scores && select == select_type::count) {
+        co_return api_error::validation(
+            "VectorSearch ReturnScores=SIMILARITY is not supported with Select=COUNT");
+    }
     std::optional<alternator::attrs_to_get> attrs_to_get_opt;
     if (select == select_type::projection) {
         // ALL_PROJECTED_ATTRIBUTES for a vector index: return only key attributes.
@@ -1406,6 +1480,7 @@ static future<executor::request_return_type> query_vector(
         co_return api_error::validation(error_msg);
     }
     const std::vector<vector_search::primary_key>& pkeys = pkeys_result.value();
+    stats.vector_search.query_items_from_vs += pkeys.size();
 
     // For SELECT=COUNT with no filter: skip fetching from the base table and
     // just return the count of candidates returned by the vector store.
@@ -1423,6 +1498,7 @@ static future<executor::request_return_type> query_vector(
     // fetch to apply it.
     if (select == select_type::projection && !flt) {
         rjson::value items_json = rjson::empty_array();
+        rjson::value scores_json = rjson::empty_array();
         for (const auto& pkey : pkeys) {
             rjson::value item = rjson::empty_object();
             std::vector<bytes> exploded_pk = pkey.partition.key().explode();
@@ -1444,11 +1520,19 @@ static future<executor::request_return_type> query_vector(
                 }
             }
             rjson::push_back(items_json, std::move(item));
+            if (return_scores) {
+                rjson::push_back(scores_json, similarity_to_json(pkey.similarity));
+            }
         }
         rjson::value response = rjson::empty_object();
-        rjson::add(response, "Count", rjson::value(static_cast<int>(items_json.Size())));
+        auto count = static_cast<int>(items_json.Size());
+        rjson::add(response, "Count", rjson::value(count));
+        stats.vector_search.query_returned_items += count;
         rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
         rjson::add(response, "Items", std::move(items_json));
+        if (return_scores) {
+            rjson::add(response, "Scores", std::move(scores_json));
+        }
         co_return rjson::print(std::move(response));
     }
 
@@ -1469,11 +1553,13 @@ static future<executor::request_return_type> query_vector(
         flt ? std::nullopt : std::move(attrs_to_get_opt));
 
     rjson::value items_json = rjson::empty_array();
+    rjson::value scores_json = rjson::empty_array();
     int matched_count = 0;
 
     // Query each primary key individually, in the order returned by the
     // vector store, to preserve vector-distance ordering in the response.
     // FIXME: do this more efficiently with a batched read that preserves ordering.
+    stats.vector_search.query_items_from_base_table += pkeys.size();
     for (const auto& pkey : pkeys) {
         std::vector<query::clustering_range> bounds{
                 base_schema->clustering_key_size() > 0
@@ -1495,6 +1581,9 @@ static future<executor::request_return_type> query_vector(
                 *selection, *qr.query_result, *attrs_to_get);
         if (opt_item && (!flt || flt.check(*opt_item))) {
             ++matched_count;
+            if (return_scores) {
+                rjson::push_back(scores_json, similarity_to_json(pkey.similarity));
+            }
             if (select != select_type::count) {
                 if (select == select_type::projection) {
                     // A filter caused us to fall through here instead of
@@ -1548,8 +1637,13 @@ static future<executor::request_return_type> query_vector(
     if (select == select_type::count) {
         rjson::add(response, "Count", rjson::value(matched_count));
     } else {
-        rjson::add(response, "Count", rjson::value(static_cast<int>(items_json.Size())));
+        auto count = static_cast<int>(items_json.Size());
+        rjson::add(response, "Count", rjson::value(count));
+        stats.vector_search.query_returned_items += count;
         rjson::add(response, "Items", std::move(items_json));
+        if (return_scores) {
+            rjson::add(response, "Scores", std::move(scores_json));
+        }
     }
     rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
     co_return rjson::print(std::move(response));

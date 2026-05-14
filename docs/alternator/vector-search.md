@@ -34,8 +34,11 @@ The workflow has three steps:
 
 1. **Create** a table (or update an existing one) with one or more
    _vector indexes_.
-2. **Write** items that include the indexed vector attribute, just like any
-   other list attribute.
+2. **Write** items that include the indexed vector attribute. The attribute
+   can be stored as a standard DynamoDB list (`L`) of number (`N`) elements,
+   or as a ScyllaDB-specific optimized vector type (`FLOAT32VECTOR`) — a list of
+   JSON floating-point numbers that is stored internally as compact 4-byte
+   floats rather than JSON-encoded strings, saving space and parse overhead.
 3. **Query** using the `VectorSearch` parameter to retrieve the _k_ nearest
    neighbors.
 
@@ -51,6 +54,7 @@ It is a list of vector index definitions, each specifying:
 | `IndexName` | String | Unique name for this vector index. Follows the same naming rules as table names: 3–192 characters, matching the regex `[a-zA-Z0-9._-]+`. |
 | `VectorAttribute` | Structure | Describes the attribute to index (see below). |
 | `Projection` | Structure | Optional. Specifies which attributes are projected into the vector index (see below). |
+| `SimilarityFunction` | String | Optional. The distance metric used for nearest-neighbor search. See below. |
 
 **VectorAttribute fields:**
 
@@ -58,6 +62,14 @@ It is a list of vector index definitions, each specifying:
 |-------|------|-------------|
 | `AttributeName` | String | The item attribute that holds the vector. It must not be a key column. |
 | `Dimensions` | Integer | The fixed size of the vector (number of elements). |
+
+**SimilarityFunction values:**
+
+| Value | Description |
+|-------|-------------|
+| `COSINE` | Cosine similarity (angular distance). **Default when `SimilarityFunction` is omitted.** |
+| `EUCLIDEAN` | Euclidean (L2) distance. |
+| `DOT_PRODUCT` | Inner product (dot product). Useful when vectors are normalized. |
 
 **Projection fields:**
 
@@ -115,7 +127,8 @@ Each element of the list is an object with exactly one of the following keys:
   "Create": {
     "IndexName": "my-vector-index",
     "VectorAttribute": {"AttributeName": "embedding", "Dimensions": 1536},
-    "Projection": {"ProjectionType": "KEYS_ONLY"}
+    "Projection": {"ProjectionType": "KEYS_ONLY"},
+    "SimilarityFunction": "COSINE"
   }
 }
 ```
@@ -124,6 +137,9 @@ The `Projection` field in the `Create` action is optional and accepts the same
 values as the `Projection` field in `CreateTable`'s `VectorIndexes` (see above).
 Currently only `ProjectionType=KEYS_ONLY` is supported; it is also the default
 when `Projection` is omitted.
+
+The `SimilarityFunction` field is also optional and accepts the same values as
+in `CreateTable`'s `VectorIndexes` (see above). Defaults to `COSINE` when omitted.
 
 **Delete:**
 ```json
@@ -147,6 +163,9 @@ objects each containing `IndexName`, `VectorAttribute`
 (`AttributeName` + `Dimensions`), and `Projection` (`ProjectionType`).
 Currently `Projection` always contains `{"ProjectionType": "KEYS_ONLY"}`
 because that is the only supported projection type.
+If a `SimilarityFunction` was specified at index creation, it is returned
+at the index level (alongside `IndexName`, `VectorAttribute`, and `Projection`).
+When `SimilarityFunction` was not specified, `COSINE` is returned as the default.
 
 Each vector index entry also includes status fields that mirror the standard
 behavior of `GlobalSecondaryIndexes` in DynamoDB:
@@ -178,6 +197,28 @@ transitions to monitoring CDC for ongoing changes, and `IndexStatus` becomes
   `BatchWriteItem`. A missing value for the indexed attribute is always
   allowed; such items simply are not indexed.
 
+**Optimized vector storage format (`FLOAT32VECTOR` type):**
+
+As a ScyllaDB extension, the indexed vector attribute may be written using
+the `FLOAT32VECTOR` type instead of the standard `L` type. With the `FLOAT32VECTOR` type the value
+is a JSON array of plain floating-point numbers (not strings):
+
+```json
+// Standard DynamoDB list-of-numbers format:
+{"embedding": {"L": [{"N": "0.1"}, {"N": "-0.3"}, {"N": "0.7"}]}}
+
+// Optimized FLOAT32VECTOR format (ScyllaDB extension):
+{"embedding": {"FLOAT32VECTOR": [0.1, -0.3, 0.7]}}
+```
+
+Both representations are accepted for writes and queries. The `FLOAT32VECTOR`
+format is stored internally as packed 4-byte IEEE 754 floats (big-endian),
+rather than as JSON with string-encoded numbers. This reduces storage space
+and avoids JSON parsing overhead when the vector is read back. For large,
+high-dimensional vectors the space saving is significant: a 1536-dimension
+vector takes 6145 bytes with `FLOAT32VECTOR` versus roughly 25 KB with `L`/`N`
+strings.
+
 > **Important:** Applications must wait until `IndexStatus` is `"ACTIVE"` before
 > issuing `Query` requests against a vector index. Queries on a vector index
 > whose `IndexStatus` is still `"CREATING"` may fail. This applies both when
@@ -198,15 +239,25 @@ vector search rather than a standard key-condition query.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `QueryVector` | AttributeValue (list `L`) | The query vector as a DynamoDB `AttributeValue` of type `L`. Every element must be of type `N` (number). |
+| `QueryVector` | AttributeValue (list `L` or vector `FLOAT32VECTOR`) | The query vector as a DynamoDB `AttributeValue`. Use type `L` with `N` elements (standard DynamoDB) or the optimized ScyllaDB `FLOAT32VECTOR` type with plain floating-point elements. |
 
 Example:
 ```python
+# Standard DynamoDB format:
 response = table.query(
     IndexName='embedding-index',
     Limit=10,
     VectorSearch={
         'QueryVector': {'L': [{'N': '0.1'}, {'N': '-0.3'}, {'N': '0.7'}, ...]},
+    },
+)
+
+# Optimized ScyllaDB FLOAT32VECTOR format:
+response = table.query(
+    IndexName='embedding-index',
+    Limit=10,
+    VectorSearch={
+        'QueryVector': {'FLOAT32VECTOR': [0.1, -0.3, 0.7, ...]},
     },
 )
 ```
@@ -216,7 +267,7 @@ response = table.query(
 | Parameter | Details |
 |-----------|---------|
 | `IndexName` | Required. Must name a vector index on this table (not a GSI or LSI). |
-| `VectorSearch.QueryVector` | Required. A DynamoDB `AttributeValue` of type `L`; all elements must be of type `N` (number). |
+| `VectorSearch.QueryVector` | Required. A DynamoDB `AttributeValue` of type `L` (all elements of type `N`) or the ScyllaDB-specific type `FLOAT32VECTOR` (plain floating-point JSON numbers). |
 | QueryVector length | Must match the `Dimensions` configured for the named vector index. |
 | `Limit` | Required. Defines _k_ — how many nearest neighbors to return. Must be a positive integer. |
 
@@ -326,3 +377,58 @@ The response always includes two count fields:
 > **Note:** `QueryFilter` (the legacy non-expression filter API) is **not**
 > supported for vector search queries and will be rejected with a
 > `ValidationException`. Use `FilterExpression` instead.
+
+**ReturnScores field:**
+
+By default, a vector search `Query` response contains only the matched items
+(or a count) — it does not include how similar each result is to the query
+vector. To also receive similarity scores, set the optional
+`ReturnScores` field inside the `VectorSearch` parameter:
+
+| Value | Behavior |
+|-------|----------|
+| `NONE` | Default. No similarity scores are returned. |
+| `SIMILARITY` | Each response includes a `Scores` array parallel to `Items`, with one floating-point score per item. |
+
+The `Scores` array is always the same length as `Items` and in the same
+order: `Scores[i]` is the similarity score for `Items[i]`.
+
+**What the similarity score means:**
+
+The similarity score is a floating-point number computed from the distance
+between the query vector and each result's stored vector, using the index's
+`SimilarityFunction`. A **higher** score means a **closer** (more similar)
+match, so results appear in descending similarity order.  The score range
+depends on the similarity function:
+
+| `SimilarityFunction` | Range | Mapping |
+|----------------------|-------|---------|
+| `COSINE` (default) | 0.0 to 1.0 | The cosine of the angle between the two vectors is in `[-1, 1]`. So taking `(1 + cos)/2` gives us a similarity value in `[0, 1]`: 1.0 means identical direction, 0.5 means orthogonal vectors, 0.0 means opposite direction. |
+| `EUCLIDEAN` | 0.0 to 1.0 | Euclidean distance _d_ in `[0, inf)` is mapped to `1 / (1 + d)`. similarity 1.0 means identical vectors, 0.0 means infinitely far apart. |
+| `DOT_PRODUCT` | Unbounded | Uses the same distance definition and mapping as `COSINE`. For L2-normalized vectors the result is identical to `COSINE` and stays in [0, 1]. For unnormalized vectors the value may exceed 1 or be negative. |
+
+`ReturnScores=SIMILARITY` is not allowed with `Select=COUNT`,
+since `COUNT` returns no `Items` array.
+
+Example:
+```python
+response = table.query(
+    IndexName='embedding-index',
+    Limit=5,
+    VectorSearch={'QueryVector': {'FLOAT32VECTOR': [0.1, -0.3, 0.7, ...]}, 'ReturnScores': 'SIMILARITY'},
+)
+for item, score in zip(response['Items'], response['Scores']):
+    print(f"  {item['id']}  similarity={score:.4f}")
+```
+
+## Metrics
+
+ScyllaDB exposes the following metrics (under the `alternator` group) for
+monitoring vector search activity:
+
+| Metric | Description |
+|--------|-------------|
+| `vector_search_query` | Number of `Query` operations that included a `VectorSearch` parameter. These are also counted in the general `operation{op="Query"}` metric. |
+| `vector_search_query_returned_items` | Total number of items returned across all vector search queries. Not incremented for `Select=COUNT` queries, since no items are actually returned in that case. |
+| `vector_search_query_items_from_vs` | Total number of nearest-neighbor candidates returned by the vector store. Some candidates may be filtered out by a `FilterExpression` and not appear in the final response. |
+| `vector_search_query_items_from_base_table` | Total number of items read from the base table by vector search queries. Queries using `Select=ALL_PROJECTED_ATTRIBUTES` without a filter, or `Select=COUNT` without a filter, bypass the base-table read entirely and do not increment this counter. |

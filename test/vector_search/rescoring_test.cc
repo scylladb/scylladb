@@ -229,7 +229,7 @@ SEASTAR_TEST_CASE(oversampled_vector_store_results_are_limited_to_cql_limit) {
                     "primary_keys": {
                         "id": [1, 2]
                     },
-                    "distances": [0, 0]
+                    "similarity_scores": [0, 0]
                 })"});
                 auto msg = co_await env.execute_cql("SELECT id FROM ks.cf ORDER BY embedding ANN OF [0, 0, 0] LIMIT 1;");
 
@@ -257,7 +257,7 @@ SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored) {
                     // Mock Response: Return all keys but in REVERSE similarity order.
                     server->next_ann_response({http::reply::status_type::ok, R"({
                         "primary_keys": { "id": [4, 3, 2, 1] },
-                        "distances": [0, 0, 0, 0]
+                        "similarity_scores": [0, 0, 0, 0]
                     })"});
                     auto msg = co_await env.execute_cql("SELECT id FROM ks.cf ORDER BY embedding ANN OF [0.1, 0.1] LIMIT 2;");
 
@@ -289,7 +289,7 @@ SEASTAR_TEST_CASE(f32_quantization_disables_rescoring) {
                 // Mock Response: Return all keys but in REVERSE similarity order.
                 server->next_ann_response({http::reply::status_type::ok, R"({
                     "primary_keys": { "id": [4, 3, 2, 1] },
-                    "distances": [0, 0, 0, 0]
+                    "similarity_scores": [0, 0, 0, 0]
                 })"});
                 auto msg = co_await env.execute_cql("SELECT id FROM ks.cf ORDER BY embedding ANN OF [0.1, 0.1] LIMIT 2;");
 
@@ -325,7 +325,7 @@ SEASTAR_TEST_CASE(similarity_function_returns_correctly_rescored_results) {
                         // Mock Response: Return all keys but in REVERSE similarity order.
                         server->next_ann_response({http::reply::status_type::ok, R"({
                             "primary_keys": { "id": [4, 3, 2, 1] },
-                            "distances": [0, 0, 0, 0]
+                            "similarity_scores": [0, 0, 0, 0]
                         })"});
                         auto msg = co_await env.execute_cql(fmt::format(
                                 "SELECT id, similarity_{}({}) FROM ks.cf ORDER BY embedding ANN OF [0.1, 0.1] LIMIT 2;", params.function_name, func_args));
@@ -363,7 +363,7 @@ SEASTAR_TEST_CASE(wildcard_select_is_correctly_rescored) {
                     // Mock Response: Return all keys but in REVERSE similarity order.
                     server->next_ann_response({http::reply::status_type::ok, R"({
                         "primary_keys": { "id": [4, 3, 2, 1] },
-                        "distances": [0, 0, 0, 0]
+                        "similarity_scores": [0, 0, 0, 0]
                     })"});
                     auto msg = co_await env.execute_cql("SELECT * FROM ks.cf ORDER BY embedding ANN OF [0.1, 0.1] LIMIT 2;");
 
@@ -399,7 +399,7 @@ SEASTAR_TEST_CASE(select_similarity_function_other_than_ann_ordering) {
                 // Mock Response: Return all keys but in REVERSE similarity order.
                 server->next_ann_response({http::reply::status_type::ok, R"({
                     "primary_keys": { "id": [4, 3, 2, 1] },
-                    "distances": [0, 0, 0, 0]
+                    "similarity_scores": [0, 0, 0, 0]
                 })"});
                 auto prep = co_await env.prepare(fmt::format(
                         "SELECT id, similarity_{}(embedding, ?) FROM ks.cf ORDER BY embedding ANN OF ? LIMIT 2;", params.function_name));
@@ -442,7 +442,7 @@ SEASTAR_TEST_CASE(no_nulls_in_rescored_results, *boost::unit_test::expected_fail
                     // Mock Response: Return all keys but in REVERSE similarity order.
                     server->next_ann_response({http::reply::status_type::ok, R"({
                         "primary_keys": { "id": [55, 17, 16, 15, 2] },
-                        "distances": [0, 0, 0, 0, 0]
+                        "similarity_scores": [0, 0, 0, 0, 0]
                     })"});
                     auto msg = co_await env.execute_cql("SELECT id FROM ks.cf ORDER BY embedding ANN OF [0.1, 0.1] LIMIT 3;");
 
@@ -474,7 +474,7 @@ SEASTAR_TEST_CASE(rescoring_with_zerovector_query) {
 
                     server->next_ann_response({http::reply::status_type::ok, R"({
                         "primary_keys": { "id": [4, 3, 2, 1] },
-                        "distances": [0, 0, 0, 0]
+                        "similarity_scores": [0, 0, 0, 0]
                     })"});
 
                     // For cosine similarity the ANN vector query would fail as `similarity_cosine` function did not support zero vectors.

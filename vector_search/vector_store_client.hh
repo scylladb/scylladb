@@ -33,6 +33,11 @@ namespace vector_search {
 struct primary_key {
     dht::decorated_key partition;
     clustering_key_prefix clustering;
+    /// The similarity score returned by the vector store (higher = more
+    /// similar, and earlier in the result set). Similarity is in the range
+    /// [0.0, 1.0] for cosine and euclidean; unbounded for dot product on
+    /// non-normalized vectors.
+    float similarity = 0.0f;
 };
 
 /// A client with the vector-store service.
@@ -89,7 +94,11 @@ public:
     /// Query the vector store for the current status of a specific vector index.
     auto get_index_status(keyspace_name keyspace, index_name name, abort_source& as) -> future<index_status>;
 
-    /// Request the vector store service for the primary keys of the nearest neighbors
+    /// Request the vector store service for the primary keys of the nearest
+    /// neighbors. Each returned primary_key has its similarity field set to
+    /// the similarity score returned by the vector store, which sorts the
+    /// results in decreasing similarity order (higher similarity score = more
+    /// similar).
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as)
             -> future<std::expected<primary_keys, ann_error>>;
 

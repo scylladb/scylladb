@@ -608,6 +608,10 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
             rjson::value projection = rjson::empty_object();
             rjson::add(projection, "ProjectionType", "KEYS_ONLY");
             rjson::add(entry, "Projection", std::move(projection));
+            auto sf_it = opts.find("similarity_function");
+            if (sf_it != opts.end()) {
+                rjson::add(entry, "SimilarityFunction", rjson::from_string(sf_it->second));
+            }
             // Report IndexStatus and Backfilling based on the vector store's
             // reported state: SERVING -> ACTIVE, BOOTSTRAPPING -> CREATING+Backfilling,
             // anything else (INITIALIZING, unreachable, etc.) -> CREATING.
@@ -1389,6 +1393,20 @@ static future<> wait_for_schema_agreement_after_ddl(service::migration_manager& 
     }
 }
 
+// Parses an optional SimilarityFunction field from a VectorIndexes or
+// VectorIndexUpdates entry. Returns the value or the default "COSINE" if
+// the field is absent. The "source" parameter is used in error messages.
+static std::string get_similarity_function(const rjson::value& vector_index, std::string_view source) {
+    std::string sf = get_string_attribute(vector_index, "SimilarityFunction", "COSINE");
+    static constexpr std::array<std::string_view, 3> valid_sf = {"EUCLIDEAN", "COSINE", "DOT_PRODUCT"};
+    if (!std::ranges::contains(valid_sf, std::string_view(sf))) {
+        throw api_error::validation(fmt::format(
+            "{} SimilarityFunction '{}' is not valid. Valid values are: EUCLIDEAN, COSINE, DOT_PRODUCT.",
+            source, sf));
+    }
+    return sf;
+}
+
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
             const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     throwing_assert(this_shard_id() == 0);
@@ -1609,6 +1627,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 }
             }
             int dimensions = get_dimensions(*vector_attribute_v, "VectorIndexes");
+            std::string similarity_function = get_similarity_function(v, "VectorIndexes");
             // The optional Projection parameter is only supported with
             // ProjectionType=KEYS_ONLY. Other values are not yet supported.
             const rjson::value* projection_v = rjson::find(v, "Projection");
@@ -1627,6 +1646,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
             index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
             index_options["dimensions"] = std::to_string(dimensions);
+            index_options["similarity_function"] = similarity_function;
             builder.with_index(index_metadata{sstring(index_name), index_options,
                     index_metadata_kind::custom, index_metadata::is_local_index(false)});
         }
@@ -2026,6 +2046,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                             "VectorIndexUpdates AttributeName '{}' is already the target of an existing vector index.", attribute_name));
                     }
                     int dimensions = get_dimensions(*vector_attribute_v, "VectorIndexUpdates");
+                    std::string similarity_function = get_similarity_function(it->value, "VectorIndexUpdates");
                     // The optional Projection parameter is only supported with
                     // ProjectionType=KEYS_ONLY. Other values are not yet supported.
                     const rjson::value* projection_v = rjson::find(it->value, "Projection");
@@ -2046,6 +2067,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     index_options[db::index::secondary_index::custom_class_option_name] = "vector_index";
                     index_options[cql3::statements::index_target::target_option_name] = sstring(attribute_name);
                     index_options["dimensions"] = std::to_string(dimensions);
+                    index_options["similarity_function"] = similarity_function;
                     builder.with_index(index_metadata{index_name, index_options,
                             index_metadata_kind::custom, index_metadata::is_local_index(false)});
                 } else if (op == "Delete") {
@@ -2319,6 +2341,23 @@ void validate_value(const rjson::value& v, const char* caller) {
             // DynamoDB uses a SerializationException in this case, not ValidationException.
             throw api_error::serialization(format("{}: number value must be encoded as string '{}'", caller, v));
         }
+    } else if (type == float32vector_type_name) {
+        // Alternator-only optimized vector type (more optimized than a list-
+        // of-number). The value must be an array of numbers (floating-point
+        // JSON numbers, not strings as in the "N" type). Each element must
+        // fit in a 32-bit float.
+        if (!it->value.IsArray()) {
+            throw api_error::validation(format("{}: improperly formatted vector '{}'", caller, v));
+        }
+        for (const rjson::value& element : it->value.GetArray()) {
+            if (!element.IsNumber()) {
+                throw api_error::validation(format("{}: vector elements must be numbers, got '{}'", caller, element));
+            }
+            if (!std::isfinite(static_cast<float>(element.GetDouble()))) {
+                throw api_error::validation(format("{}: vector element '{}' cannot be represented as a 32-bit float",
+                    caller, element.GetDouble()));
+            }
+        }
     } else if (type != "L" && type != "M" && type != "BOOL" && type != "NULL") {
         // TODO: can do more sanity checks on the content of the above types.
         throw api_error::validation(fmt::format("{}: unknown type {} for value {}", caller, type, v));
@@ -2501,16 +2540,26 @@ static void validate_value_if_vector_index_attribute(
     // value is a DynamoDB typed value: an object with one member whose key
     // is the type tag. validate_value() already checked the overall shape.
     std::string_view value_type = rjson::to_string_view(value.MemberBegin()->name);
-    if (value_type != "L") {
+    if (value_type != "L" && value_type != float32vector_type_name) {
         throw api_error::validation(fmt::format(
-            "Vector index attribute '{}' must be a list of {} numbers, got type {}",
+            "Vector index attribute '{}' must be a list or vector of {} numbers, got type {}",
             attr_name, dimensions, value_type));
     }
     const rjson::value& list = value.MemberBegin()->value;
     if (!list.IsArray() || (int)list.Size() != dimensions) {
         throw api_error::validation(fmt::format(
-            "Vector index attribute '{}' must be a list of exactly {} numbers, got {} elements",
+            "Vector index attribute '{}' must be a list or vector of exactly {} numbers, got {} elements",
             attr_name, dimensions, list.IsArray() ? (int)list.Size() : -1));
+    }
+    // In the "L" case the components of the vector can be any legal "N"-type
+    // numbers (DynamoDB decimals) - so if this vector value is to be indexed
+    // we need to verify that these numbers fit in 32-bit float.
+    // In the "FLOAT32VECTOR" case we don't need to do this check here:
+    // "FLOAT32VECTOR" components are always (regardless of indexing) required
+    // to fit in 32-bit floats, so validate_value() already verified that they
+    // do.
+    if (value_type == float32vector_type_name) {
+        return;
     }
     for (const rjson::value& elem : list.GetArray()) {
         if (!elem.IsObject() || elem.MemberCount() != 1 ||

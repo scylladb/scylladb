@@ -175,6 +175,18 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     seastar::metrics::description("Counts number of misses of cached expressions"), labels)(expression_label("ProjectionExpression")).aggregate(aggregate_labels).set_skip_when_empty()
     });
 
+    // Vector search metrics
+    metrics.add_group(group_name, {
+            seastar::metrics::make_total_operations("vector_search_query", stats.vector_search.query,
+                    seastar::metrics::description("number of Query operations with VectorSearch"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("vector_search_query_returned_items", stats.vector_search.query_returned_items,
+                    seastar::metrics::description("total number of items returned by Query operations with VectorSearch"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("vector_search_query_items_from_vs", stats.vector_search.query_items_from_vs,
+                    seastar::metrics::description("total number of nearest neighbors found by the vector store (some may be post-filtered and not returned)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("vector_search_query_items_from_base_table", stats.vector_search.query_items_from_base_table,
+                    seastar::metrics::description("total number of items read from the base table by vector search queries"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+    });
+
     // Only register the following metrics for the global metrics, not per-table
     if (!has_table) {
         metrics.add_group("alternator", {

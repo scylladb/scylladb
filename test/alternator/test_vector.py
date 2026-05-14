@@ -9,6 +9,8 @@
 
 import pytest
 import time
+import json
+import struct
 import decimal
 from decimal import Decimal
 from contextlib import contextmanager
@@ -17,8 +19,8 @@ from functools import cache
 from botocore.exceptions import ClientError
 import boto3.dynamodb.types
 
-from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, client_no_transform, is_aws
 from test.pylib.skip_types import skip_env
+from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, client_no_transform, is_aws, manual_request
 
 # Monkey-patch the boto3 library to stop doing its own error-checking on
 # numbers. This works around a bug https://github.com/boto/boto3/issues/2500
@@ -60,6 +62,7 @@ def vs(new_dynamodb_session, dynamodb):
                 'IndexName': {'shape': 'String'},
                 'VectorAttribute': {'shape': 'VectorAttribute'},
                 'Projection': {'shape': 'Projection'},
+                'SimilarityFunction': {'shape': 'String'},
                 # The following two fields are only returned in DescribeTable's
                 # output, not accepted in CreateTable's input.
                 'IndexStatus': {'shape': 'String'},
@@ -93,6 +96,7 @@ def vs(new_dynamodb_session, dynamodb):
                 'IndexName': {'shape': 'String'},
                 'VectorAttribute': {'shape': 'VectorAttribute'},
                 'Projection': {'shape': 'Projection'},
+                'SimilarityFunction': {'shape': 'String'},
             },
             'required': ['IndexName', 'VectorAttribute'],
         },
@@ -108,8 +112,22 @@ def vs(new_dynamodb_session, dynamodb):
             'type': 'structure',
             'members': {
                 'QueryVector': {'shape': 'AttributeValue'},
+                'ReturnScores': {'shape': 'String'},
             },
             'required': ['QueryVector'],
+        },
+        # For VectorSearch.ReturnScores response:
+        'Score': {'type': 'double'},
+        'ScoresList': {
+            'type': 'list',
+            'member': {'shape': 'Score'},
+        },
+        # For the 'FLOAT32VECTOR' (optimized vector) type: a list of raw JSON
+        # numbers.
+        'Float32VectorElement': {'type': 'double'},
+        'Float32VectorAttributeValue': {
+            'type': 'list',
+            'member': {'shape': 'Float32VectorElement'},
         },
     }
     # Register the new shapes:
@@ -144,6 +162,11 @@ def vs(new_dynamodb_session, dynamodb):
     }
     input_shape._cache.pop('members', None)
 
+    # Add Scores list to Query output
+    query_output_shape = query_op.output_shape
+    query_output_shape._shape_model['members']['Scores'] = {'shape': 'ScoresList'}
+    query_output_shape._cache.pop('members', None)
+
     # Add a VectorIndexes field to "TableDescription", the shape returned
     # by DescribeTable and also CreateTable
     output_shape = shape_resolver.get_shape_by_name('TableDescription')
@@ -153,7 +176,44 @@ def vs(new_dynamodb_session, dynamodb):
     output_shape._cache.pop('members', None)
     shape_resolver._shape_cache.pop('TableDescription', None)
 
+    # Add FLOAT32VECTOR (the new optimized vector type) to the AttributeValue
+    # shape, so that boto3 will accept and pass through the FLOAT32VECTOR type
+    # in requests and responses. FLOAT32VECTOR holds a list of floating-point
+    # numbers.
+    attribute_value_shape = shape_resolver.get_shape_by_name('AttributeValue')
+    attribute_value_shape._shape_model['members']['FLOAT32VECTOR'] = {'shape': 'Float32VectorAttributeValue'}
+    attribute_value_shape._cache.pop('members', None)
+    shape_resolver._shape_cache.pop('AttributeValue', None)
+
+    # Monkey-patch boto3 resource's TypeSerializer so that values of type
+    # "Vector" (a class defined below) are serialized into the JSON request as
+    # {"FLOAT32VECTOR": [1.0, ...]} (JSON numbers) instead of the standard
+    # list encoding {"L": [{"N": "1.0"}, ...]}. This allows the high-level
+    # resource interface (table.put_item etc.) to send Vector attributes
+    # without needing client_no_transform.
+    _orig_serialize = boto3.dynamodb.types.TypeSerializer.serialize
+    def _serialize_with_vector(self, value):
+        if isinstance(value, Vector):
+            return {'FLOAT32VECTOR': list(value)}
+        return _orig_serialize(self, value)
+    boto3.dynamodb.types.TypeSerializer.serialize = _serialize_with_vector
+    boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector = lambda self, value: Vector(value)
+
     yield resource
+
+    # Restore the original serialize method and remove the deserializer patch.
+    boto3.dynamodb.types.TypeSerializer.serialize = _orig_serialize
+    del boto3.dynamodb.types.TypeDeserializer._deserialize_float32vector
+
+# Use the Vector(list) type for test values that are meant to be stored as
+# optimized vectors (array of floats instead of JSON list of numbers).
+# The serialization monkey-patching in the vs fixture will cause this list
+# to be serialized and sent to Alternator as
+# {'FLOAT32VECTOR': [1.0, 2.0, ...]}} instead of the standard list-of-numbers
+# {'L': [{'N': '1.0'}, ...]}.
+class Vector(list):
+    pass
+
 
 # A simple test for the vector type. In vector search, a vector is simply
 # an array of known size that contains only numbers. In the DynamoDB API,
@@ -2158,6 +2218,596 @@ def test_query_vectorsearch_queryvector_bad_number_string(table_vs, needs_vector
                     VectorSearch={'QueryVector': {'L': [{'N': '1'}, {'N': bad_num}, {'N': '0'}]}},
                     Limit=1,
                 )
+
+# Test that when creating a vector index via UpdateTable, an optional
+# SimilarityFunction can be specified. The valid values are EUCLIDEAN,
+# COSINE, DOT_PRODUCT, and an invalid value should be rejected.
+# DescribeTable should return the SimilarityFunction that was set.
+def test_updatetable_vectorindex_similarity_function(vs):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        # A bad SimilarityFunction should be rejected:
+        with pytest.raises(ClientError, match='ValidationException.*SimilarityFunction'):
+            table.update(VectorIndexUpdates=[{'Create':
+                {'IndexName': 'ind',
+                 'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                 'SimilarityFunction': 'BAD_FUNCTION'}}])
+        # Each of the valid SimilarityFunction values should be accepted and
+        # returned by DescribeTable. We use a different attribute name for
+        # each to avoid conflicts.
+        for sf in ['EUCLIDEAN', 'COSINE', 'DOT_PRODUCT']:
+            table.update(VectorIndexUpdates=[{'Create':
+                {'IndexName': f'ind_{sf}',
+                 'VectorAttribute': {'AttributeName': f'v_{sf}', 'Dimensions': 3},
+                 'SimilarityFunction': sf}}])
+            desc = table.meta.client.describe_table(TableName=table.name)
+            indexes = {vi['IndexName']: vi for vi in desc['Table']['VectorIndexes']}
+            assert f'ind_{sf}' in indexes
+            assert indexes[f'ind_{sf}']['SimilarityFunction'] == sf
+        # Without an explicit SimilarityFunction, a default ("COSINE") is
+        # used and DescribeTable should return it:
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'ind_default',
+             'VectorAttribute': {'AttributeName': 'v_default', 'Dimensions': 3}}}])
+        desc = table.meta.client.describe_table(TableName=table.name)
+        indexes = {vi['IndexName']: vi for vi in desc['Table']['VectorIndexes']}
+        assert 'ind_default' in indexes
+        assert indexes['ind_default']['SimilarityFunction'] == 'COSINE'
+
+# Same as test_updatetable_vectorindex_similarity_function() above, but
+# for CreateTable instead of UpdateTable.
+def test_createtable_vectorindex_similarity_function(vs):
+    # A bad SimilarityFunction should be rejected:
+    with pytest.raises(ClientError, match='ValidationException.*SimilarityFunction'):
+        with new_test_table(vs,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+                VectorIndexes=[{'IndexName': 'ind',
+                                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                                'SimilarityFunction': 'BAD_FUNCTION'}]) as table:
+            pass
+    # Each of the valid SimilarityFunction values should be accepted and
+    # returned by DescribeTable.
+    for sf in ['EUCLIDEAN', 'COSINE', 'DOT_PRODUCT']:
+        with new_test_table(vs,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+                VectorIndexes=[{'IndexName': 'ind',
+                                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                                'SimilarityFunction': sf}]) as table:
+            desc = table.meta.client.describe_table(TableName=table.name)
+            indexes = {vi['IndexName']: vi for vi in desc['Table']['VectorIndexes']}
+            assert indexes['ind']['SimilarityFunction'] == sf
+    # Without an explicit SimilarityFunction, COSINE is the default and
+    # DescribeTable should return it:
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{'IndexName': 'ind',
+                            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}]) as table:
+        desc = table.meta.client.describe_table(TableName=table.name)
+        indexes = {vi['IndexName']: vi for vi in desc['Table']['VectorIndexes']}
+        assert indexes['ind']['SimilarityFunction'] == 'COSINE'
+
+# Test that the different SimilarityFunction values (EUCLIDEAN, COSINE,
+# DOT_PRODUCT) chosen during CreateTable actually work as expected in
+# subsequent vector-search queries, returning different result orders for
+# the same query vector.
+def test_createtable_query_similarity_function(vs, needs_vector_store):
+    # Choose 3 items whose nearest-neighbor under query [1, 0, 0] differs
+    # depending on the similarity function:
+    #
+    #   p_small = [0.5, 0, 0]   - perfect direction, small magnitude
+    #   p_big   = [2, 0.01, 0]  - large magnitude, nearly perfect direction
+    #   p_close = [1, 0.3, 0]   - moderate magnitude, clearly off direction
+    #
+    # Under COSINE  (angle only, higher=closer):  p_small is nearest (cosine=1.0)
+    # Under DOT_PRODUCT (inner product, higher=closer): p_big is nearest (dot=2)
+    # Under EUCLIDEAN (L2 distance, lower=closer): p_close is nearest (dist=0.3)
+    p_small = random_string()
+    p_big   = random_string()
+    p_close = random_string()
+    for sf, expected_p in [('COSINE', p_small),
+                            ('DOT_PRODUCT', p_big),
+                            ('EUCLIDEAN', p_close)]:
+        with new_test_table(vs,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+            table.put_item(Item={'p': p_small, 'v': [Decimal("0.5"), Decimal("0"),    Decimal("0")]})
+            table.put_item(Item={'p': p_big,   'v': [Decimal("2"),   Decimal("0.01"), Decimal("0")]})
+            table.put_item(Item={'p': p_close, 'v': [Decimal("1"),   Decimal("0.3"),  Decimal("0")]})
+            table.update(VectorIndexUpdates=[{'Create': {
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                'SimilarityFunction': sf,
+            }}])
+            wait_for_vector_index_active(table, 'vind')
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [Decimal("1"), Decimal("0"), Decimal("0")]},
+                Limit=1,
+                Select='ALL_PROJECTED_ATTRIBUTES',
+            )
+            assert len(result['Items']) == 1, \
+                f'Expected 1 result for SimilarityFunction={sf}'
+            assert result['Items'][0]['p'] == expected_p, \
+                f'For SimilarityFunction={sf}, expected nearest item {expected_p}, ' \
+                f'got {result["Items"][0]["p"]}'
+
+# Tests for the optimized vector type, "FLOAT32VECTOR". This is a new type not
+# supported by DynamoDB. It knows all elements are numbers and only guarantees
+# 32-bit floating point precision, so allows Scylla to store the vector much
+# more efficiently, using 32-bit floats instead of textual JSON representation.
+
+# Check that we can write and then read back a "FLOAT32VECTOR" top-level
+# attribute. We use manual_request() to bypass boto3's serializer entirely,
+# because boto3 does not know the "FLOAT32VECTOR" type and would reject it
+# before sending. Scylla shouldn't reject this value - in the worst case it
+# could store the attribute as a JSON string
+# {"FLOAT32VECTOR": [1.0, 2.0, 3.0]} - but ideally it should understand the
+# "FLOAT32VECTOR" type and store it as a native array of floats.
+#
+# Writing tests with "manual_request" is ugly. So in the next tests we will
+# check the same thing with progressively more convenient ways to write the
+# test.
+def test_put_and_get_toplevel_v_manual_request(test_table_s):
+    p = random_string()
+    v = [1.0, 2.0, 3.0]
+    manual_request(test_table_s, 'PutItem', json.dumps({
+        'TableName': test_table_s.name,
+        'Item': {'p': {'S': p}, 'v': {'FLOAT32VECTOR': v}},
+    }))
+    result = manual_request(test_table_s, 'GetItem', json.dumps({
+        'TableName': test_table_s.name,
+        'Key': {'p': {'S': p}},
+        'ConsistentRead': True,
+    }))
+    assert 'Item' in result
+    assert result['Item']['p'] == {'S': p}
+    assert result['Item']['v'] == {'FLOAT32VECTOR': v}
+
+# Same as test_put_and_get_toplevel_v_manual_request, but using the vs
+# fixture (which patches the 'FLOAT32VECTOR' shape into boto3's
+# AttributeValue) and client_no_transform, so boto3 can serialize and
+# deserialize the 'FLOAT32VECTOR' type.
+#
+# Writing tests with "client_no_transform" is still a bit ugly, so the
+# next test will do the same thing again even more conveniently.
+def test_put_and_get_toplevel_v_client_no_transform(test_table_s, vs):
+    p = random_string()
+    v = [1.0, 2.0, 3.0]
+    with client_no_transform(vs.meta.client) as client:
+        client.put_item(
+            TableName=test_table_s.name,
+            Item={'p': {'S': p}, 'v': {'FLOAT32VECTOR': v}},
+        )
+        result = client.get_item(
+            TableName=test_table_s.name,
+            Key={'p': {'S': p}},
+            ConsistentRead=True,
+        )
+    assert 'Item' in result
+    assert result['Item']['p'] == {'S': p}
+    assert result['Item']['v'] == {'FLOAT32VECTOR': v}
+
+# Finally is the same test again, using the new Vector(...) instead of
+# ugly hacks like manual_request and client_no_transform. This finally
+# looks like a good enough API to give to users, and is the approach
+# we'll use below for the rest of the tests for the optimized vector type.
+# Note: we must use a table from the vs fixture (here table_vs) and not an
+# ordinary table (like test_table_s), because the FLOAT32VECTOR type is only
+# patched into the AttributeValue shape of the vs client. An ordinary table's
+# client would fail when botocore encounters the unknown FLOAT32VECTOR member.
+def test_put_and_get_toplevel_v(table_vs):
+    p = random_string()
+    v = Vector([1.0, 2.0, 3.0])
+    table_vs.put_item(Item={'p': p, 'v': v})
+    result = table_vs.get_item(Key={'p': p}, ConsistentRead=True)
+    assert 'Item' in result
+    assert result['Item']['p'] == p
+    assert result['Item']['v'] == v
+
+# Test that on a table with vector index enabled, we can't insert a vector
+# with a floating-point value that doesn't fit in 32 bits.
+def test_vector_float32_range(table_vs):
+    p = random_string()
+    # 1e100 and -1e100 are finite doubles but become infinite as 32-bit float
+    with pytest.raises(ClientError, match='ValidationException.*32-bit'):
+        table_vs.put_item(Item={'p': p, 'v': Vector([1.0, 1e100, 3.0])})
+    with pytest.raises(ClientError, match='ValidationException.*32-bit'):
+        table_vs.put_item(Item={'p': p, 'v': Vector([1.0, -1e100, 3.0])})
+
+# Actually, the limitation that vector components must be finite (like all
+# numbers in JSON) when saved as 32-bit floats doesn't require a vector
+# index to be enabled. It should be enforced for any FLOAT32VECTOR attribute,
+# even if it's not indexed.
+def test_vector_float32_range_no_index(test_table_s, vs):
+    p = random_string()
+    # test_table_s has no vector index on it - but we should still reject
+    # a "FLOAT32VECTOR" attribute value whose elements overflow 32-bit float.
+    with pytest.raises(ClientError, match='ValidationException.*32-bit'):
+        vs.meta.client.put_item(TableName=test_table_s.name,
+            Item={'p': p, 'v': Vector([1.0, 1e100, 3.0])})
+    with pytest.raises(ClientError, match='ValidationException.*32-bit'):
+        vs.meta.client.put_item(TableName=test_table_s.name,
+            Item={'p': p, 'v': Vector([1.0, -1e100, 3.0])})
+
+# A floating-point numbers with more significant digits than a 32-bit float
+# allows is allowed, but silently truncated to 32-bit precision. It is *not*
+# rejected. Check that we can read it back with some loss of precision,
+# below the 32-bit float epsilon.
+def test_vector_float32_precision(table_vs):
+    p = random_string()
+    # FLT_EPSILON is the difference between 1.0 and the next representable
+    # 32-bit float greater than 1.0. Any value between 1 and 1+FLT_EPSILON
+    # will be indistinguishable from 1.0 when truncated to 32-bit float
+    # precision.
+    FLT_EPSILON = 1.1920928955078125e-7
+    # x = 1.0 + FLT_EPSILON/2 is distinguishable from 1.0 in Python's
+    # double-precision (64-bit) floating-point, but indistinguishable from
+    # 1.0 when Alternator will save it as 32-bit and read it back.
+    x = 1.0 + FLT_EPSILON / 2
+    table_vs.put_item(Item={'p': p, 'v': Vector([1.0, x, 3.0])})
+    result = table_vs.get_item(Key={'p': p}, ConsistentRead=True)
+    v = result['Item']['v']
+    assert isinstance(v, Vector)
+    # The middle value should be truncated to 32-bit float precision, so it
+    # should be equal to 1.0 within the 32-bit float epsilon (but not equal
+    # to the original value which had more precision).
+    assert abs(v[1] - 1.0) < FLT_EPSILON
+
+# Continue the test above (test_vector_float32_precision) to confirm that
+# the vector components are really truncated to 32-bit precision and not
+# wastefully stored with higher precision.
+# Importantly, this test proves that the vector value is stored in an
+# *optimized* way, and validates its main benefit over the unoptimized
+# list-of-numbers approach.
+def test_vector_float32_optimized(table_vs):
+    p = random_string()
+    FLT_EPSILON = 1.1920928955078125e-7
+    x = 1.0 + FLT_EPSILON / 2
+    table_vs.put_item(Item={'p': p, 'v': Vector([1.0, x, 3.0])})
+    result = table_vs.get_item(Key={'p': p}, ConsistentRead=True)
+    v = result['Item']['v']
+    # The middle value should be truncated to exactly 1.0.
+    assert v[1] == 1.0
+
+# Test more directly (using CQL) that the vector is stored in the underlying
+# table in an optimized way - and also exactly how it is encoded. It's
+# important that we don't unintentionally change this encoding, because the
+# vector store needs to know how to read it.
+# This test is similar to the tests in test_encoding.py.
+def test_vector_encoding(table_vs, cql):
+    p = random_string()
+    # We pick example values that have an accurate representation in
+    # 32-bit float, so we know exactly what we expect to be stored.
+    table_vs.put_item(Item={'p': p, 'v': Vector([1.0, 2.5, -3.25])})
+    ks = 'alternator_' + table_vs.name
+    cf = table_vs.name
+    rows = list(cql.execute(
+        f'SELECT ":attrs" FROM "{ks}"."{cf}" WHERE p = \'{p}\''))
+    assert len(rows) == 1
+    attrs = rows[0][0]
+    assert 'v' in attrs
+    # The 'v' attribute should be encoded by a single byte 5
+    # (alternator_type::FLOAT32VECTOR) followed directly by the 3 float32
+    # values 1.0, 2.5, -3.25 in big-endian binary. No explicit length field.
+    ALTERNATOR_TYPE_FLOAT32VECTOR = 5
+    v = attrs['v']
+    assert isinstance(v, bytes)
+    assert v[0] == ALTERNATOR_TYPE_FLOAT32VECTOR
+    N = 3
+    assert len(v) == 1 + N * 4
+    # We can check that the values are correct by unpacking them as big-endian
+    # float32 values.
+    values = struct.unpack('>' + 'f' * N, v[1:])
+    assert values == (1.0, 2.5, -3.25)
+
+# Test that we can use a "vector" attribute as a non top-level attribute.
+# It might be stored unoptimized as a JSON value ({"FLOAT32VECTOR": [...]}) but it
+# should still work and be retrievable and searchable.
+def test_put_and_get_nested_vector_value(table_vs):
+    p = random_string()
+    # Store a Vector nested inside a map attribute, not as a top-level attribute.
+    item = {'p': p, 'nested': {'v': Vector([1.0, 2.0, 3.0])}}
+    table_vs.put_item(Item=item)
+    result = table_vs.get_item(Key={'p': p}, ConsistentRead=True)
+    assert 'Item' in result
+    # Because the vector elements are whole numbers, we expect them to be
+    # returned without loss of precision, whether or not they were stored
+    # in an optimized way or not (which we don't want to assert in this
+    # test). So we can check that the returned item is exactly equal to the
+    # original item we put, including the nested Vector.
+    assert result['Item'] == item
+
+# When an attribute does not yet have a vector index on it, it is possible
+# to write to it vectors of any length (even the zero length). But when
+# the attribute does have an vector index, writes with the wrong length are
+# rejected.
+def test_vector_float32vector_any_length_without_index(test_table_s, vs):
+    p = random_string()
+    for length in [0, 1, 3, 42]:
+        # Without a vector index, FLOAT32VECTOR vectors of any length
+        # (including empty) are allowed:
+        vs.meta.client.put_item(TableName=test_table_s.name,
+            Item={'p': p, 'v': Vector([1.0 for i in range(length)])})
+
+def test_vector_float32vector_wrong_length_with_index(table_vs):
+    p = random_string()
+    # table_vs has a vector index on 'v' with Dimensions=3, so only length-3
+    # FLOAT32VECTOR vectors are accepted. Other lengths should be rejected.
+    for bad_length in [0, 1, 2, 4, 42]:
+        with pytest.raises(ClientError, match='ValidationException.*exactly 3'):
+            table_vs.put_item(Item={'p': p, 'v': Vector([1.0 for i in range(bad_length)])})
+
+# Test a vector-search Query when some of the vector attributes are written
+# using the optimized "FLOAT32VECTOR" type. The optimized vector type is
+# recommended, but not mandatory - users can also use a list of numbers
+# ("L" of "N"), so to confirm this, this test writes one vector with an
+# optimized type and one with an unoptimized type, and checks that both are
+# visible in the vector search results.
+def test_query_vector_float32vector_and_lon(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p_v = random_string()  # written with the optimized FLOAT32VECTOR type
+        p_l = random_string()  # written with the standard L-of-N type
+        table.put_item(Item={'p': p_v, 'v': Vector([1.0, 0.0, 0.0])})
+        table.put_item(Item={'p': p_l, 'v': [Decimal("1"), Decimal("0"), Decimal("0")]})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        # wait_for_vector_index_active() ensures the prefill scan is complete,
+        # so both items are guaranteed to be indexed.
+        wait_for_vector_index_active(table, 'vind')
+
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': [Decimal("1"), Decimal("0"), Decimal("0")]},
+            Limit=2,
+        )
+        assert {item['p'] for item in result.get('Items', [])} == {p_v, p_l}
+
+        # QueryVector can also be given as a "FLOAT32VECTOR" type if we want,
+        # instead of a list of numbers. Verify that this really works:
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1, 0, 0])},
+            Limit=2,
+        )
+        assert {item['p'] for item in result.get('Items', [])} == {p_v, p_l}
+
+# In test_query_vector_float32vector_and_lon we verified that "FLOAT32VECTOR"
+# and "L"-of-"N" vectors are both indexed for the prefill case (the items were
+# written before the index was created). For completeness, we should also
+# check that they are also read correctly when written after the index is
+# created - i.e. when noticed with CDC.
+def test_query_vector_float32vector_and_lon_cdc(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{'IndexName': 'vind',
+                            'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}]) as table:
+        # Wait until the vector store is ready (prefill of the empty table
+        # has completed), to ensure our writes are picked up via CDC, not
+        # prefill.
+        wait_for_vector_index_active(table, 'vind')
+        p_v = random_string()  # written with the optimized FLOAT32VECTOR type
+        p_l = random_string()  # written with the standard L-of-N type
+        table.put_item(Item={'p': p_v, 'v': Vector([1.0, 0.0, 0.0])})
+        table.put_item(Item={'p': p_l, 'v': [Decimal("1"), Decimal("0"), Decimal("0")]})
+        # Retry the query until both items appear in the vector search results.
+        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
+        while True:
+            result = table.query(
+                IndexName='vind',
+                VectorSearch={'QueryVector': [Decimal("1"), Decimal("0"), Decimal("0")]},
+                Limit=2,
+            )
+            if {item['p'] for item in result.get('Items', [])} == {p_v, p_l}:
+                break
+            if time.monotonic() > deadline:
+                pytest.fail('Timed out waiting for V-type and L-type items to appear via CDC')
+            time.sleep(0.1)
+
+# Test that VectorSearch.ReturnScores rejects unknown values and the
+# SIMILARITY+COUNT combination. No vector store needed.
+def test_query_vectorsearch_return_similarity_bad(table_vs):
+    # Unknown value is rejected:
+    with pytest.raises(ClientError, match='ValidationException.*ReturnScores'):
+        table_vs.query(IndexName='vind',
+            VectorSearch={'QueryVector': [1, 2, 3], 'ReturnScores': 'GARBAGE'}, Limit=1)
+    # SIMILARITY with Select=COUNT is rejected:
+    with pytest.raises(ClientError, match='ValidationException.*COUNT'):
+        table_vs.query(IndexName='vind',
+            VectorSearch={'QueryVector': [1, 2, 3], 'ReturnScores': 'SIMILARITY'}, Limit=1,
+            Select='COUNT')
+
+# Test for VectorSearch.ReturnScores - if set to NONE (the default),
+# a "Scores" field is missing in the response, but with SIMILARITY,
+# a "Scores" field is present and contains the similarity values for
+# each returned item. We verify the length matches Items, the scores are in
+# descending order, and exact scores match expected COSINE similarity values
+# for known vectors.
+def test_query_vectorsearch_return_similarity(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        # Insert 4 items at known COSINE similarity to query vector [1, 0, 0]:
+        #   p1 at [1, 0, 0]   cos=1.0    -> similarity 1.0 (identical)
+        #   p2 at [1, 0.1, 0] cos~=0.995 -> similarity ~ 0.9975
+        #   p3 at [0, 1, 0]   cos=0.0    -> similarity 0.5 (orthogonal)
+        #   p4 at [-1, 0, 0]  cos=-1.0   -> similarity 0.0 (opposite)
+        p1, p2, p3, p4 = random_string(), random_string(), random_string(), random_string()
+        table.put_item(Item={'p': p1, 'v': Vector([1.0,  0.0,  0.0])})
+        table.put_item(Item={'p': p2, 'v': Vector([1.0,  0.1,  0.0])})
+        table.put_item(Item={'p': p3, 'v': Vector([0.0,  1.0,  0.0])})
+        table.put_item(Item={'p': p4, 'v': Vector([-1.0, 0.0,  0.0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'SimilarityFunction': 'COSINE'}}])
+        wait_for_vector_index_active(table, 'vind')
+        # Without ReturnScores (or with NONE), no Scores in response.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0])},
+            Limit=4)
+        assert 'Scores' not in result
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0]), 'ReturnScores': 'NONE'},
+            Limit=4)
+        assert 'Scores' not in result
+        # With SIMILARITY, Scores is present, same length as Items, and
+        # in descending order (nearest neighbor has the highest score).
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0]), 'ReturnScores': 'SIMILARITY'},
+            Limit=4)
+        assert [item['p'] for item in result['Items']] == [p1, p2, p3, p4]
+        assert 'Scores' in result
+        sims = result['Scores']
+        assert len(sims) == 4
+        # Scores must be in descending order.
+        assert sims == sorted(sims, reverse=True)
+        # Map item key to its position in the result list.
+        pos = {item['p']: i for i, item in enumerate(result['Items'])}
+        # Known similarity values for three easy cases:
+        assert sims[pos[p1]] == pytest.approx(1.0, abs=1e-5)
+        assert sims[pos[p3]] == pytest.approx(0.5, abs=1e-5)
+        assert sims[pos[p4]] == pytest.approx(0.0, abs=1e-5)
+        # Use FilterExpression to only leave p1 and p3 in the results, and
+        # verify their similarity values are still correct and in the right
+        # order.
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0]), 'ReturnScores': 'SIMILARITY'},
+            Limit=4,
+            FilterExpression='p = :p1 OR p = :p3',
+            ExpressionAttributeValues={':p1': p1, ':p3': p3},
+        )
+        assert [item['p'] for item in result['Items']] == [p1, p3]
+        assert result['ScannedCount'] == 4
+        assert result['Count'] == 2
+        sims = result['Scores']
+        assert len(sims) == 2
+        assert sims[0] == pytest.approx(1.0, abs=1e-5)
+        assert sims[1] == pytest.approx(0.5, abs=1e-5)
+
+# Another ReturnScores=SIMILARITY test, for a different similarity
+# function (EUCLIDEAN).
+def test_query_vectorsearch_return_similarity2(vs, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': Vector([2.0, 0.0, 0.0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'SimilarityFunction': 'EUCLIDEAN'}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([1.0, 0.0, 0.0]), 'ReturnScores': 'SIMILARITY'},
+            Limit=1)
+        assert len(result['Items']) == 1 and result['Items'][0]['p'] == p
+        # The EUCLIDEAN similarity is defined as 1/(1+d) where d is the L2
+        # distance. The L2 distance between our query vector and single item
+        # is 1.0, so similarity is 1/(1+1) = 0.5.
+        assert result['Scores'] == [pytest.approx(0.5, abs=1e-5)]
+
+# The DOT_PRODUCT similarity function is not bounded if vectors are not
+# normalized (have an arbitrary magnitude, not 1.0). It is possible that the
+# similarity value returned with ReturnScores=SIMILARITY could be beyond
+# the range of 32-bit float even for valid float32 vectors. In this case, the
+# implementation should not cause an error or drop this item - it should
+# return the item correctly with a very high (even if not mathematically
+# accurate) similarity score.
+def test_query_vectorsearch_return_similarity_dot_product_overflow(vs, needs_vector_store):
+    # Two float32 vectors with very large - but valid - magnitude BIG,
+    # have a dot product of BIG^2, which overflows float32 to +infinity.
+    BIG = 1e38 # Valid 32-bit number, but close to the maximum
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p = random_string()
+        table.put_item(Item={'p': p, 'v': Vector([BIG, 0.0, 0.0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'SimilarityFunction': 'DOT_PRODUCT'}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([BIG, 0.0, 0.0]),
+                          'ReturnScores': 'SIMILARITY'},
+            Limit=1,
+            Select='ALL_ATTRIBUTES')
+        assert len(result['Items']) == 1 and result['Items'][0]['p'] == p
+        assert 'Scores' in result
+        # The dot product BIG * BIG overflows float32 to infinity.
+        # Since JSON can't represent infinity and must return some number,
+        # we don't really care what it returns, as long as it's very large.
+        # Let's just verify it's larger than BIG itself.
+        assert result['Scores'][0] >= BIG
+
+# Test that DOT_PRODUCT similarity correctly orders three items:
+# one very highly similar (large positive dot product overflowing 32 bits),
+# one mildly similar (small positive), and one very highly dissimilar
+# (large negative overflowing 32 bits).
+# The vector store should return them in descending score order.
+# We also check the Scores themselves: the highly similar item should have
+# a score much larger than 1, the mildly similar item around 1, and the
+# highly dissimilar item should have a large negative score.
+#
+# This test reproduces a bug in the vector store: When the similarity score
+# overflows the 32-bit calculation, it returns the same value "null" for both
+# +infinity and -infinity. Alternator currently assumes it's +infinity
+# (because only the results with the *highest* scores are returned from the
+# query), but in test like this one when we inspect all the items and their
+# scores, we can catch this discrepancy - the -inf result also gets
+# incorrectly returned as +inf. This test is marked xfail until the bug is
+# fixed.
+@pytest.mark.xfail(reason='vector store returns same "null" similarity for both +inf and -inf')
+def test_query_vectorsearch_return_similarity_dot_product_overflow2(vs, needs_vector_store):
+    BIG = 1e38  # Near FLT_MAX; dot product BIG * BIG overflows float32
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        p_high = random_string()
+        p_mid  = random_string()
+        p_low  = random_string()
+        table.put_item(Item={'p': p_high, 'v': Vector([BIG,  0.0, 0.0])})
+        table.put_item(Item={'p': p_mid,  'v': Vector([0.0,  0.0, 0.0])})
+        table.put_item(Item={'p': p_low,  'v': Vector([-BIG, 0.0, 0.0])})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+             'SimilarityFunction': 'DOT_PRODUCT'}}])
+        wait_for_vector_index_active(table, 'vind')
+        result = table.query(
+            IndexName='vind',
+            VectorSearch={'QueryVector': Vector([BIG, 0.0, 0.0]),
+                          'ReturnScores': 'SIMILARITY'},
+            Limit=3,
+            Select='ALL_ATTRIBUTES')
+        items = result['Items']
+        scores = result['Scores']
+        assert len(items) == 3
+        assert len(scores) == 3
+        # Results must be in descending score order (highest dot product first).
+        assert [item['p'] for item in items] == [p_high, p_mid, p_low]
+        # The highly similar item's score should be large and positive
+        assert scores[0] > BIG
+        # The mildly similar item's dot product is 0, the "similarity"
+        # converts it to 0.5 (since similarity is defined as (dot+1)/2
+        # to map from [-1,1] to [0,1] if vectors are normalized).
+        assert scores[1] == pytest.approx(0.5, abs=1e-5)
+        # The highly dissimilar item's score should be large and negative.
+        assert scores[2] < -BIG
 
 ##############################################################################
 # CONTINUE HERE - MAKE A DECISION! PRE-FILTERING:

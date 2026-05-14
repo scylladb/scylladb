@@ -35,8 +35,8 @@ from botocore.exceptions import ClientError
 
 from test.alternator.test_cql_rbac import new_dynamodb, new_role
 from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request
-from test.alternator.test_vector import vs
 from test.pylib.skip_types import skip_env
+from test.alternator.test_vector import vs, needs_vector_store, wait_for_vector_index_active, table_vs
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
 # are not available on AWS (of course), but may also not be available for
@@ -420,6 +420,65 @@ def test_query_vector_operations(vs, metrics):
                         VectorSearch={'QueryVector': [1, 2, 3]}, Limit=1)
                 except ClientError:
                     pass
+
+# Test that the three vector search item-count metrics -
+#  * scylla_alternator_vector_search_query_returned_items,
+#  * scylla_alternator_vector_search_query_items_from_vs,
+#  * scylla_alternator_vector_search_query_items_from_base_table
+# are incremented as needed for a vector search query.
+# This test requires a configured vector store and will be skipped otherwise.
+def test_query_vector_item_metrics(vs, metrics, needs_vector_store):
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        # Insert items before enabling the vector index, so the prefill scan
+        # will index them and if we wait for the index to become ACTIVE
+        # we can be sure these items are indexed.
+        for i in range(3):
+            table.put_item(Item={'p': random_string(), 'v': [i, 0, 0]})
+        table.update(VectorIndexUpdates=[{'Create':
+            {'IndexName': 'vind',
+             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
+        wait_for_vector_index_active(table, 'vind')
+
+        # A SELECT=ALL_ATTRIBUTES query fetches 2 items from the base table,
+        # so all three metrics must increase by exactly 2.
+        vs_metric = 'scylla_alternator_vector_search_query_items_from_vs'
+        returned_metric = 'scylla_alternator_vector_search_query_returned_items'
+        base_metric = 'scylla_alternator_vector_search_query_items_from_base_table'
+        the_metrics = get_metrics(metrics)
+        before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='ALL_ATTRIBUTES')
+        assert result['Count'] == 2
+        the_metrics = get_metrics(metrics)
+        after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        assert after[vs_metric] - before[vs_metric] == 2
+        assert after[returned_metric] - before[returned_metric] == 2
+        assert after[base_metric] - before[base_metric] == 2
+
+        # A SELECT=COUNT query doesn't return any items, so increments only
+        # items_from_vs, not the other two:
+        the_metrics = get_metrics(metrics)
+        before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='COUNT')
+        assert result['Count'] == 2
+        the_metrics = get_metrics(metrics)
+        after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        assert after[vs_metric] - before[vs_metric] == 2
+        assert after[returned_metric] - before[returned_metric] == 0
+        assert after[base_metric] - before[base_metric] == 0
+
+        # A SELECT=ALL_PROJECTED_ATTRIBUTES query increments items_from_vs
+        # and returned_items, but not items_from_base_table.
+        the_metrics = get_metrics(metrics)
+        before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='ALL_PROJECTED_ATTRIBUTES')
+        assert result['Count'] == 2
+        the_metrics = get_metrics(metrics)
+        after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
+        assert after[vs_metric] - before[vs_metric] == 2
+        assert after[returned_metric] - before[returned_metric] == 2
+        assert after[base_metric] - before[base_metric] == 0
 
 # Test counters for DescribeEndpoints:
 def test_describe_endpoints_operations(dynamodb, metrics):
