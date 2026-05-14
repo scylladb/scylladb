@@ -76,6 +76,7 @@ private:
             , _default_timeout_config(cs->_default_timeout_config)
             , _timeout_config(cs->_timeout_config)
             , _enabled_protocol_extensions(cs->_enabled_protocol_extensions)
+            , _original_shard(cs->_original_shard)
     {}
     friend client_state_for_another_shard;
 private:
@@ -436,6 +437,10 @@ private:
 
     cql_transport::cql_protocol_extension_enum_set _enabled_protocol_extensions;
 
+    // The shard where the current CQL request originally entered the node.
+    // After an internal CAS shard bounce this differs from this_shard_id().
+    unsigned _original_shard = this_shard_id();
+
 public:
 
     bool is_protocol_extension_set(cql_transport::cql_protocol_extension ext) const {
@@ -444,6 +449,10 @@ public:
 
     void set_protocol_extensions(cql_transport::cql_protocol_extension_enum_set exts) {
         _enabled_protocol_extensions = std::move(exts);
+    }
+
+    unsigned get_original_shard() const noexcept {
+        return _original_shard;
     }
 };
 

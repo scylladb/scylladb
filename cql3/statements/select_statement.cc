@@ -479,7 +479,7 @@ select_statement::do_execute(query_processor& qp,
             token = key_ranges[0].start()->value().as_decorated_key().token();
 
             auto erm = table.get_effective_replication_map();
-            tablet_info = erm->check_locality(token);
+            tablet_info = erm->check_locality(token, state.get_client_state().get_original_shard());
         }
     }
 

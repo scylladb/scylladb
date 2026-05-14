@@ -306,7 +306,13 @@ public:
     /// replaced but not yet rebuilt.
     virtual host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const = 0;
 
-    virtual std::optional<tablet_routing_info> check_locality(const token& token) const = 0;
+    /// Checks whether the request was routed to the correct tablet replica.
+    /// \param token       the partition token
+    /// \param original_shard the shard where the CQL request originally entered the node;
+    ///                    after an internal CAS shard bounce this differs from this_shard_id()
+    /// \returns nullopt if routed correctly, otherwise the tablet routing info
+    ///          so the client can learn the correct tablet map
+    virtual std::optional<tablet_routing_info> check_locality(const token& token, unsigned original_shard) const = 0;
 
 
     /// Returns true if there are any pending ranges for this endpoint.
@@ -492,7 +498,7 @@ public: // effective_replication_map
     host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
     host_id_vector_replica_set get_replicas_for_reading(const token& token, bool is_vnode = false) const override;
     host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const override;
-    std::optional<tablet_routing_info> check_locality(const token& token) const override;
+    std::optional<tablet_routing_info> check_locality(const token& token, unsigned original_shard) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
@@ -604,7 +610,7 @@ public:
     host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
     host_id_vector_replica_set get_replicas_for_reading(const token& token, bool is_vnode = false) const override;
     host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const override;
-    std::optional<tablet_routing_info> check_locality(const token& token) const override;
+    std::optional<tablet_routing_info> check_locality(const token& token, unsigned original_shard) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
