@@ -732,7 +732,6 @@ vector_search_tests = set([
     'test/vector_search/load_balancer_test',
     'test/vector_search/client_test',
     'test/vector_search/filter_test',
-    'test/vector_search/rescoring_test'
 ])
 
 wasms = set([
@@ -1810,7 +1809,6 @@ deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vect
 deps['test/vector_search/load_balancer_test'] = ['test/vector_search/load_balancer_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/client_test'] = ['test/vector_search/client_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/filter_test'] = ['test/vector_search/filter_test.cc'] + scylla_tests_dependencies
-deps['test/vector_search/rescoring_test'] = ['test/vector_search/rescoring_test.cc'] + scylla_tests_dependencies
 
 boost_tests_prefixes = ["test/boost/", "test/vector_search/", "test/raft/", "test/manual/", "test/ldap/"]
 

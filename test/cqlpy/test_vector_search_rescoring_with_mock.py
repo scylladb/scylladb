@@ -282,3 +282,27 @@ def test_filters_invalid_similarity_scores_in_rescored_results(cql, test_keyspac
                 # dot_product: [0, 0] produces 0.5 (valid); [INFINITY, ..] is invalid.
                 assert [row.id for row in rows] == [1, 14]
             assert len(rows[0]) == 1
+
+
+# Verifies that a zero ANN query vector does not cause an error and that
+# the result set is empty after rescoring filters out the NaN similarity
+# scores it produces. Only tested with cosine similarity because zero vectors
+# result in NaN only for cosine; other functions produce valid (non-NaN) scores.
+#
+# similarity_cosine used to throw on zero vectors (SCYLLADB-456); it now
+# returns NaN instead. NaN scores should be filtered by rescoring, yielding
+# an empty result set.
+#
+# Reproduces SCYLLADB-2231
+@pytest.mark.xfail(reason="SCYLLADB-2231: rescoring does not yet filter NaN similarity scores")
+def test_rescoring_with_zerovector_query(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data) as table:
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        rows = list(cql.execute(
+            f"SELECT id FROM {table} ORDER BY embedding ANN OF [0, 0] LIMIT 3"))
+
+        # NaN similarity scores produced by the zero-vector query should be
+        # filtered out by rescoring, leaving an empty result set.
+        # What is most important - no error is thrown and the query completes successfully
+        assert rows == []

@@ -9,5 +9,3 @@ add_scylla_test(client_test
 
 add_scylla_test(filter_test
   LIBRARIES vector_search)
-add_scylla_test(rescoring_test
-  LIBRARIES vector_search)
