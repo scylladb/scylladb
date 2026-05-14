@@ -775,6 +775,13 @@ private:
         );
     }
 
+    future<seg_ptr> get_segment(write_source src) {
+        seg_ptr seg = co_await _segment_pool.get_segment(src);
+        seg->start(make_segment_ref(seg->id()));
+        _stats.segments_in_use++;
+        co_return seg;
+    }
+
     void free_segment(log_segment_id) noexcept;
 
     segment_descriptor& get_segment_descriptor(log_segment_id segment_id) {
@@ -1030,10 +1037,9 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, compaction_g
         throw std::runtime_error(fmt::format("Write size {} exceeds segment size {}", data.size(), _cfg.segment_size));
     }
 
-    seg_ptr seg = co_await _segment_pool.get_segment(source);
+    auto seg = co_await get_segment(source);
     auto& desc = get_segment_descriptor(seg->id());
 
-    _stats.segments_in_use++;
     logstor_logger.trace("Write full segment {} from {}", seg->id(), write_source_to_string(source));
 
     wb.write_header(desc.seg_gen, cg.schema()->id());
@@ -1087,10 +1093,9 @@ future<> segment_manager_impl::request_segment_switch() {
 future<> segment_manager_impl::switch_active_segment() {
     auto holder = _async_gate.hold();
 
-    auto new_seg = co_await _segment_pool.get_segment(write_source::normal_write);
+    auto new_seg = co_await get_segment(write_source::normal_write);
 
     auto old_seg = std::exchange(_active_segment, std::move(new_seg));
-    _stats.segments_in_use++;
     _segment_seq_num++;
 
     if (old_seg) {
@@ -1106,7 +1111,6 @@ future<> segment_manager_impl::switch_active_segment() {
         trigger_separator_flush(_segment_seq_num - 5*u);
     }
 
-    _active_segment->start(make_segment_ref(_active_segment->id()));
     logstor_logger.trace("Switched active segment to {}", _active_segment->id());
 }
 
@@ -2221,7 +2225,6 @@ public:
         co_await _sm.load_segment(_db, _seg->id());
     }
     future<> abort() override {
-        _sm.free_segment(_seg->id());
         co_return;
     }
 };
@@ -2235,8 +2238,7 @@ future<> segment_manager_impl::load_segment(replica::database& db, log_segment_i
 }
 
 future<std::unique_ptr<segment_stream_sink>> segment_manager_impl::create_segment_output_stream(replica::database& db) {
-    auto seg = co_await _segment_pool.get_segment(write_source::streaming);
-    _stats.segments_in_use++;
+    auto seg = co_await get_segment(write_source::streaming);
     co_return std::make_unique<segment_stream_sink_impl>(*this, db, std::move(seg));
 }
 
