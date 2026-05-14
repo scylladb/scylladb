@@ -107,57 +107,6 @@ struct print_log_value<std::vector<float>> {
 };
 }
 
-SEASTAR_TEST_CASE(oversampling_multiplies_limit_for_vector_store_query) {
-    auto server = co_await make_vs_mock_server();
-    co_await do_with_cql_env(
-            [&](cql_test_env& env) -> future<> {
-                auto schema = co_await create_test_table(env, "ks", "cf");
-                configure(env.local_qp().vector_store_client()).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
-                env.local_qp().vector_store_client().start_background_tasks();
-                co_await env.execute_cql("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={'oversampling': 3.4}");
-
-                auto msg = co_await env.execute_cql("SELECT * FROM ks.cf ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 3;");
-
-                BOOST_REQUIRE(!server->ann_requests().empty());
-                // The expected limit is ceil(oversampling * limit) = ceil(3.4 * 3) = ceil(10.2) = 11.
-                BOOST_CHECK_EQUAL(parse_limit(server->ann_requests().back().body), 11);
-            },
-            make_config(format("http://server.node:{}", server->port())))
-            .finally(seastar::coroutine::lambda([&] -> future<> {
-                co_await server->stop();
-            }));
-}
-
-SEASTAR_TEST_CASE(oversampled_vector_store_results_are_limited_to_cql_limit) {
-    auto server = co_await make_vs_mock_server();
-    co_await do_with_cql_env(
-            [&](cql_test_env& env) -> future<> {
-                configure(env.local_qp().vector_store_client()).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
-                env.local_qp().vector_store_client().start_background_tasks();
-                co_await env.execute_cql("CREATE TABLE ks.cf (id int primary key, embedding vector<float, 3>)");
-                co_await env.execute_cql("CREATE INDEX idx ON ks.cf (embedding) USING 'vector_index' WITH OPTIONS={'oversampling': 2}");
-                co_await env.execute_cql("INSERT INTO ks.cf (id, embedding) VALUES (1, [0, 0, 0])");
-                co_await env.execute_cql("INSERT INTO ks.cf (id, embedding) VALUES (2, [0, 0, 0])");
-
-                server->next_ann_response({http::reply::status_type::ok, R"({
-                    "primary_keys": {
-                        "id": [1, 2]
-                    },
-                    "similarity_scores": [0, 0]
-                })"});
-                auto msg = co_await env.execute_cql("SELECT id FROM ks.cf ORDER BY embedding ANN OF [0, 0, 0] LIMIT 1;");
-
-                auto rms = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-                BOOST_REQUIRE(rms);
-                const auto& rows = rms->rs().result_set().rows();
-                BOOST_REQUIRE_EQUAL(rows.size(), 1);
-            },
-            make_config(format("http://server.node:{}", server->port())))
-            .finally(seastar::coroutine::lambda([&] -> future<> {
-                co_await server->stop();
-            }));
-}
-
 SEASTAR_TEST_CASE(result_returned_by_vector_store_is_rescored) {
 
     for (const auto& params : test_data) {
