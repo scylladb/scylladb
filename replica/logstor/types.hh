@@ -9,7 +9,6 @@
 
 #include <cstdint>
 #include <fmt/format.h>
-#include "replica/logstor/utils.hh"
 #include "dht/decorated_key.hh"
 #include "mutation/canonical_mutation.hh"
 #include "mutation/timestamp.hh"
@@ -35,8 +34,6 @@ struct primary_index_key {
     dht::decorated_key dk;
 };
 
-using segment_generation = generation_base<uint16_t>;
-
 struct index_entry {
     log_location location;
     api::timestamp_type timestamp;
@@ -53,6 +50,28 @@ struct log_record_header {
 struct log_record {
     log_record_header header;
     canonical_mutation mut;
+};
+
+struct segment_sequence {
+    uint64_t value;
+
+    bool operator==(const segment_sequence& other) const noexcept = default;
+    auto operator<=>(const segment_sequence& other) const noexcept = default;
+
+    segment_sequence& operator++() noexcept {
+        ++value;
+        return *this;
+    }
+
+    segment_sequence operator++(int) noexcept {
+        segment_sequence tmp = *this;
+        ++value;
+        return tmp;
+    }
+
+    segment_sequence operator+(uint64_t increment) const noexcept {
+        return segment_sequence{value + increment};
+    }
 };
 
 }
@@ -80,5 +99,13 @@ struct fmt::formatter<replica::logstor::primary_index_key> : fmt::formatter<stri
     template <typename FormatContext>
     auto format(const replica::logstor::primary_index_key& key, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{}", key.dk);
+    }
+};
+
+template <>
+struct fmt::formatter<replica::logstor::segment_sequence> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const replica::logstor::segment_sequence& seq, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "sseq({})", seq.value);
     }
 };

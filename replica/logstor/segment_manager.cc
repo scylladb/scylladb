@@ -69,6 +69,7 @@ protected:
 class writeable_segment : public segment {
     seastar::gate _write_gate;
     segment_ref _seg_ref;
+    segment_sequence _seq_num;
 
     uint32_t _current_offset = 0; // next offset for write
 
@@ -77,7 +78,7 @@ class writeable_segment : public segment {
 public:
     using segment::segment;
 
-    void start(segment_ref seg_ref);
+    void start(segment_ref, segment_sequence);
 
     future<> stop();
 
@@ -99,6 +100,10 @@ public:
 
     segment_ref ref() {
         return _seg_ref;
+    }
+
+    segment_sequence seq_num() const noexcept {
+        return _seq_num;
     }
 };
 
@@ -132,8 +137,9 @@ future<log_record> segment::read(log_location loc) {
     });
 }
 
-void writeable_segment::start(segment_ref seg_ref) {
+void writeable_segment::start(segment_ref seg_ref, segment_sequence seq_num) {
     _seg_ref = std::move(seg_ref);
+    _seq_num = seq_num;
 }
 
 future<> writeable_segment::stop() {
@@ -197,6 +203,9 @@ class file_manager {
 
     std::vector<seastar::file> _open_read_files;
 
+    std::unique_ptr<char[], seastar::free_deleter> _zero_buf;
+    size_t _zero_buf_size{0};
+
 public:
     file_manager(segment_manager_config cfg)
         : _segments_per_file(cfg.file_size / cfg.segment_size)
@@ -237,6 +246,9 @@ public:
 
 future<> file_manager::start() {
     co_await seastar::recursive_touch_directory(_base_dir.string());
+    _zero_buf_size = 128 * 1024;
+    _zero_buf = allocate_aligned_buffer<char>(_zero_buf_size, 4096);
+    std::memset(_zero_buf.get(), 0, _zero_buf_size);
 }
 
 future<> file_manager::stop() {
@@ -326,19 +338,13 @@ future<seastar::file> file_manager::get_file_for_read(size_t file_id) {
 }
 
 future<> file_manager::format_file_region(seastar::file file, uint64_t offset, size_t size) {
-    // Allocate aligned buffer for zeroing
-    const auto write_alignment = file.disk_write_dma_alignment();
-    size_t buf_size = align_up<size_t>(128 * 1024, size_t(write_alignment));
-    auto zero_buf = allocate_aligned_buffer<char>(buf_size, write_alignment);
-    std::memset(zero_buf.get(), 0, buf_size);
-
-    // Write zeros to entire region
+    // Write zeros to entire region using the pre-allocated zero buffer
     size_t remaining = size;
     uint64_t current_offset = offset;
 
     while (remaining > 0) {
-        auto write_size = std::min(remaining, buf_size);
-        auto written = co_await file.dma_write(current_offset, zero_buf.get(), write_size);
+        auto write_size = std::min(remaining, _zero_buf_size);
+        auto written = co_await file.dma_write(current_offset, _zero_buf.get(), write_size);
 
         current_offset += written;
         remaining -= written;
@@ -554,7 +560,7 @@ public:
 
 struct segment_header {
     segment_kind kind;
-    segment_generation seg_gen;
+    segment_sequence segment_seq;
 
     struct mixed {};
     struct full {
@@ -569,7 +575,7 @@ struct segment_header {
 static segment_header make_segment_header(const write_buffer::buffer_header& bh, std::optional<write_buffer::segment_header> sh) {
     segment_header seg_hdr {
         .kind = bh.kind,
-        .seg_gen = bh.seg_gen,
+        .segment_seq = bh.segment_seq,
     };
 
     switch (bh.kind) {
@@ -621,7 +627,7 @@ class segment_manager_impl {
     seastar::semaphore _active_segment_write_sem{1};
     segment_pool _segment_pool;
     std::optional<shared_future<>> _switch_segment_fut;
-    size_t _segment_seq_num{0};
+    segment_sequence _next_segment_seq{1};
 
     seastar::gate _async_gate;
     future<> _reserve_replenisher{make_ready_future<>()};
@@ -639,7 +645,7 @@ class segment_manager_impl {
     std::vector<write_buffer*> _available_separator_buffers;
 
     std::function<void()> _trigger_compaction_fn;
-    std::function<void(size_t)> _trigger_separator_flush_fn;
+    std::function<void(segment_sequence)> _trigger_separator_flush_fn;
 
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
@@ -682,7 +688,7 @@ public:
     }
 
     future<> load_segment(replica::database&, log_segment_id);
-    future<> recover_segment(replica::database&, log_segment_id);
+    future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, std::function<void(const segment_header&)> on_header);
     future<std::optional<segment_header>> read_segment_header(log_segment_id);
     future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&);
 
@@ -692,7 +698,7 @@ public:
         }
     }
 
-    void trigger_separator_flush(size_t seq) {
+    void trigger_separator_flush(segment_sequence seq) {
         if (_trigger_separator_flush_fn) {
             _trigger_separator_flush_fn(seq);
         }
@@ -710,7 +716,7 @@ public:
         _trigger_compaction_fn = std::move(fn);
     }
 
-    void set_trigger_separator_flush_hook(std::function<void(size_t)> fn) {
+    void set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
         _trigger_separator_flush_fn = std::move(fn);
     }
 
@@ -740,9 +746,12 @@ private:
 
     future<> request_segment_switch();
     future<> switch_active_segment();
+    segment_sequence allocate_segment_seq() noexcept {
+        return _next_segment_seq++;
+    }
     std::chrono::microseconds calculate_separator_delay() const;
 
-    future<> write_to_separator(write_buffer&, segment_ref, size_t segment_seq_num);
+    future<> write_to_separator(write_buffer&, segment_ref, segment_sequence);
     void write_to_separator(table&, log_location prev_loc, log_record, segment_ref);
 
     // Sequentially scans one segment and invokes callbacks for the decoded
@@ -777,7 +786,7 @@ private:
 
     future<seg_ptr> get_segment(write_source src) {
         seg_ptr seg = co_await _segment_pool.get_segment(src);
-        seg->start(make_segment_ref(seg->id()));
+        seg->start(make_segment_ref(seg->id()), allocate_segment_seq());
         _stats.segments_in_use++;
         co_return seg;
     }
@@ -991,7 +1000,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         seg_ptr seg = _active_segment;
         auto seg_holder = seg->hold();
         auto seg_ref = seg->ref();
-        auto segment_seq_num = _segment_seq_num;
+        auto seq_num = seg->seq_num();
         auto write_op = _writes_phaser.start();
         auto& desc = get_segment_descriptor(seg->id());
 
@@ -1000,7 +1009,9 @@ future<> segment_manager_impl::write(write_buffer& wb) {
             seg_ref.set_flush_failure();
         });
 
-        wb.write_header(desc.seg_gen, std::nullopt);
+        logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
+
+        wb.write_header(seq_num, std::nullopt);
 
         auto loc = co_await seg->append(data);
         sem_units.return_all();
@@ -1015,7 +1026,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         co_await wb.complete_writes(loc);
 
         co_await with_scheduling_group(_cfg.separator_sg, [&] {
-            return write_to_separator(wb, std::move(seg_ref), segment_seq_num);
+            return write_to_separator(wb, std::move(seg_ref), seq_num);
         });
         write_to_separator_failed.cancel();
     }
@@ -1040,9 +1051,9 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, compaction_g
     auto seg = co_await get_segment(source);
     auto& desc = get_segment_descriptor(seg->id());
 
-    logstor_logger.trace("Write full segment {} from {}", seg->id(), write_source_to_string(source));
+    logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
 
-    wb.write_header(desc.seg_gen, cg.schema()->id());
+    wb.write_header(seg->seq_num(), cg.schema()->id());
 
     auto loc = co_await seg->append(data);
 
@@ -1096,7 +1107,6 @@ future<> segment_manager_impl::switch_active_segment() {
     auto new_seg = co_await get_segment(write_source::normal_write);
 
     auto old_seg = std::exchange(_active_segment, std::move(new_seg));
-    _segment_seq_num++;
 
     if (old_seg) {
         // close old segment in background
@@ -1107,11 +1117,11 @@ future<> segment_manager_impl::switch_active_segment() {
 
     // trigger separator flush for separator buffers that hold old segments
     auto u = std::max<size_t>(1, _max_segments / 100);
-    if (_segment_seq_num % u == 0 && _segment_seq_num > 5*u) {
-        trigger_separator_flush(_segment_seq_num - 5*u);
+    if (_next_segment_seq.value % u == 0 && _next_segment_seq.value > 5*u) {
+        trigger_separator_flush(segment_sequence(_next_segment_seq.value - 5*u));
     }
 
-    logstor_logger.trace("Switched active segment to {}", _active_segment->id());
+    logstor_logger.trace("Switched active segment to {} seq {}", _active_segment->id(), _active_segment->seq_num());
 }
 
 future<> segment_manager_impl::replenish_reserve() {
@@ -1193,10 +1203,6 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
     if (desc.ref_count != 0) {
         on_internal_error(logstor_logger, format("Freeing segment {} with non-zero reference count", segment_id));
     }
-    desc.on_free_segment();
-
-    // TODO write new generation?
-
     _free_segments.push_back(segment_id);
     _segment_freed_cv.signal();
 
@@ -1224,22 +1230,12 @@ future<> segment_manager_impl::discard_segments(segment_set& ss) {
         segments.push_back(seg_id);
     }
 
+    // Invalidate the first header block so recovery treats the slot as empty.
     co_await max_concurrent_for_each(segments, 32, [this] (log_segment_id seg_id) -> future<> {
-        // Write a valid empty segment header with the next generation.
-        // This marks the segment as discarded while preserving the generation counter.
-        auto next_gen = get_segment_descriptor(seg_id).seg_gen;
-        ++next_gen;
-        auto buf = allocate_aligned_buffer<char>(block_alignment, 4096);
-        std::memset(buf.get(), 0, block_alignment);
-        simple_memory_output_stream out(buf.get(), write_buffer::buffer_header_size);
-        write_buffer::write_empty_header(out, next_gen);
-
+        logstor_logger.trace("Discard segment {}", seg_id);
         auto [file_id, file_offset] = segment_id_to_file_location(seg_id);
         auto file = co_await _file_mgr.get_file_for_write(file_id);
-        co_await file.dma_write(file_offset, buf.get(), block_alignment);
-
-        logstor_logger.trace("Discard segment {} next gen {}", seg_id, next_gen);
-
+        co_await _file_mgr.format_file_region(file, file_offset, block_alignment);
         free_segment(seg_id);
     });
 }
@@ -1258,7 +1254,7 @@ future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
             .read_ahead = 1,
     });
     size_t current_position = 0;
-    auto seg_gen = get_segment_descriptor(segment_id).seg_gen;
+    std::optional<segment_sequence> segment_seq;
 
     logstor_logger.trace("Reading records from segment {} at file {} offset {}",
                         segment_id, file_id, file_offset);
@@ -1288,7 +1284,9 @@ future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
             break;
         }
 
-        if (bh.seg_gen != seg_gen) {
+        if (!segment_seq) {
+            segment_seq = bh.segment_seq;
+        } else if (bh.segment_seq != *segment_seq) {
             break;
         }
 
@@ -1755,7 +1753,7 @@ separator_buffer compaction_manager_impl::allocate_separator_buffer() {
     return separator_buffer(wb);
 }
 
-future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref seg_ref, size_t segment_seq_num) {
+future<> segment_manager_impl::write_to_separator(write_buffer& wb, segment_ref seg_ref, segment_sequence segment_seq_num) {
     for (auto&& w : wb.records()) {
         co_await coroutine::maybe_yield();
 
@@ -1891,18 +1889,39 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
         next_file_id++;
     }
 
-    // populate index from all segments. keep the latest record for each key.
+    size_t allocated_segment_count = next_file_id * _segments_per_file;
+
+    std::vector<segment_sequence> segment_seqs(allocated_segment_count, segment_sequence(0));
+    segment_sequence max_segment_seq = segment_sequence(0);
+
+    // Populate the index from all segments. Keep the latest record for each key.
+    // For equal records, keep the one from the segment with the highest sequence number.
+    auto cmp_with_seq = [&segment_seqs] (const index_entry& old_entry, const index_entry& candidate) -> std::strong_ordering {
+        if (auto c = primary_index::default_entry_cmp(old_entry, candidate); c != 0) {
+            return c;
+        }
+        const auto old_seq = segment_seqs[old_entry.location.segment.value];
+        const auto new_seq = segment_seqs[candidate.location.segment.value];
+        if (auto c = old_seq <=> new_seq; c != 0) {
+            return c;
+        }
+        return old_entry.location.offset <=> candidate.location.offset;
+    };
+
     for (auto file_id : found_file_ids) {
         logstor_logger.info("Recovering segments from file {}: {}%", _file_mgr.get_file_path(file_id).string(), (file_id + 1) * 100 / found_file_ids.size());
         co_await max_concurrent_for_each(segments_in_file(file_id), 32,
-            [this, &db] (log_segment_id seg_id) {
-                return recover_segment(db, seg_id);
+            [this, &db, &cmp_with_seq, &segment_seqs, &max_segment_seq] (log_segment_id seg_id) {
+                return recover_segment(db, seg_id, cmp_with_seq,
+                    [seg_id, &segment_seqs, &max_segment_seq] (const segment_header& seg_hdr) {
+                        segment_seqs[seg_id.value] = seg_hdr.segment_seq;
+                        max_segment_seq = std::max(max_segment_seq, seg_hdr.segment_seq);
+                    });
             }
         );
     }
 
     // go over the index and mark all segments that have live data as used.
-    size_t allocated_segment_count = next_file_id * _segments_per_file;
     utils::dynamic_bitset used_segments(allocated_segment_count);
 
     co_await db.get_tables_metadata().for_each_table_gently([&] (table_id tid, lw_shared_ptr<table> tp) -> future<> {
@@ -1922,9 +1941,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     for (size_t seg_idx = 0; seg_idx < allocated_segment_count; ++seg_idx) {
         co_await coroutine::maybe_yield();
         log_segment_id seg_id(seg_idx);
-        auto& desc = get_segment_descriptor(seg_id);
         if (!used_segments.test(seg_idx)) {
-            desc.on_free_segment();
             _free_segments.push_back(seg_id);
             free_segment_count++;
         } else {
@@ -1950,22 +1967,25 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     }
 
     _next_new_segment_id = allocated_segment_count;
+    _next_segment_seq = max_segment_seq + 1;
 
     _file_mgr.recover_next_file_id(next_file_id);
 
     logstor_logger.info("Recovery complete");
 }
 
-future<> segment_manager_impl::recover_segment(replica::database& db, log_segment_id segment_id) {
+future<> segment_manager_impl::recover_segment(replica::database& db, log_segment_id segment_id,
+        primary_index::entry_cmp_fn cmp, std::function<void(const segment_header&)> on_header) {
     auto& desc = get_segment_descriptor(segment_id);
     desc.reset(_cfg.segment_size);
 
     co_await scan_segment(segment_id,
-        [segment_id] (const segment_header& seg_hdr) {
-            logstor_logger.trace("Recovering segment {} with generation {}", segment_id, seg_hdr.seg_gen);
+        [segment_id, on_header = std::move(on_header)] (const segment_header& seg_hdr) mutable {
+            logstor_logger.trace("Recovering segment {} with sequence {}", segment_id, seg_hdr.segment_seq);
+            on_header(seg_hdr);
             return make_ready_future<>();
         },
-        [this, &desc, &db] (log_location loc, const log_record_header& header) -> want_data {
+        [this, &desc, &db, &cmp] (log_location loc, const log_record_header& header) -> want_data {
             logstor_logger.trace("Recovery: read record at {} key {} ts {}", loc, header.key, header.timestamp);
 
             index_entry new_entry {
@@ -1978,7 +1998,7 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
                 if (!t.uses_logstor()) {
                     return want_data::no;
                 }
-                auto [inserted, prev_entry] = t.logstor_index().insert(header.key, new_entry);
+                auto [inserted, prev_entry] = t.logstor_index().insert(header.key, new_entry, cmp);
                 if (inserted) {
                     desc.on_write(loc);
                     if (prev_entry) {
@@ -2146,7 +2166,7 @@ void segment_manager::set_trigger_compaction_hook(std::function<void()> fn) {
     _impl->set_trigger_compaction_hook(std::move(fn));
 }
 
-void segment_manager::set_trigger_separator_flush_hook(std::function<void(size_t)> fn) {
+void segment_manager::set_trigger_separator_flush_hook(std::function<void(segment_sequence)> fn) {
     _impl->set_trigger_separator_flush_hook(std::move(fn));
 }
 
@@ -2231,7 +2251,7 @@ public:
 
 future<> segment_manager_impl::load_segment(replica::database& db, log_segment_id seg_id) {
     // read the segment and populate the index
-    co_await recover_segment(db, seg_id);
+    co_await recover_segment(db, seg_id, primary_index::default_entry_cmp, [] (const segment_header&) {});
 
     auto& desc = get_segment_descriptor(seg_id);
     co_await add_segment_to_compaction_group(db, desc);

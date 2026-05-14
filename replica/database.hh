@@ -1179,7 +1179,7 @@ public:
         return _logstor->get_compaction_manager();
     }
 
-    future<> flush_separator(std::optional<size_t> seq_num = std::nullopt);
+    future<> flush_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
 
     future<logstor::table_segment_stats> get_logstor_segment_stats() const;
 
@@ -2069,7 +2069,7 @@ public:
     static future<> trigger_logstor_compaction_on_all_shards(sharded<database>& sharded_db, bool major);
     void trigger_logstor_compaction(bool major);
     static future<> flush_logstor_separator_on_all_shards(sharded<database>& sharded_db);
-    future<> flush_logstor_separator(std::optional<size_t> seq_num = std::nullopt);
+    future<> flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
     future<logstor::table_segment_stats> get_logstor_table_segment_stats(table_id table) const;
     size_t get_logstor_memory_usage() const;
 

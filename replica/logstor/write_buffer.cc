@@ -164,11 +164,12 @@ void write_buffer::finalize(size_t alignment) {
     pad_to_alignment(alignment);
 }
 
-void write_buffer::write_header(segment_generation seg_gen, std::optional<table_id> table) {
+void write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table) {
     _buffer_header.magic = buffer_header_magic;
-    _buffer_header.seg_gen = seg_gen;
     _buffer_header.kind = _segment_kind;
     _buffer_header.version = current_version;
+    _buffer_header.reserved = 0;
+    _buffer_header.segment_seq = segment_seq;
 
     _buffer_header.crc = _buffer_header.calculate_crc();
 
@@ -185,29 +186,24 @@ void write_buffer::write_header(segment_generation seg_gen, std::optional<table_
     }
 }
 
-void write_buffer::write_empty_header(ostream& out, segment_generation seg_gen) {
-    buffer_header hdr;
-    hdr.magic = buffer_header_magic;
-    hdr.data_size = 0;
-    hdr.seg_gen = seg_gen;
-    hdr.kind = segment_kind::mixed;
-    hdr.version = current_version;
-
-    hdr.crc = hdr.calculate_crc();
-
-    ser::serialize<buffer_header>(out, hdr);
-}
-
 bool write_buffer::validate_header(const write_buffer::buffer_header& bh) {
     if (bh.magic != write_buffer::buffer_header_magic) {
         return false;
     }
 
-    if (bh.calculate_crc() != bh.crc) {
+    switch (bh.kind) {
+    case segment_kind::mixed:
+    case segment_kind::full:
+        break;
+    default:
         return false;
     }
 
     if (bh.version != current_version) {
+        return false;
+    }
+
+    if (bh.calculate_crc() != bh.crc) {
         return false;
     }
 
@@ -248,10 +244,11 @@ size_t write_buffer::estimate_required_segments(size_t net_data_size, size_t rec
 uint32_t write_buffer::buffer_header::calculate_crc() const {
     utils::crc32 c;
     c.process_le(magic);
-    c.process_le(data_size);
-    c.process_le(seg_gen.value());
     c.process_le(static_cast<uint8_t>(kind));
     c.process_le(version);
+    c.process_le(reserved);
+    c.process_le(segment_seq.value);
+    c.process_le(data_size);
     return c.get();
 }
 
