@@ -26,7 +26,7 @@ import boto3.dynamodb.types
 import botocore
 
 from test.pylib.skip_types import skip_env
-from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, scylla_config_temporary, client_no_transform, is_aws, manual_request, metrics, check_increases_operation, check_table_increases_operation, get_metrics, get_metric, check_increases_metric_exact
+from .util import random_string, new_test_table, unique_table_name, scylla_inject_error, scylla_config_read, scylla_config_write, scylla_config_temporary, client_no_transform, is_aws, manual_request, metrics, check_increases_operation, check_table_increases_operation, get_metrics, get_metric, check_increases_metric_exact
 from .test_streams import wait_for_status_active, wait_for_active_stream, list_shards, fetch_more
 
 
@@ -6892,6 +6892,29 @@ def test_enabling_stream_keeps_vectorindex_cdc_log(dynamodb, cql):
         table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'})
         wait_for_status_active(table)
         assert scan_cdc_log() == before
+
+# Enabling a stream on a table with tablets is deferred: the stream remains
+# in ENABLING state until the topology coordinator finalizes it. During that
+# time, DescribeTable reports a StreamSpecification with StreamEnabled true
+# (see test_deferred_stream_enablement_on_tablets in test/cluster). Check
+# that this is also the case on a table with a vector index, which already
+# has a CDC log before the stream is enabled. The error injection
+# delay_cdc_stream_finalization keeps the stream in ENABLING state.
+def test_enabling_stream_on_vectorindex_table_describe_table(dynamodb, rest_api):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v'},
+                'Dimensions': 3,
+                'DistanceFunction': 'COSINE',
+                'Projection': {'ProjectionType': 'KEYS_ONLY'},
+            }]) as table:
+        with scylla_inject_error(rest_api, 'delay_cdc_stream_finalization'):
+            table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'})
+            desc = table.meta.client.describe_table(TableName=table.name)['Table']
+            assert desc['StreamSpecification'] == {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}
 
 # The downside of making test_enabling_stream_keeps_vectorindex_cdc_log pass
 # is that because we keep the vector index's CDC log instead of dropping it,
