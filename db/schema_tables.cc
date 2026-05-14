@@ -1863,8 +1863,12 @@ static void make_update_indices_mutations(
     }
 
     mutations.emplace_back(std::move(indices_mutation));
-    mutations.emplace_back(vb_mut_builder.build());
-    mutations.insert(mutations.end(), std::make_move_iterator(view_status_muts.begin()), std::make_move_iterator(view_status_muts.end()));
+    if (!vb_mut_builder.empty()) {
+        mutations.emplace_back(vb_mut_builder.build());
+    }
+    if (!view_status_muts.empty()) {
+        mutations.insert(mutations.end(), std::make_move_iterator(view_status_muts.begin()), std::make_move_iterator(view_status_muts.end()));
+    }
 }
 
 static void add_drop_column_to_mutations(schema_ptr table, const sstring& name, const schema::dropped_column& dc, api::timestamp_type timestamp, utils::chunked_vector<mutation>& mutations) {
