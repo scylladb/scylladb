@@ -68,6 +68,21 @@ using coordinator_result = cql3::statements::select_statement::coordinator_resul
 
 bool is_internal_keyspace(std::string_view name);
 
+namespace {
+
+std::optional<locator::tablet_replica> tablet_routing_source_replica(const service::client_state& client_state, const locator::effective_replication_map& erm) {
+    auto source_shard = client_state.get_tablet_routing_source_shard();
+    if (!source_shard) {
+        return std::nullopt;
+    }
+    return locator::tablet_replica{
+        client_state.get_tablet_routing_source_host().value_or(erm.get_token_metadata().get_my_id()),
+        *source_shard,
+    };
+}
+
+}
+
 namespace cql3 {
 
 namespace statements {
@@ -491,7 +506,7 @@ select_statement::do_execute(query_processor& qp,
             token = key_ranges[0].start()->value().as_decorated_key().token();
 
             auto erm = table.get_effective_replication_map();
-            tablet_info = erm->check_locality(token);
+            tablet_info = erm->check_locality(token, tablet_routing_source_replica(state.get_client_state(), *erm));
         }
     }
 

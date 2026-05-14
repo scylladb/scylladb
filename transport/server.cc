@@ -399,22 +399,24 @@ void cql_server::init_messaging_service() {
     ser::forward_cql_rpc_verbs::register_forward_cql_execute(&_ms,
         [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, unsigned shard, forward_cql_execute_request req) -> future<forward_cql_execute_response> {
             auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-            clogger.trace("Handling forwarded CQL request from {} on shard {}", src_host, shard);
+            auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            clogger.trace("Handling forwarded CQL request from {} shard {} on shard {}", src_host, src_shard, shard);
 
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
-            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+            co_return co_await container().invoke_on(shard, [src_host, src_shard, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
                     &shard_svc._abort_source);
+                cs.set_tablet_routing_source(src_host, src_shard);
                 tracing::trace_state_ptr trace_state_ptr;
                 if (req.trace_info) {
                     trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*req.trace_info);
                     tracing::begin(trace_state_ptr);
                 }
                 service::query_state qs(cs, trace_state_ptr, empty_service_permit());
-                tracing::trace(qs.get_trace_state(), "Handling forwarded CQL request from {} on shard {}", src_host, this_shard_id());
+                tracing::trace(qs.get_trace_state(), "Handling forwarded CQL request from {} shard {} on shard {}", src_host, src_shard, this_shard_id());
 
                 auto f = co_await coroutine::as_future(shard_svc.handle_forward_execute(qs, req));
                 if (f.failed()) {
@@ -1856,6 +1858,11 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
     } (opcode);
 
     co_await utils::get_local_injector().inject("transport_cql_request_pause", utils::wait_for_message(60s));
+
+    if (!client_state.get_tablet_routing_source_host() || !client_state.get_tablet_routing_source_shard()) {
+        auto my_host_id = _query_processor.local().proxy().get_token_metadata_ptr()->get_topology().my_host_id();
+        client_state.set_tablet_routing_source(my_host_id, this_shard_id());
+    }
 
     bool init_trace = (bool)!bounced; // If the request was bounced, we already started the trace in the handler
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,

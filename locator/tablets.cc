@@ -1474,12 +1474,11 @@ public:
         return get_for_reading_helper(search_token);
     }
 
-    std::optional<tablet_routing_info> check_locality(const token& search_token) const override {
+    std::optional<tablet_routing_info> check_locality(const token& search_token, std::optional<tablet_replica> source_replica) const override {
         auto&& tablets = get_tablet_map();
         auto tid = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_info(tid);
-        auto host = get_token_metadata().get_my_id();
-        auto shard = this_shard_id();
+        auto source = source_replica.value_or(tablet_replica{get_token_metadata().get_my_id(), this_shard_id()});
 
         auto make_tablet_routing_info = [&] {
             dht::token first_token;
@@ -1493,17 +1492,13 @@ public:
         };
 
         for (auto&& r : info.replicas) {
-            if (r.host == host) {
-                if (r.shard == shard) {
-                    return std::nullopt; // routed correctly
-                } else {
-                    return make_tablet_routing_info();
-                }
+            if (r == source) {
+                return std::nullopt; // routed correctly
             }
         }
 
         auto tinfo = tablets.get_tablet_transition_info(tid);
-        if (tinfo && tinfo->pending_replica && tinfo->pending_replica->host == host && tinfo->pending_replica->shard == shard) {
+        if (tinfo && tinfo->pending_replica && *tinfo->pending_replica == source) {
             return std::nullopt; // routed correctly
         }
 

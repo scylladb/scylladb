@@ -19,6 +19,7 @@
 #include "auth/authenticator.hh"
 #include "auth/permission.hh"
 #include "client_data.hh"
+#include "locator/host_id.hh"
 
 #include "transport/cql_protocol_extension.hh"
 #include "service/qos/service_level_controller.hh"
@@ -97,6 +98,8 @@ private:
             , _timeout_config(cs->_timeout_config)
             , _as(as)
             , _enabled_protocol_extensions(cs->_enabled_protocol_extensions)
+            , _tablet_routing_source_host(cs->_tablet_routing_source_host)
+            , _tablet_routing_source_shard(cs->_tablet_routing_source_shard)
     {}
     friend client_state_for_another_shard;
 private:
@@ -505,6 +508,12 @@ public:
 private:
 
     cql_transport::cql_protocol_extension_enum_set _enabled_protocol_extensions;
+    // Host and shard where the current CQL request entered the coordinator.
+    // Local shard bounces copy this state; node-forwarded requests restore it
+    // from RPC client metadata so tablet routing feedback is based on the
+    // client's routing decision, not on the post-bounce execution shard.
+    std::optional<locator::host_id> _tablet_routing_source_host;
+    std::optional<unsigned> _tablet_routing_source_shard;
 
 public:
 
@@ -519,7 +528,24 @@ public:
     void set_protocol_extensions(cql_transport::cql_protocol_extension_enum_set exts) {
         _enabled_protocol_extensions = std::move(exts);
     }
+
+    void set_tablet_routing_source(locator::host_id host, unsigned shard) noexcept {
+        _tablet_routing_source_host = host;
+        _tablet_routing_source_shard = shard;
+    }
+
+    void set_tablet_routing_source_shard(unsigned shard) noexcept {
+        _tablet_routing_source_host = std::nullopt;
+        _tablet_routing_source_shard = shard;
+    }
+
+    std::optional<locator::host_id> get_tablet_routing_source_host() const noexcept {
+        return _tablet_routing_source_host;
+    }
+
+    std::optional<unsigned> get_tablet_routing_source_shard() const noexcept {
+        return _tablet_routing_source_shard;
+    }
 };
 
 }
-

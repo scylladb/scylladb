@@ -7,6 +7,8 @@
  */
 
 
+#include <initializer_list>
+
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
@@ -4890,7 +4892,6 @@ SEASTAR_TEST_CASE(test_select_serial_consistency) {
     }, std::move(cfg));
 }
 
-
 SEASTAR_TEST_CASE(test_range_deletions_for_specific_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "CREATE TABLE t (pk int, ck int, col text, PRIMARY KEY(pk, ck))");
@@ -6113,6 +6114,114 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
             });
         }).get();
     }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_tablet_routing_feedback_uses_source_host) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} and tablets = {'initial': 8};").get();
+        e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
+        e.execute_cql("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (1, 2, 3);").get();
+
+        auto select = e.prepare("select pk, ck, v FROM ks_tablet.test_tablet WHERE pk = ?;").get();
+        std::vector<cql3::raw_value> raw_values;
+        raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+
+        const auto sptr = e.local_db().find_schema("ks_tablet", "test_tablet");
+        auto pk = partition_key::from_singular(*sptr, int32_t(1));
+        auto token = dht::get_token(*sptr, pk.view());
+        unsigned local_shard = sptr->table().shard_for_reads(token);
+        auto foreign_host = locator::host_id(utils::UUID_gen::get_time_UUID());
+
+        smp::submit_to(local_shard, [&] {
+            return seastar::async([&] {
+                e.local_client_state().set_tablet_routing_source(foreign_host, this_shard_id());
+                auto result = e.execute_prepared(select, raw_values).get();
+                BOOST_REQUIRE(has_tablet_routing(result));
+            });
+        }).get();
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_sending_tablet_info_for_forwarded_serial_and_lwt) {
+    BOOST_REQUIRE_GT(smp::count, 1u);
+
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = 8;
+    cfg.need_remote_proxy = true;
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
+
+        for (int32_t pk = 1; pk <= 8; ++pk) {
+            e.execute_cql(format("insert into test_tablet (pk, ck, v) values ({}, 1, 2);", pk)).get();
+        }
+
+        const auto schema = e.local_db().find_schema("ks", "test_tablet");
+
+        auto raw_values = [] (std::initializer_list<int32_t> values) {
+            std::vector<cql3::raw_value> result;
+            result.reserve(values.size());
+            for (auto value : values) {
+                result.emplace_back(cql3::raw_value::make_value(int32_type->decompose(value)));
+            }
+            return result;
+        };
+
+        auto shard_for_pk = [&] (int32_t pk) {
+            auto key = partition_key::from_singular(*schema, pk);
+            return schema->table().shard_for_reads(dht::get_token(*schema, key.view()));
+        };
+
+        struct tablet_query_result {
+            bool has_tablet_info;
+            std::optional<unsigned> bounce_shard;
+        };
+
+        auto execute_prepared_once_on_shard = [&] (unsigned shard, unsigned source_shard,
+                const cql3::prepared_cache_key_type& id, std::vector<cql3::raw_value> values,
+                db::consistency_level cl) {
+            return smp::submit_to(shard, [&e, &id, values = std::move(values), cl, source_shard] () mutable {
+                return seastar::async([&e, &id, values = std::move(values), cl, source_shard] () mutable {
+                    e.local_client_state().set_tablet_routing_source_shard(source_shard);
+                    auto result = e.execute_prepared(id, std::move(values), cl).get();
+                    if (auto bounce = result->as_bounce()) {
+                        return tablet_query_result{false, bounce->target_shard()};
+                    }
+                    return tablet_query_result{has_tablet_routing(result), std::nullopt};
+                });
+            }).get();
+        };
+
+        auto execute_prepared_from_source_shard = [&] (unsigned source_shard,
+                const cql3::prepared_cache_key_type& id, std::vector<cql3::raw_value> values,
+                db::consistency_level cl) {
+            auto result = execute_prepared_once_on_shard(source_shard, source_shard, id, values, cl);
+            if (result.bounce_shard) {
+                result = execute_prepared_once_on_shard(*result.bounce_shard, source_shard, id, std::move(values), cl);
+            }
+            return result.has_tablet_info;
+        };
+
+        auto require_token_aware_prepared = [&] (std::string_view name,
+                const cql3::prepared_cache_key_type& id, auto make_values, int32_t local_pk,
+                int32_t foreign_pk, db::consistency_level cl) {
+            auto local_shard = shard_for_pk(local_pk);
+            BOOST_REQUIRE_MESSAGE(!execute_prepared_from_source_shard(local_shard, id, make_values(local_pk), cl),
+                    format("{} got tablet info on owning shard {}", name, local_shard));
+
+            auto foreign_shard = (shard_for_pk(foreign_pk) + 1) % smp::count;
+            BOOST_REQUIRE_MESSAGE(execute_prepared_from_source_shard(foreign_shard, id, make_values(foreign_pk), cl),
+                    format("{} did not get tablet info from foreign shard {}", name, foreign_shard));
+        };
+
+        auto select_prepared = e.prepare("select pk, ck, v from ks.test_tablet where pk = ? and ck = ?;").get();
+        auto update_lwt_if_v = e.prepare("update ks.test_tablet set v = ? where pk = ? and ck = ? if v = ?;").get();
+
+        require_token_aware_prepared("SELECT_SERIAL_PREPARED", select_prepared,
+                [&] (int32_t pk) { return raw_values({pk, 1}); }, 1, 2, db::consistency_level::SERIAL);
+        require_token_aware_prepared("UPDATE_LWT_IF_VAL", update_lwt_if_v,
+                [&] (int32_t pk) { return raw_values({4, pk, 1, 2}); }, 3, 4, db::consistency_level::ONE);
+    }, std::move(cfg));
 }
 
 // check if create statements emit schema change event properly
