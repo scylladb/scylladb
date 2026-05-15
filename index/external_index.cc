@@ -41,25 +41,23 @@ utils::UUID external_index::index_version(const schema& schema) {
 
 void external_index::check_cdc_options(const schema& schema, std::string_view search_type_name, bool index_already_exists) {
     auto cdc_options = schema.cdc_options();
-    if (cdc_options.enabled()) {
-        auto ttl = cdc_options.ttl();
-        auto delta_mode = cdc_options.get_delta_mode();
-        auto postimage = cdc_options.postimage();
-        if ((ttl && ttl < VS_TTL_SECONDS) ||
-            (delta_mode != cdc::delta_mode::full && !postimage)) {
-            throw exceptions::invalid_request_exception(
-                index_already_exists ?
-                format("{} is enabled on this table.\n"
-                "The CDC log must meet the minimal requirements for external indexes.\n"
-                "This means that the CDC's TTL must be at least {} seconds (24 hours), "
-                "and the CDC's delta mode must be set to 'full' or postimage must be enabled.",
-                search_type_name, VS_TTL_SECONDS) :
-                format("To enable {} on this table, "
-                "the CDC log must meet the minimal requirements for external indexes.\n"
-                "CDC's TTL must be at least {} seconds (24 hours), "
-                "and the CDC's delta mode must be set to 'full' or postimage must be enabled.",
-                search_type_name, VS_TTL_SECONDS));
-        }
+    auto ttl = cdc_options.ttl();
+    auto delta_mode = cdc_options.get_delta_mode();
+    auto postimage = cdc_options.postimage();
+    if ((ttl && ttl < VS_TTL_SECONDS) ||
+        (delta_mode != cdc::delta_mode::full && !postimage)) {
+        throw exceptions::invalid_request_exception(
+            index_already_exists ?
+            format("{} is enabled on this table.\n"
+            "The CDC log must meet the minimal requirements for external indexes.\n"
+            "This means that the CDC's TTL must be at least {} seconds (24 hours), "
+            "and the CDC's delta mode must be set to 'full' or postimage must be enabled.",
+            search_type_name, VS_TTL_SECONDS) :
+            format("To enable {} on this table, "
+            "the CDC log must meet the minimal requirements for external indexes.\n"
+            "CDC's TTL must be at least {} seconds (24 hours), "
+            "and the CDC's delta mode must be set to 'full' or postimage must be enabled.",
+            search_type_name, VS_TTL_SECONDS));
     }
 }
 
