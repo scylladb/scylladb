@@ -172,19 +172,23 @@ class SessionServiceManager:
 
         previous = self.active_services
         stopped = set(previous - desired)
+        stopped_successfully: list[str] = []
         started: list[str] = []
         try:
             for service in sorted(stopped, reverse=True):
                 await self._stop_service(service)
+                stopped_successfully.append(service)
             for service in sorted(desired - previous):
                 await self._start_service(service)
                 started.append(service)
         except Exception:
             for service in reversed(started):
                 await self._stop_service(service)
-            # If the failure happened before any new service was started, keep
-            # the last known active set so cleanup can retry the stop later.
-            self.active_services = normalize_session_services(previous - stopped) if started else previous
+            for service in reversed(stopped_successfully):
+                await self._start_service(service)
+            # Preserve the previously active set when we cannot complete the
+            # requested transition.
+            self.active_services = previous
             self._write_environment()
             raise
 

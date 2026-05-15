@@ -107,6 +107,27 @@ class FailingSessionServiceManager(SessionServiceManager):
         self.events.append(("write", tuple(sorted(self.active_services))))
 
 
+class PartiallyFailingSessionServiceManager(SessionServiceManager):
+    def __init__(self, fail_on: str) -> None:
+        self.active_services = frozenset({"ldap", "s3"})
+        self.fail_on = fail_on
+        self.events: list[tuple[str, str | tuple[str, ...]]] = []
+        self.running_services = set(self.active_services)
+
+    async def _start_service(self, service: str) -> None:
+        self.events.append(("start", service))
+        self.running_services.add(service)
+
+    async def _stop_service(self, service: str) -> None:
+        self.events.append(("stop", service))
+        if service == self.fail_on:
+            raise RuntimeError("boom")
+        self.running_services.discard(service)
+
+    def _write_environment(self) -> None:
+        self.events.append(("write", tuple(sorted(self.active_services))))
+
+
 def mark(name: str, *args, **kwargs):
     return getattr(pytest.mark, name)(*args, **kwargs).mark
 
@@ -557,7 +578,7 @@ async def test_service_manager_preserves_previous_state_when_first_new_service_f
         await manager.ensure_services({"s3"})
 
     assert manager.active_services == frozenset({"ldap"})
-    assert manager.events == [("stop", "ldap"), ("start", "s3"), ("write", ("ldap",))]
+    assert manager.events == [("stop", "ldap"), ("start", "s3"), ("start", "ldap"), ("write", ("ldap",))]
 
 
 @pytest.mark.asyncio
@@ -571,6 +592,20 @@ async def test_service_manager_preserves_previous_state_when_stop_fails() -> Non
 
     assert manager.active_services == frozenset({"ldap"})
     assert manager.events == [("stop", "ldap"), ("write", ("ldap",))]
+
+
+@pytest.mark.asyncio
+async def test_service_manager_restores_partial_stop_progress_when_a_later_stop_fails() -> None:
+    # Regression test for rollback when a later stop fails after an earlier service
+    # has already been stopped successfully.
+    manager = PartiallyFailingSessionServiceManager(fail_on="ldap")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await manager.ensure_services(())
+
+    assert manager.running_services == {"ldap", "s3"}
+    assert manager.active_services == frozenset({"ldap", "s3"})
+    assert manager.events == [("stop", "s3"), ("stop", "ldap"), ("start", "s3"), ("write", ("ldap", "s3"))]
 
 
 def test_scheduler_dispatches_oversized_work_unit_for_per_test_failure() -> None:
