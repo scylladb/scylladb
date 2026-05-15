@@ -858,8 +858,8 @@ class load_balancer {
 
     struct cluster_resize_load {
         using table_id_and_size_desc = std::pair<table_id, table_size_desc>;
-        std::vector<table_id_and_size_desc> tables_need_resize;
-        std::vector<table_id_and_size_desc> tables_being_resized;
+        utils::chunked_vector<table_id_and_size_desc> tables_need_resize;
+        utils::chunked_vector<table_id_and_size_desc> tables_being_resized;
 
         static locator::resize_decision to_resize_decision(const table_size_desc& d) {
             return d.new_resize_decision;
