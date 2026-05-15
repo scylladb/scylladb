@@ -362,7 +362,7 @@ class ManagerClient:
     async def set_scylla_resource_limit(
             self,
             cores: int | None,
-            memory: str | int | float | None,
+            memory_bytes: int | None,
             allow_memory_override: bool,
             enforce_usage_limits: bool = True) -> None:
         """Set Scylla resource limits for the current test case."""
@@ -370,7 +370,7 @@ class ManagerClient:
             "/cluster/scylla-resource-limit",
             {
                 "cores": cores,
-                "memory": memory,
+                "memory_bytes": memory_bytes,
                 "allow_memory_override": allow_memory_override,
                 "enforce_usage_limits": enforce_usage_limits,
             },

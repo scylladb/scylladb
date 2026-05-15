@@ -20,10 +20,16 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import universalasync
 
-from test.pylib.scylla_cluster import SCYLLA_CMDLINE_OPTIONS, merge_cmdline_options, scylla_resource_usage_from_cmdline
+from test.pylib.scylla_cluster import SCYLLA_CMDLINE_OPTIONS, merge_cmdline_options
 from test.pylib.db.writer import DEFAULT_DB_NAME, METRICS_TABLE, TESTS_TABLE
 from test.pylib.scylla_cluster_profile import ScyllaClusterProfile, scylla_cluster_profile_from_node
-from test.pylib.scylla_resources import parse_scylla_memory, scylla_resource_limit_from_markers
+from test.pylib.scylla_resources import (
+    ScyllaResourceAmount,
+    configured_scylla_resource_memory,
+    default_scylla_resource_cpus,
+    scylla_resource_limit_from_markers,
+    scylla_resource_usage_from_cmdline,
+)
 from test.pylib.session_services import SessionServiceManager, normalize_session_services, session_service_requirements_for_item
 
 if TYPE_CHECKING:
@@ -61,33 +67,7 @@ HISTORICAL_MEMORY_REDUCTION_FLOOR = 0.5
 # Reserve one quarter of a host CPU for the default --smp 2 topology node.
 TOPOLOGY_CPU_RESERVATION_PER_SMP = 0.125
 
-
-@dataclass(frozen=True)
-class SchedulerResource:
-    cores: float = 0
-    memory_bytes: int = 0
-
-    def __add__(self, other: SchedulerResource) -> SchedulerResource:
-        return SchedulerResource(
-            cores=self.cores + other.cores,
-            memory_bytes=self.memory_bytes + other.memory_bytes,
-        )
-
-    def fits_in(self, total: SchedulerResource) -> bool:
-        return self.cores <= total.cores + 1e-9 and self.memory_bytes <= total.memory_bytes
-
-    def max(self, other: SchedulerResource) -> SchedulerResource:
-        return SchedulerResource(
-            cores=max(self.cores, other.cores),
-            memory_bytes=max(self.memory_bytes, other.memory_bytes),
-        )
-
-    def to_json(self) -> dict[str, float | int]:
-        return {"cores": self.cores, "memory_bytes": self.memory_bytes}
-
-    @classmethod
-    def from_json(cls, data: dict[str, object]) -> SchedulerResource:
-        return cls(cores=float(data["cores"]), memory_bytes=int(data["memory_bytes"]))
+SchedulerResource = ScyllaResourceAmount
 
 
 @dataclass(frozen=True)
@@ -134,60 +114,6 @@ class HistoricalResourceUsage:
     sample_count: int
     cores: float | None = None
     memory_bytes: int | None = None
-
-
-def default_scylla_resource_cpus() -> int:
-    try:
-        return max(1, len(os.sched_getaffinity(0)))
-    except AttributeError:
-        return max(1, os.cpu_count() or 1)
-
-
-def _read_memory_limit(path: pathlib.Path) -> int | None:
-    try:
-        text = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not text or text == "max":
-        return None
-    try:
-        limit = int(text)
-    except ValueError:
-        return None
-    if limit <= 0 or limit >= 1 << 60:
-        return None
-    return limit
-
-
-def system_memory_bytes() -> int:
-    sys_mem = int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
-    cgroup_limits = [
-        _read_memory_limit(pathlib.Path("/sys/fs/cgroup/memory.max")),
-        _read_memory_limit(pathlib.Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")),
-    ]
-    limits = [limit for limit in cgroup_limits if limit is not None]
-    if limits:
-        return min(sys_mem, *limits)
-    return sys_mem
-
-
-def default_scylla_resource_memory() -> int:
-    total = system_memory_bytes()
-    reserve = int(min(max(total / 16, 5e9), 8e9))
-    return max(1, total - reserve)
-
-
-def configured_scylla_resource_memory(config: pytest.Config) -> int:
-    value = config.getoption("--scylla-resource-memory")
-    if value is None:
-        return default_scylla_resource_memory()
-    try:
-        memory = parse_scylla_memory(value)
-    except ValueError as exc:
-        raise pytest.UsageError(f"--scylla-resource-memory must be a valid Scylla memory size: {value!r}") from exc
-    if memory <= 0:
-        raise pytest.UsageError("--scylla-resource-memory must be positive")
-    return memory
 
 
 def scylla_resource_budget_from_config(config: pytest.Config) -> SchedulerResource:
@@ -419,8 +345,7 @@ def scylla_resource_metadata_for_item(
         group_key = _module_group_key(item.nodeid, build_mode)
 
     if resource_limit := scylla_resource_limit_from_markers(item):
-        memory_bytes = resource_limit.memory_bytes if resource_limit.memory_bytes is not None else default_resources.memory_bytes or DEFAULT_SCYLLA_MEMORY_BYTES
-        resources = SchedulerResource(cores=resource_limit.cores, memory_bytes=memory_bytes)
+        resources = resource_limit.resource_amount(default_resources.memory_bytes or DEFAULT_SCYLLA_MEMORY_BYTES)
     else:
         resources = _apply_historical_resource_usage(
             default_resources,

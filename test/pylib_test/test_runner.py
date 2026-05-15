@@ -17,6 +17,7 @@ import pytest
 from test import TOP_SRC_DIR
 import test.pylib.runner as runner_plugin
 from test.pylib.runner import TestSuiteConfig as RunnerTestSuiteConfig
+from test.pylib.suite.python import cluster_pool_size
 
 
 def _load_test_runner_module():
@@ -49,11 +50,29 @@ def test_threads_calculator_scales_auto_jobs_by_four(
     cpus_per_test_job: float,
     expected: int,
 ) -> None:
-    calculator = object.__new__(test_runner_module.ThreadsCalculator)
-    calculator.default_num_jobs_mem = memory_cap
-    calculator.cpus_per_test_job = cpus_per_test_job
+    calculator = test_runner_module.ThreadsCalculator(
+        modes=["debug"],
+        max_test_memory=1e9,
+        test_memory_fraction=1.0,
+        debug_test_memory_multiplier=1.0,
+        debug_cpus_per_test_job=cpus_per_test_job,
+        total_memory_bytes=int(memory_cap * 1e9 + 5e9),
+    )
 
     assert calculator.get_number_of_threads(nr_cpus) == expected
+
+
+def test_cluster_pool_size_defaults_to_unbounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CLUSTER_POOL_SIZE", raising=False)
+
+    assert cluster_pool_size({}, SimpleNamespace(cluster_pool_size=None)) is None
+
+
+def test_cluster_pool_size_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLUSTER_POOL_SIZE", "7")
+
+    assert cluster_pool_size({"pool_size": 5}, SimpleNamespace(cluster_pool_size=None)) == 7
+    assert cluster_pool_size({"pool_size": 5}, SimpleNamespace(cluster_pool_size=9)) == 9
 
 
 class _FakeCollector:
@@ -182,7 +201,9 @@ def test_junit_function_path_keeps_test_prefix(pytestconfig: pytest.Config) -> N
     """Regression test for the JUnit function_path attribute preserving the real test path."""
 
     fake_xml = _FakeXmlReporter()
+    previous_config = runner_plugin._pytest_config
     previous_xml = pytestconfig.stash.get(runner_plugin.xml_key, None)
+    runner_plugin._pytest_config = pytestconfig
     pytestconfig.stash[runner_plugin.xml_key] = fake_xml
 
     try:
@@ -195,6 +216,7 @@ def test_junit_function_path_keeps_test_prefix(pytestconfig: pytest.Config) -> N
 
         assert fake_xml.node_reporter_obj.to_xml().attrib["function_path"] == "test/cluster/test_a.py::test_one"
     finally:
+        runner_plugin._pytest_config = previous_config
         if previous_xml is None:
             del pytestconfig.stash[runner_plugin.xml_key]
         else:

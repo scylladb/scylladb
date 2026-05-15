@@ -18,11 +18,11 @@ from test.pylib.scylla_cluster import (
     ScyllaResourceLimit,
     ScyllaResourceUsage,
     ScyllaVersionDescription,
-    parse_scylla_memory,
     scylla_cmdline_has_memory_override,
     scylla_resource_usage_from_cmdline,
 )
 from test.pylib.internal_types import ServerNum
+from test.pylib.scylla_resources import parse_scylla_memory, scylla_resource_limit_from_payload
 
 
 @pytest.mark.parametrize(
@@ -66,6 +66,22 @@ def test_scylla_cmdline_has_memory_override_ignores_other_options():
 )
 def test_scylla_resource_usage_from_cmdline(cmdline, usage):
     assert scylla_resource_usage_from_cmdline(cmdline) == usage
+
+
+def test_scylla_resource_limit_from_payload_prefers_numeric_memory_bytes() -> None:
+    limit = scylla_resource_limit_from_payload({
+        "cores": 4,
+        "memory_bytes": 2 * 1024 ** 3,
+        "allow_memory_override": True,
+        "enforce_usage_limits": False,
+    })
+
+    assert limit == ScyllaResourceLimit(
+        cores=4,
+        memory_bytes=2 * 1024 ** 3,
+        allow_memory_override=True,
+        enforce_usage_limits=False,
+    )
 
 
 def test_scylla_resource_limit_rejects_excess_cores():

@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
-import math
 import shlex
 import textwrap
 from bisect import insort
@@ -37,6 +36,7 @@ import treelib
 from scripts import coverage
 from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to
 from test.pylib import coverage_utils
+from test.pylib.scylla_resources import auto_test_jobs, default_scylla_resource_cpus
 from test.pylib.suite.base import (
     TestSuite,
     palette,
@@ -67,42 +67,36 @@ class ThreadsCalculator:
 
     def __init__(self,
                  modes: list[str],
-                 min_system_memory_reserve: float = 5e9,
-                 max_system_memory_reserve: float = 8e9,
-                 system_memory_reserve_fraction = 16,
                  max_test_memory: float = 5e9,
                  test_memory_fraction: float = 8.0,
                  debug_test_memory_multiplier: float = 1.5,
                  debug_cpus_per_test_job=1.5,
                  non_debug_cpus_per_test_job: float =1.0,
-                 non_debug_max_test_memory: float = 4e9
+                 non_debug_max_test_memory: float = 4e9,
+                 total_memory_bytes: int | None = None,
                  ):
-        sys_mem = int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
-        test_mem = min(sys_mem / test_memory_fraction, max_test_memory)
-        if "debug" in modes:
-            test_mem *= debug_test_memory_multiplier
-        system_memory_reserve = int(min(
-            max(sys_mem / system_memory_reserve_fraction, min_system_memory_reserve),
-            max_system_memory_reserve,
-        ))
-        available_mem = max(0, sys_mem - system_memory_reserve)
-        is_debug = "debug" in modes
-        test_mem = min(
-            sys_mem / test_memory_fraction,
-            max_test_memory if is_debug else non_debug_max_test_memory,
-        )
-        if is_debug:
-            test_mem *= debug_test_memory_multiplier
-        self.cpus_per_test_job = (
-            debug_cpus_per_test_job if is_debug else non_debug_cpus_per_test_job
-        )
-        self.default_num_jobs_mem = max(1, int(available_mem // test_mem))
+        self.modes = modes
+        self.max_test_memory = max_test_memory
+        self.test_memory_fraction = test_memory_fraction
+        self.debug_test_memory_multiplier = debug_test_memory_multiplier
+        self.debug_cpus_per_test_job = debug_cpus_per_test_job
+        self.non_debug_cpus_per_test_job = non_debug_cpus_per_test_job
+        self.non_debug_max_test_memory = non_debug_max_test_memory
+        self.total_memory_bytes = total_memory_bytes
 
     def get_number_of_threads(self, nr_cpus: int) -> int:
-        default_num_jobs_cpu = max(1, math.ceil(nr_cpus / self.cpus_per_test_job))
-        # Oversubscribe the auto-sized worker count on this branch so the
-        # integration suite can better saturate the available resources.
-        return min(self.default_num_jobs_mem, default_num_jobs_cpu) * AUTO_JOBS_MULTIPLIER
+        return auto_test_jobs(
+            self.modes,
+            nr_cpus,
+            total_memory_bytes=self.total_memory_bytes,
+            test_memory_fraction=self.test_memory_fraction,
+            max_test_memory_bytes=int(self.max_test_memory),
+            non_debug_max_test_memory_bytes=int(self.non_debug_max_test_memory),
+            debug_test_memory_multiplier=self.debug_test_memory_multiplier,
+            debug_cpus_per_test_job=self.debug_cpus_per_test_job,
+            non_debug_cpus_per_test_job=self.non_debug_cpus_per_test_job,
+            multiplier=AUTO_JOBS_MULTIPLIER,
+        )
 
 
 def parse_cmd_line() -> argparse.Namespace:
@@ -241,7 +235,7 @@ def parse_cmd_line() -> argparse.Namespace:
 
     if not args.jobs:
         if not args.cpus:
-            nr_cpus = multiprocessing.cpu_count()
+            nr_cpus = default_scylla_resource_cpus()
         else:
             nr_cpus = int(subprocess.check_output(
                 ['taskset', '-c', args.cpus, 'python3', '-c',

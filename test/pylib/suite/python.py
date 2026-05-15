@@ -37,6 +37,15 @@ if TYPE_CHECKING:
     from pytest import Parser
 
 
+def cluster_pool_size(cfg: dict, options: argparse.Namespace) -> int | None:
+    env_pool_size = os.getenv("CLUSTER_POOL_SIZE")
+    if options.cluster_pool_size is not None:
+        return options.cluster_pool_size
+    if env_pool_size is not None:
+        return int(env_pool_size)
+    return cfg.get("pool_size")
+
+
 class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla instance"""
 
@@ -53,13 +62,7 @@ class PythonTestSuite(TestSuite):
 
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
         cluster_size = cluster_cfg["initial_size"]
-        env_pool_size = os.getenv("CLUSTER_POOL_SIZE")
-        if options.cluster_pool_size is not None:
-            pool_size = options.cluster_pool_size
-        elif env_pool_size is not None:
-            pool_size = int(env_pool_size)
-        else:
-            pool_size = cfg.get("pool_size", 2)
+        pool_size = cluster_pool_size(cfg, options)
         self.dirties_cluster = set(cfg.get("dirties_cluster", []))
 
         self.create_cluster = self.get_cluster_factory(cluster_size, options)

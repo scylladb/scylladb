@@ -65,11 +65,11 @@ class Pool(Generic[T]):
             if server:
                 await pool.put(is_dirty=dirty)
     """
-    def __init__(self, max_size: int,
+    def __init__(self, max_size: int | None,
                  build: Callable[..., Awaitable[T]],
                  destroy: Callable[[T], Awaitable[None]]):
-        assert(max_size >= 0)
-        self.max_size: Final[int] = max_size
+        assert(max_size is None or max_size >= 0)
+        self.max_size: Final[int | None] = max_size
         self.build: Final[Callable[..., Awaitable[T]]] = build
         self.destroy: Final[Callable[[T], Awaitable]] = destroy
         self.cond: Final[asyncio.Condition] = asyncio.Condition()
@@ -86,11 +86,11 @@ class Pool(Generic[T]):
            or an existing one will be borrowed.
         """
         async with self.cond:
-            await self.cond.wait_for(lambda: self.pool or self.total < self.max_size)
+            await self.cond.wait_for(lambda: self.pool or self.max_size is None or self.total < self.max_size)
             if self.pool:
                 return self.pool.pop()
 
-            # No object in pool, but total < max_size so we can construct one
+            # No object in pool, but capacity allows us to construct one.
             self.total += 1
 
         return await self._build_and_get(*args, **kwargs)
@@ -104,12 +104,12 @@ class Pool(Generic[T]):
         """
         build_new = False
         async with self.cond:
-            await self.cond.wait_for(lambda: self.pool or self.total < self.max_size)
+            await self.cond.wait_for(lambda: self.pool or self.max_size is None or self.total < self.max_size)
             for index, obj in enumerate(self.pool):
                 if predicate(obj):
                     return self.pool.pop(index)
 
-            if self.total < self.max_size:
+            if self.max_size is None or self.total < self.max_size:
                 self.total += 1
                 build_new = True
             else:

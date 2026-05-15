@@ -33,7 +33,12 @@ from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.scylla_cluster_profile import ScyllaClusterNodeProfile, ScyllaClusterProfile
-from test.pylib.scylla_resources import parse_scylla_memory
+from test.pylib.scylla_resources import (
+    ScyllaResourceAmount as ScyllaResourceUsage,
+    ScyllaResourceLimit,
+    scylla_resource_limit_from_payload as shared_scylla_resource_limit_from_payload,
+    scylla_resource_usage_from_cmdline,
+)
 from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id, scale_timeout_by_mode
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
@@ -368,30 +373,6 @@ def merge_cmdline_options(
 
     return run()
 
-
-def _cmdline_option_value(cmdline: list[str], names: set[str], default: str | None = None) -> str | None:
-    i = 0
-    while i < len(cmdline):
-        arg = cmdline[i]
-        if arg in names:
-            if i + 1 >= len(cmdline):
-                return default
-            value = cmdline[i + 1]
-            i += 2
-            if value.startswith('-'):
-                return default
-            default = value
-            continue
-        if arg.startswith('--') and '=' in arg:
-            name, _, value = arg.partition('=')
-            if name in names:
-                default = value
-        elif '-m' in names and arg.startswith('-m') and arg != '-m':
-            default = arg[2:]
-        i += 1
-    return default
-
-
 def scylla_cmdline_has_memory_override(cmdline: list[str] | None) -> bool:
     if not cmdline:
         return False
@@ -403,41 +384,6 @@ def scylla_cmdline_has_memory_override(cmdline: list[str] | None) -> bool:
         if arg.startswith('-m') and arg != '-m':
             return True
     return False
-
-
-@dataclass(frozen=True)
-class ScyllaResourceUsage:
-    cores: int = 0
-    memory_bytes: int = 0
-
-    def __add__(self, other: 'ScyllaResourceUsage') -> 'ScyllaResourceUsage':
-        return ScyllaResourceUsage(
-            cores=self.cores + other.cores,
-            memory_bytes=self.memory_bytes + other.memory_bytes,
-        )
-
-    def __mul__(self, multiplier: int) -> 'ScyllaResourceUsage':
-        return ScyllaResourceUsage(
-            cores=self.cores * multiplier,
-            memory_bytes=self.memory_bytes * multiplier,
-        )
-
-
-@dataclass(frozen=True)
-class ScyllaResourceLimit:
-    cores: int | None = None
-    memory_bytes: int | None = None
-    allow_memory_override: bool = False
-    enforce_usage_limits: bool = True
-
-
-def scylla_resource_usage_from_cmdline(cmdline: list[str]) -> ScyllaResourceUsage:
-    smp = _cmdline_option_value(cmdline, {'--smp'}, default='2')
-    memory = _cmdline_option_value(cmdline, {'-m', '--memory'}, default='1G')
-    assert smp is not None
-    assert memory is not None
-    return ScyllaResourceUsage(cores=int(smp), memory_bytes=parse_scylla_memory(memory))
-
 
 def start_stop_lock(func):
     """
@@ -2001,16 +1947,7 @@ class ScyllaClusterManager:
 
     @staticmethod
     def _resource_limit_from_payload(payload: dict[str, object] | None) -> ScyllaResourceLimit | None:
-        if payload is None:
-            return None
-        cores = payload.get("cores")
-        memory = payload.get("memory")
-        return ScyllaResourceLimit(
-            cores=int(cores) if cores is not None else None,
-            memory_bytes=parse_scylla_memory(memory) if memory is not None else None,
-            allow_memory_override=bool(payload.get("allow_memory_override", False)),
-            enforce_usage_limits=bool(payload.get("enforce_usage_limits", True)),
-        )
+        return shared_scylla_resource_limit_from_payload(payload)
 
     def _clear_current_test_limits(self) -> None:
         self.current_resource_limit = None

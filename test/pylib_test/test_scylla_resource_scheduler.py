@@ -152,18 +152,16 @@ def test_scylla_cores_marker_parsing() -> None:
     limit = scylla_resource_limit_from_markers(FakeMarkedNode(mark("scylla_cores", 3)))
 
     assert limit.cores == 3
-    assert limit.memory is None
     assert limit.memory_bytes is None
     assert not limit.allow_memory_override
     assert limit.enforce_usage_limits
-    assert limit.as_manager_kwargs() == {"cores": 3, "memory": None, "allow_memory_override": False, "enforce_usage_limits": True}
+    assert limit.as_manager_kwargs() == {"cores": 3, "memory_bytes": None, "allow_memory_override": False, "enforce_usage_limits": True}
 
 
 def test_scylla_cores_unbounded_marker_parsing() -> None:
     limit = scylla_resource_limit_from_markers(FakeMarkedNode(mark("scylla_cores", 3, unbounded=True)))
 
     assert limit.cores == 3
-    assert limit.memory is None
     assert limit.memory_bytes is None
     assert not limit.allow_memory_override
     assert not limit.enforce_usage_limits
@@ -173,7 +171,6 @@ def test_scylla_resources_marker_parsing() -> None:
     limit = scylla_resource_limit_from_markers(FakeMarkedNode(mark("scylla_resources", cpu=2, mem="2G")))
 
     assert limit.cores == 2
-    assert limit.memory == "2G"
     assert limit.memory_bytes == 2 * GIB
     assert limit.allow_memory_override
     assert limit.enforce_usage_limits
@@ -183,13 +180,12 @@ def test_scylla_resources_unbounded_marker_parsing() -> None:
     limit = scylla_resource_limit_from_markers(FakeMarkedNode(mark("scylla_resources", cpu=8, mem="12G", unbounded=True)))
 
     assert limit.cores == 8
-    assert limit.memory == "12G"
     assert limit.memory_bytes == 12 * GIB
     assert limit.allow_memory_override
     assert not limit.enforce_usage_limits
     assert limit.as_manager_kwargs() == {
         "cores": 8,
-        "memory": "12G",
+        "memory_bytes": 12 * GIB,
         "allow_memory_override": True,
         "enforce_usage_limits": False,
     }
