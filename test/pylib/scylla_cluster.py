@@ -1735,6 +1735,7 @@ class ScyllaCluster:
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
         self.server_resources[server_id] = resource_usage
+        server.has_memory_override = has_memory_override
 
         def instance_auth_provider(desc: dict):
             module_path, class_name = desc["authenticator"].rsplit('.', 1)
@@ -1751,7 +1752,6 @@ class ScyllaCluster:
             cmdline_options_override=cmdline_options_override,
             append_env_override=append_env_override,
         )
-        server.has_memory_override = has_memory_override
         if expected_error is not None:
             self.running.pop(server_id)
             self.stopped[server_id] = server
