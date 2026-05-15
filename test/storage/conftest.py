@@ -5,10 +5,12 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 import pytest
+import logging
 import os
 import pathlib
 import shutil
 import subprocess
+import time
 import uuid
 
 from typing import Callable
@@ -18,6 +20,8 @@ from dataclasses import dataclass
 from test.pylib.manager_client import ManagerClient
 from test.cluster.conftest import *
 from test.pylib.util import gather_safely
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="function")
@@ -64,7 +68,15 @@ def volumes_factory(pytestconfig, build_mode, request):
             shutil.copytree(volume.mount, base.parent.parent / f"scylla-{hash}-{id}", ignore=shutil.ignore_patterns('commitlog*', 'lost+found*'))
             shutil.copyfile(volume.log, base.parent.parent / f"scylla-{hash}-{id}.log")
 
-        subprocess.run(["fusermount3", "-u", volume.mount], check=True)
+        retries = 10
+        for attempt in range(retries):
+            result = subprocess.run(["fusermount3", "-u", volume.mount], capture_output=True, text=True)
+            if result.returncode == 0:
+                break
+            logger.warning("fusermount3 -u attempt %d/%d failed: %s", attempt + 1, retries, result.stderr.strip())
+            if attempt + 1 == retries:
+                raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+            time.sleep(0.5)
         os.unlink(volume.img)
 
 
