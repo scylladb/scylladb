@@ -21,7 +21,7 @@
 #include "cdc/metadata.hh"
 #include "cdc/cdc_partitioner.hh"
 #include "bytes.hh"
-#include "index/vector_index.hh"
+#include "index/external_index.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
@@ -217,12 +217,9 @@ public:
     }
 
     void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
-        bool has_vector_index = secondary_index::vector_index::has_vector_index(new_schema);
-        if (has_vector_index) {
-            // If we have a vector index, we need to ensure that the CDC log is created
-            // satisfying the minimal requirements of Vector Search.
-            secondary_index::vector_index::check_cdc_options(new_schema);
-        }
+        // If we have a vector index, we need to ensure that the CDC log
+        // is created satisfying the minimal requirements of Vector Store.
+        secondary_index::external_index::check_cdc_options_if_present(new_schema);
 
         bool is_cdc = cdc_enabled(new_schema);
         bool was_cdc = cdc_enabled(old_schema);
@@ -520,7 +517,7 @@ static const sstring cdc_deleted_column_prefix = cdc_meta_column_prefix + "delet
 static const sstring cdc_deleted_elements_column_prefix = cdc_meta_column_prefix + "deleted_elements_";
 
 bool cdc_enabled(const schema& s) {
-    return s.cdc_options().enabled() || secondary_index::vector_index::has_vector_index(s);
+    return s.cdc_options().enabled() || secondary_index::external_index::has_index(s);
 }
 
 bool is_log_name(const std::string_view& table_name) {

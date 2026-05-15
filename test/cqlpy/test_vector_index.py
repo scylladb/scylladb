@@ -690,7 +690,7 @@ def alter_cdc(cql, table, options):
     try:
         cql.execute(f"ALTER TABLE {table} WITH cdc = {options}")
     except InvalidRequest as e:
-        with pytest.raises(InvalidRequest, match="CDC log must meet the minimal requirements of Vector Search"):
+        with pytest.raises(InvalidRequest, match="CDC log must meet the minimal requirements"):
             raise e
         return False
     return True
@@ -702,7 +702,7 @@ def create_index(cql, test_keyspace, table, column):
     try:
         cql.execute(query)
     except InvalidRequest as e:
-        with pytest.raises(InvalidRequest, match="CDC log must meet the minimal requirements of Vector Search"):
+        with pytest.raises(InvalidRequest, match="CDC log must meet the minimal requirements"):
             raise e
         return False
     cql.execute(f"DROP INDEX {test_keyspace}.{idx_name}")

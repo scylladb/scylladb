@@ -13,7 +13,6 @@
 #include "index/fulltext_index.hh"
 #include "index/index_option_utils.hh"
 #include "index/secondary_index_manager.hh"
-#include "utils/UUID_gen.hh"
 #include <seastar/core/sstring.hh>
 #include <boost/algorithm/string.hpp>
 
@@ -32,10 +31,6 @@ const static std::unordered_map<sstring, std::function<void(std::string_view, co
         // Required for phrase queries. Set to false to save space.
         {"positions", std::bind_front(util::validate_enumerated_option, util::boolean_values)},
 };
-
-bool fulltext_index::view_should_exist() const {
-    return false;
-}
 
 std::optional<cql3::description> fulltext_index::describe(const index_metadata& im, const schema& base_schema) const {
     auto target = im.options().at(cql3::statements::index_target::target_option_name);
@@ -83,10 +78,6 @@ void fulltext_index::validate(const schema& schema, const cql3::statements::inde
         const std::vector<::shared_ptr<cql3::statements::index_target>>& targets, const gms::feature_service&, const data_dictionary::database&) const {
     check_target(schema, targets);
     check_index_options(properties);
-}
-
-utils::UUID fulltext_index::index_version(const schema& schema) {
-    return utils::UUID_gen::get_time_UUID();
 }
 
 std::unique_ptr<secondary_index::custom_index> fulltext_index_factory() {

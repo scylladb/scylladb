@@ -5,6 +5,7 @@ target_sources(index
   PRIVATE
     secondary_index.cc
     secondary_index_manager.cc
+    external_index.cc
     fulltext_index.cc
     index_option_utils.cc
     vector_index.cc)

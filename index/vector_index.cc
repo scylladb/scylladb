@@ -19,7 +19,6 @@
 #include "index/secondary_index_manager.hh"
 #include "index/target_parser.hh"
 #include "types/concrete_types.hh"
-#include "utils/UUID_gen.hh"
 #include "types/types.hh"
 #include <ranges>
 #include <seastar/core/sstring.hh>
@@ -199,10 +198,6 @@ sstring vector_index::get_cql_similarity_function_name(const index_options_map& 
     return "similarity_cosine";
 }
 
-bool vector_index::view_should_exist() const {
-    return false;
-}
-
 std::optional<cql3::description> vector_index::describe(const index_metadata& im, const schema& base_schema) const {
     return describe_with_target(im, base_schema,
             targets_to_cql(im.options().at(cql3::statements::index_target::target_option_name)));
@@ -310,33 +305,6 @@ void vector_index::check_cdc_not_explicitly_disabled(const schema& schema) const
     }
 }
 
-void vector_index::check_cdc_options(const schema& schema) {
-    auto cdc_options = schema.cdc_options();
-    if (cdc_options.enabled()) {
-        auto ttl = cdc_options.ttl();
-        auto delta_mode = cdc_options.get_delta_mode();
-        auto postimage = cdc_options.postimage();
-        if ((ttl && ttl < VS_TTL_SECONDS) ||
-            (delta_mode != cdc::delta_mode::full && !postimage)) {
-            throw exceptions::invalid_request_exception(
-                secondary_index::vector_index::has_vector_index(schema) ?
-                format("Vector Search is enabled on this table.\n"
-                "The CDC log must meet the minimal requirements of Vector Search.\n"
-                "This means that the CDC's TTL must be at least {} seconds (24 hours), "
-                "and the CDC's delta mode must be set to 'full' or postimage must be enabled.\n",
-                VS_TTL_SECONDS) :
-                format("To enable Vector Search on this table, "
-                "the CDC log must meet the minimal requirements of Vector Search.\n"
-                "CDC's TTL must be at least {} seconds (24 hours), "
-                "and the CDC's delta mode must be set to 'full' or postimage must be enabled "
-                "to enable Vector Search.\n"
-                "Check documentation on how to setup CDC's parameters - "
-                "https://docs.scylladb.com/manual/branch-2025.2/features/cdc/cdc-intro.html#cdc-parameters",
-                VS_TTL_SECONDS));
-        }
-    }
-}
-
 void vector_index::check_index_options(const cql3::statements::index_specific_prop_defs& properties) const {
     for (auto option: properties.get_raw_options()) {
         auto it = vector_index_options.find(option.first);
@@ -344,15 +312,6 @@ void vector_index::check_index_options(const cql3::statements::index_specific_pr
             throw exceptions::invalid_request_exception(format("Unsupported option {} for vector index", option.first));
         }
         it->second(index_type_name(), option.first, option.second);
-    }
-}
-
-void vector_index::check_uses_tablets(const schema& schema, const data_dictionary::database& db) const {
-    const auto& keyspace = db.find_keyspace(schema.ks_name());
-    if (!keyspace.uses_tablets()) {
-        throw exceptions::invalid_request_exception(
-            "Vector index requires the base table's keyspace to use tablets.\n"
-            "Please alter the keyspace to use tablets and try again.");
     }
 }
 
@@ -366,18 +325,6 @@ void vector_index::validate(const schema &schema, const cql3::statements::index_
     check_cdc_not_explicitly_disabled(schema);
     check_cdc_options(schema);
     check_index_options(properties);
-}
-
-bool vector_index::has_vector_index(const schema& s) {
-    auto i = s.indices();
-    return std::any_of(i.begin(), i.end(), [](const auto& index) {
-        auto it = index.options().find(db::index::secondary_index::custom_class_option_name);
-        if (it != index.options().end()) {
-            auto custom_class = secondary_index_manager::get_custom_class_factory(it->second);
-            return (custom_class && dynamic_cast<vector_index*>((*custom_class)().get()));
-        }
-        return false;
-    });
 }
 
 bool vector_index::has_vector_index_on_column(const schema& s, const sstring& target_name) {
@@ -397,13 +344,6 @@ bool vector_index::is_vector_index_on_column(const index_metadata& im, const sst
         return custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && get_target_column(target_it->second) == target_name;
     }
     return false;
-}
-
-/// Returns a timeuuid representing the time at which the index was created.
-/// This is used to determine if the index needs to be rebuilt, and to enable
-/// routing by creation time when multiple vector indexes exist on the same column.
-utils::UUID vector_index::index_version(const schema& schema) {
-    return utils::UUID_gen::get_time_UUID();
 }
 
 std::unique_ptr<secondary_index::custom_index> vector_index_factory() {
