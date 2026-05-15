@@ -128,6 +128,10 @@ def run_vector_store_cmd(pid, dir):
         'VECTOR_STORE_SCYLLADB_URI': f'{ip}:9042',
         'VECTOR_STORE_SCYLLADB_USERNAME': 'cassandra',
         'VECTOR_STORE_SCYLLADB_PASSWORD_FILE': f'{dir}/.password',
+        # Use short poll intervals for faster test turnaround.
+        'VECTOR_STORE_CDC_FINE_SLEEP_INTERVAL': '100ms',
+        'VECTOR_STORE_CDC_SLEEP_INTERVAL': '1s',
+        'VECTOR_STORE_MONITOR_INDEXES_INTERVAL': '100ms',
     }
     global vector_store_executable # set by the code below
     cmd = [
