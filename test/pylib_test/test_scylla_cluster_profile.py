@@ -300,6 +300,16 @@ def test_manager_cluster_candidate_for_profile_matches_clean_and_reused_cluster(
     assert not manager._cluster_candidate_for_profile(dirty, profile)
 
 
+# Regression for plain-cluster reuse: a clean running cluster without a profile must still be reusable.
+def test_manager_cluster_candidate_for_profile_accepts_clean_running_plain_cluster(tmp_path) -> None:
+    manager = ScyllaClusterManager("test", SimpleNamespace(), str(tmp_path), sock_path=str(tmp_path / "api"))
+
+    plain = FakeCluster()
+    plain.running = {ServerNum(1): FakeServer(1)}
+
+    assert manager._cluster_candidate_for_profile(plain, None)
+
+
 def test_manager_cluster_profile_resource_limit_uses_effective_new_cluster_usage(tmp_path) -> None:
     manager = ScyllaClusterManager("test", SimpleNamespace(), str(tmp_path), sock_path=str(tmp_path / "api"))
     cluster = FakeCluster()

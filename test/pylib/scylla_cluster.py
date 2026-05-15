@@ -1322,7 +1322,7 @@ class ScyllaCluster:
     def set_resource_limit(self, resource_limit: ScyllaResourceLimit | None) -> None:
         self.resource_limit = resource_limit
         if resource_limit is not None:
-            self._check_resource_limit(ScyllaResourceUsage(), has_memory_override=False)
+            self._check_resource_limit(ScyllaResourceUsage(), has_memory_override=self._current_has_memory_override())
 
     def _resource_usage_from_test_cmdline(self, cmdline: list[str] | None, version: Optional[ScyllaVersionDescription]) -> ScyllaResourceUsage:
         return scylla_resource_usage_from_cmdline(self.build_cmdline_options(cmdline or [], version))
@@ -1340,6 +1340,12 @@ class ScyllaCluster:
         for server_id, server in itertools.chain(self.running.items(), self.starting.items()):
             usage += self.server_resources.get(server_id, scylla_resource_usage_from_cmdline(server.cmdline_options))
         return usage
+
+    def _current_has_memory_override(self) -> bool:
+        return any(
+            scylla_cmdline_has_memory_override(server.cmdline_options)
+            for server in itertools.chain(self.running.values(), self.starting.values())
+        )
 
     def _check_resource_limit(self, additional: ScyllaResourceUsage, has_memory_override: bool) -> None:
         if has_memory_override and (self.resource_limit is None or not self.resource_limit.allow_memory_override):
@@ -1713,7 +1719,8 @@ class ScyllaCluster:
         resource_usage = self._resource_usage_from_start_cmdline(server, cmdline_options_override)
         has_memory_override = has_scylla_memory_override
         if has_memory_override is None:
-            has_memory_override = scylla_cmdline_has_memory_override(cmdline_options_override)
+            effective_cmdline = cmdline_options_override if cmdline_options_override is not None else server.cmdline_options
+            has_memory_override = scylla_cmdline_has_memory_override(effective_cmdline)
         self._check_resource_limit(resource_usage, has_memory_override)
         self.stopped.pop(server_id)
         self.logger.info("Cluster %s starting server %s ip %s", self,
@@ -2019,7 +2026,7 @@ class ScyllaClusterManager:
         if cluster.is_dirty:
             return False
         if profile is None:
-            return cluster.cluster_profile_key is None and self._cluster_is_empty(cluster)
+            return cluster.cluster_profile_key is None
 
         if self._cluster_matches_profile(cluster, profile):
             return True

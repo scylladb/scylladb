@@ -5,6 +5,7 @@
 #
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,7 @@ from test.pylib.scylla_cluster import (
     scylla_cmdline_has_memory_override,
     scylla_resource_usage_from_cmdline,
 )
+from test.pylib.internal_types import ServerNum
 
 
 @pytest.mark.parametrize(
@@ -106,3 +108,40 @@ def test_scylla_resource_limit_detects_global_memory_override():
             cluster._resource_usage_from_test_cmdline([], None),
             cluster._has_memory_override_from_test_cmdline([], None),
         )
+
+
+# Regression: applying a resource limit must inspect the current running cluster state.
+def test_set_resource_limit_rejects_existing_memory_override() -> None:
+    cluster = ScyllaCluster(logging.getLogger(__name__), None, 0, lambda params: None)
+    cluster.running = {
+        ServerNum(1): SimpleNamespace(cmdline_options=["--smp", "1", "-m", "2G"]),
+    }
+
+    with pytest.raises(RuntimeError, match="Scylla memory overrides"):
+        cluster.set_resource_limit(ScyllaResourceLimit(enforce_usage_limits=False))
+
+
+# Regression: restarting a stopped server must honor the stored command line when no override is passed.
+@pytest.mark.asyncio
+async def test_server_start_rejects_restart_with_existing_memory_override() -> None:
+    class FakeStoppedServer:
+        def __init__(self) -> None:
+            self.cmdline_options = ["--smp", "1", "-m", "2G"]
+            self.ip_addr = "127.0.0.1"
+            self.started = False
+
+        def change_seeds(self, seeds) -> None:
+            self.seeds = seeds
+
+        async def start(self, **kwargs) -> None:
+            self.started = True
+
+    cluster = ScyllaCluster(logging.getLogger(__name__), None, 0, lambda params: None)
+    cluster.resource_limit = ScyllaResourceLimit(enforce_usage_limits=False)
+    server = FakeStoppedServer()
+    cluster.stopped = {ServerNum(1): server}
+
+    with pytest.raises(RuntimeError, match="Scylla memory overrides"):
+        await cluster.server_start(ServerNum(1))
+
+    assert not server.started
