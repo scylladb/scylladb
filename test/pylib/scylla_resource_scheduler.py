@@ -37,7 +37,10 @@ SCYLLA_BACKED_NON_CLUSTER_SUITES = frozenset({
     "broadcast_tables",
     "cql",
     "cqlpy",
+    "ldap",
+    "raft",
     "rest_api",
+    "vector_search",
     "scylla_gdb",
 })
 SCYLLA_RESOURCE_METADATA_VERSION = 1

@@ -312,6 +312,33 @@ def test_grouped_work_unit_uses_union_of_services() -> None:
     assert next(iter(workqueue.values())).services == frozenset({"s3"})
 
 
+@pytest.mark.parametrize(
+    ("suite_name", "nodeid", "expected_services"),
+    [
+        ("raft", "test/raft/raft_server_test.cc::test_one", frozenset()),
+        ("vector_search", "test/vector_search/vector_store_client_test.cc::test_one", frozenset()),
+        ("ldap", "test/ldap/role_manager_test.cc::test_one", frozenset({"ldap"})),
+    ],
+)
+def test_non_cluster_scylla_backed_suites_are_charged_like_scylla_backed_tests(
+    suite_name: str,
+    nodeid: str,
+    expected_services: frozenset[str],
+) -> None:
+    suite_cfg = {
+        "type": "Python" if suite_name == "ldap" else "C++",
+        "extra_scylla_cmdline_options": ["--reactor-backend=linux-aio"],
+    }
+    if suite_name == "ldap":
+        suite_cfg["requires_services"] = ["ldap"]
+
+    metadata = scylla_resource_metadata_for_item(FakeItem(nodeid), FakeSuiteConfig(suite_name, suite_cfg), "dev", False)
+
+    assert metadata.group_key == f"module:dev:{nodeid.split('::', 1)[0]}"
+    assert metadata.resources == SchedulerResource(cores=1, memory_bytes=GIB)
+    assert metadata.services == expected_services
+
+
 def test_scheduler_only_dispatches_fitting_work() -> None:
     collection = ["test_a", "test_b"]
     metadata = {
