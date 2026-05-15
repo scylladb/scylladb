@@ -316,7 +316,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
             auto erm = table.get_effective_replication_map();
             auto tablet_info = erm->check_locality(token, qs.get_client_state().get_original_shard());
             if (tablet_info.has_value()) {
-                result->add_tablet_info(tablet_info->tablet_replicas, tablet_info->token_range);
+                result->add_tablet_info(std::move(*tablet_info));
             }
         }
     }
@@ -454,7 +454,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
             std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (bool is_applied) mutable {
         auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
         if (tablet_info) {
-            result->add_tablet_info(std::move(tablet_info->tablet_replicas), tablet_info->token_range);
+            result->add_tablet_info(std::move(*tablet_info));
         }
         return result;
     });
