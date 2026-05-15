@@ -286,6 +286,8 @@ def _scylla_resource_budget_failure_for_item(item: pytest.Item) -> str | None:
         return None
     if item.config.getoption("--scylla-resource-scheduler") == "off":
         return None
+    if item.get_closest_marker("skip") is not None:
+        return None
 
     metadata = scylla_resource_metadata_for_item(
         item=item,
@@ -365,7 +367,7 @@ def pytest_runtest_logreport(report):
     # Only wrap once to avoid multiple wrapping (check on the node_reporter object itself)
     if not getattr(node_reporter, '__reporter_modified', False):
 
-        function_path = f'test/{report.nodeid.rsplit('.', 2)[0].rsplit('[', 1)[0]}'
+        function_path = report.nodeid.rsplit('.', 2)[0].rsplit('[', 1)[0]
 
         # Wrap the to_xml method to add custom attributes to the element
         original_to_xml = node_reporter.to_xml
