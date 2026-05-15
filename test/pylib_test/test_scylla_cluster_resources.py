@@ -6,14 +6,18 @@
 
 import asyncio
 import logging
+import pathlib
 from types import SimpleNamespace
 
 import pytest
 
+import test.pylib.scylla_cluster as scylla_cluster_module
 from test.pylib.scylla_cluster import (
     ScyllaCluster,
+    ScyllaServer,
     ScyllaResourceLimit,
     ScyllaResourceUsage,
+    ScyllaVersionDescription,
     parse_scylla_memory,
     scylla_cmdline_has_memory_override,
     scylla_resource_usage_from_cmdline,
@@ -122,6 +126,78 @@ def test_set_resource_limit_rejects_existing_memory_override() -> None:
         cluster.set_resource_limit(ScyllaResourceLimit(enforce_usage_limits=False))
 
     assert cluster.resource_limit is None
+
+
+# Regression: updating a running server's command line must refresh cached memory-override state.
+def test_update_cmdline_refreshes_memory_override_for_later_resource_checks(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scylla_cluster_module, "SCYLLA_CMDLINE_OPTIONS", ["--smp", "2"])
+
+    cluster = ScyllaCluster(logging.getLogger(__name__), None, 0, lambda params: None)
+    cluster.set_resource_limit(ScyllaResourceLimit(allow_memory_override=True, enforce_usage_limits=False))
+
+    server = ScyllaServer(
+        mode="dev",
+        version=ScyllaVersionDescription(path="/bin/true", config={}, argv=[]),
+        vardir=tmp_path,
+        logger=logging.getLogger(__name__),
+        cluster_name="test-cluster",
+        ip_addr="127.0.0.1",
+        seeds=["127.0.0.1"],
+        cmdline_options=["--smp", "1"],
+        config_options={},
+        property_file={},
+        append_env={},
+        server_encryption="none",
+    )
+    cluster.running[ServerNum(1)] = server
+
+    assert not server.has_memory_override
+
+    cluster.update_cmdline(ServerNum(1), ["-m", "2G"])
+
+    assert server.has_memory_override
+
+    with pytest.raises(RuntimeError, match="Scylla memory overrides"):
+        cluster.set_resource_limit(ScyllaResourceLimit(enforce_usage_limits=False))
+
+    assert cluster.resource_limit.allow_memory_override
+
+
+# Regression: a command-line update that removes `-m` must be checked after merge, not on the raw patch.
+def test_update_cmdline_allows_removing_memory_override_without_introducing_one(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scylla_cluster_module, "SCYLLA_CMDLINE_OPTIONS", ["--smp", "2"])
+
+    cluster = ScyllaCluster(logging.getLogger(__name__), None, 0, lambda params: None)
+    cluster.set_resource_limit(ScyllaResourceLimit(enforce_usage_limits=False))
+
+    server = ScyllaServer(
+        mode="dev",
+        version=ScyllaVersionDescription(path="/bin/true", config={}, argv=[]),
+        vardir=tmp_path,
+        logger=logging.getLogger(__name__),
+        cluster_name="test-cluster",
+        ip_addr="127.0.0.1",
+        seeds=["127.0.0.1"],
+        cmdline_options=["--smp", "1"],
+        config_options={},
+        property_file={},
+        append_env={},
+        server_encryption="none",
+    )
+    cluster.running[ServerNum(1)] = server
+
+    assert not server.has_memory_override
+
+    cluster.update_cmdline(ServerNum(1), ["-m", "__remove__"])
+
+    assert server.cmdline_options == ["--smp", "1"]
+    assert not server.has_memory_override
 
 
 # Regression: rejecting a server-add request because of the resource budget must not dirty the cluster.

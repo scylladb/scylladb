@@ -730,6 +730,7 @@ class ScyllaServer:
         """Update the command-line options by merging the new options into the existing ones.
            Takes effect only after the node is restarted."""
         self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
+        self.has_memory_override = scylla_cmdline_has_memory_override(self.cmdline_options)
 
     def take_log_savepoint(self) -> None:
         """Save the server current log size when a test starts so that if
@@ -1834,7 +1835,8 @@ class ScyllaCluster:
            Marks the cluster as dirty.
            Fails if the server cannot be found."""
         assert server_id in self.servers, f"Server {server_id} unknown"
-        self._check_resource_limit(ScyllaResourceUsage(), scylla_cmdline_has_memory_override(cmdline_options))
+        updated_cmdline = merge_cmdline_options(self.servers[server_id].cmdline_options, cmdline_options)
+        self._check_resource_limit(ScyllaResourceUsage(), scylla_cmdline_has_memory_override(updated_cmdline))
         self.is_dirty = True
         self.servers[server_id].update_cmdline(cmdline_options)
 
