@@ -153,6 +153,12 @@ struct cql_sg_stats {
     // scheduling group. Incremented when a request starts processing,
     // decremented after the response is sent.
     uint32_t _requests_serving = 0;
+
+    // Latency histogram tracking the transport-level request lifetime:
+    // from the start of request processing until the response is written
+    // to the socket. This captures processing time and time waiting in the
+    // response write queue, complementing storage-proxy-level latency.
+    utils::time_estimated_histogram _request_latency;
 private:
     bool _use_metrics = false;
     seastar::metrics::metric_groups _metrics;
