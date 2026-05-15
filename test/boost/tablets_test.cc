@@ -7281,4 +7281,135 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_dropped_table) {
     }).get();
 }
 
+// Tests convergence of a tablet map with arbitrary boundaries to a uniform
+// pow2 layout. This applies to tables produced by vnodes-to-tablets migration,
+// where tablet boundaries inherit the random vnode token distribution.
+//
+// The test constructs a tablet map with 8 pow2 token ranges and then injects
+// a deterministic number of extra tokens into those ranges to cover various
+// merge conditions:
+// - Token range with 0 extra tokens: no merges needed
+// - Token range with 1 extra token:  1 merge round (1 merged tablet pair)
+// - Token range with 2 extra tokens: 2 merge rounds (1 merged tablet pair in first round, 1 merged tablet pair in second round)
+// - Token range with 3 extra tokens: 2 merge rounds (2 merged tablet pairs in first round, 1 merged tablet pair in second round)
+// - Token range with 4 extra tokens: 3 merge rounds (2 merged tablet pairs in first round, 1 merged tablet pair in second round, 1 merged tablet pair in third round)
+//
+// Tablets within each pow2 token range are assigned different replica sets to
+// exercise the merge colocation path.
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_pow2_convergence) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 3;
+        const int n_racks = 3;
+        const int nodes_per_rack = 2;
+        const unsigned shard_count = 2;
+
+        // Build the topology.
+
+        topology_builder topo(e);
+
+        std::vector<host_id> hosts;
+        for (int r = 0; r < n_racks; ++r) {
+            if (r > 0) {
+                topo.start_new_rack();
+            }
+            for (int n = 0; n < nodes_per_rack; ++n) {
+                hosts.push_back(topo.add_node(node_state::normal, shard_count));
+            }
+        }
+
+        // Compute tablet boundaries by starting with pow2 boundaries and
+        // injecting extra tokens within each pow2 token range.
+
+        const size_t target_pow2 = 8;
+        const int n_extra_tokens_per_range[target_pow2] = {0, 1, 2, 3, 4, 0, 0, 0};
+        const size_t initial_tablet_count = target_pow2 + std::accumulate(std::begin(n_extra_tokens_per_range), std::end(n_extra_tokens_per_range), 0);
+
+        utils::chunked_vector<dht::raw_token> pow2_boundaries = dht::get_uniform_tokens(target_pow2);
+        utils::chunked_vector<dht::raw_token> all_boundaries;
+
+        for (size_t seg = 0; seg < target_pow2; ++seg) {
+            uint64_t seg_start = (seg == 0) ? dht::first_token().unbias() : dht::token(pow2_boundaries[seg - 1]).unbias() + 1;
+            uint64_t seg_end = dht::token(pow2_boundaries[seg]).unbias();
+            int n_extra = n_extra_tokens_per_range[seg];
+            for (int j = 0; j < n_extra; ++j) {
+                // Place extra tokens within the segment.
+                size_t even_spacing = (seg_end - seg_start) / (n_extra + 1);
+                uint64_t even_pos = seg_start + even_spacing * (j + 1);
+                uint64_t skew = even_spacing / 10;
+                uint64_t pos = (j % 2 == 0) ? even_pos - skew : even_pos + skew; // skew tokens slightly to break evenness
+                all_boundaries.push_back(dht::raw_token(dht::token::bias(pos)));
+            }
+            // Add the pow2 boundary itself.
+            all_boundaries.push_back(pow2_boundaries[seg]);
+        }
+
+        // Create the table.
+        auto ks_name = add_keyspace(e, {{topo.dc(), rf}});
+        auto table1 = add_table(e, ks_name).get();
+        auto& stm = e.shared_token_metadata().local();
+
+        // Introduce a tablet map with arbitrary boundaries.
+        mutate_tablets(e, [&](tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(std::move(all_boundaries));
+
+            // Assign replicas: cycle through different (host, shard) combinations
+            // so that adjacent tablets within a segment have different replica sets.
+            size_t host_offset = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tablet_replica_set replicas;
+                replicas.reserve(rf);
+                for (int r = 0; r < rf; ++r) {
+                    auto h = hosts[(host_offset + r * nodes_per_rack) % hosts.size()];
+                    auto s = shard_id((host_offset + r) % shard_count);
+                    replicas.push_back(tablet_replica{h, s});
+                }
+                tmap.set_tablet(tid, tablet_info{std::move(replicas)});
+                ++host_offset;
+            }
+
+            // Set the pow2 target.
+            tmap.set_target_pow2_tablet_count(target_pow2);
+
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Verify initial state.
+        {
+            auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+            BOOST_REQUIRE_EQUAL(tmap.tablet_count(), initial_tablet_count);
+            BOOST_REQUIRE(tmap.is_converging_to_pow2());
+            BOOST_REQUIRE(tmap.get_layout() == tablet_layout::arbitrary);
+            check_tablet_invariants(stm.get()->tablets());
+        }
+
+        // Lower "initial" tablets option so it doesn't force splits after
+        // convergence reduces the tablet count below the initial value.
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_name)).get();
+
+        // Set tablet sizes so the load balancer has stats for the table.
+        // Use the default target size so normal resize logic doesn't
+        // interfere (it would only merge if tablets are small).
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_default_tablet_sizes(stm.get());
+        load_stats.set_size(table1, service::default_target_tablet_size * target_pow2);
+
+        // Run the load balancer until convergence.
+        rebalance_tablets(e, &load_stats);
+
+        // Verify final state.
+        {
+            auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+            BOOST_REQUIRE_EQUAL(tmap.tablet_count(), target_pow2);
+            BOOST_REQUIRE(!tmap.is_converging_to_pow2());
+            BOOST_REQUIRE(tmap.get_layout() == tablet_layout::pow_of_2);
+            check_tablet_invariants(stm.get()->tablets());
+        }
+
+        e.execute_cql(fmt::format("drop keyspace {}", ks_name)).get();
+    }, std::move(cfg)).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
