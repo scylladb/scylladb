@@ -97,6 +97,19 @@ class _FakeItem:
     def get_closest_marker(self, name: str):
         return self._marks.get(name)
 
+    def iter_markers(self, name: str | None = None):
+        if name is None:
+            values = self._marks.values()
+        else:
+            mark = self._marks.get(name)
+            if mark is None:
+                values = ()
+            elif isinstance(mark, (list, tuple)):
+                values = mark
+            else:
+                values = (mark,)
+        return iter(values)
+
 
 class _FakeNodeReporter:
     def __init__(self) -> None:
@@ -131,6 +144,31 @@ def test_skipped_tests_are_not_converted_into_budget_failures() -> None:
         config,
         {
             "skip": pytest.mark.skip(reason="skip").mark,
+            "scylla_resources": pytest.mark.scylla_resources(cpu=100, mem="100G").mark,
+        },
+    )
+    item.stash[runner_plugin.TEST_SUITE] = SimpleNamespace(name="cluster", cfg={"type": "Topology"}, path=Path("test/cluster"))
+    item.stash[runner_plugin.BUILD_MODE] = "dev"
+
+    assert runner_plugin._scylla_resource_budget_failure_for_item(item) is None
+
+
+def test_skipif_tests_are_not_converted_into_budget_failures() -> None:
+    """Regression test for skipif items being short-circuited before synthetic budget failures."""
+
+    options = {
+        "--collect-only": False,
+        "--scylla-resource-scheduler": "on",
+        "--scylla-resource-cpus": 1,
+        "--scylla-resource-memory": "1G",
+        "--tmpdir": "/tmp",
+    }
+    config = SimpleNamespace(getoption=lambda name: options.get(name))
+    item = _FakeItem(
+        "test/cluster/dtest/auth_test.py::test_one",
+        config,
+        {
+            "skipif": pytest.mark.skipif(True, reason="skipif").mark,
             "scylla_resources": pytest.mark.scylla_resources(cpu=100, mem="100G").mark,
         },
     )

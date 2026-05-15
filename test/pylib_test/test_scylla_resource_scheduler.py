@@ -338,6 +338,7 @@ def test_grouped_work_unit_uses_union_of_services() -> None:
     ("suite_name", "nodeid", "expected_services"),
     [
         ("boost", "test/boost/s3_test.cc::test_one", frozenset({"s3"})),
+        ("nodetool", "test/nodetool/test_compact.py::test_all_keyspaces", frozenset()),
         ("raft", "test/raft/raft_server_test.cc::test_one", frozenset()),
         ("vector_search", "test/vector_search/vector_store_client_test.cc::test_one", frozenset()),
         ("ldap", "test/ldap/role_manager_test.cc::test_one", frozenset({"ldap"})),
