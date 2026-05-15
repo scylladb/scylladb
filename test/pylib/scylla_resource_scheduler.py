@@ -37,6 +37,7 @@ SCYLLA_BACKED_NON_CLUSTER_SUITES = frozenset({
     "broadcast_tables",
     "cql",
     "cqlpy",
+    "boost",
     "ldap",
     "raft",
     "rest_api",

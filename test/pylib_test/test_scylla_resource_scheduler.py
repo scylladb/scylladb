@@ -312,9 +312,11 @@ def test_grouped_work_unit_uses_union_of_services() -> None:
     assert next(iter(workqueue.values())).services == frozenset({"s3"})
 
 
+# Regression test for Scylla-backed non-cluster suites that were previously charged as free.
 @pytest.mark.parametrize(
     ("suite_name", "nodeid", "expected_services"),
     [
+        ("boost", "test/boost/s3_test.cc::test_one", frozenset({"s3"})),
         ("raft", "test/raft/raft_server_test.cc::test_one", frozenset()),
         ("vector_search", "test/vector_search/vector_store_client_test.cc::test_one", frozenset()),
         ("ldap", "test/ldap/role_manager_test.cc::test_one", frozenset({"ldap"})),
@@ -329,6 +331,8 @@ def test_non_cluster_scylla_backed_suites_are_charged_like_scylla_backed_tests(
         "type": "Python" if suite_name == "ldap" else "C++",
         "extra_scylla_cmdline_options": ["--reactor-backend=linux-aio"],
     }
+    if suite_name == "boost":
+        suite_cfg["requires_services"] = {"s3_test": ["s3"]}
     if suite_name == "ldap":
         suite_cfg["requires_services"] = ["ldap"]
 
@@ -544,15 +548,16 @@ async def test_service_manager_cleans_up_partial_start_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_service_manager_clears_state_after_transition_failure() -> None:
+# Regression test for rollback when the first new service fails before any new service is active.
+async def test_service_manager_preserves_previous_state_when_first_new_service_fails() -> None:
     manager = FailingSessionServiceManager(fail_on="s3")
     manager.active_services = frozenset({"ldap"})
 
     with pytest.raises(RuntimeError, match="boom"):
         await manager.ensure_services({"s3"})
 
-    assert manager.active_services == frozenset()
-    assert manager.events == [("stop", "ldap"), ("start", "s3"), ("write", ())]
+    assert manager.active_services == frozenset({"ldap"})
+    assert manager.events == [("stop", "ldap"), ("start", "s3"), ("write", ("ldap",))]
 
 
 @pytest.mark.asyncio
