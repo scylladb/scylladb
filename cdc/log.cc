@@ -217,7 +217,7 @@ public:
     }
 
     void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
-        // If we have a vector index, we need to ensure that the CDC log
+        // If we have a vector (VS) or fulltext (FTS) index, we need to ensure that the CDC log
         // is created satisfying the minimal requirements of Vector Store.
         secondary_index::external_index::check_cdc_options_if_present(new_schema);
 

@@ -32,6 +32,12 @@ public:
     void validate(const schema& schema, const cql3::statements::index_specific_prop_defs& properties,
             const std::vector<::shared_ptr<cql3::statements::index_target>>& targets, const gms::feature_service& fs,
             const data_dictionary::database& db) const override;
+    static bool has_index(const schema& s) {
+        return has_index_impl<fulltext_index>(s);
+    }
+    static void check_cdc_options(const schema& s) {
+        check_cdc_options_impl<fulltext_index>(s);
+    }
 
 private:
     void check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const;

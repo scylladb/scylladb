@@ -433,8 +433,8 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                     throw exceptions::invalid_request_exception("Altering CDC options requires specifying \"enabled\" flag");
                 }
 
-                // If we are disabling CDC, we need to ensure that the vector index is enabled on the table,
-                // because it relies on CDC to function, and disabling CDC would leave it in a broken state.
+                // If we are disabling CDC, we need to ensure that neither the vector index nor the fulltext index is enabled on the table,
+                // because both of them rely on CDC to function, and disabling CDC would leave them in a broken state.
                 if (!cdc_opts.enabled()) {
                     secondary_index::external_index::validate_cdc_not_disabled_if_present(*s);
                 }

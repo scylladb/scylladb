@@ -78,6 +78,7 @@ void fulltext_index::validate(const schema& schema, const cql3::statements::inde
         const std::vector<::shared_ptr<cql3::statements::index_target>>& targets, const gms::feature_service&, const data_dictionary::database& db) const {
     check_uses_tablets(schema, db);
     check_target(schema, targets);
+    check_cdc_options(schema);
     check_index_options(properties);
 }
 
