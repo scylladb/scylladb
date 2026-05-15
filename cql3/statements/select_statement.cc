@@ -495,8 +495,8 @@ select_statement::do_execute(query_processor& qp,
         return f;
     }
 
-    return f.then([tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (auto res) mutable {
-        res->add_tablet_info(std::move(tablet_replicas), token_range);
+    return f.then([tablet_info = std::move(*tablet_info)] (auto res) mutable {
+        res->add_tablet_info(std::move(tablet_info));
         return res;
     });
 }

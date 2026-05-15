@@ -31,6 +31,7 @@
 #include "utils/assert.hh"
 #include "view_info.hh"
 #include "replica/database.hh"
+#include "replica/tablets.hh"
 #include "lang/manager.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/expr/expression.hh"
