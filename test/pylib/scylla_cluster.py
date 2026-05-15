@@ -505,6 +505,7 @@ class ScyllaServer:
         self.log_file = None
         self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
         self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
+        self.has_memory_override = scylla_cmdline_has_memory_override(self.cmdline_options)
         self.cluster_name = cluster_name
         self.ip_addr = IPAddress(ip_addr)
         self.seeds = seeds
@@ -1343,7 +1344,7 @@ class ScyllaCluster:
 
     def _current_has_memory_override(self) -> bool:
         return any(
-            scylla_cmdline_has_memory_override(server.cmdline_options)
+            getattr(server, "has_memory_override", scylla_cmdline_has_memory_override(server.cmdline_options))
             for server in itertools.chain(self.running.values(), self.starting.values())
         )
 
@@ -1750,6 +1751,7 @@ class ScyllaCluster:
             cmdline_options_override=cmdline_options_override,
             append_env_override=append_env_override,
         )
+        server.has_memory_override = has_memory_override
         if expected_error is not None:
             self.running.pop(server_id)
             self.stopped[server_id] = server

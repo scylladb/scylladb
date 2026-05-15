@@ -145,3 +145,31 @@ async def test_server_start_rejects_restart_with_existing_memory_override() -> N
         await cluster.server_start(ServerNum(1))
 
     assert not server.started
+
+
+# Regression: a restart-time cmdline override must remain visible to later resource-limit checks.
+@pytest.mark.asyncio
+async def test_server_start_persists_memory_override_for_later_resource_checks() -> None:
+    class FakeStoppedServer:
+        def __init__(self) -> None:
+            self.cmdline_options = ["--smp", "1"]
+            self.ip_addr = "127.0.0.1"
+            self.started = False
+
+        def change_seeds(self, seeds) -> None:
+            self.seeds = seeds
+
+        async def start(self, **kwargs) -> None:
+            self.started = True
+
+    cluster = ScyllaCluster(logging.getLogger(__name__), None, 0, lambda params: None)
+    cluster.resource_limit = ScyllaResourceLimit(allow_memory_override=True, enforce_usage_limits=False)
+    server = FakeStoppedServer()
+    cluster.stopped = {ServerNum(1): server}
+
+    await cluster.server_start(ServerNum(1), cmdline_options_override=["--smp", "1", "-m", "2G"])
+
+    assert server.started
+
+    with pytest.raises(RuntimeError, match="Scylla memory overrides"):
+        cluster.set_resource_limit(ScyllaResourceLimit(enforce_usage_limits=False))
