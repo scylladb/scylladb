@@ -182,7 +182,9 @@ class SessionServiceManager:
         except Exception:
             for service in reversed(started):
                 await self._stop_service(service)
-            self.active_services = normalize_session_services(previous - stopped)
+            # If the failure happened before any new service was started, keep
+            # the last known active set so cleanup can retry the stop later.
+            self.active_services = normalize_session_services(previous - stopped) if started else previous
             self._write_environment()
             raise
 

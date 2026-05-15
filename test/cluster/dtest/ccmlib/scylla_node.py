@@ -458,6 +458,9 @@ class ScyllaNode:
 
         logger.debug(f"Starting server: server_id={self.server_id} {scylla_args=} {scylla_env=}")
 
+        has_scylla_memory_override = scylla_cmdline_has_memory_override(jvm_args)
+        has_scylla_memory_override |= scylla_cmdline_has_memory_override(os.environ.get("SCYLLA_EXT_OPTS", "").split())
+
         self.cluster.manager.server_start(
             server_id=self.server_id,
             seeds=None if self.bootstrap else [self.address()],
@@ -465,7 +468,7 @@ class ScyllaNode:
             cmdline_options_override=scylla_args,
             append_env_override=scylla_env,
             connect_driver=False,
-            has_scylla_memory_override=scylla_cmdline_has_memory_override(jvm_args),
+            has_scylla_memory_override=has_scylla_memory_override,
         )
 
         if wait_for_binary_proto is None:

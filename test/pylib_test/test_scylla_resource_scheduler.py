@@ -100,6 +100,8 @@ class FailingSessionServiceManager(SessionServiceManager):
 
     async def _stop_service(self, service: str) -> None:
         self.events.append(("stop", service))
+        if service == self.fail_on:
+            raise RuntimeError("boom")
 
     def _write_environment(self) -> None:
         self.events.append(("write", tuple(sorted(self.active_services))))
@@ -524,6 +526,19 @@ async def test_service_manager_clears_state_after_transition_failure() -> None:
 
     assert manager.active_services == frozenset()
     assert manager.events == [("stop", "ldap"), ("start", "s3"), ("write", ())]
+
+
+@pytest.mark.asyncio
+async def test_service_manager_preserves_previous_state_when_stop_fails() -> None:
+    # Regression test for session-service rollback when stopping an old service fails before any new service starts.
+    manager = FailingSessionServiceManager(fail_on="ldap")
+    manager.active_services = frozenset({"ldap"})
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await manager.ensure_services({"s3"})
+
+    assert manager.active_services == frozenset({"ldap"})
+    assert manager.events == [("stop", "ldap"), ("write", ("ldap",))]
 
 
 def test_scheduler_dispatches_oversized_work_unit_for_per_test_failure() -> None:
