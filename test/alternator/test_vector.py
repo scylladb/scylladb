@@ -2268,7 +2268,7 @@ def test_vector_with_streams(vs, needs_vector_store, dynamodbstreams, cql, setup
                 break
             if time.monotonic() > stream_deadline:
                 pytest.fail('Timed out waiting for stream to become ENABLED')
-            time.sleep(0.5)
+            time.sleep(0.1)
         # Collect all shard "LATEST" iterators, handling multi-page DescribeStream.
         iterators = []
         while True:
@@ -2718,7 +2718,7 @@ def test_vector_with_old_image_stream(vs, needs_vector_store, dynamodbstreams, c
                 break
             if time.monotonic() > stream_deadline:
                 pytest.fail('Timed out waiting for stream to become ENABLED')
-            time.sleep(0.5)
+            time.sleep(0.1)
 
         # DescribeStream and DescribeTable must both report OLD_IMAGE.
         assert desc['StreamViewType'] == 'OLD_IMAGE'
