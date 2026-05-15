@@ -121,6 +121,20 @@ def test_set_resource_limit_rejects_existing_memory_override() -> None:
     with pytest.raises(RuntimeError, match="Scylla memory overrides"):
         cluster.set_resource_limit(ScyllaResourceLimit(enforce_usage_limits=False))
 
+    assert cluster.resource_limit is None
+
+
+# Regression: rejecting a server-add request because of the resource budget must not dirty the cluster.
+@pytest.mark.asyncio
+async def test_add_server_rejects_resource_limit_without_dirtying_cluster() -> None:
+    cluster = ScyllaCluster(logging.getLogger(__name__), None, 0, lambda params: None)
+    cluster.resource_limit = ScyllaResourceLimit(cores=0, memory_bytes=0)
+
+    with pytest.raises(RuntimeError, match="Scylla core limit exceeded"):
+        await cluster.add_server(cmdline=["--smp", "1"])
+
+    assert not cluster.is_dirty
+
 
 # Regression: restarting a stopped server must honor the stored command line when no override is passed.
 @pytest.mark.asyncio
@@ -145,6 +159,33 @@ async def test_server_start_rejects_restart_with_existing_memory_override() -> N
     with pytest.raises(RuntimeError, match="Scylla memory overrides"):
         await cluster.server_start(ServerNum(1))
 
+    assert not server.started
+
+
+# Regression: rejecting a server restart because of the resource budget must not dirty the cluster.
+@pytest.mark.asyncio
+async def test_server_start_rejects_resource_limit_without_dirtying_cluster() -> None:
+    class FakeStoppedServer:
+        def __init__(self) -> None:
+            self.cmdline_options = ["--smp", "1"]
+            self.ip_addr = "127.0.0.1"
+            self.started = False
+
+        def change_seeds(self, seeds) -> None:
+            self.seeds = seeds
+
+        async def start(self, **kwargs) -> None:
+            self.started = True
+
+    cluster = ScyllaCluster(logging.getLogger(__name__), None, 0, lambda params: None)
+    cluster.resource_limit = ScyllaResourceLimit(cores=0, memory_bytes=0)
+    server = FakeStoppedServer()
+    cluster.stopped = {ServerNum(1): server}
+
+    with pytest.raises(RuntimeError, match="Scylla core limit exceeded"):
+        await cluster.server_start(ServerNum(1))
+
+    assert not cluster.is_dirty
     assert not server.started
 
 

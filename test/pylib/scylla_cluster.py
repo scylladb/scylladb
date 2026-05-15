@@ -1321,9 +1321,14 @@ class ScyllaCluster:
         return scylla_cmdline_has_memory_override(cmdline_from_test)
 
     def set_resource_limit(self, resource_limit: ScyllaResourceLimit | None) -> None:
+        previous_resource_limit = self.resource_limit
         self.resource_limit = resource_limit
-        if resource_limit is not None:
-            self._check_resource_limit(ScyllaResourceUsage(), has_memory_override=self._current_has_memory_override())
+        try:
+            if resource_limit is not None:
+                self._check_resource_limit(ScyllaResourceUsage(), has_memory_override=self._current_has_memory_override())
+        except Exception:
+            self.resource_limit = previous_resource_limit
+            raise
 
     def _resource_usage_from_test_cmdline(self, cmdline: list[str] | None, version: Optional[ScyllaVersionDescription]) -> ScyllaResourceUsage:
         return scylla_resource_usage_from_cmdline(self.build_cmdline_options(cmdline or [], version))
@@ -1447,14 +1452,14 @@ class ScyllaCluster:
                          expected_error: Optional[str] = None,
                          expected_server_up_state: ServerUpState = ServerUpState.CQL_ALTERNATOR_QUERIED) -> ServerInfo:
         """Add a new server to the cluster"""
-        self.is_dirty = True
-
         assert start or not expected_error, \
             f"add_server: cannot add a stopped server and expect an error"
 
         resource_usage = self._resource_usage_from_test_cmdline(cmdline, version)
         has_memory_override = self._has_memory_override_from_test_cmdline(cmdline, version)
         self._check_resource_limit(resource_usage if start else ScyllaResourceUsage(), has_memory_override)
+
+        self.is_dirty = True
 
         extra_config: dict[str, Any] = config.copy() if config else {}
         if replace_cfg:
@@ -1715,7 +1720,6 @@ class ScyllaCluster:
         if server_id in self.running:
             return
         assert server_id in self.stopped, f"Server {server_id} unknown"
-        self.is_dirty = True
         server = self.stopped[server_id]
         resource_usage = self._resource_usage_from_start_cmdline(server, cmdline_options_override)
         has_memory_override = has_scylla_memory_override
@@ -1723,6 +1727,7 @@ class ScyllaCluster:
             effective_cmdline = cmdline_options_override if cmdline_options_override is not None else server.cmdline_options
             has_memory_override = scylla_cmdline_has_memory_override(effective_cmdline)
         self._check_resource_limit(resource_usage, has_memory_override)
+        self.is_dirty = True
         self.stopped.pop(server_id)
         self.logger.info("Cluster %s starting server %s ip %s", self,
                          server_id, server.ip_addr)
