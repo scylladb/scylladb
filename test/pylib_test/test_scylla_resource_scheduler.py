@@ -538,6 +538,27 @@ def test_scheduler_dispatches_oversized_work_unit_for_per_test_failure() -> None
     assert node1.sent == [[0]] or node2.sent == [[0]]
 
 
+def test_scheduler_serializes_oversized_work_units() -> None:
+    """Regression test for oversized Scylla work units being dispatched on multiple workers at once."""
+
+    collection = ["test_a", "test_b"]
+    metadata = {
+        "test_a": ScyllaResourceMetadata("test_a", SchedulerResource(cores=3, memory_bytes=GIB)),
+        "test_b": ScyllaResourceMetadata("test_b", SchedulerResource(cores=3, memory_bytes=GIB)),
+    }
+    scheduler, node1, node2 = make_scheduler(collection, metadata, cpus=2)
+
+    scheduler.schedule()
+
+    assert (node1.sent == [[0]] and node2.sent == []) or (node1.sent == [] and node2.sent == [[0]])
+
+    active_node = node1 if node1.sent else node2
+    scheduler.mark_test_complete(active_node, 0)
+
+    assert sorted(node1.sent + node2.sent) == [[0], [1]]
+    assert (node1.sent == [[0], [1]] and node2.sent == []) or (node1.sent == [] and node2.sent == [[0], [1]])
+
+
 def test_oversized_work_unit_waits_for_idle_worker() -> None:
     collection = ["test_a", "test_b"]
     metadata = {

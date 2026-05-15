@@ -791,7 +791,11 @@ class ScyllaResourceScheduler:
                 continue
             if self._work_unit_fits_now(node, work_unit):
                 return key
-        if oversized_key is not None and self._pending_of(self.assigned_work[node]) == 0:
+        if (
+            oversized_key is not None
+            and self._pending_of(self.assigned_work[node]) == 0
+            and self._resource_usage_in_use() == SchedulerResource()
+        ):
             return oversized_key
         return None
 

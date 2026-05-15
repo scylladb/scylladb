@@ -550,7 +550,13 @@ class TestSuiteConfig:
         for config_file in (node.path / SUITE_CONFIG_FILENAME, node.path / TEST_CONFIG_FILENAME,):
             if config_file.is_file():
                 suite = cls(config_file=config_file)
-                break
+                extra_opts = node.config.getoption("--extra-scylla-cmdline-options")
+                if extra_opts:
+                    extra_cmd = suite.cfg.get('extra_scylla_cmdline_options', [])
+                    extra_cmd = merge_cmdline_options(extra_cmd, extra_opts.split())
+                    suite.cfg['extra_scylla_cmdline_options'] = extra_cmd
+                node.stash[TEST_SUITE] = suite
+                return suite
         else:
             if node.parent is None:
                 return None
@@ -558,11 +564,6 @@ class TestSuiteConfig:
             if suite is None:
                 suite = cls.from_pytest_node(node=node.parent)
         if suite:
-            extra_opts = node.config.getoption("--extra-scylla-cmdline-options")
-            if extra_opts:
-                extra_cmd = suite.cfg.get('extra_scylla_cmdline_options', [])
-                extra_cmd = merge_cmdline_options(extra_cmd, extra_opts.split())
-                suite.cfg['extra_scylla_cmdline_options'] = extra_cmd
             node.stash[TEST_SUITE] = suite
         return suite
 
