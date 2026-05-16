@@ -335,12 +335,12 @@ def _is_lingering_candidate(item_metadata: ScyllaResourceMetadata) -> bool:
 
 
 def _item_priority_key(nodeid: str, item_metadata: ScyllaResourceMetadata) -> tuple[int, float, float]:
-    if not _is_lingering_candidate(item_metadata):
-        return (1, 0.0, 0.0)
+    if _is_lingering_candidate(item_metadata):
+        duration_rank = -(item_metadata.estimated_duration_seconds or DEFAULT_ESTIMATED_DURATION_SECONDS)
+        cpu_rank = item_metadata.observed_cpu_cores if item_metadata.observed_cpu_cores is not None else item_metadata.resources.cores
+        return (0, duration_rank, cpu_rank)
 
-    duration_rank = -(item_metadata.estimated_duration_seconds or DEFAULT_ESTIMATED_DURATION_SECONDS)
-    cpu_rank = item_metadata.observed_cpu_cores if item_metadata.observed_cpu_cores is not None else item_metadata.resources.cores
-    return (0, duration_rank, cpu_rank)
+    return (1, 0.0, 0.0)
 
 
 def _suite_cmdline_options(suite_config: TestSuiteConfig | None) -> list[str]:
