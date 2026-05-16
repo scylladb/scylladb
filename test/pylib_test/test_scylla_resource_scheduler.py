@@ -620,6 +620,43 @@ def test_historical_resource_usage_requires_enough_samples(tmp_path: pathlib.Pat
     assert metadata.resources == SchedulerResource(cores=0.25, memory_bytes=GIB)
 
 
+def test_historical_resource_usage_aggregates_across_multiple_run_dbs(tmp_path: pathlib.Path) -> None:
+    first_db = tmp_path / DEFAULT_DB_NAME
+    second_db = tmp_path / "sqlite_other.db"
+
+    first_writer = SQLiteWriter(first_db)
+    second_writer = SQLiteWriter(second_db)
+
+    for run_id, writer in ((1, first_writer), (2, first_writer), (3, second_writer)):
+        test_id = writer.write_row(
+            TestRow(host_id=HOST_ID, architecture="x86_64", directory="cluster", mode="dev", run_id=run_id, test_name="dtest/auth_test"),
+            TESTS_TABLE,
+        )
+        writer.write_row(
+            Metric(
+                test_id=test_id,
+                host_id=HOST_ID,
+                memory_peak=128 * 1024 ** 2,
+                success=True,
+                time_taken=100.0,
+                usage_sec=2.0,
+            ),
+            METRICS_TABLE,
+        )
+
+    config = FakeConfig(tmpdir=tmp_path)
+    suite = FakeSuiteConfig("cluster", {"type": "Topology"})
+    metadata = scylla_resource_metadata_for_item(
+        FakeItem("test/cluster/dtest/auth_test.py::test_one", mark("single_node"), config=config),
+        suite,
+        "dev",
+        False,
+        config,
+    )
+
+    assert metadata.resources == SchedulerResource(cores=0.125, memory_bytes=GIB // 2)
+
+
 @pytest.mark.asyncio
 async def test_service_manager_cleans_up_partial_start_failure() -> None:
     manager = FailingSessionServiceManager(fail_on="s3")

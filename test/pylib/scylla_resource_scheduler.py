@@ -157,6 +157,20 @@ def historical_resource_db_path(config: pytest.Config) -> pathlib.Path | None:
     return pathlib.Path(tmpdir).absolute() / DEFAULT_DB_NAME
 
 
+def historical_resource_db_paths(config: pytest.Config) -> list[pathlib.Path]:
+    tmpdir = config.getoption("--tmpdir")
+    if tmpdir is None:
+        return []
+
+    tmpdir_path = pathlib.Path(tmpdir).absolute()
+    db_paths = sorted(path for path in tmpdir_path.glob("sqlite_*.db") if path.is_file())
+    if not db_paths:
+        current_db = tmpdir_path / DEFAULT_DB_NAME
+        if current_db.exists():
+            db_paths.append(current_db)
+    return db_paths
+
+
 def _nodeid_path(nodeid: str) -> str:
     return nodeid.split("::", 1)[0]
 
@@ -187,46 +201,75 @@ def _load_historical_resource_usage(config: pytest.Config) -> dict[tuple[str, st
     if cached is not None:
         return cached
 
-    db_path = historical_resource_db_path(config)
     result: dict[tuple[str, str, str], HistoricalResourceUsage] = {}
-    if db_path is None or not db_path.exists():
+    db_paths = historical_resource_db_paths(config)
+    if not db_paths:
         config._scylla_historical_resource_usage = result
         return result
 
-    connection = None
-    try:
-        connection = sqlite3.connect(db_path)
-        cursor = connection.cursor()
-        cursor.execute(
-            f"""
-            SELECT
-                t.directory,
-                t.mode,
-                t.test_name,
-                COUNT(*) AS sample_count,
-                MAX(CAST(m.memory_peak AS INTEGER)) AS max_memory_peak,
-                MAX(CASE WHEN m.time_taken > 0 AND m.usage_sec IS NOT NULL THEN m.usage_sec / m.time_taken END) AS max_avg_cpu,
-                AVG(CASE WHEN m.time_taken > 0 THEN m.time_taken END) AS avg_time_taken
-            FROM {TESTS_TABLE} AS t
-            JOIN {METRICS_TABLE} AS m ON m.test_id = t.id
-            WHERE m.success = 1
-            GROUP BY t.directory, t.mode, t.test_name
-            """
-        )
-        for directory, mode, test_name, sample_count, max_memory_peak, max_avg_cpu, avg_time_taken in cursor.fetchall():
-            result[(str(directory), str(mode), str(test_name))] = HistoricalResourceUsage(
-                sample_count=int(sample_count),
-                cores=float(max_avg_cpu) if max_avg_cpu is not None else None,
-                memory_bytes=int(max_memory_peak) if max_memory_peak is not None else None,
-                duration_seconds=float(avg_time_taken) if avg_time_taken is not None else None,
-            )
-    except sqlite3.Error:
-        logger.debug("Failed to load historical resource usage from %s", db_path, exc_info=True)
-    finally:
+    aggregated: dict[tuple[str, str, str], dict[str, float | int | None]] = {}
+
+    for db_path in db_paths:
+        connection = None
         try:
-            connection.close()
-        except Exception:
-            pass
+            connection = sqlite3.connect(db_path)
+            cursor = connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT
+                    t.directory,
+                    t.mode,
+                    t.test_name,
+                    COUNT(*) AS sample_count,
+                    MAX(CAST(m.memory_peak AS INTEGER)) AS max_memory_peak,
+                    MAX(CASE WHEN m.time_taken > 0 AND m.usage_sec IS NOT NULL THEN m.usage_sec / m.time_taken END) AS max_avg_cpu,
+                    SUM(CASE WHEN m.time_taken > 0 THEN m.time_taken ELSE 0 END) AS total_time_taken,
+                    SUM(CASE WHEN m.time_taken > 0 THEN 1 ELSE 0 END) AS timed_samples
+                FROM {TESTS_TABLE} AS t
+                JOIN {METRICS_TABLE} AS m ON m.test_id = t.id
+                WHERE m.success = 1
+                GROUP BY t.directory, t.mode, t.test_name
+                """
+            )
+            for directory, mode, test_name, sample_count, max_memory_peak, max_avg_cpu, total_time_taken, timed_samples in cursor.fetchall():
+                key = (str(directory), str(mode), str(test_name))
+                entry = aggregated.setdefault(
+                    key,
+                    {
+                        "sample_count": 0,
+                        "memory_bytes": None,
+                        "cores": None,
+                        "total_time_taken": 0.0,
+                        "timed_samples": 0,
+                    },
+                )
+                entry["sample_count"] = int(entry["sample_count"]) + int(sample_count)
+                if max_memory_peak is not None:
+                    current_memory = entry["memory_bytes"]
+                    entry["memory_bytes"] = max(int(max_memory_peak), int(current_memory)) if current_memory is not None else int(max_memory_peak)
+                if max_avg_cpu is not None:
+                    current_cores = entry["cores"]
+                    entry["cores"] = max(float(max_avg_cpu), float(current_cores)) if current_cores is not None else float(max_avg_cpu)
+                entry["total_time_taken"] = float(entry["total_time_taken"]) + float(total_time_taken or 0.0)
+                entry["timed_samples"] = int(entry["timed_samples"]) + int(timed_samples or 0)
+        except sqlite3.Error:
+            logger.debug("Failed to load historical resource usage from %s", db_path, exc_info=True)
+        finally:
+            try:
+                if connection is not None:
+                    connection.close()
+            except Exception:
+                pass
+
+    for key, entry in aggregated.items():
+        timed_samples = int(entry["timed_samples"])
+        duration_seconds = None if timed_samples == 0 else float(entry["total_time_taken"]) / timed_samples
+        result[key] = HistoricalResourceUsage(
+            sample_count=int(entry["sample_count"]),
+            cores=float(entry["cores"]) if entry["cores"] is not None else None,
+            memory_bytes=int(entry["memory_bytes"]) if entry["memory_bytes"] is not None else None,
+            duration_seconds=duration_seconds,
+        )
 
     config._scylla_historical_resource_usage = result
     return result
