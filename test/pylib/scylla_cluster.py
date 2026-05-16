@@ -975,8 +975,14 @@ class ScyllaServer:
                 # Only poll CQL/Alternator until they are known to be up.
                 # Once CQL_ALTERNATOR_QUERIED is reached, skip the poll to avoid
                 # repeatedly recreating driver connections while waiting for sd_notify.
-                if server_up_state < ServerUpState.CQL_ALTERNATOR_QUERIED:
-                    server_up_state = await self.get_cql_alternator_up_state() or server_up_state
+                if server_up_state < expected_server_up_state and server_up_state < ServerUpState.CQL_ALTERNATOR_QUERIED:
+                    if state := await self.get_cql_alternator_up_state():
+                        server_up_state = state
+                    else:
+                        # Don't check SERVING state until we successfully setup the connections
+                        await asyncio.sleep(sleep_interval)
+                        continue
+
                 # Check for SERVING state via sd_notify. This is authoritative: Scylla sends
                 # STATUS=serving once all configured listeners are ready, and
                 # STATUS=entering maintenance mode once the maintenance socket is ready.
