@@ -458,6 +458,32 @@ def test_scheduler_dispatch_uses_cached_worker_indexes() -> None:
     assert node2.sent == []
 
 
+def test_scheduler_prioritizes_lingering_low_cpu_items() -> None:
+    collection = ["test_fast", "test_linger"]
+    metadata = {
+        "test_fast": ScyllaResourceMetadata(
+            "test_fast",
+            SchedulerResource(cores=1, memory_bytes=GIB),
+            estimated_duration_seconds=1.0,
+            observed_cpu_cores=1.0,
+        ),
+        "test_linger": ScyllaResourceMetadata(
+            "test_linger",
+            SchedulerResource(cores=0.5, memory_bytes=GIB),
+            estimated_duration_seconds=20.0,
+            observed_cpu_cores=0.02,
+        ),
+    }
+    scheduler = ScyllaResourceScheduler(FakeConfig(cpus=2), numnodes=1, resource_metadata=metadata)
+    node = FakeWorker("gw0")
+    scheduler.add_node(node)
+    scheduler.add_node_collection(node, collection)
+
+    scheduler.schedule()
+
+    assert node.sent == [[1], [0]]
+
+
 def test_scheduler_writes_jsonl_timeline(tmp_path: pathlib.Path) -> None:
     collection = ["test_a"]
     metadata = {

@@ -71,6 +71,8 @@ DEFAULT_ESTIMATED_DURATION_SECONDS = 1.0
 PREFETCH_MIN_ITEMS = 2
 PREFETCH_MAX_ITEMS = 8
 PREFETCH_TARGET_SECONDS = 5.0
+LINGER_MIN_DURATION_SECONDS = 5.0
+LINGER_MAX_CPU_CORES = 0.1
 
 SchedulerResource = ScyllaResourceAmount
 ResourceBucketKey = tuple[float, int]
@@ -85,6 +87,7 @@ class ScyllaResourceMetadata:
     cluster_profile_name: str | None = None
     cluster_reuse: str | None = None
     estimated_duration_seconds: float | None = None
+    observed_cpu_cores: float | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -95,6 +98,7 @@ class ScyllaResourceMetadata:
             "cluster_profile_name": self.cluster_profile_name,
             "cluster_reuse": self.cluster_reuse,
             "estimated_duration_seconds": self.estimated_duration_seconds,
+            "observed_cpu_cores": self.observed_cpu_cores,
         }
 
     @classmethod
@@ -107,6 +111,7 @@ class ScyllaResourceMetadata:
             cluster_profile_name=str(data["cluster_profile_name"]) if data.get("cluster_profile_name") is not None else None,
             cluster_reuse=str(data["cluster_reuse"]) if data.get("cluster_reuse") is not None else None,
             estimated_duration_seconds=float(data["estimated_duration_seconds"]) if data.get("estimated_duration_seconds") is not None else None,
+            observed_cpu_cores=float(data["observed_cpu_cores"]) if data.get("observed_cpu_cores") is not None else None,
         )
 
 
@@ -314,6 +319,30 @@ def _estimated_duration_seconds_from_history(history: HistoricalResourceUsage | 
     return history.duration_seconds * HISTORICAL_DURATION_HEADROOM
 
 
+def _observed_cpu_cores_from_history(history: HistoricalResourceUsage | None) -> float | None:
+    if history is None or history.cores is None or history.cores <= 0:
+        return None
+    return history.cores
+
+
+def _is_lingering_candidate(item_metadata: ScyllaResourceMetadata) -> bool:
+    return (
+        item_metadata.estimated_duration_seconds is not None
+        and item_metadata.estimated_duration_seconds >= LINGER_MIN_DURATION_SECONDS
+        and item_metadata.observed_cpu_cores is not None
+        and item_metadata.observed_cpu_cores <= LINGER_MAX_CPU_CORES
+    )
+
+
+def _item_priority_key(nodeid: str, item_metadata: ScyllaResourceMetadata) -> tuple[int, float, float]:
+    if not _is_lingering_candidate(item_metadata):
+        return (1, 0.0, 0.0)
+
+    duration_rank = -(item_metadata.estimated_duration_seconds or DEFAULT_ESTIMATED_DURATION_SECONDS)
+    cpu_rank = item_metadata.observed_cpu_cores if item_metadata.observed_cpu_cores is not None else item_metadata.resources.cores
+    return (0, duration_rank, cpu_rank)
+
+
 def _suite_cmdline_options(suite_config: TestSuiteConfig | None) -> list[str]:
     if suite_config is None:
         return []
@@ -418,6 +447,7 @@ def scylla_resource_metadata_for_item(
         cluster_profile_name=cluster_profile.name if cluster_profile is not None else None,
         cluster_reuse=cluster_profile.reuse if cluster_profile is not None else None,
         estimated_duration_seconds=_estimated_duration_seconds_from_history(history),
+        observed_cpu_cores=_observed_cpu_cores_from_history(history),
     )
 
 
@@ -496,7 +526,8 @@ def plan_items_by_service_phase(workqueue: OrderedDict[str, ScyllaResourceMetada
 
     planned: OrderedDict[str, ScyllaResourceMetadata] = OrderedDict()
     for services in phase_order:
-        planned.update(phased[services])
+        for nodeid, item_metadata in sorted(phased[services].items(), key=lambda item: _item_priority_key(item[0], item[1])):
+            planned[nodeid] = item_metadata
     return planned
 
 
