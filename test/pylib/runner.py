@@ -33,6 +33,7 @@ from _pytest.runner import CallInfo
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, HOST_ID
 from test.pylib.scylla_resource_scheduler import (
+    archive_historical_resource_db,
     SCYLLA_RESOURCE_METADATA_PREFIX,
     ScyllaResourceScheduler,
     scylla_resource_budget_failure,
@@ -267,6 +268,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     # Run stuff just once for the main pytest process (not in xdist workers).
     if not is_xdist_worker:
+        archive_historical_resource_db(session.config)
         temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
         use_service_planner = _use_session_service_planner(session.config)
 
@@ -398,6 +400,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # xdist workers own their own TestSuite artifacts, so each worker must clean up its local registry.
     if not is_xdist_worker and (manager := getattr(session.config, "_scylla_session_service_manager", None)):
         _run_async(manager.stop_all())
+    if not is_xdist_worker:
+        archive_historical_resource_db(session.config)
     if getattr(TestSuite, "artifacts", None) is not None:
         asyncio.run(TestSuite.artifacts.cleanup_before_exit())
 

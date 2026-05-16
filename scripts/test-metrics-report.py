@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-import sqlite3
 from collections import defaultdict
 
-
-TESTS_TABLE = "tests"
-METRICS_TABLE = "test_metrics"
-
+from test.pylib.scylla_resource_scheduler import (
+    HISTORICAL_DURATION_HEADROOM,
+    historical_resource_archive_paths_for_root,
+    historical_resource_db_paths_for_root,
+    load_historical_resource_history,
+)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Aggregate and report per-test profiling metrics from testlog sqlite DBs")
@@ -21,140 +22,164 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def iter_db_paths(testlog: pathlib.Path) -> list[pathlib.Path]:
-    return sorted(path for path in testlog.glob("sqlite_*.db") if path.is_file())
+def format_float(value: float | None, digits: int = 3, suffix: str = "") -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.{digits}f}{suffix}"
 
 
-def load_rows(db_paths: list[pathlib.Path]) -> list[tuple[str, str, float | None, float | None, float | None, int | None]]:
-    rows: list[tuple[str, str, float | None, float | None, float | None, int | None]] = []
-    query = f"""
-        SELECT
-            t.directory,
-            t.test_name,
-            m.time_taken,
-            m.usage_sec,
-            m.user_sec,
-            CAST(m.memory_peak AS INTEGER)
-        FROM {TESTS_TABLE} AS t
-        JOIN {METRICS_TABLE} AS m ON m.test_id = t.id
-        WHERE m.success = 1
-    """
-    for db_path in db_paths:
-        connection = sqlite3.connect(db_path)
-        try:
-            rows.extend(connection.execute(query).fetchall())
-        finally:
-            connection.close()
-    return rows
+def format_bytes_mib(value: int | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value / 1024 / 1024:.1f}MiB"
 
 
-def aggregate(rows: list[tuple[str, str, float | None, float | None, float | None, int | None]]) -> list[dict[str, object]]:
-    grouped: dict[tuple[str, str], dict[str, object]] = defaultdict(lambda: {
-        "samples": 0,
-        "time_sum": 0.0,
-        "time_count": 0,
-        "cpu_ratio_sum": 0.0,
-        "cpu_ratio_count": 0,
-        "memory_peak": 0,
-    })
-    for directory, test_name, time_taken, usage_sec, _user_sec, memory_peak in rows:
-        entry = grouped[(directory, test_name)]
-        entry["samples"] += 1
-        if time_taken is not None and time_taken > 0:
-            entry["time_sum"] += float(time_taken)
-            entry["time_count"] += 1
-            if usage_sec is not None:
-                entry["cpu_ratio_sum"] += float(usage_sec) / float(time_taken)
-                entry["cpu_ratio_count"] += 1
-        if memory_peak is not None:
-            entry["memory_peak"] = max(int(entry["memory_peak"]), int(memory_peak))
-
-    result: list[dict[str, object]] = []
-    for (directory, test_name), entry in grouped.items():
-        avg_time = None if entry["time_count"] == 0 else entry["time_sum"] / entry["time_count"]
-        avg_cpu = None if entry["cpu_ratio_count"] == 0 else entry["cpu_ratio_sum"] / entry["cpu_ratio_count"]
-        result.append({
-            "directory": directory,
-            "test_name": test_name,
-            "samples": entry["samples"],
-            "avg_time": avg_time,
-            "avg_cpu": avg_cpu,
-            "memory_peak": entry["memory_peak"],
-        })
-    return result
+def format_test_label(test_key: tuple[str, str, str]) -> str:
+    suite, build_mode, test_name = test_key
+    return f"{suite}|{build_mode}|{test_name}"
 
 
-def format_row(entry: dict[str, object]) -> str:
-    avg_cpu = entry["avg_cpu"]
-    avg_time = entry["avg_time"]
-    memory_peak = int(entry["memory_peak"])
-    peak_mib = memory_peak / 1024 / 1024 if memory_peak else 0.0
-    avg_cpu_text = "n/a" if avg_cpu is None else f"{avg_cpu:.3f}"
-    avg_time_text = "n/a" if avg_time is None else f"{avg_time:.1f}s"
-    return (
-        f"{entry['directory']}|{entry['test_name']}|"
-        f"samples={entry['samples']}|"
-        f"avg_cpu={avg_cpu_text}|"
-        f"avg_time={avg_time_text}|"
-        f"peak_mem={peak_mib:.1f}MiB"
-    )
+def format_suite_label(suite_key: tuple[str, str]) -> str:
+    suite, build_mode = suite_key
+    return f"{suite}|{build_mode}"
+
+
+def format_percent(value: float | None) -> str:
+    return format_float(value, digits=1, suffix="%")
+
+
+def format_seconds(value: float | None) -> str:
+    return format_float(value, digits=1, suffix="s")
+
+
+def predicted_duration_seconds(duration_seconds: float | None) -> float | None:
+    if duration_seconds is None or duration_seconds <= 0:
+        return None
+    return duration_seconds * HISTORICAL_DURATION_HEADROOM
+
+
+def print_test_section(title: str, rows: list[tuple[tuple[str, str, str], object]], limit: int, *, sort_key) -> None:
+    print(f"\n{title}:")
+    if not rows:
+        print("none")
+        return
+    for test_key, entry in sorted(rows, key=sort_key)[:limit]:
+        print(
+            f"{format_test_label(test_key)}|"
+            f"samples={entry.sample_count}|"
+            f"avg_cpu={format_float(entry.cores)}|"
+            f"avg_time={format_seconds(entry.duration_seconds)}|"
+            f"predicted_time={format_seconds(predicted_duration_seconds(entry.duration_seconds))}|"
+            f"peak_mem={format_bytes_mib(entry.memory_bytes)}"
+        )
+
+
+def print_suite_section(history, limit: int) -> None:
+    print("\nSuite class recommendations:")
+    if not history.suites:
+        print("none")
+        return
+    ranked = sorted(history.suites.items(), key=lambda item: (-float(item[1].sum_avg_time or 0.0), item[0]))[:limit]
+    for suite_key, entry in ranked:
+        print(
+            f"{format_suite_label(suite_key)}|"
+            f"class={entry.suite_class}|"
+            f"samples={entry.sample_count}|"
+            f"avg_cpu={format_float(entry.avg_cpu)}|"
+            f"sum_avg_time={format_seconds(entry.sum_avg_time)}|"
+            f"peak_mem={format_bytes_mib(entry.peak_mem)}"
+        )
+
+
+def print_host_section(history) -> None:
+    print("\nHost utilization summary:")
+    if not history.system_resource_metrics:
+        print("none")
+        return
+    for host_id, entry in sorted(history.system_resource_metrics.items()):
+        print(
+            f"{host_id}|"
+            f"samples={entry.sample_count}|"
+            f"avg_cpu={format_percent(entry.avg_cpu)}|"
+            f"peak_cpu={format_percent(entry.peak_cpu)}|"
+            f"avg_mem={format_percent(entry.avg_memory)}|"
+            f"peak_mem={format_percent(entry.peak_memory)}"
+        )
+
+
+def print_archive_coverage_section(archive_history, archive_count: int) -> None:
+    print("\nArchive coverage summary:")
+    print(f"archived_runs={archive_count}")
+    if not archive_history.tests:
+        print("none")
+        return
+
+    coverage: dict[str, dict[str, int]] = defaultdict(lambda: {"samples": 0, "tests": 0})
+    for (suite, _build_mode, _test_name), entry in archive_history.tests.items():
+        summary = coverage[suite]
+        summary["samples"] += entry.sample_count
+        summary["tests"] += 1
+
+    for suite, summary in sorted(coverage.items(), key=lambda item: (-item[1]["samples"], item[0])):
+        print(f"{suite}|tests={summary['tests']}|samples={summary['samples']}")
 
 
 def main() -> int:
     args = parse_args()
     testlog = pathlib.Path(args.testlog).resolve()
-    db_paths = iter_db_paths(testlog)
+    db_paths = historical_resource_db_paths_for_root(testlog)
+    archive_paths = historical_resource_archive_paths_for_root(testlog)
     if not db_paths:
-        print(f"No sqlite_*.db files found under {testlog}")
+        print(f"No active sqlite DB or history archives found under {testlog}")
         return 1
 
-    rows = load_rows(db_paths)
-    aggregated = aggregate(rows)
+    history = load_historical_resource_history(db_paths)
+    archive_history = load_historical_resource_history(archive_paths)
+
     print(f"DB files: {len(db_paths)}")
-    print(f"Successful metric rows: {len(rows)}")
-    print(f"Aggregated tests: {len(aggregated)}")
+    print(f"Archived runs: {len(archive_paths)}")
+    print(f"Successful metric rows: {sum(entry.sample_count for entry in history.tests.values())}")
+    print(f"Aggregated tests: {len(history.tests)}")
 
-    low_cpu = sorted(
-        (entry for entry in aggregated if entry["avg_cpu"] is not None and entry["avg_time"] is not None),
-        key=lambda entry: (entry["avg_cpu"], -entry["avg_time"], str(entry["test_name"])),
-    )[:args.limit]
-    print("\nLow CPU lingerers:")
-    for entry in low_cpu:
-        avg_cpu = entry["avg_cpu"]
-        avg_time = entry["avg_time"]
-        peak_mib = int(entry["memory_peak"]) / 1024 / 1024
-        print(f"{entry['directory']}|{entry['test_name']}|samples={entry['samples']}|avg_cpu={avg_cpu:.3f}|avg_time={avg_time:.1f}s|peak_mem={peak_mib:.1f}MiB")
+    low_cpu = [
+        (test_key, entry)
+        for test_key, entry in history.tests.items()
+        if entry.cores is not None and entry.duration_seconds is not None
+    ]
+    print_test_section(
+        "Low CPU lingerers",
+        low_cpu,
+        args.limit,
+        sort_key=lambda item: (item[1].cores, -float(item[1].duration_seconds or 0.0), format_test_label(item[0])),
+    )
 
-    memory_hogs = sorted(aggregated, key=lambda entry: (-int(entry["memory_peak"]), -(entry["avg_time"] or 0.0), str(entry["test_name"])))[:args.limit]
-    print("\nMemory hogs:")
-    for entry in memory_hogs:
-        avg_cpu = entry["avg_cpu"]
-        avg_time = entry["avg_time"]
-        peak_mib = int(entry["memory_peak"]) / 1024 / 1024
-        avg_cpu_text = "n/a" if avg_cpu is None else f"{avg_cpu:.3f}"
-        avg_time_text = "n/a" if avg_time is None else f"{avg_time:.1f}s"
-        print(f"{entry['directory']}|{entry['test_name']}|samples={entry['samples']}|avg_cpu={avg_cpu_text}|avg_time={avg_time_text}|peak_mem={peak_mib:.1f}MiB")
+    memory_hogs = [
+        (test_key, entry)
+        for test_key, entry in history.tests.items()
+        if entry.memory_bytes is not None
+    ]
+    print_test_section(
+        "Memory hogs",
+        memory_hogs,
+        args.limit,
+        sort_key=lambda item: (-int(item[1].memory_bytes or 0), -float(item[1].duration_seconds or 0.0), format_test_label(item[0])),
+    )
 
-    suite_summary: dict[str, dict[str, float]] = defaultdict(lambda: {"samples": 0.0, "time_sum": 0.0, "cpu_sum": 0.0, "cpu_count": 0.0, "memory_peak": 0.0})
-    for entry in aggregated:
-        suite = str(entry["directory"])
-        summary = suite_summary[suite]
-        summary["samples"] += float(entry["samples"])
-        summary["time_sum"] += float(entry["avg_time"] or 0.0)
-        if entry["avg_cpu"] is not None:
-            summary["cpu_sum"] += float(entry["avg_cpu"])
-            summary["cpu_count"] += 1.0
-        summary["memory_peak"] = max(summary["memory_peak"], float(entry["memory_peak"]))
+    tail_contributors = [
+        (test_key, entry)
+        for test_key, entry in history.tests.items()
+        if predicted_duration_seconds(entry.duration_seconds) is not None
+    ]
+    print_test_section(
+        "Top tail contributors",
+        tail_contributors,
+        args.limit,
+        sort_key=lambda item: (-float(predicted_duration_seconds(item[1].duration_seconds) or 0.0), format_test_label(item[0])),
+    )
 
-    ranked_suites = sorted(
-        suite_summary.items(),
-        key=lambda item: (-item[1]["time_sum"], item[0]),
-    )[:args.limit]
-    print("\nSuite summary:")
-    for suite, summary in ranked_suites:
-        avg_cpu = 0.0 if summary["cpu_count"] == 0 else summary["cpu_sum"] / summary["cpu_count"]
-        peak_mib = summary["memory_peak"] / 1024 / 1024
-        print(f"{suite}|tests={int(summary['samples'])}|sum_avg_time={summary['time_sum']:.1f}s|avg_cpu={avg_cpu:.3f}|peak_mem={peak_mib:.1f}MiB")
+    print_suite_section(history, args.limit)
+    print_host_section(history)
+    print_archive_coverage_section(archive_history, len(archive_paths))
 
     return 0
 

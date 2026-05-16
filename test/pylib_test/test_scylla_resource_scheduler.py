@@ -8,17 +8,24 @@ from __future__ import annotations
 
 import json
 import pathlib
+from collections import OrderedDict
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 
 from test import HOST_ID
-from test.pylib.db.model import Metric, Test as TestRow
-from test.pylib.db.writer import DEFAULT_DB_NAME, METRICS_TABLE, TESTS_TABLE, SQLiteWriter
+import test.pylib.scylla_resource_scheduler as scheduler_module
+from test.pylib.db.model import Metric, SystemResourceMetric, Test as TestRow
+from test.pylib.db.writer import DEFAULT_DB_NAME, METRICS_TABLE, SYSTEM_RESOURCE_METRICS_TABLE, TESTS_TABLE, SQLiteWriter
 from test.pylib.scylla_resource_scheduler import (
     ScyllaResourceMetadata,
     ScyllaResourceScheduler,
     SchedulerResource,
+    archive_historical_resource_db_for_root,
+    historical_resource_archive_paths_for_root,
+    historical_resource_db_paths_for_root,
+    load_historical_resource_history,
     plan_items_by_service_phase,
     queue_items_from_collection,
     scylla_resource_budget_failure,
@@ -171,6 +178,41 @@ def make_scheduler(
     scheduler.add_node_collection(node1, collection)
     scheduler.add_node_collection(node2, collection)
     return scheduler, node1, node2
+
+
+def write_test_sample(
+        writer: SQLiteWriter,
+        directory: str,
+        mode: str,
+        test_name: str,
+        run_id: int,
+        *,
+        time_taken: float,
+        usage_sec: float,
+        memory_peak: int,
+        host_id: str = HOST_ID) -> None:
+    test_id = writer.write_row(
+        TestRow(host_id=host_id, architecture="x86_64", directory=directory, mode=mode, run_id=run_id, test_name=test_name),
+        TESTS_TABLE,
+    )
+    writer.write_row(
+        Metric(
+            test_id=test_id,
+            host_id=host_id,
+            memory_peak=memory_peak,
+            success=True,
+            time_taken=time_taken,
+            usage_sec=usage_sec,
+        ),
+        METRICS_TABLE,
+    )
+
+
+def write_system_sample(writer: SQLiteWriter, *, cpu: float, memory: float, host_id: str = HOST_ID) -> None:
+    writer.write_row(
+        SystemResourceMetric(host_id=host_id, cpu=cpu, memory=memory, timestamp=datetime.now()),
+        SYSTEM_RESOURCE_METRICS_TABLE,
+    )
 
 
 def test_scylla_cores_marker_parsing() -> None:
@@ -334,8 +376,14 @@ def test_debug_mode_charges_more_cpu() -> None:
 
 def test_non_cluster_tests_remain_itemized_even_with_shared_module_group_key() -> None:
     metadata = {
-        "test/cqlpy/test_a.py::test_one.dev.1": ScyllaResourceMetadata("module:dev:test/cqlpy/test_a.py", SchedulerResource(cores=1, memory_bytes=GIB)),
-        "test/cqlpy/test_a.py::test_two.dev.1": ScyllaResourceMetadata("module:dev:test/cqlpy/test_a.py", SchedulerResource(cores=1, memory_bytes=GIB)),
+        "test/cqlpy/test_a.py::test_one.dev.1": ScyllaResourceMetadata(
+            "module:dev:test/cqlpy/test_a.py",
+            SchedulerResource(cores=1, memory_bytes=GIB),
+        ),
+        "test/cqlpy/test_a.py::test_two.dev.1": ScyllaResourceMetadata(
+            "module:dev:test/cqlpy/test_a.py",
+            SchedulerResource(cores=1, memory_bytes=GIB),
+        ),
     }
 
     workqueue = queue_items_from_collection(list(metadata), metadata)
@@ -345,8 +393,15 @@ def test_non_cluster_tests_remain_itemized_even_with_shared_module_group_key() -
 
 def test_item_queue_preserves_per_item_services() -> None:
     metadata = {
-        "test/cqlpy/test_a.py::test_one.dev.1": ScyllaResourceMetadata("module:dev:test/cqlpy/test_a.py", SchedulerResource(cores=1, memory_bytes=GIB)),
-        "test/cqlpy/test_a.py::test_two.dev.1": ScyllaResourceMetadata("module:dev:test/cqlpy/test_a.py", SchedulerResource(cores=1, memory_bytes=GIB), frozenset({"s3"})),
+        "test/cqlpy/test_a.py::test_one.dev.1": ScyllaResourceMetadata(
+            "module:dev:test/cqlpy/test_a.py",
+            SchedulerResource(cores=1, memory_bytes=GIB),
+        ),
+        "test/cqlpy/test_a.py::test_two.dev.1": ScyllaResourceMetadata(
+            "module:dev:test/cqlpy/test_a.py",
+            SchedulerResource(cores=1, memory_bytes=GIB),
+            frozenset({"s3"}),
+        ),
     }
 
     workqueue = queue_items_from_collection(list(metadata), metadata)
@@ -482,6 +537,252 @@ def test_scheduler_prioritizes_lingering_low_cpu_items() -> None:
     scheduler.schedule()
 
     assert node.sent == [[1], [0]]
+
+
+def test_historical_resource_db_archive_roundtrip(tmp_path: pathlib.Path) -> None:
+    db_path = tmp_path / DEFAULT_DB_NAME
+    writer = SQLiteWriter(db_path)
+    write_test_sample(
+        writer,
+        "cluster",
+        "dev",
+        "dtest/auth_test",
+        1,
+        time_taken=100.0,
+        usage_sec=2.0,
+        memory_peak=128 * 1024 ** 2,
+    )
+    write_system_sample(writer, cpu=33.0, memory=44.0)
+    writer._connection.close()
+
+    archive_path = archive_historical_resource_db_for_root(tmp_path)
+
+    assert archive_path is not None
+    assert not db_path.exists()
+    assert historical_resource_db_paths_for_root(tmp_path) == [archive_path]
+
+    history = load_historical_resource_history([archive_path])
+
+    assert history.tests[("cluster", "dev", "dtest/auth_test")].sample_count == 1
+    assert history.system_resource_metrics[HOST_ID].sample_count == 1
+    assert history.system_resource_metrics[HOST_ID].avg_cpu == 33.0
+
+
+def test_historical_resource_archive_paths_keep_newest_limit(tmp_path: pathlib.Path) -> None:
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    active_db = tmp_path / DEFAULT_DB_NAME
+    active_db.write_text("active", encoding="utf-8")
+
+    archive_names = [
+        "20260101T000001.000001Z-host.sqlite",
+        "20260101T000002.000001Z-host.sqlite",
+        "20260101T000003.000001Z-host.sqlite",
+    ]
+    for name in archive_names:
+        (history_dir / name).write_text(name, encoding="utf-8")
+
+    assert [path.name for path in historical_resource_archive_paths_for_root(tmp_path, limit=2)] == archive_names[-1:-3:-1]
+    assert historical_resource_db_paths_for_root(tmp_path, limit=2)[0] == active_db
+
+
+def test_historical_resource_history_loads_active_and_archived_dbs(tmp_path: pathlib.Path) -> None:
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+
+    active_db = tmp_path / DEFAULT_DB_NAME
+    archive_db_1 = history_dir / "20260101T000002.000001Z-host.sqlite"
+    archive_db_2 = history_dir / "20260101T000001.000001Z-host.sqlite"
+
+    active_writer = SQLiteWriter(active_db)
+    archive_writer_1 = SQLiteWriter(archive_db_1)
+    archive_writer_2 = SQLiteWriter(archive_db_2)
+
+    write_test_sample(
+        active_writer,
+        "cluster",
+        "dev",
+        "dtest/auth_test",
+        1,
+        time_taken=100.0,
+        usage_sec=10.0,
+        memory_peak=128 * 1024 ** 2,
+    )
+    write_system_sample(active_writer, cpu=20.0, memory=30.0)
+    write_test_sample(
+        archive_writer_1,
+        "cluster",
+        "dev",
+        "dtest/auth_test",
+        2,
+        time_taken=100.0,
+        usage_sec=20.0,
+        memory_peak=192 * 1024 ** 2,
+    )
+    write_system_sample(archive_writer_1, cpu=40.0, memory=50.0)
+    write_test_sample(
+        archive_writer_2,
+        "cluster",
+        "dev",
+        "dtest/other_test",
+        3,
+        time_taken=10.0,
+        usage_sec=8.0,
+        memory_peak=64 * 1024 ** 2,
+    )
+    write_system_sample(archive_writer_2, cpu=60.0, memory=70.0)
+
+    paths = historical_resource_db_paths_for_root(tmp_path)
+    history = load_historical_resource_history(paths)
+
+    assert paths[0] == active_db
+    assert [path.name for path in paths[1:]] == [archive_db_1.name, archive_db_2.name]
+    assert history.tests[("cluster", "dev", "dtest/auth_test")].sample_count == 2
+    assert history.tests[("cluster", "dev", "dtest/other_test")].sample_count == 1
+    assert history.system_resource_metrics[HOST_ID].sample_count == 3
+    assert history.system_resource_metrics[HOST_ID].avg_cpu == 40.0
+
+
+@pytest.mark.parametrize(
+    ("sample_count", "usage_sec", "time_taken", "expected_class"),
+    [
+        (20, 8.0, 40.0, "wait_heavy"),
+        (20, 75.0, 100.0, "cpu_heavy"),
+        (19, 8.0, 40.0, "balanced"),
+    ],
+)
+def test_suite_class_derivation_thresholds(
+    tmp_path: pathlib.Path,
+    sample_count: int,
+    usage_sec: float,
+    time_taken: float,
+    expected_class: str,
+) -> None:
+    db_path = tmp_path / DEFAULT_DB_NAME
+    writer = SQLiteWriter(db_path)
+
+    for run_id in range(sample_count):
+        write_test_sample(
+            writer,
+            "cluster",
+            "dev",
+            "dtest/auth_test",
+            run_id,
+            time_taken=time_taken,
+            usage_sec=usage_sec,
+            memory_peak=128 * 1024 ** 2,
+        )
+
+    history = load_historical_resource_history([db_path])
+
+    assert history.suites[("cluster", "dev")].sample_count == sample_count
+    assert history.suites[("cluster", "dev")].suite_class == expected_class
+
+
+def test_tail_mode_activation_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(scheduler_module, "TAIL_MODE_MIN_REMAINING_ITEMS", 2)
+    monkeypatch.setattr(scheduler_module, "TAIL_MODE_FRACTION", 100)
+
+    scheduler = ScyllaResourceScheduler(FakeConfig(cpus=2), numnodes=1, resource_metadata={})
+    scheduler.collection = ["test_a", "test_b", "test_c"]
+    scheduler.total_items = 3
+    scheduler.workqueue = OrderedDict(
+        (nodeid, ScyllaResourceMetadata(nodeid, SchedulerResource(cores=1, memory_bytes=GIB)))
+        for nodeid in scheduler.collection
+    )
+
+    assert not scheduler._tail_mode()
+
+    scheduler.workqueue.popitem(last=False)
+
+    assert scheduler._tail_mode()
+
+
+def test_tail_mode_reorders_long_predictions_after_activation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(scheduler_module, "TAIL_MODE_MIN_REMAINING_ITEMS", 2)
+    monkeypatch.setattr(scheduler_module, "TAIL_MODE_FRACTION", 100)
+    monkeypatch.setattr(scheduler_module, "PREFETCH_MIN_ITEMS", 1)
+
+    collection = ["test_short", "test_other", "test_long"]
+    metadata = {
+        "test_short": ScyllaResourceMetadata(
+            "test_short",
+            SchedulerResource(cores=2, memory_bytes=GIB),
+            estimated_duration_seconds=5.0,
+            observed_cpu_cores=1.0,
+        ),
+        "test_other": ScyllaResourceMetadata(
+            "test_other",
+            SchedulerResource(cores=2, memory_bytes=GIB),
+            estimated_duration_seconds=6.0,
+            observed_cpu_cores=1.0,
+        ),
+        "test_long": ScyllaResourceMetadata(
+            "test_long",
+            SchedulerResource(cores=2, memory_bytes=GIB),
+            estimated_duration_seconds=50.0,
+            observed_cpu_cores=1.0,
+        ),
+    }
+    scheduler = ScyllaResourceScheduler(FakeConfig(cpus=2), numnodes=1, resource_metadata=metadata)
+    node = FakeWorker("gw0")
+    scheduler.add_node(node)
+    scheduler.add_node_collection(node, collection)
+
+    scheduler.schedule()
+
+    assert node.sent == [[0]]
+
+    scheduler.mark_test_complete(node, 0)
+
+    assert node.sent == [[0], [2]]
+
+
+def test_wait_heavy_tail_prefetch_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(scheduler_module, "TAIL_MODE_MIN_REMAINING_ITEMS", 4)
+    monkeypatch.setattr(scheduler_module, "TAIL_MODE_FRACTION", 100)
+    monkeypatch.setattr(scheduler_module, "PREFETCH_MAX_ITEMS", 2)
+    monkeypatch.setattr(scheduler_module, "TAIL_WAIT_HEAVY_PREFETCH_MAX_ITEMS", 3)
+    monkeypatch.setattr(scheduler_module, "PREFETCH_TARGET_SECONDS", 5.0)
+    monkeypatch.setattr(scheduler_module, "TAIL_WAIT_HEAVY_PREFETCH_TARGET_SECONDS", 12.0)
+
+    collection = ["test_a", "test_b", "test_c"]
+
+    balanced_metadata = {
+        nodeid: ScyllaResourceMetadata(
+            nodeid,
+            SchedulerResource(cores=0.5, memory_bytes=GIB),
+            estimated_duration_seconds=4.0,
+            suite_class="balanced",
+        )
+        for nodeid in collection
+    }
+    balanced_scheduler = ScyllaResourceScheduler(FakeConfig(cpus=2), numnodes=1, resource_metadata=balanced_metadata)
+    balanced_node = FakeWorker("gw0")
+    balanced_scheduler.add_node(balanced_node)
+    balanced_scheduler.add_node_collection(balanced_node, collection)
+
+    balanced_scheduler.schedule()
+
+    assert balanced_node.sent == [[0], [1]]
+
+    wait_heavy_metadata = {
+        nodeid: ScyllaResourceMetadata(
+            nodeid,
+            SchedulerResource(cores=0.5, memory_bytes=GIB),
+            estimated_duration_seconds=4.0,
+            suite_class="wait_heavy",
+        )
+        for nodeid in collection
+    }
+    wait_heavy_scheduler = ScyllaResourceScheduler(FakeConfig(cpus=2), numnodes=1, resource_metadata=wait_heavy_metadata)
+    wait_heavy_node = FakeWorker("gw1")
+    wait_heavy_scheduler.add_node(wait_heavy_node)
+    wait_heavy_scheduler.add_node_collection(wait_heavy_node, collection)
+
+    wait_heavy_scheduler.schedule()
+
+    assert wait_heavy_node.sent == [[0], [1], [2]]
 
 
 def test_scheduler_writes_jsonl_timeline(tmp_path: pathlib.Path) -> None:
@@ -648,7 +949,8 @@ def test_historical_resource_usage_requires_enough_samples(tmp_path: pathlib.Pat
 
 def test_historical_resource_usage_aggregates_across_multiple_run_dbs(tmp_path: pathlib.Path) -> None:
     first_db = tmp_path / DEFAULT_DB_NAME
-    second_db = tmp_path / "sqlite_other.db"
+    second_db = tmp_path / "history" / "20260101T000001.000001Z-host.sqlite"
+    second_db.parent.mkdir(parents=True, exist_ok=True)
 
     first_writer = SQLiteWriter(first_db)
     second_writer = SQLiteWriter(second_db)

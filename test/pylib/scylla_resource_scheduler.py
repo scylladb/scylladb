@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict, deque
+from collections import OrderedDict, defaultdict, deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -20,8 +21,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import universalasync
 
+from test import HOST_ID
 from test.pylib.scylla_cluster import SCYLLA_CMDLINE_OPTIONS, merge_cmdline_options
-from test.pylib.db.writer import DEFAULT_DB_NAME, METRICS_TABLE, TESTS_TABLE
+from test.pylib.db.writer import DEFAULT_DB_NAME, METRICS_TABLE, SYSTEM_RESOURCE_METRICS_TABLE, TESTS_TABLE
 from test.pylib.scylla_cluster_profile import ScyllaClusterProfile, scylla_cluster_profile_from_node
 from test.pylib.scylla_resources import (
     ScyllaResourceAmount,
@@ -60,6 +62,7 @@ DEFAULT_TOPOLOGY_NODE_COUNT = 3
 DEBUG_RESOURCE_CPU_MULTIPLIER = 1.5
 DEFAULT_SCYLLA_MEMORY_BYTES = 1024 ** 3
 HISTORICAL_RESOURCE_MIN_SAMPLES = 3
+HISTORICAL_SUITE_MIN_SAMPLES = 20
 HISTORICAL_CPU_HEADROOM = 1.5
 HISTORICAL_MEMORY_HEADROOM = 1.25
 HISTORICAL_DURATION_HEADROOM = 1.25
@@ -71,6 +74,10 @@ DEFAULT_ESTIMATED_DURATION_SECONDS = 1.0
 PREFETCH_MIN_ITEMS = 2
 PREFETCH_MAX_ITEMS = 8
 PREFETCH_TARGET_SECONDS = 5.0
+TAIL_MODE_MIN_REMAINING_ITEMS = 512
+TAIL_MODE_FRACTION = 8
+TAIL_WAIT_HEAVY_PREFETCH_MAX_ITEMS = 12
+TAIL_WAIT_HEAVY_PREFETCH_TARGET_SECONDS = 12.0
 LINGER_MIN_DURATION_SECONDS = 5.0
 LINGER_MAX_CPU_CORES = 0.1
 
@@ -88,6 +95,7 @@ class ScyllaResourceMetadata:
     cluster_reuse: str | None = None
     estimated_duration_seconds: float | None = None
     observed_cpu_cores: float | None = None
+    suite_class: str = "balanced"
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -99,6 +107,7 @@ class ScyllaResourceMetadata:
             "cluster_reuse": self.cluster_reuse,
             "estimated_duration_seconds": self.estimated_duration_seconds,
             "observed_cpu_cores": self.observed_cpu_cores,
+            "suite_class": self.suite_class,
         }
 
     @classmethod
@@ -112,6 +121,7 @@ class ScyllaResourceMetadata:
             cluster_reuse=str(data["cluster_reuse"]) if data.get("cluster_reuse") is not None else None,
             estimated_duration_seconds=float(data["estimated_duration_seconds"]) if data.get("estimated_duration_seconds") is not None else None,
             observed_cpu_cores=float(data["observed_cpu_cores"]) if data.get("observed_cpu_cores") is not None else None,
+            suite_class=str(data["suite_class"]) if data.get("suite_class") is not None else "balanced",
         )
 
 
@@ -121,6 +131,32 @@ class HistoricalResourceUsage:
     cores: float | None = None
     memory_bytes: int | None = None
     duration_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class HistoricalSuiteUsage:
+    sample_count: int
+    avg_cpu: float | None = None
+    sum_avg_time: float | None = None
+    peak_mem: int | None = None
+    suite_class: str = "balanced"
+
+
+@dataclass(frozen=True)
+class HistoricalSystemResourceUsage:
+    sample_count: int
+    avg_cpu: float | None = None
+    peak_cpu: float | None = None
+    avg_memory: float | None = None
+    peak_memory: float | None = None
+
+
+@dataclass(frozen=True)
+class HistoricalResourceHistory:
+    tests: dict[tuple[str, str, str], HistoricalResourceUsage]
+    suites: dict[tuple[str, str], HistoricalSuiteUsage]
+    system_resource_metrics: dict[str, HistoricalSystemResourceUsage]
+    db_paths: tuple[pathlib.Path, ...]
 
 
 def scylla_resource_budget_from_config(config: pytest.Config) -> SchedulerResource:
@@ -162,18 +198,59 @@ def historical_resource_db_path(config: pytest.Config) -> pathlib.Path | None:
     return pathlib.Path(tmpdir).absolute() / DEFAULT_DB_NAME
 
 
+def active_resource_db_path(config: pytest.Config) -> pathlib.Path | None:
+    return historical_resource_db_path(config)
+
+
+def historical_resource_archive_dir(config: pytest.Config) -> pathlib.Path | None:
+    tmpdir = config.getoption("--tmpdir")
+    if tmpdir is None:
+        return None
+    return pathlib.Path(tmpdir).absolute() / "history"
+
+
+def historical_resource_archive_paths_for_root(testlog: pathlib.Path, limit: int = 50) -> list[pathlib.Path]:
+    history_dir = testlog / "history"
+    if not history_dir.exists():
+        return []
+    archives = sorted((path for path in history_dir.glob("*.sqlite") if path.is_file()), key=lambda path: path.name, reverse=True)
+    return archives[:limit]
+
+
+def historical_resource_db_paths_for_root(testlog: pathlib.Path, limit: int = 50) -> list[pathlib.Path]:
+    paths: list[pathlib.Path] = []
+    active_db = testlog / DEFAULT_DB_NAME
+    if active_db.is_file():
+        paths.append(active_db)
+    paths.extend(historical_resource_archive_paths_for_root(testlog, limit=limit))
+    return paths
+
+
 def historical_resource_db_paths(config: pytest.Config) -> list[pathlib.Path]:
     tmpdir = config.getoption("--tmpdir")
     if tmpdir is None:
         return []
+    return historical_resource_db_paths_for_root(pathlib.Path(tmpdir).absolute())
 
-    tmpdir_path = pathlib.Path(tmpdir).absolute()
-    db_paths = sorted(path for path in tmpdir_path.glob("sqlite_*.db") if path.is_file())
-    if not db_paths:
-        current_db = tmpdir_path / DEFAULT_DB_NAME
-        if current_db.exists():
-            db_paths.append(current_db)
-    return db_paths
+
+def archive_historical_resource_db_for_root(testlog: pathlib.Path, source_path: pathlib.Path | None = None) -> pathlib.Path | None:
+    source = source_path or (testlog / DEFAULT_DB_NAME)
+    if not source.exists():
+        return None
+
+    history_dir = testlog / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    archive_path = history_dir / f"{timestamp}-{HOST_ID}.sqlite"
+    source.replace(archive_path)
+    return archive_path
+
+
+def archive_historical_resource_db(config: pytest.Config) -> pathlib.Path | None:
+    tmpdir = config.getoption("--tmpdir")
+    if tmpdir is None:
+        return None
+    return archive_historical_resource_db_for_root(pathlib.Path(tmpdir).absolute())
 
 
 def _nodeid_path(nodeid: str) -> str:
@@ -201,62 +278,108 @@ def _suite_relative_test_name(item: pytest.Item, suite_config: TestSuiteConfig |
     return relative.with_suffix("").as_posix()
 
 
-def _load_historical_resource_usage(config: pytest.Config) -> dict[tuple[str, str, str], HistoricalResourceUsage]:
-    cached = getattr(config, "_scylla_historical_resource_usage", None)
-    if cached is not None:
-        return cached
+def _classify_suite_usage(sample_count: int, avg_cpu: float | None, sum_avg_time: float | None) -> str:
+    if sample_count >= HISTORICAL_SUITE_MIN_SAMPLES and avg_cpu is not None and sum_avg_time is not None:
+        if avg_cpu <= 0.25 and sum_avg_time >= 30.0:
+            return "wait_heavy"
+        if avg_cpu >= 0.70:
+            return "cpu_heavy"
+    return "balanced"
 
-    result: dict[tuple[str, str, str], HistoricalResourceUsage] = {}
-    db_paths = historical_resource_db_paths(config)
-    if not db_paths:
-        config._scylla_historical_resource_usage = result
-        return result
 
-    aggregated: dict[tuple[str, str, str], dict[str, float | int | None]] = {}
+def load_historical_resource_history(db_paths: Sequence[pathlib.Path]) -> HistoricalResourceHistory:
+    db_paths = tuple(db_paths)
+    tests: dict[tuple[str, str, str], dict[str, float | int | None]] = {}
+    system_resource_metrics: dict[str, dict[str, float | int | None]] = {}
 
     for db_path in db_paths:
+        if not db_path.is_file():
+            continue
         connection = None
         try:
             connection = sqlite3.connect(db_path)
             cursor = connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT
-                    t.directory,
-                    t.mode,
-                    t.test_name,
-                    COUNT(*) AS sample_count,
-                    MAX(CAST(m.memory_peak AS INTEGER)) AS max_memory_peak,
-                    MAX(CASE WHEN m.time_taken > 0 AND m.usage_sec IS NOT NULL THEN m.usage_sec / m.time_taken END) AS max_avg_cpu,
-                    SUM(CASE WHEN m.time_taken > 0 THEN m.time_taken ELSE 0 END) AS total_time_taken,
-                    SUM(CASE WHEN m.time_taken > 0 THEN 1 ELSE 0 END) AS timed_samples
-                FROM {TESTS_TABLE} AS t
-                JOIN {METRICS_TABLE} AS m ON m.test_id = t.id
-                WHERE m.success = 1
-                GROUP BY t.directory, t.mode, t.test_name
-                """
-            )
-            for directory, mode, test_name, sample_count, max_memory_peak, max_avg_cpu, total_time_taken, timed_samples in cursor.fetchall():
-                key = (str(directory), str(mode), str(test_name))
-                entry = aggregated.setdefault(
-                    key,
-                    {
-                        "sample_count": 0,
-                        "memory_bytes": None,
-                        "cores": None,
-                        "total_time_taken": 0.0,
-                        "timed_samples": 0,
-                    },
+            try:
+                cursor.execute(
+                    f"""
+                    SELECT
+                        t.directory,
+                        t.mode,
+                        t.test_name,
+                        COUNT(*) AS sample_count,
+                        MAX(CAST(m.memory_peak AS INTEGER)) AS max_memory_peak,
+                        MAX(CASE WHEN m.time_taken > 0 AND m.usage_sec IS NOT NULL THEN m.usage_sec / m.time_taken END) AS max_avg_cpu,
+                        SUM(CASE WHEN m.time_taken > 0 THEN m.time_taken ELSE 0 END) AS total_time_taken,
+                        SUM(CASE WHEN m.time_taken > 0 THEN 1 ELSE 0 END) AS timed_samples
+                    FROM {TESTS_TABLE} AS t
+                    JOIN {METRICS_TABLE} AS m ON m.test_id = t.id
+                    WHERE m.success = 1
+                    GROUP BY t.directory, t.mode, t.test_name
+                    """
                 )
-                entry["sample_count"] = int(entry["sample_count"]) + int(sample_count)
-                if max_memory_peak is not None:
-                    current_memory = entry["memory_bytes"]
-                    entry["memory_bytes"] = max(int(max_memory_peak), int(current_memory)) if current_memory is not None else int(max_memory_peak)
-                if max_avg_cpu is not None:
-                    current_cores = entry["cores"]
-                    entry["cores"] = max(float(max_avg_cpu), float(current_cores)) if current_cores is not None else float(max_avg_cpu)
-                entry["total_time_taken"] = float(entry["total_time_taken"]) + float(total_time_taken or 0.0)
-                entry["timed_samples"] = int(entry["timed_samples"]) + int(timed_samples or 0)
+            except sqlite3.Error:
+                logger.debug("Failed to load historical test metrics from %s", db_path, exc_info=True)
+            else:
+                for directory, mode, test_name, sample_count, max_memory_peak, max_avg_cpu, total_time_taken, timed_samples in cursor.fetchall():
+                    key = (str(directory), str(mode), str(test_name))
+                    entry = tests.setdefault(
+                        key,
+                        {
+                            "sample_count": 0,
+                            "memory_bytes": None,
+                            "cores": None,
+                            "total_time_taken": 0.0,
+                            "timed_samples": 0,
+                        },
+                    )
+                    entry["sample_count"] = int(entry["sample_count"]) + int(sample_count)
+                    if max_memory_peak is not None:
+                        current_memory = entry["memory_bytes"]
+                        entry["memory_bytes"] = max(int(max_memory_peak), int(current_memory)) if current_memory is not None else int(max_memory_peak)
+                    if max_avg_cpu is not None:
+                        current_cores = entry["cores"]
+                        entry["cores"] = max(float(max_avg_cpu), float(current_cores)) if current_cores is not None else float(max_avg_cpu)
+                    entry["total_time_taken"] = float(entry["total_time_taken"]) + float(total_time_taken or 0.0)
+                    entry["timed_samples"] = int(entry["timed_samples"]) + int(timed_samples or 0)
+
+            try:
+                cursor.execute(
+                    f"""
+                    SELECT
+                        host_id,
+                        COUNT(*) AS sample_count,
+                        SUM(cpu) AS total_cpu,
+                        MAX(cpu) AS peak_cpu,
+                        SUM(memory) AS total_memory,
+                        MAX(memory) AS peak_memory
+                    FROM {SYSTEM_RESOURCE_METRICS_TABLE}
+                    GROUP BY host_id
+                    """
+                )
+            except sqlite3.Error:
+                logger.debug("Failed to load historical host metrics from %s", db_path, exc_info=True)
+            else:
+                for host_id, sample_count, total_cpu, peak_cpu, total_memory, peak_memory in cursor.fetchall():
+                    key = str(host_id)
+                    entry = system_resource_metrics.setdefault(
+                        key,
+                        {
+                            "sample_count": 0,
+                            "cpu_sum": 0.0,
+                            "cpu_peak": None,
+                            "memory_sum": 0.0,
+                            "memory_peak": None,
+                        },
+                    )
+                    entry["sample_count"] = int(entry["sample_count"]) + int(sample_count)
+                    entry["cpu_sum"] = float(entry["cpu_sum"]) + float(total_cpu or 0.0)
+                    if peak_cpu is not None:
+                        current_peak_cpu = entry["cpu_peak"]
+                        entry["cpu_peak"] = max(float(peak_cpu), float(current_peak_cpu)) if current_peak_cpu is not None else float(peak_cpu)
+                    entry["memory_sum"] = float(entry["memory_sum"]) + float(total_memory or 0.0)
+                    if peak_memory is not None:
+                        current_peak_memory = entry["memory_peak"]
+                        entry["memory_peak"] = max(float(peak_memory), float(current_peak_memory)) if current_peak_memory is not None else float(peak_memory)
         except sqlite3.Error:
             logger.debug("Failed to load historical resource usage from %s", db_path, exc_info=True)
         finally:
@@ -266,18 +389,90 @@ def _load_historical_resource_usage(config: pytest.Config) -> dict[tuple[str, st
             except Exception:
                 pass
 
-    for key, entry in aggregated.items():
+    test_usage: dict[tuple[str, str, str], HistoricalResourceUsage] = {}
+    suite_accumulator: dict[tuple[str, str], dict[str, float | int | None]] = defaultdict(
+        lambda: {
+            "sample_count": 0,
+            "cpu_sum": 0.0,
+            "cpu_count": 0,
+            "sum_avg_time": 0.0,
+            "sum_avg_time_count": 0,
+            "peak_mem": 0,
+        },
+    )
+
+    for key, entry in tests.items():
         timed_samples = int(entry["timed_samples"])
         duration_seconds = None if timed_samples == 0 else float(entry["total_time_taken"]) / timed_samples
-        result[key] = HistoricalResourceUsage(
+        usage = HistoricalResourceUsage(
             sample_count=int(entry["sample_count"]),
             cores=float(entry["cores"]) if entry["cores"] is not None else None,
             memory_bytes=int(entry["memory_bytes"]) if entry["memory_bytes"] is not None else None,
             duration_seconds=duration_seconds,
         )
+        test_usage[key] = usage
 
-    config._scylla_historical_resource_usage = result
-    return result
+        suite_key = key[:2]
+        suite_entry = suite_accumulator[suite_key]
+        suite_entry["sample_count"] = int(suite_entry["sample_count"]) + usage.sample_count
+        if usage.cores is not None:
+            suite_entry["cpu_sum"] = float(suite_entry["cpu_sum"]) + usage.cores
+            suite_entry["cpu_count"] = int(suite_entry["cpu_count"]) + 1
+        if usage.duration_seconds is not None:
+            suite_entry["sum_avg_time"] = float(suite_entry["sum_avg_time"]) + usage.duration_seconds
+            suite_entry["sum_avg_time_count"] = int(suite_entry["sum_avg_time_count"]) + 1
+        if usage.memory_bytes is not None:
+            suite_entry["peak_mem"] = max(int(suite_entry["peak_mem"]), usage.memory_bytes)
+
+    suite_usage: dict[tuple[str, str], HistoricalSuiteUsage] = {}
+    for suite_key, entry in suite_accumulator.items():
+        avg_cpu = None if int(entry["cpu_count"]) == 0 else float(entry["cpu_sum"]) / int(entry["cpu_count"])
+        sum_avg_time = None if int(entry["sum_avg_time_count"]) == 0 else float(entry["sum_avg_time"])
+        peak_mem = None if int(entry["peak_mem"]) == 0 else int(entry["peak_mem"])
+        suite_usage[suite_key] = HistoricalSuiteUsage(
+            sample_count=int(entry["sample_count"]),
+            avg_cpu=avg_cpu,
+            sum_avg_time=sum_avg_time,
+            peak_mem=peak_mem,
+            suite_class=_classify_suite_usage(int(entry["sample_count"]), avg_cpu, sum_avg_time),
+        )
+
+    host_usage: dict[str, HistoricalSystemResourceUsage] = {}
+    for host_id, entry in system_resource_metrics.items():
+        sample_count = int(entry["sample_count"])
+        host_usage[host_id] = HistoricalSystemResourceUsage(
+            sample_count=sample_count,
+            avg_cpu=None if sample_count == 0 else float(entry["cpu_sum"]) / sample_count,
+            peak_cpu=None if entry["cpu_peak"] is None else float(entry["cpu_peak"]),
+            avg_memory=None if sample_count == 0 else float(entry["memory_sum"]) / sample_count,
+            peak_memory=None if entry["memory_peak"] is None else float(entry["memory_peak"]),
+        )
+
+    return HistoricalResourceHistory(
+        tests=test_usage,
+        suites=suite_usage,
+        system_resource_metrics=host_usage,
+        db_paths=tuple(db_paths),
+    )
+
+
+def _load_historical_resource_history(config: pytest.Config) -> HistoricalResourceHistory:
+    cached = getattr(config, "_scylla_historical_resource_history", None)
+    if cached is not None:
+        return cached
+
+    history = load_historical_resource_history(historical_resource_db_paths(config))
+    config._scylla_historical_resource_history = history
+    return history
+
+
+def _historical_suite_usage_for_item(
+        suite_config: TestSuiteConfig | None,
+        build_mode: str,
+        config: pytest.Config | None) -> HistoricalSuiteUsage | None:
+    if config is None or suite_config is None:
+        return None
+    return _load_historical_resource_history(config).suites.get((suite_config.name, build_mode))
 
 
 def _historical_resource_usage_for_item(
@@ -289,7 +484,7 @@ def _historical_resource_usage_for_item(
         return None
     if not (test_name := _suite_relative_test_name(item, suite_config)):
         return None
-    history = _load_historical_resource_usage(config).get((suite_config.name, build_mode, test_name))
+    history = _load_historical_resource_history(config).tests.get((suite_config.name, build_mode, test_name))
     if history is None or history.sample_count < HISTORICAL_RESOURCE_MIN_SAMPLES:
         return None
     return history
@@ -427,6 +622,7 @@ def scylla_resource_metadata_for_item(
         group_key = _module_group_key(item.nodeid, build_mode)
 
     history = _historical_resource_usage_for_item(item, suite_config, build_mode, config or getattr(item, "config", None))
+    suite_history = _historical_suite_usage_for_item(suite_config, build_mode, config or getattr(item, "config", None))
 
     if resource_limit := scylla_resource_limit_from_markers(item):
         resources = resource_limit.resource_amount(default_resources.memory_bytes or DEFAULT_SCYLLA_MEMORY_BYTES)
@@ -448,6 +644,7 @@ def scylla_resource_metadata_for_item(
         cluster_reuse=cluster_profile.reuse if cluster_profile is not None else None,
         estimated_duration_seconds=_estimated_duration_seconds_from_history(history),
         observed_cpu_cores=_observed_cpu_cores_from_history(history),
+        suite_class=suite_history.suite_class if suite_history is not None else "balanced",
     )
 
 
@@ -598,6 +795,7 @@ class ScyllaResourceScheduler:
             service_manager: SessionServiceManager | None = None) -> None:
         self.numnodes = numnodes
         self.collection: list[str] | None = None
+        self.total_items = 0
         self.workqueue: OrderedDict[str, ScyllaResourceMetadata] = OrderedDict()
         self.workqueue_by_services: dict[frozenset[str], OrderedDict[ResourceBucketKey, deque[str]]] = {}
         self.assigned_work: dict[Any, OrderedDict[str, ScyllaResourceMetadata]] = {}
@@ -742,6 +940,7 @@ class ScyllaResourceScheduler:
             return
 
         self.collection = list(next(iter(self.registered_collections.values())))
+        self.total_items = len(self.collection)
         if not self.collection:
             self._record_timeline("collection_ready", tests=0, work_items=0)
             self._record_finish_if_done()
@@ -793,13 +992,42 @@ class ScyllaResourceScheduler:
             return item_metadata.estimated_duration_seconds
         return DEFAULT_ESTIMATED_DURATION_SECONDS
 
+    def _remaining_items(self) -> int:
+        return len(self.workqueue) + sum(len(workload) for workload in self.assigned_work.values())
+
+    def _tail_mode(self) -> bool:
+        if self.collection is None or self.total_items <= 0:
+            return False
+        return self._remaining_items() <= max(TAIL_MODE_MIN_REMAINING_ITEMS, self.total_items // TAIL_MODE_FRACTION)
+
+    def _ready_items(self) -> list[tuple[str, ScyllaResourceMetadata]]:
+        active_services = self.active_services or frozenset()
+        return [
+            (nodeid, item_metadata)
+            for nodeid, item_metadata in self.workqueue.items()
+            if item_metadata.services.issubset(active_services)
+        ]
+
+    def _tail_item_priority_key(self, fallback_index: int, item_metadata: ScyllaResourceMetadata) -> tuple[float, int, int]:
+        return (
+            -self._estimated_duration_seconds(item_metadata),
+            0 if _is_lingering_candidate(item_metadata) else 1,
+            fallback_index,
+        )
+
+    def _prefetch_limits_for_node(self, node: Any) -> tuple[int, float]:
+        if self._tail_mode() and any(item_metadata.suite_class == "wait_heavy" for item_metadata in self.assigned_work[node].values()):
+            return TAIL_WAIT_HEAVY_PREFETCH_MAX_ITEMS, TAIL_WAIT_HEAVY_PREFETCH_TARGET_SECONDS
+        return PREFETCH_MAX_ITEMS, PREFETCH_TARGET_SECONDS
+
     def _prefetch_saturated(self, node: Any) -> bool:
         assigned_count = self._pending_of(self.assigned_work[node])
         if assigned_count < PREFETCH_MIN_ITEMS:
             return False
-        if assigned_count >= PREFETCH_MAX_ITEMS:
+        max_items, target_seconds = self._prefetch_limits_for_node(node)
+        if assigned_count >= max_items:
             return True
-        return self.node_backlog_seconds.get(node, 0.0) >= PREFETCH_TARGET_SECONDS
+        return self.node_backlog_seconds.get(node, 0.0) >= target_seconds
 
     def _set_workqueue(self, workqueue: OrderedDict[str, ScyllaResourceMetadata]) -> None:
         self.workqueue = OrderedDict()
@@ -844,6 +1072,27 @@ class ScyllaResourceScheduler:
         self._advance_service_phase_if_needed()
         oversized_nodeid: str | None = None
         fit_budget = self._fit_budget_for_node(node)
+        if self._tail_mode():
+            ready_items = sorted(
+                enumerate(self._ready_items()),
+                key=lambda item: self._tail_item_priority_key(item[0], item[1][1]),
+            )
+            for _, (nodeid, item_metadata) in ready_items:
+                resources = item_metadata.resources
+                if not resources.fits_in(self.total_resources):
+                    oversized_nodeid = oversized_nodeid or nodeid
+                    continue
+                if not resources.fits_in(fit_budget):
+                    continue
+                return nodeid
+            if (
+                oversized_nodeid is not None
+                and self._pending_of(self.assigned_work[node]) == 0
+                and self._resource_usage_in_use() == SchedulerResource()
+            ):
+                return oversized_nodeid
+            return None
+
         for services in self._ready_service_groups():
             services_queue = self.workqueue_by_services[services]
             for bucket_key, bucket in list(services_queue.items()):
