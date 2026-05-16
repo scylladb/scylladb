@@ -19,10 +19,11 @@ from test.pylib.scylla_resource_scheduler import (
     ScyllaResourceMetadata,
     ScyllaResourceScheduler,
     SchedulerResource,
+    plan_items_by_service_phase,
+    queue_items_from_collection,
     scylla_resource_budget_failure,
     scylla_resource_metadata_for_item,
     scylla_resource_timeline_path,
-    work_units_from_collection,
 )
 from test.pylib.scylla_resources import scylla_resource_limit_from_markers
 from test.pylib.session_services import SessionServiceManager
@@ -77,6 +78,30 @@ class FakeWorker:
 
     def shutdown(self) -> None:
         self.shutting_down = True
+
+
+class IndexlessCollection:
+    def __init__(self, values: list[str]) -> None:
+        self.values = list(values)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, IndexlessCollection):
+            return self.values == other.values
+        if isinstance(other, list):
+            return self.values == other
+        return NotImplemented
+
+    def __getitem__(self, index: int) -> str:
+        return self.values[index]
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def index(self, value: str) -> int:
+        raise AssertionError("scheduler should use cached worker indexes")
 
 
 class FakeServiceManager:
@@ -232,7 +257,7 @@ def test_default_resource_classification() -> None:
     assert without_scylla_metadata.resources == SchedulerResource()
 
 
-def test_cluster_profile_metadata_groups_by_profile() -> None:
+def test_cluster_profile_metadata_remains_itemized() -> None:
     cluster_suite = FakeSuiteConfig("cluster", {"type": "Topology"})
     first = scylla_resource_metadata_for_item(FakeItem("test/cluster/test_a.py::test_one", mark("scylla_cluster", nodes=2)), cluster_suite, "dev", False)
     second = scylla_resource_metadata_for_item(FakeItem("test/cluster/test_b.py::test_two", mark("scylla_cluster", nodes=2)), cluster_suite, "dev", False)
@@ -243,10 +268,11 @@ def test_cluster_profile_metadata_groups_by_profile() -> None:
     assert first.group_key == f"cluster:{first.cluster_profile_key}"
     assert first.resources == SchedulerResource(cores=0.5, memory_bytes=2 * GIB)
 
-    workqueue = work_units_from_collection(["a", "b"], {"a": first, "b": second})
+    workqueue = queue_items_from_collection(["a", "b"], {"a": first, "b": second})
 
-    assert list(workqueue) == [first.group_key]
-    assert list(next(iter(workqueue.values())).nodeids) == ["a", "b"]
+    assert list(workqueue) == ["a", "b"]
+    assert workqueue["a"].cluster_profile_key == first.cluster_profile_key
+    assert workqueue["b"].cluster_profile_key == second.cluster_profile_key
 
 
 def test_cluster_profile_cpu_scales_with_smp() -> None:
@@ -268,16 +294,16 @@ def test_cluster_profile_cpu_scales_with_smp() -> None:
     assert metadata.resources == SchedulerResource(cores=0.625, memory_bytes=2 * GIB)
 
 
-def test_cluster_profile_grouping_stays_inside_service_phase() -> None:
+def test_cluster_profile_service_phase_stays_itemized() -> None:
     metadata = {
         "plain": ScyllaResourceMetadata("cluster:key", SchedulerResource(cores=1, memory_bytes=GIB), cluster_profile_key="key"),
         "s3": ScyllaResourceMetadata("cluster:key", SchedulerResource(cores=1, memory_bytes=GIB), frozenset({"s3"}), cluster_profile_key="key"),
     }
 
-    workqueue = work_units_from_collection(["plain", "s3"], metadata)
+    workqueue = plan_items_by_service_phase(queue_items_from_collection(["plain", "s3"], metadata))
 
-    assert list(workqueue) == ["cluster:key", "cluster:key:services:s3"]
-    assert [work_unit.services for work_unit in workqueue.values()] == [frozenset(), frozenset({"s3"})]
+    assert list(workqueue) == ["plain", "s3"]
+    assert [item_metadata.services for item_metadata in workqueue.values()] == [frozenset(), frozenset({"s3"})]
 
 
 def test_service_requirements_from_marker_and_suite_config() -> None:
@@ -306,27 +332,27 @@ def test_debug_mode_charges_more_cpu() -> None:
     assert metadata.resources == SchedulerResource(cores=1.5, memory_bytes=GIB)
 
 
-def test_non_cluster_tests_are_grouped_by_module() -> None:
+def test_non_cluster_tests_remain_itemized_even_with_shared_module_group_key() -> None:
     metadata = {
         "test/cqlpy/test_a.py::test_one.dev.1": ScyllaResourceMetadata("module:dev:test/cqlpy/test_a.py", SchedulerResource(cores=1, memory_bytes=GIB)),
         "test/cqlpy/test_a.py::test_two.dev.1": ScyllaResourceMetadata("module:dev:test/cqlpy/test_a.py", SchedulerResource(cores=1, memory_bytes=GIB)),
     }
 
-    workqueue = work_units_from_collection(list(metadata), metadata)
+    workqueue = queue_items_from_collection(list(metadata), metadata)
 
-    assert list(workqueue) == ["module:dev:test/cqlpy/test_a.py"]
-    assert list(next(iter(workqueue.values())).nodeids) == list(metadata)
+    assert list(workqueue) == list(metadata)
 
 
-def test_grouped_work_unit_uses_union_of_services() -> None:
+def test_item_queue_preserves_per_item_services() -> None:
     metadata = {
         "test/cqlpy/test_a.py::test_one.dev.1": ScyllaResourceMetadata("module:dev:test/cqlpy/test_a.py", SchedulerResource(cores=1, memory_bytes=GIB)),
         "test/cqlpy/test_a.py::test_two.dev.1": ScyllaResourceMetadata("module:dev:test/cqlpy/test_a.py", SchedulerResource(cores=1, memory_bytes=GIB), frozenset({"s3"})),
     }
 
-    workqueue = work_units_from_collection(list(metadata), metadata)
+    workqueue = queue_items_from_collection(list(metadata), metadata)
 
-    assert next(iter(workqueue.values())).services == frozenset({"s3"})
+    assert workqueue["test/cqlpy/test_a.py::test_one.dev.1"].services == frozenset()
+    assert workqueue["test/cqlpy/test_a.py::test_two.dev.1"].services == frozenset({"s3"})
 
 
 # Regression test for Scylla-backed non-cluster suites that were previously charged as free.
@@ -392,6 +418,46 @@ def test_scheduler_releases_resources_after_completion() -> None:
     assert [2] in node1.sent or [2] in node2.sent
 
 
+def test_scheduler_tracks_resource_usage_incrementally() -> None:
+    collection = ["test_a", "test_b"]
+    metadata = {
+        "test_a": ScyllaResourceMetadata("test_a", SchedulerResource(cores=2, memory_bytes=GIB)),
+        "test_b": ScyllaResourceMetadata("test_b", SchedulerResource(cores=1, memory_bytes=GIB)),
+    }
+    scheduler, node1, node2 = make_scheduler(collection, metadata, cpus=2)
+
+    assert scheduler._resource_usage_in_use() == SchedulerResource()
+
+    scheduler.schedule()
+
+    assert scheduler._resource_usage_in_use() == SchedulerResource(cores=2, memory_bytes=GIB)
+
+    scheduler.mark_test_complete(node1, 0)
+
+    assert scheduler._resource_usage_in_use() == SchedulerResource(cores=1, memory_bytes=GIB)
+
+    scheduler.mark_test_complete(node1, 1)
+
+    assert scheduler._resource_usage_in_use() == SchedulerResource()
+    assert node2.sent == []
+
+
+def test_scheduler_dispatch_uses_cached_worker_indexes() -> None:
+    collection = ["test_a", "test_b"]
+    metadata = {
+        "test_a": ScyllaResourceMetadata("test_a", SchedulerResource(cores=1, memory_bytes=GIB)),
+        "test_b": ScyllaResourceMetadata("test_b", SchedulerResource(cores=1, memory_bytes=GIB)),
+    }
+    scheduler, node1, node2 = make_scheduler(collection, metadata, cpus=2)
+    scheduler.registered_collections[node1] = IndexlessCollection(collection)
+    scheduler.registered_collections[node2] = IndexlessCollection(collection)
+
+    scheduler.schedule()
+
+    assert node1.sent == [[0], [1]]
+    assert node2.sent == []
+
+
 def test_scheduler_writes_jsonl_timeline(tmp_path: pathlib.Path) -> None:
     collection = ["test_a"]
     metadata = {
@@ -420,7 +486,7 @@ def test_scheduler_writes_jsonl_timeline(tmp_path: pathlib.Path) -> None:
         "node_shutdown",
         "node_shutdown",
         "test_complete",
-        "work_unit_complete",
+        "item_complete",
         "service_phase",
         "scheduler_finish",
     ]

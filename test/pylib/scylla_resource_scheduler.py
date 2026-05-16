@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 import json
@@ -62,12 +62,18 @@ DEFAULT_SCYLLA_MEMORY_BYTES = 1024 ** 3
 HISTORICAL_RESOURCE_MIN_SAMPLES = 3
 HISTORICAL_CPU_HEADROOM = 1.5
 HISTORICAL_MEMORY_HEADROOM = 1.25
+HISTORICAL_DURATION_HEADROOM = 1.25
 HISTORICAL_CPU_REDUCTION_FLOOR = 0.5
 HISTORICAL_MEMORY_REDUCTION_FLOOR = 0.5
 # Reserve one quarter of a host CPU for the default --smp 2 topology node.
 TOPOLOGY_CPU_RESERVATION_PER_SMP = 0.125
+DEFAULT_ESTIMATED_DURATION_SECONDS = 1.0
+PREFETCH_MIN_ITEMS = 2
+PREFETCH_MAX_ITEMS = 8
+PREFETCH_TARGET_SECONDS = 5.0
 
 SchedulerResource = ScyllaResourceAmount
+ResourceBucketKey = tuple[float, int]
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,7 @@ class ScyllaResourceMetadata:
     cluster_profile_key: str | None = None
     cluster_profile_name: str | None = None
     cluster_reuse: str | None = None
+    estimated_duration_seconds: float | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -87,6 +94,7 @@ class ScyllaResourceMetadata:
             "cluster_profile_key": self.cluster_profile_key,
             "cluster_profile_name": self.cluster_profile_name,
             "cluster_reuse": self.cluster_reuse,
+            "estimated_duration_seconds": self.estimated_duration_seconds,
         }
 
     @classmethod
@@ -98,15 +106,8 @@ class ScyllaResourceMetadata:
             cluster_profile_key=str(data["cluster_profile_key"]) if data.get("cluster_profile_key") is not None else None,
             cluster_profile_name=str(data["cluster_profile_name"]) if data.get("cluster_profile_name") is not None else None,
             cluster_reuse=str(data["cluster_reuse"]) if data.get("cluster_reuse") is not None else None,
+            estimated_duration_seconds=float(data["estimated_duration_seconds"]) if data.get("estimated_duration_seconds") is not None else None,
         )
-
-
-@dataclass
-class WorkUnit:
-    key: str
-    nodeids: OrderedDict[str, bool]
-    resources: SchedulerResource
-    services: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ class HistoricalResourceUsage:
     sample_count: int
     cores: float | None = None
     memory_bytes: int | None = None
+    duration_seconds: float | None = None
 
 
 def scylla_resource_budget_from_config(config: pytest.Config) -> SchedulerResource:
@@ -203,18 +205,20 @@ def _load_historical_resource_usage(config: pytest.Config) -> dict[tuple[str, st
                 t.test_name,
                 COUNT(*) AS sample_count,
                 MAX(CAST(m.memory_peak AS INTEGER)) AS max_memory_peak,
-                MAX(CASE WHEN m.time_taken > 0 AND m.usage_sec IS NOT NULL THEN m.usage_sec / m.time_taken END) AS max_avg_cpu
+                MAX(CASE WHEN m.time_taken > 0 AND m.usage_sec IS NOT NULL THEN m.usage_sec / m.time_taken END) AS max_avg_cpu,
+                AVG(CASE WHEN m.time_taken > 0 THEN m.time_taken END) AS avg_time_taken
             FROM {TESTS_TABLE} AS t
             JOIN {METRICS_TABLE} AS m ON m.test_id = t.id
             WHERE m.success = 1
             GROUP BY t.directory, t.mode, t.test_name
             """
         )
-        for directory, mode, test_name, sample_count, max_memory_peak, max_avg_cpu in cursor.fetchall():
+        for directory, mode, test_name, sample_count, max_memory_peak, max_avg_cpu, avg_time_taken in cursor.fetchall():
             result[(str(directory), str(mode), str(test_name))] = HistoricalResourceUsage(
                 sample_count=int(sample_count),
                 cores=float(max_avg_cpu) if max_avg_cpu is not None else None,
                 memory_bytes=int(max_memory_peak) if max_memory_peak is not None else None,
+                duration_seconds=float(avg_time_taken) if avg_time_taken is not None else None,
             )
     except sqlite3.Error:
         logger.debug("Failed to load historical resource usage from %s", db_path, exc_info=True)
@@ -259,6 +263,12 @@ def _apply_historical_resource_usage(default_resources: SchedulerResource, histo
         resources = replace(resources, memory_bytes=min(default_resources.memory_bytes, adjusted_memory))
 
     return resources
+
+
+def _estimated_duration_seconds_from_history(history: HistoricalResourceUsage | None) -> float | None:
+    if history is None or history.duration_seconds is None or history.duration_seconds <= 0:
+        return None
+    return history.duration_seconds * HISTORICAL_DURATION_HEADROOM
 
 
 def _suite_cmdline_options(suite_config: TestSuiteConfig | None) -> list[str]:
@@ -344,12 +354,14 @@ def scylla_resource_metadata_for_item(
         default_resources = _non_cluster_default_resource(suite_config)
         group_key = _module_group_key(item.nodeid, build_mode)
 
+    history = _historical_resource_usage_for_item(item, suite_config, build_mode, config or getattr(item, "config", None))
+
     if resource_limit := scylla_resource_limit_from_markers(item):
         resources = resource_limit.resource_amount(default_resources.memory_bytes or DEFAULT_SCYLLA_MEMORY_BYTES)
     else:
         resources = _apply_historical_resource_usage(
             default_resources,
-            _historical_resource_usage_for_item(item, suite_config, build_mode, config or getattr(item, "config", None)),
+            history,
         )
 
     if resources.cores and is_debug_mode:
@@ -362,6 +374,7 @@ def scylla_resource_metadata_for_item(
         cluster_profile_key=cluster_profile.key if cluster_profile is not None else None,
         cluster_profile_name=cluster_profile.name if cluster_profile is not None else None,
         cluster_reuse=cluster_profile.reuse if cluster_profile is not None else None,
+        estimated_duration_seconds=_estimated_duration_seconds_from_history(history),
     )
 
 
@@ -416,47 +429,36 @@ def _fallback_metadata_from_nodeid(nodeid: str) -> ScyllaResourceMetadata:
     return ScyllaResourceMetadata(group_key=_item_group_key(nodeid), resources=SchedulerResource())
 
 
-def work_units_from_collection(collection: Sequence[str], metadata: dict[str, ScyllaResourceMetadata]) -> OrderedDict[str, WorkUnit]:
-    workqueue: OrderedDict[str, WorkUnit] = OrderedDict()
-    for nodeid in collection:
-        item_metadata = metadata.get(nodeid, _fallback_metadata_from_nodeid(nodeid))
-        workqueue_key = item_metadata.group_key
-        if item_metadata.cluster_profile_key is not None and item_metadata.services:
-            workqueue_key = f"{item_metadata.group_key}:services:{','.join(sorted(item_metadata.services))}"
-        work_unit = workqueue.get(workqueue_key)
-        if work_unit is None:
-            workqueue[workqueue_key] = WorkUnit(
-                key=workqueue_key,
-                nodeids=OrderedDict([(nodeid, False)]),
-                resources=item_metadata.resources,
-                services=item_metadata.services,
-            )
-        else:
-            work_unit.nodeids[nodeid] = False
-            work_unit.resources = work_unit.resources.max(item_metadata.resources)
-            work_unit.services = normalize_session_services(set(work_unit.services) | set(item_metadata.services))
-    return workqueue
+def queue_items_from_collection(collection: Sequence[str], metadata: dict[str, ScyllaResourceMetadata]) -> OrderedDict[str, ScyllaResourceMetadata]:
+    return OrderedDict(
+        (nodeid, metadata.get(nodeid, _fallback_metadata_from_nodeid(nodeid)))
+        for nodeid in collection
+    )
 
 
-def plan_work_units_by_service_phase(workqueue: OrderedDict[str, WorkUnit]) -> OrderedDict[str, WorkUnit]:
+def plan_items_by_service_phase(workqueue: OrderedDict[str, ScyllaResourceMetadata]) -> OrderedDict[str, ScyllaResourceMetadata]:
     phase_order: list[frozenset[str]] = []
-    phased: dict[frozenset[str], OrderedDict[str, WorkUnit]] = {}
+    phased: dict[frozenset[str], OrderedDict[str, ScyllaResourceMetadata]] = {}
 
-    for key, work_unit in workqueue.items():
-        services = work_unit.services
+    for nodeid, item_metadata in workqueue.items():
+        services = item_metadata.services
         if services not in phased:
             phased[services] = OrderedDict()
             phase_order.append(services)
-        phased[services][key] = work_unit
+        phased[services][nodeid] = item_metadata
 
     # Prefer tests with no external service first so a run that mostly does not
     # need MinIO/LDAP does not pay that memory cost during the whole session.
     phase_order.sort(key=lambda services: (bool(services), tuple(sorted(services))))
 
-    planned: OrderedDict[str, WorkUnit] = OrderedDict()
+    planned: OrderedDict[str, ScyllaResourceMetadata] = OrderedDict()
     for services in phase_order:
         planned.update(phased[services])
     return planned
+
+
+def _resource_bucket_key(resources: SchedulerResource) -> ResourceBucketKey:
+    return (resources.cores, resources.memory_bytes)
 
 
 class _SchedulerLog:
@@ -522,9 +524,14 @@ class ScyllaResourceScheduler:
             service_manager: SessionServiceManager | None = None) -> None:
         self.numnodes = numnodes
         self.collection: list[str] | None = None
-        self.workqueue: OrderedDict[str, WorkUnit] = OrderedDict()
-        self.assigned_work: dict[Any, OrderedDict[str, WorkUnit]] = {}
+        self.workqueue: OrderedDict[str, ScyllaResourceMetadata] = OrderedDict()
+        self.workqueue_by_services: dict[frozenset[str], OrderedDict[ResourceBucketKey, deque[str]]] = {}
+        self.assigned_work: dict[Any, OrderedDict[str, ScyllaResourceMetadata]] = {}
         self.registered_collections: dict[Any, list[str]] = {}
+        self.worker_collection_indexes: dict[Any, dict[str, int]] = {}
+        self.node_reservations: dict[Any, SchedulerResource] = {}
+        self.node_backlog_seconds: dict[Any, float] = {}
+        self.resource_usage_in_use: SchedulerResource = SchedulerResource()
         self.config = config
         self.resource_metadata = resource_metadata
         self.service_manager = service_manager
@@ -543,15 +550,18 @@ class ScyllaResourceScheduler:
 
     @property
     def tests_finished(self) -> bool:
-        return self.collection_is_completed and not self.workqueue and all(self._pending_of(workload) == 0 for workload in self.assigned_work.values())
+        return self.collection_is_completed and not self.workqueue and all(not workload for workload in self.assigned_work.values())
 
     @property
     def has_pending(self) -> bool:
-        return bool(self.workqueue) or any(self._pending_of(workload) > 0 for workload in self.assigned_work.values())
+        return bool(self.workqueue) or any(workload for workload in self.assigned_work.values())
 
     def add_node(self, node: Any) -> None:
         assert node not in self.assigned_work
         self.assigned_work[node] = OrderedDict()
+        self.worker_collection_indexes[node] = {}
+        self.node_reservations[node] = SchedulerResource()
+        self.node_backlog_seconds[node] = 0.0
         self._record_timeline("node_added", node=self._node_name(node))
 
     def add_node_collection(self, node: Any, collection: Sequence[str]) -> None:
@@ -561,87 +571,87 @@ class ScyllaResourceScheduler:
             if list(collection) != self.collection:
                 self.log(f"New worker {self._node_name(node)} collected different tests; ignoring it")
                 return
-        self.registered_collections[node] = list(collection)
+        registered_collection = list(collection)
+        self.registered_collections[node] = registered_collection
+        self.worker_collection_indexes[node] = {
+            nodeid: index for index, nodeid in enumerate(registered_collection)
+        }
         self._record_timeline("collection_registered", node=self._node_name(node), tests=len(collection))
 
     def mark_test_complete(self, node: Any, item_index: int, duration: float = 0) -> None:
         nodeid = self.registered_collections[node][item_index]
         workload = self.assigned_work[node]
-        for key, work_unit in list(workload.items()):
-            if nodeid not in work_unit.nodeids:
-                continue
-            work_unit.nodeids[nodeid] = True
-            self._record_timeline(
-                "test_complete",
-                node=self._node_name(node),
-                nodeid=nodeid,
-                item_index=item_index,
-                work_unit=work_unit.key,
-                resources=work_unit.resources.to_json(),
-                services=sorted(work_unit.services),
-                duration_seconds=duration,
-                estimated_start_timestamp=self._estimated_start_timestamp(duration),
-            )
-            if self._pending_in_unit(work_unit) == 0:
-                del workload[key]
-                self._record_timeline("work_unit_complete", node=self._node_name(node), work_unit=work_unit.key)
-            break
-        else:
+        item_metadata = workload.pop(nodeid, None)
+        if item_metadata is None:
             raise KeyError(f"Completed test {nodeid} was not assigned to {self._node_name(node)}")
 
-        self._reschedule_all()
+        self._record_timeline(
+            "test_complete",
+            node=self._node_name(node),
+            nodeid=nodeid,
+            item_index=item_index,
+            resources=item_metadata.resources.to_json(),
+            services=sorted(item_metadata.services),
+            duration_seconds=duration,
+            estimated_start_timestamp=self._estimated_start_timestamp(duration),
+        )
+        self._record_timeline("item_complete", node=self._node_name(node), nodeid=nodeid)
+
+        self._refresh_node_reservation(node)
+        self._refresh_node_backlog_seconds(node)
+        self._reschedule_after_completion(node)
 
     def mark_test_pending(self, item: str) -> None:
         assert self.collection is not None
         metadata = self._metadata_for_collection(self.collection)
-        work_unit = work_units_from_collection([item], metadata).popitem(last=False)[1]
-        self.workqueue.update(OrderedDict([(work_unit.key, work_unit)]))
-        self.workqueue.move_to_end(work_unit.key, last=False)
-        self.workqueue = plan_work_units_by_service_phase(self.workqueue)
-        self._record_timeline("test_requeued", nodeid=item, work_unit=work_unit.key, reason="mark_test_pending")
+        item_metadata = metadata.get(item, _fallback_metadata_from_nodeid(item))
+        self._enqueue_item(item, item_metadata, front=True)
+        self._record_timeline("test_requeued", nodeid=item, reason="mark_test_pending")
         self._reschedule_all()
 
     def remove_pending_tests_from_node(self, node: Any, indices: Sequence[int]) -> None:
         nodeids = {self.registered_collections[node][index] for index in indices}
         workload = self.assigned_work[node]
-        requeued: OrderedDict[str, WorkUnit] = OrderedDict()
-        for key, work_unit in list(workload.items()):
-            if not any(nodeid in work_unit.nodeids and not work_unit.nodeids[nodeid] for nodeid in nodeids):
+        requeued: OrderedDict[str, ScyllaResourceMetadata] = OrderedDict()
+        for nodeid in nodeids:
+            item_metadata = workload.pop(nodeid, None)
+            if item_metadata is None:
                 continue
-            del workload[key]
-            requeued[key] = work_unit
+            requeued[nodeid] = item_metadata
             self._record_timeline(
-                "work_unit_requeued",
+                "item_requeued",
                 node=self._node_name(node),
-                work_unit=work_unit.key,
-                nodeids=self._pending_nodeids(work_unit),
+                nodeid=nodeid,
                 reason="remove_pending_tests_from_node",
             )
-        self.workqueue = plan_work_units_by_service_phase(OrderedDict([*requeued.items(), *self.workqueue.items()]))
+        self._refresh_node_reservation(node)
+        self._refresh_node_backlog_seconds(node)
+        for nodeid, item_metadata in reversed(list(requeued.items())):
+            self._enqueue_item(nodeid, item_metadata, front=True)
         self._reschedule_all()
 
     def remove_node(self, node: Any) -> str | None:
         workload = self.assigned_work.pop(node)
-        if self._pending_of(workload) == 0:
+        self.worker_collection_indexes.pop(node, None)
+        self._drop_node_reservation(node)
+        self.node_backlog_seconds.pop(node, None)
+        if not workload:
             return None
 
         crashitem = None
-        requeued: OrderedDict[str, WorkUnit] = OrderedDict()
-        for key, work_unit in workload.items():
-            if self._pending_in_unit(work_unit) == 0:
-                continue
-            requeued[key] = work_unit
+        requeued: OrderedDict[str, ScyllaResourceMetadata] = OrderedDict(workload.items())
+        for nodeid in requeued:
             if crashitem is None:
-                crashitem = next(nodeid for nodeid, completed in work_unit.nodeids.items() if not completed)
+                crashitem = nodeid
             self._record_timeline(
-                "work_unit_requeued",
+                "item_requeued",
                 node=self._node_name(node),
-                work_unit=work_unit.key,
-                nodeids=self._pending_nodeids(work_unit),
+                nodeid=nodeid,
                 reason="node_removed",
             )
 
-        self.workqueue = plan_work_units_by_service_phase(OrderedDict([*requeued.items(), *self.workqueue.items()]))
+        for nodeid, item_metadata in reversed(list(requeued.items())):
+            self._enqueue_item(nodeid, item_metadata, front=True)
         self._record_timeline("node_removed", node=self._node_name(node), crashitem=crashitem)
         self._reschedule_all()
         return crashitem
@@ -659,13 +669,13 @@ class ScyllaResourceScheduler:
 
         self.collection = list(next(iter(self.registered_collections.values())))
         if not self.collection:
-            self._record_timeline("collection_ready", tests=0, work_units=0)
+            self._record_timeline("collection_ready", tests=0, work_items=0)
             self._record_finish_if_done()
             return
 
         metadata = self._metadata_for_collection(self.collection)
-        self.workqueue = plan_work_units_by_service_phase(work_units_from_collection(self.collection, metadata))
-        self._record_timeline("collection_ready", tests=len(self.collection), work_units=len(self.workqueue))
+        self._set_workqueue(plan_items_by_service_phase(queue_items_from_collection(self.collection, metadata)))
+        self._record_timeline("collection_ready", tests=len(self.collection), work_items=len(self.workqueue))
         self._reschedule_all()
 
     def _metadata_for_collection(self, collection: Sequence[str]) -> dict[str, ScyllaResourceMetadata]:
@@ -681,96 +691,143 @@ class ScyllaResourceScheduler:
         return self.resource_metadata
 
     def _resource_usage_in_use(self) -> SchedulerResource:
-        usage = SchedulerResource()
-        for workload in self.assigned_work.values():
-            usage += self._resource_reservation_of(workload)
-        return usage
+        return self.resource_usage_in_use
 
-    def _resource_reservation_of(self, workload: OrderedDict[str, WorkUnit]) -> SchedulerResource:
+    def _resource_reservation_of(self, workload: OrderedDict[str, ScyllaResourceMetadata]) -> SchedulerResource:
         reservation = SchedulerResource()
-        for work_unit in workload.values():
-            reservation = reservation.max(work_unit.resources)
+        for item_metadata in workload.values():
+            reservation = reservation.max(item_metadata.resources)
         return reservation
 
-    def _resource_usage_with_candidate(self, node: Any, work_unit: WorkUnit) -> SchedulerResource:
-        usage = SchedulerResource()
-        for candidate_node, workload in self.assigned_work.items():
-            reservation = self._resource_reservation_of(workload)
-            if candidate_node is node:
-                reservation = reservation.max(work_unit.resources)
-            usage += reservation
-        return usage
+    def _fit_budget_for_node(self, node: Any) -> SchedulerResource:
+        current_reservation = self.node_reservations.get(node, SchedulerResource())
+        return SchedulerResource(
+            cores=self.total_resources.cores - self.resource_usage_in_use.cores + current_reservation.cores,
+            memory_bytes=self.total_resources.memory_bytes - self.resource_usage_in_use.memory_bytes + current_reservation.memory_bytes,
+        )
 
-    def _work_unit_fits_now(self, node: Any, work_unit: WorkUnit) -> bool:
-        if self._work_unit_exceeds_budget(work_unit):
+    def _item_fits_now(self, node: Any, item_metadata: ScyllaResourceMetadata, fit_budget: SchedulerResource | None = None) -> bool:
+        if self._item_exceeds_budget(item_metadata):
             return self._pending_of(self.assigned_work[node]) == 0
-        return self._resource_usage_with_candidate(node, work_unit).fits_in(self.total_resources)
+        return item_metadata.resources.fits_in(fit_budget if fit_budget is not None else self._fit_budget_for_node(node))
 
-    def _work_unit_exceeds_budget(self, work_unit: WorkUnit) -> bool:
-        return not work_unit.resources.fits_in(self.total_resources)
+    def _item_exceeds_budget(self, item_metadata: ScyllaResourceMetadata) -> bool:
+        return not item_metadata.resources.fits_in(self.total_resources)
 
-    def _next_fitting_work_unit_key(self, node: Any) -> str | None:
-        self._advance_service_phase_if_needed()
-        oversized_key = None
+    def _estimated_duration_seconds(self, item_metadata: ScyllaResourceMetadata) -> float:
+        if item_metadata.estimated_duration_seconds is not None and item_metadata.estimated_duration_seconds > 0:
+            return item_metadata.estimated_duration_seconds
+        return DEFAULT_ESTIMATED_DURATION_SECONDS
+
+    def _prefetch_saturated(self, node: Any) -> bool:
+        assigned_count = self._pending_of(self.assigned_work[node])
+        if assigned_count < PREFETCH_MIN_ITEMS:
+            return False
+        if assigned_count >= PREFETCH_MAX_ITEMS:
+            return True
+        return self.node_backlog_seconds.get(node, 0.0) >= PREFETCH_TARGET_SECONDS
+
+    def _set_workqueue(self, workqueue: OrderedDict[str, ScyllaResourceMetadata]) -> None:
+        self.workqueue = OrderedDict()
+        self.workqueue_by_services = {}
+        for nodeid, item_metadata in workqueue.items():
+            self._enqueue_item(nodeid, item_metadata)
+
+    def _enqueue_item(self, nodeid: str, item_metadata: ScyllaResourceMetadata, *, front: bool = False) -> None:
+        self.workqueue[nodeid] = item_metadata
+        services_queue = self.workqueue_by_services.setdefault(item_metadata.services, OrderedDict())
+        bucket_key = _resource_bucket_key(item_metadata.resources)
+        bucket = services_queue.get(bucket_key)
+        if bucket is None:
+            services_queue[bucket_key] = deque()
+            if front:
+                services_queue.move_to_end(bucket_key, last=False)
+            bucket = services_queue[bucket_key]
+        if front:
+            bucket.appendleft(nodeid)
+        else:
+            bucket.append(nodeid)
+
+    def _pop_queued_item(self, services: frozenset[str], bucket_key: ResourceBucketKey) -> tuple[str, ScyllaResourceMetadata]:
+        services_queue = self.workqueue_by_services[services]
+        bucket = services_queue[bucket_key]
+        nodeid = bucket.popleft()
+        if not bucket:
+            del services_queue[bucket_key]
+            if not services_queue:
+                del self.workqueue_by_services[services]
+        item_metadata = self.workqueue.pop(nodeid)
+        return nodeid, item_metadata
+
+    def _ready_service_groups(self) -> list[frozenset[str]]:
         active_services = self.active_services or frozenset()
-        for key, work_unit in self.workqueue.items():
-            if not work_unit.services.issubset(active_services):
-                continue
-            if self._work_unit_exceeds_budget(work_unit):
-                oversized_key = oversized_key or key
-                continue
-            if self._work_unit_fits_now(node, work_unit):
-                return key
+        return sorted(
+            [services for services in self.workqueue_by_services if services.issubset(active_services)],
+            key=lambda services: (bool(services), tuple(sorted(services))),
+        )
+
+    def _next_fitting_nodeid(self, node: Any) -> str | None:
+        self._advance_service_phase_if_needed()
+        oversized_nodeid: str | None = None
+        fit_budget = self._fit_budget_for_node(node)
+        for services in self._ready_service_groups():
+            services_queue = self.workqueue_by_services[services]
+            for bucket_key, bucket in list(services_queue.items()):
+                resources = SchedulerResource(cores=bucket_key[0], memory_bytes=bucket_key[1])
+                if not resources.fits_in(self.total_resources):
+                    oversized_nodeid = oversized_nodeid or bucket[0]
+                    continue
+                if not resources.fits_in(fit_budget):
+                    continue
+                return bucket[0]
         if (
-            oversized_key is not None
+            oversized_nodeid is not None
             and self._pending_of(self.assigned_work[node]) == 0
             and self._resource_usage_in_use() == SchedulerResource()
         ):
-            return oversized_key
+            return oversized_nodeid
         return None
 
-    def _assign_work_unit(self, node: Any, key: str) -> None:
-        work_unit = self.workqueue.pop(key)
-        self.assigned_work[node][key] = work_unit
-        self._send_work_unit(node, work_unit)
+    def _assign_item(self, node: Any, nodeid: str) -> None:
+        item_metadata = self.workqueue.pop(nodeid)
+        self._remove_item_from_indexes(nodeid, item_metadata)
+        self.assigned_work[node][nodeid] = item_metadata
+        self._refresh_node_reservation(node)
+        self._refresh_node_backlog_seconds(node)
+        self._send_item(node, nodeid, item_metadata)
 
-    def _send_work_unit(self, node: Any, work_unit: WorkUnit) -> None:
-        worker_collection = self.registered_collections[node]
-        nodeids_indexes = [
-            worker_collection.index(nodeid)
-            for nodeid, completed in work_unit.nodeids.items()
-            if not completed
-        ]
-        assert nodeids_indexes
-        node.send_runtest_some(nodeids_indexes)
+    def _send_item(self, node: Any, nodeid: str, item_metadata: ScyllaResourceMetadata) -> None:
+        worker_collection_indexes = self.worker_collection_indexes[node]
+        item_index = worker_collection_indexes[nodeid]
+        node.send_runtest_some([item_index])
         self._record_timeline(
             "dispatch",
             node=self._node_name(node),
-            work_unit=work_unit.key,
-            item_indexes=nodeids_indexes,
-            nodeids=self._pending_nodeids(work_unit),
-            resources=work_unit.resources.to_json(),
-            exceeds_budget=self._work_unit_exceeds_budget(work_unit),
-            services=sorted(work_unit.services),
+            item_index=item_index,
+            nodeid=nodeid,
+            nodeids=[nodeid],
+            resources=item_metadata.resources.to_json(),
+            exceeds_budget=self._item_exceeds_budget(item_metadata),
+            services=sorted(item_metadata.services),
             active_services=sorted(self.active_services or ()),
-            workqueue_units=len(self.workqueue),
+            workqueue_items=len(self.workqueue),
             resource_in_use=self._resource_usage_in_use().to_json(),
         )
 
     def _reschedule(self, node: Any) -> bool:
         if getattr(node, "shutting_down", False):
             return False
-        if self._pending_of(self.assigned_work[node]) >= 2:
+        if self._prefetch_saturated(node):
             return False
         if not self.workqueue:
             if self._can_shutdown_nodes():
                 self._shutdown_node(node)
             return False
 
-        key = self._next_fitting_work_unit_key(node)
-        if key is None:
+        nodeid = self._next_fitting_nodeid(node)
+        if nodeid is None:
             return False
-        self._assign_work_unit(node, key)
+        self._assign_item(node, nodeid)
         return True
 
     def _reschedule_all(self) -> None:
@@ -791,7 +848,28 @@ class ScyllaResourceScheduler:
 
         self._record_finish_if_done()
 
-        self.log("Scylla resource scheduler waiting units:", len(self.workqueue), "in-use:", self._resource_usage_in_use())
+        self.log("Scylla resource scheduler waiting items:", len(self.workqueue), "in-use:", self._resource_usage_in_use())
+
+    def _reschedule_after_completion(self, node: Any) -> None:
+        previous_services = self.active_services
+        self._advance_service_phase_if_needed()
+        while self._reschedule(node):
+            pass
+        if self.active_services != previous_services:
+            for other in self.nodes:
+                if other is node:
+                    continue
+                while self._reschedule(other):
+                    pass
+
+        if not self.workqueue and self._can_shutdown_nodes():
+            for candidate in self.nodes:
+                if not getattr(candidate, "shutting_down", False):
+                    self._shutdown_node(candidate)
+
+        self._record_finish_if_done()
+
+        self.log("Scylla resource scheduler waiting items:", len(self.workqueue), "in-use:", self._resource_usage_in_use())
 
     def _advance_service_phase_if_needed(self) -> None:
         if self._has_service_free_remaining():
@@ -822,36 +900,40 @@ class ScyllaResourceScheduler:
 
     def _has_service_free_remaining(self) -> bool:
         return any(
-            work_unit.services == frozenset()
+            item_metadata.services == frozenset()
             for workload in self.assigned_work.values()
-            for work_unit in self._pending_units_of(workload)
-        ) or any(work_unit.services == frozenset() for work_unit in self.workqueue.values())
+            for item_metadata in workload.values()
+        ) or frozenset() in self.workqueue_by_services
 
     def _remaining_service_union(self) -> frozenset[str]:
         services: set[str] = set()
         for workload in self.assigned_work.values():
-            for work_unit in self._pending_units_of(workload):
-                services.update(work_unit.services)
-        for work_unit in self.workqueue.values():
-            services.update(work_unit.services)
+            for item_metadata in workload.values():
+                services.update(item_metadata.services)
+        for queued_services in self.workqueue_by_services:
+            services.update(queued_services)
         return normalize_session_services(services)
 
     def _next_workqueue_services(self) -> frozenset[str] | None:
-        if not self.workqueue:
+        ready_groups = self._ready_service_groups()
+        if not ready_groups:
             return None
-        return next(iter(self.workqueue.values())).services
+        return ready_groups[0]
 
     def _next_assigned_services(self) -> frozenset[str] | None:
         for node in self.nodes:
-            for work_unit in self._pending_units_of(self.assigned_work[node]):
-                if work_unit.services != self.active_services:
-                    return work_unit.services
+            for item_metadata in self.assigned_work[node].values():
+                if item_metadata.services != self.active_services:
+                    return item_metadata.services
         return None
 
     def _first_workqueue_key_for_services(self, services: frozenset[str]) -> str | None:
-        for key, work_unit in self.workqueue.items():
-            if work_unit.services == services:
-                return key
+        services_queue = self.workqueue_by_services.get(services)
+        if not services_queue:
+            return None
+        for bucket in services_queue.values():
+            if bucket:
+                return bucket[0]
         return None
 
     def _can_shutdown_nodes(self) -> bool:
@@ -859,19 +941,19 @@ class ScyllaResourceScheduler:
 
     def _has_pending_outside_active_services(self) -> bool:
         return any(
-            not work_unit.services.issubset(self.active_services or frozenset())
+            not item_metadata.services.issubset(self.active_services or frozenset())
             for workload in self.assigned_work.values()
-            for work_unit in self._pending_units_of(workload)
+            for item_metadata in workload.values()
         )
 
     def _workqueue_has_services(self, services: frozenset[str]) -> bool:
-        return any(work_unit.services == services for work_unit in self.workqueue.values())
+        return services in self.workqueue_by_services
 
     def _assigned_has_services(self, services: frozenset[str]) -> bool:
         return any(
-            work_unit.services == services and self._pending_in_unit(work_unit) > 0
+            item_metadata.services == services
             for workload in self.assigned_work.values()
-            for work_unit in workload.values()
+            for item_metadata in workload.values()
         )
 
     def _ensure_session_services(self, services: frozenset[str]) -> None:
@@ -889,17 +971,43 @@ class ScyllaResourceScheduler:
             raise RuntimeError("Cannot switch session services while an event loop is running")
         loop.run_until_complete(awaitable)
 
-    def _pending_of(self, workload: OrderedDict[str, WorkUnit]) -> int:
-        return sum(self._pending_in_unit(work_unit) for work_unit in workload.values())
+    def _refresh_node_reservation(self, node: Any) -> None:
+        self._set_node_reservation(node, self._resource_reservation_of(self.assigned_work[node]))
 
-    def _pending_units_of(self, workload: OrderedDict[str, WorkUnit]) -> list[WorkUnit]:
-        return [work_unit for work_unit in workload.values() if self._pending_in_unit(work_unit) > 0]
+    def _refresh_node_backlog_seconds(self, node: Any) -> None:
+        self.node_backlog_seconds[node] = sum(self._estimated_duration_seconds(item_metadata) for item_metadata in self.assigned_work[node].values())
 
-    def _pending_in_unit(self, work_unit: WorkUnit) -> int:
-        return list(work_unit.nodeids.values()).count(False)
+    def _set_node_reservation(self, node: Any, reservation: SchedulerResource) -> None:
+        previous = self.node_reservations.get(node, SchedulerResource())
+        if previous == reservation:
+            return
+        self.node_reservations[node] = reservation
+        self.resource_usage_in_use = SchedulerResource(
+            cores=self.resource_usage_in_use.cores - previous.cores + reservation.cores,
+            memory_bytes=self.resource_usage_in_use.memory_bytes - previous.memory_bytes + reservation.memory_bytes,
+        )
 
-    def _pending_nodeids(self, work_unit: WorkUnit) -> list[str]:
-        return [nodeid for nodeid, completed in work_unit.nodeids.items() if not completed]
+    def _drop_node_reservation(self, node: Any) -> None:
+        previous = self.node_reservations.pop(node, SchedulerResource())
+        if previous == SchedulerResource():
+            return
+        self.resource_usage_in_use = SchedulerResource(
+            cores=self.resource_usage_in_use.cores - previous.cores,
+            memory_bytes=self.resource_usage_in_use.memory_bytes - previous.memory_bytes,
+        )
+
+    def _remove_item_from_indexes(self, nodeid: str, item_metadata: ScyllaResourceMetadata) -> None:
+        services_queue = self.workqueue_by_services[item_metadata.services]
+        bucket_key = _resource_bucket_key(item_metadata.resources)
+        bucket = services_queue[bucket_key]
+        bucket.remove(nodeid)
+        if not bucket:
+            del services_queue[bucket_key]
+            if not services_queue:
+                del self.workqueue_by_services[item_metadata.services]
+
+    def _pending_of(self, workload: OrderedDict[str, ScyllaResourceMetadata]) -> int:
+        return len(workload)
 
     def _shutdown_node(self, node: Any) -> None:
         if getattr(node, "shutting_down", False):
