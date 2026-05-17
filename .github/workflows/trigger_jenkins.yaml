@@ -1,25 +1,26 @@
 name: Trigger next gating
 
-permissions:
-  contents: read
-
 on:
   push:
     branches:
       - next**
+
+permissions: {}
 
 jobs:
   trigger-jenkins:
     runs-on: ubuntu-latest
     steps:
       - name: Determine Jenkins Job Name
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.ref_name }}" == "next" ]]; then
+          if [[ "$REF_NAME" == "next" ]]; then
             FOLDER_NAME="scylla-master"
-          elif [[ "${{ github.ref_name }}" == "next-enterprise" ]]; then
+          elif [[ "$REF_NAME" == "next-enterprise" ]]; then
             FOLDER_NAME="scylla-enterprise"
           else
-            VERSION=$(echo "${{ github.ref_name }}" | awk -F'-' '{print $2}')
+            VERSION=$(echo "$REF_NAME" | awk -F'-' '{print $2}')
             if [[ "$VERSION" =~ ^202[0-4]\.[0-9]+$ ]]; then
               FOLDER_NAME="enterprise-$VERSION"
             elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
@@ -34,6 +35,8 @@ jobs:
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
           JENKINS_URL: "https://jenkins.scylladb.com"
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           echo "Triggering Jenkins Job: $JOB_NAME"
           if ! curl -X POST "$JENKINS_URL/job/$JOB_NAME/buildWithParameters" --fail --user "$JENKINS_USER:$JENKINS_API_TOKEN" -i -v; then
@@ -42,11 +45,11 @@ jobs:
             # Send Slack message
             curl -X POST -H 'Content-type: application/json' \
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-              --data '{
-                "channel": "#releng-team",
-                "text": "🚨 @here '$JOB_NAME' failed to be triggered, please check https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }} for more details",
-                "icon_emoji": ":warning:"
-              }' \
+              --data "$(jq -n \
+                --arg channel '#releng-team' \
+                --arg text "🚨 @here '${JOB_NAME}' failed to be triggered, please check https://github.com/${REPO}/actions/runs/${RUN_ID} for more details" \
+                --arg icon ':warning:' \
+                '{channel: $channel, text: $text, icon_emoji: $icon}')" \
               https://slack.com/api/chat.postMessage
 
             exit 1
