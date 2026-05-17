@@ -105,6 +105,7 @@ public:
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
     size_t max_command_size() const override;
+    handle get_handle() override;
 private:
     seastar::condition_variable _events;
 
@@ -327,6 +328,8 @@ private:
     future<> wait_for_next_tick(seastar::abort_source* as);
 
 
+    seastar::named_gate _shutdown_gate;
+
     seastar::named_gate _do_on_leader_gate;
     // Call a function on a current leader until it returns stop_iteration::yes.
     // Handles aborts and leader changes, adds a delay between
@@ -347,7 +350,9 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
         seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) :
                     _rpc(std::move(rpc)), _state_machine(std::move(state_machine)),
                     _persistence(std::move(persistence)), _failure_detector(failure_detector),
-                    _id(uuid), _config(config), _do_on_leader_gate("raft::server_impl::do_on_leader_gate")
+                    _id(uuid), _config(config),
+                    _shutdown_gate("raft::server_impl::shutdown_gate"),
+                    _do_on_leader_gate("raft::server_impl::do_on_leader_gate")
 {
     set_rpc_server(_rpc.get());
     if (_config.snapshot_threshold_log_size > _config.max_log_size) {
@@ -1613,17 +1618,54 @@ future<> server_impl::abort(sstring reason) {
     _is_alive = false;
     _aborted = std::move(reason);
     logger.trace("[{}]: abort() called", _id);
+
+    // Stop FSM and break condition variables to cause io_fiber and
+    // applier_fiber to exit. These internal fibers don't hold shutdown gate
+    // handles, so we can safely wait for them before closing the gate.
     _fsm->stop();
     _events.broken();
     _snapshot_desc_idx_changed.broken();
-
-    // IO and applier fibers may update waiters and start new snapshot
-    // transfers, so abort them first
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
     co_await seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status)).discard_result();
 
-    // Start RPC abort before aborting snapshot applications or destroying entry waiters.
-    // After calling `_rpc->abort()` no new snapshot applications should be started or new waiters created
+    // Now that internal fibers have stopped, break all promises that
+    // handle-holding callers may be waiting on. This allows them to observe
+    // the abort and release their handles so the shutdown gate can close.
+    if (_state_change_promise) {
+        _state_change_promise->set_exception(stopped_error(*_aborted));
+    }
+    if (_leader_promise) {
+        _leader_promise->set_exception(stopped_error(*_aborted));
+    }
+    if (_tick_promise) {
+        _tick_promise->set_exception(stopped_error(*_aborted));
+    }
+    for (auto& ac: _awaited_commits) {
+        ac.second.done.set_exception(stopped_error(*_aborted));
+    }
+    _awaited_commits.clear();
+    for (auto& aa: _awaited_applies) {
+        aa.second.done.set_exception(stopped_error(*_aborted));
+    }
+    _awaited_applies.clear();
+    if (_non_joint_conf_commit_promise) {
+        std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_exception(stopped_error(*_aborted));
+    }
+    for (auto& r: _reads) {
+        r.promise.set_value(raft::not_a_leader{server_id{}});
+    }
+    _reads.clear();
+    for (auto& i : _awaited_indexes) {
+        i.second.promise.set_exception(stopped_error(*_aborted));
+    }
+    _awaited_indexes.clear();
+
+    // Close the shutdown gate. All waiters have been signaled, so
+    // handle holders can observe the abort and release their handles.
+    co_await _shutdown_gate.close();
+
+    // Start RPC abort before aborting snapshot applications.
+    // After calling `_rpc->abort()` no new snapshot applications should be started
     // (see `rpc::abort()` comment and `_aborted` flag).
     auto abort_rpc = _rpc->abort();
     auto abort_sm = _state_machine->abort();
@@ -1635,45 +1677,7 @@ future<> server_impl::abort(sstring reason) {
         f.set_exception(std::runtime_error("Snapshot application aborted"));
     }
 
-    // Destroy entry waiters before waiting for `abort_rpc`,
-    // since the RPC implementation may wait for forwarded `modify_config` calls to finish
-    // (and `modify_config` does not finish until the configuration entry is committed or an error occurs).
-    for (auto& ac: _awaited_commits) {
-        ac.second.done.set_exception(stopped_error(*_aborted));
-    }
-    for (auto& aa: _awaited_applies) {
-        aa.second.done.set_exception(stopped_error(*_aborted));
-    }
-    _awaited_commits.clear();
-    _awaited_applies.clear();
-    if (_non_joint_conf_commit_promise) {
-        std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_exception(stopped_error(*_aborted));
-    }
-
-    // Complete all read attempts with not_a_leader
-    for (auto& r: _reads) {
-        r.promise.set_value(raft::not_a_leader{server_id{}});
-    }
-    _reads.clear();
-
-    // Abort all read_barriers with an exception
-    for (auto& i : _awaited_indexes) {
-        i.second.promise.set_exception(stopped_error(*_aborted));
-    }
-    _awaited_indexes.clear();
-
     co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
-
-    if (_leader_promise) {
-        _leader_promise->set_exception(stopped_error(*_aborted));
-    }
-    if (_tick_promise) {
-        _tick_promise->set_exception(stopped_error(*_aborted));
-    }
-
-    if (_state_change_promise) {
-        _state_change_promise->set_exception(stopped_error(*_aborted));
-    }
 
     abort_snapshot_transfers();
 
@@ -1925,6 +1929,11 @@ future<> server_impl::stepdown(logical_clock::duration timeout) {
 
 size_t server_impl::max_command_size() const {
     return _config.max_command_size;
+}
+
+server::handle server_impl::get_handle() {
+    check_not_aborted();
+    return handle(*this, _shutdown_gate.hold());
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,

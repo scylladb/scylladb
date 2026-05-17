@@ -7,6 +7,7 @@
  */
 #pragma once
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/gate.hh>
 #include "raft.hh"
 
 namespace raft {
@@ -19,6 +20,26 @@ enum class wait_type {
 // A single uniquely identified participant of a Raft group.
 class server {
 public:
+    // RAII handle to a raft server that holds the server's shutdown gate
+    // open, preventing the server from being fully aborted while the handle
+    // exists. This protects against races between async operations on the
+    // server (e.g. read_barrier) and the server being aborted concurrently.
+    class handle {
+        server& _server;
+        seastar::gate::holder _holder;
+    public:
+        handle(server& s, seastar::gate::holder h) noexcept
+                : _server(s), _holder(std::move(h)) {}
+        server& operator*() const { return _server; }
+        server* operator->() const { return &_server; }
+    };
+
+    // Returns a handle that holds the server's shutdown gate open.
+    // The caller must keep the handle alive for the duration of any
+    // async operation on this server.
+    // Throws seastar::gate_closed_exception if the server is being shut down.
+    virtual handle get_handle() = 0;
+
     struct configuration {
         // automatically snapshot state machine after applying
         // this number of entries
