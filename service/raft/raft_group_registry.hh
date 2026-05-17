@@ -84,6 +84,7 @@ class raft_operation_timeout_error : public std::runtime_error {
 class raft_server_with_timeouts {
     raft_server_for_group& _group_server;
     shared_ptr<raft::failure_detector> _fd;
+    raft::server::handle _handle;
 
     template <std::invocable<abort_source*> Op>
     std::invoke_result_t<Op, abort_source*>
@@ -160,6 +161,12 @@ public:
     // there is no such group.
     raft::server& get_server(raft::group_id gid);
 
+    // Returns a handle to the server for the given group id.
+    // The handle holds the server's shutdown gate open, preventing
+    // the server from being aborted while the handle exists.
+    // Throws raft_group_not_found if there is no such group.
+    raft::server::handle get_server_handle(raft::group_id gid);
+
     // Returns a server with timeouts support for group by group id.
     // Throws exception if there is no such group.
     raft_server_with_timeouts get_server_with_timeouts(raft::group_id gid);
@@ -171,9 +178,16 @@ public:
     // Returns the list of all Raft groups on this shard by their IDs.
     std::vector<raft::group_id> all_groups() const;
 
-    // Return an instance of group 0. Valid only on shard 0,
-    // after boot/upgrade is complete
+    // Return a reference to group 0 server. Valid only on shard 0,
+    // after boot/upgrade is complete.
     raft::server& group0();
+
+    // Return a handle to group 0 server. Valid only on shard 0,
+    // after boot/upgrade is complete.
+    // The handle holds the server's shutdown gate open,
+    // preventing the server from being aborted while the handle exists.
+    // Use this variant when the server reference is held across async calls.
+    raft::server::handle get_group0();
     raft::group_id group0_id() const;
 
     // Return an instance of group 0 server with timeouts support. Valid only on shard 0,

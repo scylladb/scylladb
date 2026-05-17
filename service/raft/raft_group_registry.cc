@@ -314,6 +314,10 @@ raft::server& raft_group_registry::get_server(raft::group_id gid) {
     return *ptr;
 }
 
+raft::server::handle raft_group_registry::get_server_handle(raft::group_id gid) {
+    return get_server(gid).get_handle();
+}
+
 raft_server_with_timeouts raft_group_registry::get_server_with_timeouts(raft::group_id gid) {
     auto& group_server = server_for_group(gid);
     if (!group_server.server.get()) {
@@ -344,6 +348,13 @@ raft::server& raft_group_registry::group0() {
         on_internal_error(rslog, "group0(): _group0_id not present");
     }
     return get_server(*_group0_id);
+}
+
+raft::server::handle raft_group_registry::get_group0() {
+    if (!_group0_id) {
+        on_internal_error(rslog, "get_group0(): _group0_id not present");
+    }
+    return get_server_handle(*_group0_id);
 }
 
 raft::group_id raft_group_registry::group0_id() const {
@@ -461,6 +472,7 @@ namespace {
 raft_server_with_timeouts::raft_server_with_timeouts(raft_server_for_group& group_server, shared_ptr<raft::failure_detector> fd)
     : _group_server(group_server)
     , _fd(fd)
+    , _handle(group_server.server->get_handle())
 {
 }
 
