@@ -397,6 +397,11 @@ public:
         return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
     }
 
+    /**
+     * Migrate data from `system_distributed.service_levels` to `system.service_levels_v2`.
+     */
+    static future<> migrate_to_v2(size_t nodes_count, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as);
+
 private:
     /**
      *  Adds a service level configuration if it doesn't exists, and updates
