@@ -20,6 +20,8 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 
 async def assert_row_count_on_host(cql, host, ks, table, row_count):
     stmt = SimpleStatement(f"SELECT * FROM {ks}.{table}", consistency_level = ConsistencyLevel.LOCAL_ONE)

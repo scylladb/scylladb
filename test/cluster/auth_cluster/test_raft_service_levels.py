@@ -201,6 +201,7 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
         safe_driver_shutdown(cluster_conn)
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=2, mem="1G")
 async def test_service_level_cache_after_restart(manager: ManagerClient):
     servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
     cql = manager.get_cql()

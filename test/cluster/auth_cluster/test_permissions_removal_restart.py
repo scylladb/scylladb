@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=2, mem="1G")
 async def test_permissions_removal_and_restart(manager: ManagerClient) -> None:
     """Test that a node boots successfully when role_permissions contains a
     ghost row with role and resource set but the permissions column missing.

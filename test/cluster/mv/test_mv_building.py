@@ -15,6 +15,8 @@ from test.cluster.util import get_topology_coordinator, new_test_keyspace, recon
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.scylla_resources(cpu=4, mem="2G")
+
 # This test makes sure that view building is done mainly in the streaming
 # scheduling group. We check that by grepping all relevant logs in TRACE mode
 # and verifying that they come from the streaming scheduling group.

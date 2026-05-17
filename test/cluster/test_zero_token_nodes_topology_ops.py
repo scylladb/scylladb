@@ -14,6 +14,8 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import check_node_log_for_failed_mutations, start_writes
 
+pytestmark = pytest.mark.scylla_resources(cpu=10, mem="5G")
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('tablets_enabled', [True, False])

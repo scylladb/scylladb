@@ -616,6 +616,7 @@ async def test_tablet_cleanup_failure(manager: ManagerClient):
         assert len(ssts) == 0
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=3, mem="2G")
 async def test_tablet_resharding(manager: ManagerClient):
     cmdline = ['--smp=3']
     config = {'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -2302,6 +2303,7 @@ async def test_split_and_intranode_synchronization(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=2, mem="1G")
 async def test_split_stopped_on_shutdown(manager: ManagerClient):
     logger.info('Bootstrapping cluster')
     cfg = { 'enable_tablets': True,
