@@ -6,6 +6,7 @@
 import os
 import glob
 import json
+import time
 import pytest
 import asyncio
 import logging
@@ -159,6 +160,38 @@ async def verify_tablet_map_boundaries(manager: ManagerClient, server: ServerInf
     assert not extra, f"Unexpected boundaries in tablet map: {sorted(extra)}"
 
     return tablet_replicas
+
+
+async def verify_pow2_layout(manager: ManagerClient, server: ServerInfo,
+                             ks: str, table_name: str):
+    """Verify that the tablet map has an exact uniform pow2 layout."""
+    tablet_replicas = await get_all_tablet_replicas(manager, server, ks, table_name)
+    tablet_count = len(tablet_replicas)
+    assert tablet_count > 0 and tablet_count & (tablet_count - 1) == 0, \
+        f"Tablet count {tablet_count} is not a power of two"
+
+    tablet_tokens = sorted(tr.last_token for tr in tablet_replicas)
+    expected_tokens = compute_pow2_boundaries(tablet_count)
+
+    assert tablet_tokens == expected_tokens
+
+
+async def wait_for_pow2_convergence(manager: ManagerClient, server: ServerInfo,
+                                    ks: str, table_name: str, timeout: float = 120):
+    """Wait until pow2 convergence completes and verify the result.
+
+    Polls target_pow2_tablet_count in system.tablets until it is cleared,
+    indicating that the tablet map has converged to a power-of-two layout.
+    Once cleared, verifies that the resulting tablet map has a pow2 layout.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        target = await get_target_pow2_tablet_count(manager, server, ks, table_name)
+        if target is None or target == 0:
+            await verify_pow2_layout(manager, server, ks, table_name)
+            return
+        await asyncio.sleep(1)
+    assert False, f"Pow2 convergence for {ks}.{table_name} did not complete within {timeout}s"
 
 
 async def verify_migration_status(manager: ManagerClient, server: ServerInfo,
@@ -327,6 +360,9 @@ async def test_migration(manager: ManagerClient):
         logger.info("Verifying migration status after finalization")
         await verify_migration_status(manager, server, ks, expected_status='tablets', expected_node_statuses={})
 
+        logger.info("Waiting for pow2 convergence to complete")
+        await wait_for_pow2_convergence(manager, server, ks, 'test')
+
 
 async def test_migration_rollback(manager: ManagerClient):
     """Verify rollback of vnodes-to-tablets migration on a single-node cluster.
@@ -460,7 +496,7 @@ async def test_migration_multinode(manager: ManagerClient):
     """
     num_nodes = 2
     num_shards = 3
-    tokens_per_node = 64
+    tokens_per_node = 16
     num_keys = 1000
 
     logger.info(f"Starting {num_nodes} nodes with {num_shards} shards each, {tokens_per_node} random tokens per node")
@@ -579,6 +615,9 @@ async def test_migration_multinode(manager: ManagerClient):
         logger.info("Final data integrity check")
         total_keys = num_keys + num_nodes * num_nodes * 10 # original keys + 10 keys per node inserted during rolling restarts
         await verify_data_integrity(cql, ks, "test", total_keys)
+
+        logger.info("Waiting for pow2 convergence to complete")
+        await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
 
 
 async def setup_single_node(manager: ManagerClient):
