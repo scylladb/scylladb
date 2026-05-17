@@ -185,8 +185,8 @@ future<std::tuple<tests::proc::process_fixture, int>> tests::proc::start_docker_
     std::string_view image,
     parse_service_callback stdout_parse,
     parse_service_callback stderr_parse,
-    const std::vector<std::string>& docker_args,
-    const std::vector<std::string>& image_args,
+    std::vector<std::string> docker_args,
+    std::vector<std::string> image_args,
     int service_port)
 {
     std::string container_name;
