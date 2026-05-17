@@ -15,6 +15,9 @@ from cassandra.auth import PlainTextAuthProvider
 from test.pylib.util import wait_for
 
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
+
 async def repeat_until_success(f):
     async def try_execute(f):
         try:

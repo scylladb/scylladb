@@ -110,6 +110,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
         for r in rows:
             assert r.c == r.pk
 
+@pytest.mark.scylla_resources(cpu=1, mem="1G")
 async def test_reshape_with_tablets(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -1614,6 +1615,7 @@ async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
         assert len(list(rows)) == expected_num_of_rows
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=4, mem="2G")
 async def test_orphaned_sstables_on_startup(manager: ManagerClient):
     """
     Reproducer for https://github.com/scylladb/scylladb/issues/18038
@@ -1830,6 +1832,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
 @pytest.mark.asyncio
 @pytest.mark.nightly
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
+@pytest.mark.scylla_resources(cpu=16, mem="8G")
 async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
     """
     Verify that nodes can be successfully replaced with tablets when
@@ -2102,6 +2105,7 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(manager: ManagerClient):
     injection = "repair_writer_impl_create_writer_wait"
     cmdline = [

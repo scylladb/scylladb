@@ -229,6 +229,7 @@ async def test_service_level_cache_after_restart(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
+@pytest.mark.scylla_resources(cpu=2, mem="1G")
 async def test_shares_check(manager: ManagerClient):
     srv = await manager.server_add(config={
         "error_injections_at_startup": [

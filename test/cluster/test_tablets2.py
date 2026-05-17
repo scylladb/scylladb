@@ -80,6 +80,7 @@ async def wait_for_valid_load_stats(cql, table_id, timeout=120):
         await asyncio.sleep(0.2)
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=6, mem="3G")
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ManagerClient):
     """Test that you can create a table and insert and query data"""
 
@@ -488,6 +489,7 @@ async def test_table_dropped_during_streaming(manager: ManagerClient):
         assert replica == (s1_host_id, 0)
 
 @pytest.mark.asyncio
+@pytest.mark.scylla_resources(cpu=4, mem="2G")
 async def test_tablet_cleanup(manager: ManagerClient):
     cmdline = ['--smp=2', '--commitlog-sync=batch']
 
@@ -707,6 +709,7 @@ async def test_tablet_split(manager: ManagerClient, injection_error: str):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=4, mem="2G")
 async def test_correctness_of_tablet_split_finalization_after_restart(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -1011,6 +1014,7 @@ async def test_tablet_count_metric_per_shard(manager: ManagerClient):
         await assert_tablet_count_metric_value_for_shards(manager, dest_server, dest_expected_count_per_shard)
 
 @pytest.mark.parametrize("primary_replica_only", [False, True])
+@pytest.mark.scylla_resources(cpu=2, mem="2G")
 async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_only):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -1811,6 +1815,7 @@ async def test_split_correctness_on_tablet_count_change(manager: ManagerClient):
 # Reproducer for https://github.com/scylladb/scylladb/issues/26041.
 @pytest.mark.parametrize("primary_replica_only", [False, True])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=2, mem="1G")
 async def test_tablet_load_and_stream_and_split_synchronization(manager: ManagerClient, primary_replica_only):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -2130,6 +2135,7 @@ async def test_tablets_barrier_waits_for_replica_erms(manager: ManagerClient):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("repair_before_split", [False, True])
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.scylla_resources(cpu=4, mem="2G")
 async def test_split_and_incremental_repair_synchronization(manager: ManagerClient, repair_before_split: bool):
     logger.info('Bootstrapping cluster')
     cfg = { 'enable_tablets': True,

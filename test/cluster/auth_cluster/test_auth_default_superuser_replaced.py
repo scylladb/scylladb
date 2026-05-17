@@ -14,6 +14,9 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 from cassandra.auth import PlainTextAuthProvider
 
 
+pytestmark = pytest.mark.scylla_resources(cpu=6, mem="3G")
+
+
 """
 Checks whether the default superuser is replaced by a custom one,
 and that the default superuser is not present in the system.

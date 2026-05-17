@@ -15,6 +15,9 @@ from test.cluster import test_cluster_features
 import pytest
 
 
+pytestmark = pytest.mark.scylla_resources(cpu=8, mem="4G")
+
+
 @pytest.mark.asyncio
 async def test_rolling_upgrade_happy_path(manager: ManagerClient) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
