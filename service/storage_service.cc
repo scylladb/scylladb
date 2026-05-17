@@ -4888,8 +4888,7 @@ future<tablet_operation_result> storage_service::do_tablet_operation(locator::gl
                                               std::function<future<tablet_operation_result>(locator::tablet_metadata_guard&)> op) {
     // The coordinator may not execute global token metadata barrier before triggering the operation, so we need
     // a barrier here to see the token metadata which is at least as recent as that of the sender.
-    auto& raft_server = _group0->group0_server();
-    co_await raft_server.read_barrier(&_group0_as);
+    co_await _group0->get_group0_server()->read_barrier(&_group0_as);
 
     if (_tablet_ops.contains(tablet)) {
         rtlogger.debug("{} retry joining with existing session for tablet {}", op_name, tablet);
@@ -5714,7 +5713,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     }
 
     // Refresh is triggered after table creation, need to make sure we see the new tablets.
-    co_await _group0->group0_server().read_barrier(&_group0_as);
+    co_await _group0->get_group0_server()->read_barrier(&_group0_as);
 
     using table_ids_t = std::unordered_set<table_id>;
     const auto table_ids = co_await std::invoke([this] () -> future<table_ids_t> {
@@ -5922,7 +5921,7 @@ future<> storage_service::await_topology_quiesced() {
         co_return;
     }
 
-    co_await _group0->group0_server().read_barrier(&_group0_as);
+    co_await _group0->get_group0_server()->read_barrier(&_group0_as);
     co_await _topology_state_machine.await_not_busy();
 }
 
@@ -5936,7 +5935,7 @@ future<bool> storage_service::verify_topology_quiesced(token_metadata::version_t
         });
     }
 
-    co_await _group0->group0_server().read_barrier(&_group0_as);
+    co_await _group0->get_group0_server()->read_barrier(&_group0_as);
     co_return _topology_state_machine._topology.version == expected_version && !_topology_state_machine._topology.is_busy();
 }
 

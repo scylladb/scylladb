@@ -133,9 +133,9 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
 
         if (req->get_query_param("group_id").empty()) {
             // Stepdown on group 0 by default
-            co_await raft_gr.invoke_on(0, [timeout_dur] (service::raft_group_registry& raft_gr) {
+            co_await raft_gr.invoke_on(0, [timeout_dur] (service::raft_group_registry& raft_gr) -> future<> {
                 apilog.info("Triggering stepdown for group0");
-                return raft_gr.group0().stepdown(timeout_dur);
+                co_await raft_gr.get_group0()->stepdown(timeout_dur);
             });
             co_return json_void{};
         }
@@ -150,7 +150,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
 
             found_srv = true;
             apilog.info("Triggering stepdown for group {}", gid);
-            co_await srv->stepdown(timeout_dur);
+            co_await raft_gr.get_server_handle(gid)->stepdown(timeout_dur);
         });
 
         if (!found_srv) {

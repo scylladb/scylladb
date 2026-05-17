@@ -206,7 +206,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 try {
                     rtlogger.debug("topology coordinator fiber removing {}"
                                   " from raft since they are in `left` state", to_remove);
-                    co_await _group0.group0_server().modify_config({}, to_remove, &_as);
+                    co_await _group0.get_group0_server()->modify_config({}, to_remove, &_as);
                 } catch (const raft::commit_status_unknown&) {
                     rtlogger.warn("topology coordinator fiber got commit_status_unknown status"
                                   " while removing {} from raft", to_remove);
@@ -4645,7 +4645,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
             // The node was removed already. We need to add it back. Lets do it as non voter.
             // If it ever boots again it will make itself a voter.
             release_node(std::move(node));
-            co_await _group0.group0_server().modify_config({raft::config_member{{id, {}}, raft::is_voter::no}}, {}, &_as);
+            co_await _group0.get_group0_server()->modify_config({raft::config_member{{id, {}}, raft::is_voter::no}}, {}, &_as);
             node = retake_node(co_await start_operation(), id);
         }
             [[fallthrough]];
