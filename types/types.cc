@@ -774,6 +774,46 @@ bool abstract_type::is_counter() const {
     return visit(*this, visitor{});
 }
 
+bool abstract_type::is_arithmetic() const {
+    if (_kind == kind::reversed) {
+        return underlying_type()->is_arithmetic();
+    }
+    switch (_kind) {
+    case kind::byte:
+    case kind::short_kind:
+    case kind::int32:
+    case kind::long_kind:
+    case kind::varint:
+    case kind::decimal:
+    case kind::float_kind:
+    case kind::double_kind:
+        return true;
+    case kind::ascii:
+    case kind::boolean:
+    case kind::bytes:
+    case kind::counter:
+    case kind::date:
+    case kind::duration:
+    case kind::empty:
+    case kind::inet:
+    case kind::list:
+    case kind::map:
+    case kind::reversed:
+    case kind::set:
+    case kind::simple_date:
+    case kind::time:
+    case kind::timestamp:
+    case kind::timeuuid:
+    case kind::tuple:
+    case kind::user:
+    case kind::utf8:
+    case kind::uuid:
+    case kind::vector:
+        return false;
+    }
+    __builtin_unreachable();
+}
+
 bool abstract_type::is_collection() const {
     struct visitor {
         bool operator()(const reversed_type_impl& r) { return r.underlying_type()->is_collection(); }
