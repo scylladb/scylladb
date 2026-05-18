@@ -1,0 +1,15 @@
+[package]
+name = "fts_bindings"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cxx = { version = "1.0.83", features = ["c++20"] }
+tantivy = { version = "0.22", features = ["mmap"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+itertools = "0.13"
+
+[dev-dependencies]
+tempfile = "3"

@@ -18,6 +18,7 @@
 #include "index/secondary_index_manager.hh"
 #include "index/secondary_index.hh"
 #include "index/vector_index.hh"
+#include "index/fts_index.hh"
 
 #include "cql3/expr/expression.hh"
 #include "index/target_parser.hh"
@@ -208,6 +209,7 @@ std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_ma
 
     const static std::unordered_map<std::string_view, std::function<std::unique_ptr<custom_index>()>> classes = {
         {"vector_index", vector_index_factory},
+        {"fts_index", db::index::fts_index_factory},
     };
 
     if (auto class_it = classes.find(lower_class_name); class_it != classes.end()) {

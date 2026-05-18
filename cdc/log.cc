@@ -22,6 +22,7 @@
 #include "cdc/cdc_partitioner.hh"
 #include "bytes.hh"
 #include "index/vector_index.hh"
+#include "index/fts_index.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
@@ -503,7 +504,9 @@ static const sstring cdc_deleted_column_prefix = cdc_meta_column_prefix + "delet
 static const sstring cdc_deleted_elements_column_prefix = cdc_meta_column_prefix + "deleted_elements_";
 
 bool cdc_enabled(const schema& s) {
-    return s.cdc_options().enabled() || secondary_index::vector_index::has_vector_index(s);
+    return s.cdc_options().enabled()
+        || secondary_index::vector_index::has_vector_index(s)
+        || db::index::fts_index::has_fts_index(s);
 }
 
 bool is_log_name(const std::string_view& table_name) {

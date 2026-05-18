@@ -295,6 +295,7 @@ add_subdirectory(ent)
 add_subdirectory(gms)
 add_subdirectory(idl)
 add_subdirectory(index)
+add_subdirectory(fts)
 add_subdirectory(lang)
 add_subdirectory(locator)
 add_subdirectory(message)
@@ -337,6 +338,7 @@ set(scylla_libs
     gms
     idl
     index
+    fts
     lang
     ldap
     locator

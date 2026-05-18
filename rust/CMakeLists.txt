@@ -95,6 +95,27 @@ if (Scylla_USE_PRECOMPILED_HEADER_USE)
   target_precompile_headers(wasmtime_bindings REUSE_FROM scylla-precompiled-header)
 endif()
 
+generate_cxxbridge(fts_bindings
+  INPUT fts_bindings/src/lib.rs
+  INCLUDE rust/cxx.h
+  OUTPUT_DIR "${binding_gen_build_dir}"
+  SOURCES fts_bindings_sources)
+
+add_library(fts_bindings STATIC)
+target_sources(fts_bindings
+  PRIVATE
+    ${cxx_header}
+    ${fts_bindings_sources})
+target_include_directories(fts_bindings
+  PUBLIC
+    ${scylla_gen_build_dir})
+target_link_libraries(fts_bindings
+  INTERFACE Rust::rust_combined)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_link_libraries(fts_bindings PRIVATE Seastar::seastar)
+  target_precompile_headers(fts_bindings REUSE_FROM scylla-precompiled-header)
+endif()
+
 # only for testing
 generate_cxxbridge(inc
   INPUT inc/src/lib.rs

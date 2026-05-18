@@ -65,6 +65,7 @@
 #include "repair/repair.hh"
 #include "repair/row_level.hh"
 #include "vector_search/vector_store_client.hh"
+#include "fts/fts_cdc_consumer.hh"
 #include <cstdio>
 #include <seastar/core/file.hh>
 #include <unistd.h>
@@ -737,6 +738,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<sstables_loader> sst_loader;
     sharded<streaming::stream_manager> stream_manager;
     sharded<service::mapreduce_service> mapreduce_service;
+    sharded<db::fts::fts_cdc_consumer> fts_cdc_service;
     sharded<gms::gossiper> gossiper;
     sharded<locator::snitch_ptr> snitch;
     sharded<vector_search::vector_store_client> vector_store_client;
@@ -779,7 +781,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &auth_cache, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker, &vector_store_client] {
+                &repair, &sst_loader, &auth_cache, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker, &vector_store_client, &fts_cdc_service] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -1363,6 +1365,52 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
             qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), std::ref(vector_store_client), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(langman)).get();
+
+            checkpoint(stop_signal, "starting FTS CDC consumer");
+            fts_cdc_service.start(std::ref(qp), std::ref(db)).get();
+            auto stop_fts_cdc_service = defer_verbose_shutdown("FTS CDC consumer", [&fts_cdc_service] {
+                fts_cdc_service.stop().get();
+            });
+            fts_cdc_service.invoke_on_all(&db::fts::fts_cdc_consumer::start).get();
+            qp.invoke_on_all([&fts_cdc_service](cql3::query_processor& local_qp) {
+                local_qp.set_fts_cdc_consumer(fts_cdc_service.local());
+            }).get();
+
+            // Wire the FTS CDC consumer into the migration listener chain so
+            // that DROP TABLE / DROP INDEX events deterministically close
+            // file handles and remove on-disk index data without waiting for
+            // the 5-second poll tick to discover the change.
+            //
+            // The migration listener callbacks are synchronous, but our
+            // cleanup is futures-based; we bridge by fire-and-forget
+            // dispatch onto every shard.  Errors are logged but otherwise
+            // ignored so that an FTS cleanup failure cannot block schema
+            // propagation for the rest of the cluster.
+            class fts_schema_listener : public service::migration_listener::empty_listener {
+                seastar::sharded<db::fts::fts_cdc_consumer>& _fts;
+            public:
+                explicit fts_schema_listener(seastar::sharded<db::fts::fts_cdc_consumer>& fts)
+                    : _fts(fts) {}
+
+                void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
+                    // Run cleanup on every shard.  Capture by value so the
+                    // strings outlive the listener call (which returns to
+                    // the migration coordinator synchronously).
+                    (void)_fts.invoke_on_all(
+                            [ks_name, cf_name](db::fts::fts_cdc_consumer& c) {
+                        return c.on_drop_column_family(ks_name, cf_name);
+                    }).handle_exception([ks_name, cf_name](std::exception_ptr ep) {
+                        startlog.warn("FTS DROP TABLE cleanup for {}.{} failed: {}",
+                                ks_name, cf_name, ep);
+                    });
+                }
+            };
+            auto the_fts_schema_listener = std::make_unique<fts_schema_listener>(fts_cdc_service);
+            mm_notifier.local().register_listener(the_fts_schema_listener.get());
+            auto stop_fts_listener = defer_verbose_shutdown("FTS schema listener",
+                    [&mm_notifier, listener = std::move(the_fts_schema_listener)]() mutable {
+                mm_notifier.local().unregister_listener(listener.get()).get();
+            });
 
             checkpoint(stop_signal, "starting lifecycle notifier");
             lifecycle_notifier.start().get();
