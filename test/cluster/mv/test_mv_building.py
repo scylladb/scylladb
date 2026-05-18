@@ -328,6 +328,9 @@ async def test_do_not_finish_view_builder_with_nodes_down(manager: ManagerClient
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r2"},
         {"dc": "dc1", "rack": "r3"},
+    ], cmdline=[
+        '--logger-log-level', 'storage_proxy=debug',
+        '--logger-log-level', 'cql_server=debug',
     ])
     cql, _ = await manager.get_ready_cql(servers)
 
@@ -376,6 +379,8 @@ async def test_do_not_finish_view_builder_with_nodes_down(manager: ManagerClient
         logger.info("Restarting nodes 2 and 3")
         await manager.server_start(servers[1].server_id)
         await manager.server_start(servers[2].server_id)
+        await manager.servers_see_each_other(servers)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         logger.info("Waiting for the view builder to complete")
         await wait_for_view(cql, 'mv_cf_view', node_count)
