@@ -2137,3 +2137,41 @@ def test_tombstone_gc_property_unnamed_index(cql, test_keyspace, scylla_only):
 
         desc_row = cql.execute(f"DESCRIBE MATERIALIZED VIEW {table}_v_idx_index").one()
         assert "tombstone_gc = {" in desc_row.create_statement
+
+# Verify that if a write includes a static row update on a table with a secondary
+# index on a regular (non-static) collection column, it doesn't fail.
+#
+# Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-2030
+def test_static_row_update_with_regular_set_index(cql, test_keyspace):
+    schema = 'pk int, ck int, s int STATIC, x set<text>, PRIMARY KEY(pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(x)")
+
+        # Test updating both static and non-static columns in the same write
+        cql.execute(f"INSERT INTO {table} (pk, ck, s, x) VALUES (1, 2, 3, {{'test'}})")
+        assert [(1, 2, 3, {'test'})] == list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1 AND ck = 2"))
+        assert [(1, 2, 3, {'test'})] == list(cql.execute(f"SELECT * FROM {table} WHERE x CONTAINS 'test'"))
+
+        # Test updating just the static column
+        cql.execute(f"UPDATE {table} SET s = 4 WHERE pk = 1")
+        assert [(1, 2, 4, {'test'})] == list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1 AND ck = 2"))
+        assert [(1, 2, 4, {'test'})] == list(cql.execute(f"SELECT * FROM {table} WHERE x CONTAINS 'test'"))
+
+# Verify that if a write includes a regular row update on a table with a secondary
+# index on a static collection column, it doesn't fail.
+#
+# Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-2030
+def test_regular_row_update_with_static_set_index(cql, test_keyspace):
+    schema = 'pk int, ck int, s set<text> STATIC, x int, PRIMARY KEY(pk, ck)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(s)")
+
+        # Test updating both static and non-static columns in the same write
+        cql.execute(f"INSERT INTO {table} (pk, ck, s, x) VALUES (1, 2, {{'test'}}, 3)")
+        assert [(1, 2, {'test'}, 3)] == list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1"))
+        assert [(1, 2, {'test'}, 3)] == list(cql.execute(f"SELECT * FROM {table} WHERE s CONTAINS 'test'"))
+
+        # Test updating just the regular column
+        cql.execute(f"UPDATE {table} SET x = 4 WHERE pk = 1 AND ck = 2")
+        assert [(1, 2, {'test'}, 4)] == list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1 AND ck = 2"))
+        assert [(1, 2, {'test'}, 4)] == list(cql.execute(f"SELECT * FROM {table} WHERE s CONTAINS 'test'"))
