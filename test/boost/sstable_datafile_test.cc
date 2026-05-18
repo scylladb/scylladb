@@ -3422,3 +3422,32 @@ SEASTAR_TEST_CASE(test_non_full_and_empty_row_keys) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_stats_metadata_error_includes_filename) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            auto s = schema_builder("ks", "cf")
+                    .with_column("pk", utf8_type, column_kind::partition_key)
+                    .with_column("v", int32_type)
+                    .build();
+            auto sst_gen = env.make_sst_factory(s, version);
+            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v"),
+                                 make_atomic_cell(int32_type, int32_type->decompose(1)));
+            auto sst = make_sstable_containing(sst_gen, {std::move(m)}).get();
+
+            // Verify get_stats_metadata() works normally
+            BOOST_REQUIRE_NO_THROW(sst->get_stats_metadata());
+
+            // Erase Stats from the loaded statistics to simulate corruption
+            sstables::test(sst)._statistics().contents.erase(metadata_type::Stats);
+
+            // Now get_stats_metadata() should throw with the filename in the message
+            auto filename = fmt::to_string(sst->get_filename());
+            BOOST_REQUIRE_EXCEPTION(sst->get_stats_metadata(), std::runtime_error,
+                exception_predicate::message_contains(filename));
+        }
+    });
+}
