@@ -5746,58 +5746,36 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
         });
     }
 
-    // Holding tm around transit_tablet() can lead to deadlock, if state machine is busy
-    // with something which executes a barrier. The barrier will wait for tm to die, and
-    // transit_tablet() will wait for the barrier to finish.
-    // Due to that, we first collect tablet boundaries, then prepare and submit transition
-    // mutations. Since this code is called with equal min:max tokens set for the table,
-    // the tablet map cannot split and merge and, thus, the static vector of tokens should
-    // map to correct tablet boundaries throughout the whole operation
-    utils::chunked_vector<std::pair<locator::tablet_id, dht::token>> tablets;
-    {
-        const auto tm = get_token_metadata_ptr();
-        const auto& tmap = tm->tablets().get_tablet_map(table);
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            auto last_token = tmap.get_last_token(tid);
-            tablets.push_back(std::make_pair(tid, last_token));
-            return make_ready_future<>();
-        });
+    utils::UUID request_id;
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+        request_id = guard.new_group0_state_id();
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        topology_request_tracking_mutation_builder trbuilder(request_id, _feature_service.topology_requests_type_column);
+
+        trbuilder.set_restore_tablets_data(table, snap_name)
+                 .set("done", false)
+                 .set("start_time", db_clock::now());
+
+        builder.queue_global_topology_request_id(request_id);
+        trbuilder.set("request_type", global_topology_request::restore_tablets);
+
+        topology_change change{{builder.build(), trbuilder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, "Restore tablets");
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            break;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("restore_tablets: concurrent modification, retrying");
+        }
     }
 
-    auto wait_one_transition = [this] (locator::global_tablet_id gid) {
-        return _topology_state_machine.event.wait([this, gid] {
-            auto& tmap = get_token_metadata().tablets().get_tablet_map(gid.table);
-            return !tmap.get_tablet_transition_info(gid.tablet);
-        });
-    };
+    auto error = co_await wait_for_topology_request_completion(request_id);
+    if (!error.empty()) {
+        throw std::runtime_error(error);
+    }
 
-    std::vector<future<>> wait;
-    co_await coroutine::parallel_for_each(tablets, [&] (const auto& tablet) -> future<> {
-        auto [ tid, last_token ] = tablet;
-        auto gid = locator::global_tablet_id{table, tid};
-        while (true) {
-            auto success = co_await try_transit_tablet(table, last_token, [&] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
-                utils::chunked_vector<canonical_mutation> updates;
-                updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
-                    .set_stage(last_token, locator::tablet_transition_stage::restore)
-                    .set_new_replicas(last_token, tmap.get_tablet_info(tid).replicas)
-                    .set_snapshot_name(last_token, snap_name)
-                    .set_transition(last_token, locator::tablet_transition_kind::restore)
-                    .build());
-
-                sstring reason = format("Restoring tablet {}", gid);
-                return std::make_tuple(std::move(updates), std::move(reason));
-            });
-            if (success) {
-                wait.emplace_back(wait_one_transition(gid));
-                break;
-            }
-            slogger.debug("Tablet is in transition, waiting");
-            co_await wait_one_transition(gid);
-        }
-    });
-
-    co_await when_all_succeed(wait.begin(), wait.end()).discard_result();
     slogger.info("Restoring {} finished", table);
 }
 

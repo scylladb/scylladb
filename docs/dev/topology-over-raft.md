@@ -177,6 +177,7 @@ are the currently supported global topology operations:
    coordinator executes the truncate request, it issues truncate RPCs to nodes which
    contain replicas of the table being truncated. It uses [sessions](#Topology guards)
    to make sure that no stale RPCs are executed outside of the scope of the request.
+- `restore_tablets` See [Tablet restore transition](#tablet-restore-transition) below.
 
 ## Tablet draining
 
@@ -997,11 +998,24 @@ from object storage. The transition contains a `snapshot_name` string identifyin
 The object storage coordinates (endpoint, bucket) are looked up from the
 `system_distributed.snapshot_remote_locations` table using the snapshot name and datacenter.
 
-Like `repair`, the `restore` transition does not change token ownership — replicas remain intact.
-The topology coordinator processes a tablet in this stage by calling the `RESTORE_TABLET` RPC on
-all tablet replicas. Each replica then downloads and attaches the SSTables that are contained in
-the tablet's token range. If the operation succeeds or fails, the transition is cleared and the
-failure to download SSTables is propagated back to user by the API handler itself.
+Restore is implemented as a `restore_tablets` global topology request. When the topology
+coordinator picks up this request, it populates per-tablet restore transitions for all tablets
+of the target table, sets the topology state machine into the `tablet_migration` track, and
+registers the request in `ongoing_restore_requests` (similar to `ongoing_rf_changes`).
+The existing tablet migration handler then processes the restore transitions by calling the
+`RESTORE_TABLET` RPC on all tablet replicas. Each replica downloads and attaches the SSTables
+that are contained in the tablet's token range. If the operation succeeds or fails, the
+transition is cleared.
 
+After the load balancer detects that no restore transitions remain for the table, it reports
+restore completion. The topology coordinator then removes the request from
+`ongoing_restore_requests` and marks it done. If any transition failed, the error is recorded
+in the request's `error` column and propagated to the caller.
+
+The caller (storage service) waits for the topology request to complete, which encompasses
+both transition population and all transitions being processed. Failure to download SSTables
+is propagated back to user by the API handler.
+
+Like `repair`, the `restore` transition does not change token ownership — replicas remain intact.
 Restore transitions are serialized per-tablet like any other transition (invariant [INV-TABL-2]),
 so they do not run concurrently with migrations or repairs on the same tablet.

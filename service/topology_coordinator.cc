@@ -1462,6 +1462,58 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         }
         break;
+        case global_topology_request::restore_tablets: {
+            rtlogger.info("restore_tablets requested");
+
+            auto tid = *req_entry.restore_table_id;
+            auto snap_name = *req_entry.restore_snapshot_name;
+
+            utils::chunked_vector<canonical_mutation> updates;
+            sstring error;
+
+            try {
+                auto tmptr = get_token_metadata_ptr();
+                const auto& tmap = tmptr->tablets().get_tablet_map(tid);
+
+                replica::tablet_mutation_builder tablet_builder(guard.write_timestamp(), tid);
+                co_await tmap.for_each_tablet([&] (locator::tablet_id tablet, const locator::tablet_info& info) {
+                    auto last_token = tmap.get_last_token(tablet);
+                    tablet_builder
+                        .set_stage(last_token, locator::tablet_transition_stage::restore)
+                        .set_new_replicas(last_token, info.replicas)
+                        .set_snapshot_name(last_token, snap_name)
+                        .set_transition(last_token, locator::tablet_transition_kind::restore);
+                    return make_ready_future<>();
+                });
+                updates.emplace_back(tablet_builder.build());
+
+                updates.emplace_back(
+                    topology_mutation_builder(guard.write_timestamp())
+                        .set_transition_state(topology::transition_state::tablet_migration)
+                        .del_global_topology_request()
+                        .del_global_topology_request_id()
+                        .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                        .start_restore_request(req_id)
+                        .set_version(_topo_sm._topology.version + 1)
+                        .build());
+            } catch (const std::exception& e) {
+                error = e.what();
+                rtlogger.error("Couldn't set up restore transitions for table {}: {}", tid, std::current_exception());
+                updates.clear();
+
+                topology_mutation_builder builder(guard.write_timestamp());
+                builder.del_global_topology_request()
+                       .del_global_topology_request_id()
+                       .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
+                updates.emplace_back(builder.build());
+                updates.emplace_back(topology_request_tracking_mutation_builder(req_id)
+                                          .done(error)
+                                          .build());
+            }
+
+            co_await update_topology_state(std::move(guard), std::move(updates), "restore_tablets: set up tablet transitions");
+        }
+        break;
         }
     }
 
@@ -1855,6 +1907,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await coroutine::maybe_yield();
             generate_resize_update(out, guard, table_id, resize_decision);
         }
+
+        for (const auto& completion : plan.restore_completions()) {
+            rtlogger.info("All restore transitions for table {} completed, finishing request {}", completion.table, completion.request_id);
+            out.emplace_back(
+                topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_request(_topo_sm._topology.ongoing_restore_requests, completion.request_id)
+                    .build());
+            out.emplace_back(
+                topology_request_tracking_mutation_builder(completion.request_id)
+                    .done(completion.error.empty() ? std::nullopt : std::optional<sstring>(completion.error))
+                    .build());
+        }
     }
 
     void log_active_transitions(size_t max_count) {
@@ -1913,6 +1977,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         });
 
         _tablets_ready = false;
+
+        // Build table_id -> request_id mapping for ongoing restore requests
+        // so that we can find the owning request when a restore transition fails.
+        std::unordered_map<table_id, utils::UUID> restore_request_for_table;
+        for (const auto& req_id : _topo_sm._topology.ongoing_restore_requests) {
+            auto req_entry = co_await _sys_ks.get_topology_request_entry(req_id);
+            if (req_entry.restore_table_id) {
+                restore_request_for_table[*req_entry.restore_table_id] = req_id;
+            }
+        }
+
         // We operate here on groups of co-located tablets.
         // The tablets of several tables may be co-located and share the same tablet map, and in
         // particular their transitions are shared. Therefore, each transition must be handled for
@@ -2373,8 +2448,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         on_internal_error(rtlogger, format("Cannot handle restore transition without snapshot name for tablet {}", gid));
                     }
                     if (action_failed(tablet_state.restore)) {
+                        auto ep = tablet_state.restore->get_exception();
                         rtlogger.debug("Clearing restore transition for {} due to error", gid);
                         updates.emplace_back(get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).build());
+                        // Record error on the ongoing restore request so it's propagated to the caller.
+                        if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end()) {
+                            updates.emplace_back(
+                                topology_request_tracking_mutation_builder(it->second)
+                                    .set("error", format("Restore failed for tablet {}: {}", gid, ep))
+                                    .build());
+                        }
                         break;
                     }
                     if (advance_in_background(gid, tablet_state.restore, "restore", [this, gid, &tmap] () -> future<> {

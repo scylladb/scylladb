@@ -851,7 +851,7 @@ async def test_restore_tablets_download_failure(build_mode: str, manager: Manage
         tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
         status = await manager.api.wait_task(servers[0].ip_addr, tid)
         assert 'state' in status and status['state'] == 'failed'
-        assert 'error' in status and 'Failed to download' in status['error']
+        assert 'error' in status and 'Failing sstable download' in status['error']
 
 
 @pytest.mark.parametrize("target", ['coordinator', 'replica', 'api'])

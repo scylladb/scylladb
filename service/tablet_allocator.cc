@@ -508,6 +508,9 @@ struct fmt::formatter<service::plan_summary> : fmt::formatter<std::string_view> 
         if (plan.rack_list_colocation_plan().size()) {
             fmt::format_to(ctx.out(), "{}rack-list colocation ready: {}", get_delim(), plan.rack_list_colocation_plan().request_to_resume());
         }
+        if (!plan.restore_completions().empty()) {
+            fmt::format_to(ctx.out(), "{}restore completed for: {}", get_delim(), plan.restore_completions() | std::views::transform(&service::restore_completion_info::table));
+        }
         if (delim.empty()) {
             fmt::format_to(ctx.out(), "empty");
         }
@@ -1093,6 +1096,46 @@ public:
         return _topology != nullptr && _sys_ks != nullptr && !_topology->ongoing_rf_changes.empty();
     }
 
+    bool ongoing_restore() const {
+        return _topology != nullptr && _sys_ks != nullptr && !_topology->ongoing_restore_requests.empty();
+    }
+
+    // Check if any ongoing restore requests have completed (all their transitions cleared).
+    future<> check_restore_completions(migration_plan& plan) {
+        if (!ongoing_restore()) {
+            co_return;
+        }
+        for (const auto& request_id : _topology->ongoing_restore_requests) {
+            auto req_entry = co_await _sys_ks->get_topology_request_entry(request_id);
+            auto restore_tid = *req_entry.restore_table_id;
+
+            if (!_tm->tablets().has_tablet_map(restore_tid)) {
+                plan.add_restore_completion(restore_completion_info{
+                    .request_id = request_id,
+                    .table = restore_tid,
+                    .error = format("Table {} was dropped during restore", restore_tid),
+                });
+                continue;
+            }
+            const auto& tmap = _tm->tablets().get_tablet_map(restore_tid);
+            bool has_restore_transitions = false;
+            for (auto tablet : tmap.tablet_ids()) {
+                auto* trinfo = tmap.get_tablet_transition_info(tablet);
+                if (trinfo && trinfo->transition == locator::tablet_transition_kind::restore) {
+                    has_restore_transitions = true;
+                    break;
+                }
+            }
+            if (!has_restore_transitions) {
+                plan.add_restore_completion(restore_completion_info{
+                    .request_id = request_id,
+                    .table = restore_tid,
+                    .error = req_entry.error,
+                });
+            }
+        }
+    }
+
     future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
@@ -1129,6 +1172,8 @@ public:
         if (plan.resize_plan().finalize_resize.empty()) {
             plan.set_repair_plan(co_await make_repair_plan(plan));
         }
+
+        co_await check_restore_completions(plan);
 
         auto level = plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
         lblogger.log(level, "Prepared plan: {}", plan_summary(plan));
