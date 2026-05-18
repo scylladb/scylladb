@@ -203,14 +203,14 @@ class view_update_builder {
     const replica::table& _base;
     schema_ptr _schema; // The base schema
     std::vector<view_updates> _view_updates;
-    mutation_reader _updates;
-    mutation_reader_opt _existings;
+    mutation_reader _update_reader;
+    mutation_reader_opt _existing_reader;
     tombstone _update_partition_tombstone;
     tombstone _update_current_tombstone;
     tombstone _existing_partition_tombstone;
     tombstone _existing_current_tombstone;
-    mutation_fragment_v2_opt _update;
-    mutation_fragment_v2_opt _existing;
+    mutation_fragment_v2_opt _update_fragment;
+    mutation_fragment_v2_opt _existing_fragment;
     gc_clock::time_point _now;
     partition_key _key = partition_key::make_empty();
     bool _skip_row_updates = false;
@@ -225,12 +225,15 @@ public:
             , _base(base)
             , _schema(std::move(s))
             , _view_updates(std::move(views_to_update))
-            , _updates(std::move(updates))
-            , _existings(std::move(existings))
+            , _update_reader(std::move(updates))
+            , _existing_reader(std::move(existings))
             , _now(now) {
     }
     view_update_builder(view_update_builder&& other) noexcept = default;
 
+    // One builder instance processes at most one base partition, but it may
+    // need multiple build_some() calls to emit all of that partition's view
+    // updates.
 
     // build_some() works on batches of 100 (max_rows_for_view_updates)
     // updated rows, but can_skip_view_updates() can decide that some of
@@ -246,15 +249,22 @@ public:
 private:
     void generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
     void generate_update(static_row&& update, const tombstone& update_tomb, std::optional<static_row>&& existing, const tombstone& existing_tomb);
-    future<stop_iteration> on_results();
 
-    future<stop_iteration> advance_all();
-    future<stop_iteration> advance_updates();
-    future<stop_iteration> advance_existings();
+    // generate updates from the read fragments and read new fragments for the next iteration
+    future<stop_iteration> generate_updates();
+
+    future<stop_iteration> read_both_next_fragments();
+    future<stop_iteration> read_next_update_fragment();
+    future<stop_iteration> read_next_existing_fragment();
+
+    void consume_both_fragments();
+    void consume_update_fragment();
+    void consume_existing_fragment();
 
     future<stop_iteration> stop() const;
 };
 
+// The readers provided for the view_update_builder should span the same single partition.
 view_update_builder make_view_update_builder(
         data_dictionary::database db,
         const replica::table& base_table,

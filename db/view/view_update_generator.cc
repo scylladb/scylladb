@@ -375,7 +375,7 @@ static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_sc
  *
  * @param views the affected views which need to be updated.
  * @param base_token The token to use to match the base replica with the paired replicas.
- * @param reader the base table updates being applied, which all correspond to the base token.
+ * @param reader the base table updates being applied, which all correspond to one partition corresponding to the base token.
  * @return a future that resolves when the updates have been acknowledged by the view replicas
  */
 future<> view_update_generator::populate_views(const replica::table& table,
