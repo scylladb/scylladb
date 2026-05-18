@@ -11,7 +11,6 @@ import threading
 import time
 import asyncio
 import logging
-import pathlib
 import os
 import universalasync
 from collections.abc import Awaitable, Callable, Coroutine
