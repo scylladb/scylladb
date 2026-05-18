@@ -325,6 +325,19 @@ public:
     future<> set_node_intended_storage_mode(intended_storage_mode mode);
     future<> finalize_tablets_migration(const sstring& ks_name);
 
+    struct table_pow2_convergence_info {
+        sstring table_name;
+        bool converging;
+        size_t current_tablet_count;
+        size_t target_pow2_tablet_count; // 0 means not set
+    };
+    struct tablets_pow2_convergence_status {
+        size_t tables_converging;
+        size_t tables_total;
+        std::vector<table_pow2_convergence_info> tables;
+    };
+    tablets_pow2_convergence_status get_tablets_pow2_convergence_status(const sstring& ks_name) const;
+
     void start_tablet_split_monitor();
 private:
     using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;

@@ -4407,6 +4407,48 @@ future<storage_service::keyspace_migration_status> storage_service::get_tablets_
     co_return result;
 }
 
+storage_service::tablets_pow2_convergence_status
+storage_service::get_tablets_pow2_convergence_status(const sstring& ks_name) const {
+    auto& db = _db.local();
+    auto& ks = db.find_keyspace(ks_name);
+
+    if (!ks.uses_tablets()) {
+        throw std::runtime_error(fmt::format("Keyspace '{}' does not use tablets", ks_name));
+    }
+
+    if (!_feature_service.tablet_pow2_convergence) {
+        throw std::runtime_error("TABLET_POW2_CONVERGENCE cluster feature is not enabled");
+    }
+
+    const auto& tm = get_token_metadata();
+    const auto& tablet_metadata = tm.tablets();
+
+    tablets_pow2_convergence_status status;
+    status.tables_converging = 0;
+    status.tables_total = 0;
+
+    for (const auto& schema : ks.metadata()->tables()) {
+        if (!tablet_metadata.has_tablet_map(schema->id())) {
+            continue;
+        }
+        auto& tmap = tablet_metadata.get_tablet_map(schema->id());
+        bool converging = tmap.is_converging_to_pow2();
+
+        status.tables.push_back(table_pow2_convergence_info{
+            .table_name = schema->cf_name(),
+            .converging = converging,
+            .current_tablet_count = tmap.tablet_count(),
+            .target_pow2_tablet_count = tmap.target_pow2_tablet_count(),
+        });
+        status.tables_total++;
+        if (converging) {
+            status.tables_converging++;
+        }
+    }
+
+    return status;
+}
+
 future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
