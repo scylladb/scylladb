@@ -64,7 +64,6 @@ def make_server_config(auth_type: str) -> dict:
     raise ValueError(f"Unknown auth_type: {auth_type!r}")
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("auth_type", [
     "allow_all",
     "password",

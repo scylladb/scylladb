@@ -16,7 +16,6 @@ from test.pylib.random_tables import Column, TextType
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_reboot(request, manager: ManagerClient):
     # Check that commitlog provides durability in case of a node reboot.

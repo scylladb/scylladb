@@ -15,7 +15,6 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import check_node_log_for_failed_mutations, start_writes
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize('tablets_enabled', [True, False])
 async def test_zero_token_nodes_topology_ops(manager: ManagerClient, tablets_enabled: bool):
     """

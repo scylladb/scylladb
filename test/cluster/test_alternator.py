@@ -250,7 +250,6 @@ async def test_alternator_ttl_multinode_expiration(manager: ManagerClient, with_
         time.sleep(0.1)
     assert items == 0
 
-@pytest.mark.asyncio
 async def test_localnodes_broadcast_rpc_address(manager: ManagerClient):
     """Test that if the "broadcast_rpc_address" of a node is set, the
        "/localnodes" request returns not the node's internal IP address,
@@ -289,7 +288,6 @@ async def test_localnodes_broadcast_rpc_address(manager: ManagerClient):
                 break # done
             await asyncio.sleep(0.1)
 
-@pytest.mark.asyncio
 async def test_localnodes_drained_node(manager: ManagerClient):
     """Test that if in a cluster one node is brought down with "nodetool drain"
        a "/localnodes" request should NOT return that node. This test does
@@ -331,7 +329,6 @@ async def test_localnodes_drained_node(manager: ManagerClient):
     assert await wait_for(check_localnodes_one, time.time() + 60)
 
 
-@pytest.mark.asyncio
 async def test_localnodes_down_normal_node(manager: ManagerClient):
     """Test that if in a cluster one node reaches "normal" state and then
        brought down (so is now in "DN" state), a "/localnodes" request
@@ -374,7 +371,6 @@ async def test_localnodes_down_normal_node(manager: ManagerClient):
     assert await wait_for(check_localnodes_one, time.time() + 60)
 
 
-@pytest.mark.asyncio
 @pytest.mark.nightly
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_localnodes_joining_nodes(manager: ManagerClient):
@@ -430,7 +426,6 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
     except Exception as e:
         assert 'Failed to add server' in str(e)
 
-@pytest.mark.asyncio
 async def test_localnodes_multi_dc_multi_rack(manager: ManagerClient):
     """A test for /localnodes on a more general setup, with multiple DCs and
        multiple racks - an 8-node setup with two DCs, two racks in each, and
@@ -516,7 +511,6 @@ async def test_localnodes_multi_dc_multi_rack(manager: ManagerClient):
 # same one-node cluster with authentication and authorization enabled.
 # Here in this file we have the opportunity to create clusters with different
 # configurations, so we can check how these configuration settings affect RBAC.
-@pytest.mark.asyncio
 async def test_alternator_enforce_authorization_false(manager: ManagerClient):
     """A basic test for how Alternator authentication and authorization
        work when alternator_enfore_authorization is *false* (and CQL's
@@ -586,7 +580,6 @@ def get_secret_key(cql, user):
 
 #flaky, see https://github.com/scylladb/scylladb/issues/20135")
 @pytest.mark.unstable
-@pytest.mark.asyncio
 async def test_alternator_enforce_authorization_true(manager: ManagerClient):
     """A basic test for how Alternator authentication and authorization
        work when authentication and authorization is enabled in CQL, and
@@ -636,7 +629,6 @@ async def test_alternator_enforce_authorization_true(manager: ManagerClient):
     # We could further test how GRANT works, but this would be unnecessary
     # repeating of the tests in test/alternator/test_cql_rbac.py.
 
-@pytest.mark.asyncio
 async def test_index_in_rf_rack_valid_keyspace_does_not_require_rf_rack_flag(manager: ManagerClient):
     """
     Verify that creating a table with GSI or LSI and adding GSI to an existing table works
@@ -735,7 +727,6 @@ async def test_index_in_rf_rack_valid_keyspace_does_not_require_rf_rack_flag(man
         ]
     )
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_index_requires_rf_rack_valid_keyspace(manager: ManagerClient):
     """
@@ -840,7 +831,6 @@ async def test_index_requires_rf_rack_valid_keyspace(manager: ManagerClient):
             ]
         )
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_rf_rack_flag_enforces_rf_rack_validity(manager: ManagerClient):
     """
@@ -1155,7 +1145,6 @@ async def nodes_with_data(manager, ks, cf, host):
         return { await manager.api.get_host_id(entry['value']) for entry in j }
 
 @pytest.mark.parametrize("tablets", [True, False])
-@pytest.mark.asyncio
 async def test_zero_token_node_load_balancer(manager, tablets):
     """Test that a zero-token node (a.k.a. coordinator-only or proxy node),
        can be used as an Alternator server-side load balancer as proposed in
@@ -1279,7 +1268,6 @@ async def test_alternator_concurrent_rmw_same_partition_different_server(manager
         table.delete()
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
     """
@@ -1395,7 +1383,6 @@ async def test_alternator_invalid_shard_for_lwt(manager: ManagerClient):
     stop_event.set()
     t.join()
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_deferred_stream_enablement_on_tablets(manager: ManagerClient):
     """Test that enabling Alternator Streams on a tablet table uses deferred

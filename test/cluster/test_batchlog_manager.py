@@ -15,7 +15,6 @@ from test.cluster.util import new_test_keyspace, reconnect_driver, wait_for_cql_
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> None:
     """ Test that batchlog replay handles the case when a node is down while replaying a batch.
@@ -76,7 +75,6 @@ async def test_batchlog_replay_while_a_node_is_down(manager: ManagerClient) -> N
                 return True
         await wait_for(batchlog_empty, time.time() + 60)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> None:
     """ Similar to the previous test, but also verifies that the batchlog replay is aborted on shutdown,
@@ -140,7 +138,6 @@ async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> No
                 return True
         await wait_for(batchlog_empty, time.time() + 60)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_replay_includes_cdc(manager: ManagerClient) -> None:
     """ Test that when a batch is replayed from the batchlog, it includes CDC mutations.
@@ -203,7 +200,6 @@ async def test_batchlog_replay_includes_cdc(manager: ManagerClient) -> None:
         result2 = await cql.run_async(f"SELECT * FROM {cdc_table_name} WHERE key = 40 ALLOW FILTERING")
         assert len(result2) == 1, f"Expected 1 CDC mutation for key 40, got {len(result2)}"
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_mutations_for_dropped_table(manager: ManagerClient) -> None:
     """
@@ -292,7 +288,6 @@ async def test_drop_mutations_for_dropped_table(manager: ManagerClient) -> None:
 
         await wait_for(batchlog_empty, time.time() + 60)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("repair_cache", [True, False])
 async def test_batchlog_replay_failure_during_repair(manager: ManagerClient, repair_cache: bool) -> None:

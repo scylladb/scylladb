@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-@pytest.mark.asyncio
 async def test_upgrade_to_ssl(manager: ManagerClient) -> None:
     """Tests rolling upgrade/downgrade from non-SSL to SSL and back
     """

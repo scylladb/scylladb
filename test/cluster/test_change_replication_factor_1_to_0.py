@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
         pytest.param(True, id="tablets", marks=[pytest.mark.skip_bug(reason="issue #20282"), pytest.mark.nightly]),
     ],
 )
-@pytest.mark.asyncio
 async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, manager: ManagerClient, use_tablets: bool) -> None:
     CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled" if use_tablets else "disabled"}
     logger.info("Creating a new cluster")
@@ -77,7 +76,6 @@ async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, 
         pytest.param(True, id="tablets"),
     ],
 )
-@pytest.mark.asyncio
 async def test_change_replication_factor_1_to_0_and_decommission(request: pytest.FixtureRequest, manager: ManagerClient, use_tablets: bool) -> None:
     CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled" if use_tablets else "disabled"}
     logger.info("Creating a new cluster")

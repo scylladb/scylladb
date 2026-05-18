@@ -9,7 +9,6 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_drop_table_during_streaming_receiver_side(manager: ManagerClient):
     servers = [await manager.server_add(config={
         'error_injections_at_startup': ['stream_mutation_fragments_table_dropped'],
@@ -18,7 +17,6 @@ async def test_drop_table_during_streaming_receiver_side(manager: ManagerClient)
         'tablets_mode_for_new_keyspaces': 'disabled'
     }) for _ in range(2)]
 
-@pytest.mark.asyncio
 async def test_drop_table_during_flush(manager: ManagerClient):
     servers = [await manager.server_add() for _ in range(2)]
 
@@ -31,7 +29,6 @@ async def test_drop_table_during_flush(manager: ManagerClient):
         await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_table_during_load_and_stream(manager: ManagerClient):
     """Verify that dropping a table while load_and_stream is in progress

@@ -27,7 +27,6 @@ async def repeat_if_host_unavailable(f):
 Test CQL is served only after superuser default password is created.
 After CQL is served, user is properily authenticated as superuser (not annonymous user)
 """
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
 async def test_auth_password_ensured(manager: ManagerClient) -> None:
     config = {

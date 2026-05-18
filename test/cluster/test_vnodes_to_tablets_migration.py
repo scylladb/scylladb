@@ -147,7 +147,6 @@ async def verify_migration_status(manager: ManagerClient, server: ServerInfo,
                 raise
 
 
-@pytest.mark.asyncio
 async def test_migration(manager: ManagerClient):
     """Verify vnodes-to-tablets migration for a single table on a single-node cluster.
 
@@ -286,7 +285,6 @@ async def test_migration(manager: ManagerClient):
         await verify_migration_status(manager, server, ks, expected_status='tablets', expected_node_statuses={})
 
 
-@pytest.mark.asyncio
 async def test_migration_rollback(manager: ManagerClient):
     """Verify rollback of vnodes-to-tablets migration on a single-node cluster.
 
@@ -408,7 +406,6 @@ async def test_migration_rollback(manager: ManagerClient):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
 
-@pytest.mark.asyncio
 async def test_migration_multinode(manager: ManagerClient):
     """Verify vnodes-to-tablets migration for a single table on a multi-node cluster with rolling restarts.
 
@@ -560,7 +557,6 @@ async def setup_single_node(manager: ManagerClient):
     return server, cql
 
 
-@pytest.mark.asyncio
 async def test_migration_nonexistent_keyspace(manager: ManagerClient):
     """Verify that migration APIs fail on a non-existent keyspace."""
     server, cql = await setup_single_node(manager)
@@ -573,7 +569,6 @@ async def test_migration_nonexistent_keyspace(manager: ManagerClient):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, "ks")
 
 
-@pytest.mark.asyncio
 async def test_migration_already_tablets(manager: ManagerClient):
     """Verify that starting migration on a keyspace that already uses tablets fails."""
     server, cql = await setup_single_node(manager)
@@ -583,7 +578,6 @@ async def test_migration_already_tablets(manager: ManagerClient):
             await manager.api.create_vnode_tablet_migration(server.ip_addr, ks_tablets)
 
 
-@pytest.mark.asyncio
 async def test_migration_empty_keyspace(manager: ManagerClient):
     """Verify that starting migration on a keyspace with no tables fails."""
     server, cql = await setup_single_node(manager)
@@ -593,7 +587,6 @@ async def test_migration_empty_keyspace(manager: ManagerClient):
             await manager.api.create_vnode_tablet_migration(server.ip_addr, ks_empty)
 
 
-@pytest.mark.asyncio
 async def test_migration_finalize_without_migration(manager: ManagerClient):
     """Verify that finalizing migration without starting one first fails."""
     server, cql = await setup_single_node(manager)
@@ -604,7 +597,6 @@ async def test_migration_finalize_without_migration(manager: ManagerClient):
             await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks_vnodes)
 
 
-@pytest.mark.asyncio
 async def test_migration_upgrade_without_migration(manager: ManagerClient):
     """Verify that upgrading a node to tablets without an active migration fails."""
     server, cql = await setup_single_node(manager)
@@ -613,7 +605,6 @@ async def test_migration_upgrade_without_migration(manager: ManagerClient):
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
 
 
-@pytest.mark.asyncio
 async def test_migration_overlapping_migrations(manager: ManagerClient):
     """Verify that starting a second migration while one is already in progress fails."""
     server, cql = await setup_single_node(manager)
@@ -634,7 +625,6 @@ async def test_migration_overlapping_migrations(manager: ManagerClient):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
 
 
-@pytest.mark.asyncio
 async def test_migration_finalize_before_upgrade(manager: ManagerClient):
     """Verify that finalizing migration before the node has finished upgrading fails."""
     server, cql = await setup_single_node(manager)
@@ -653,7 +643,6 @@ async def test_migration_finalize_before_upgrade(manager: ManagerClient):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
-@pytest.mark.asyncio
 async def test_migration_task_not_abortable(manager: ManagerClient):
     """Verify that aborting a vnodes-to-tablets migration task via the task manager fails."""
     server, cql = await setup_single_node(manager)
@@ -679,7 +668,6 @@ async def test_migration_task_not_abortable(manager: ManagerClient):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
-@pytest.mark.asyncio
 async def test_migration_wait_task(manager: ManagerClient):
     """Verify that the task manager "wait" API works for vnodes-to-tablets migration tasks.
 
@@ -743,7 +731,6 @@ async def test_migration_wait_task(manager: ManagerClient):
         assert wait_status.progress_completed == 1, f"Expected 1 upgraded node for completed migration, got {wait_status.progress_completed}"
 
 
-@pytest.mark.asyncio
 async def test_migration_multiple_keyspaces(manager: ManagerClient):
     """Verify that two keyspaces can be migrated from vnodes to tablets simultaneously."""
     num_shards = 3

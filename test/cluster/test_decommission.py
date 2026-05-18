@@ -13,7 +13,6 @@ from test.cluster.util import wait_for_token_ring_and_group0_consistency
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_decommissioned_node_cant_rejoin(request, manager: ManagerClient):
     # This a regression test for #17282.
 

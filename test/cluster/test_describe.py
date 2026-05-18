@@ -21,7 +21,6 @@ import os
 # to 128 * 2^10 bytes.
 #
 # Reproducer for issue scylladb/scylladb#24018.
-@pytest.mark.asyncio
 async def test_large_create_statement(manager: ManagerClient):
     cmdline = ["--logger-log-level", "describe=trace"]
     srv = await manager.server_add(cmdline=cmdline)
@@ -54,7 +53,6 @@ async def test_large_create_statement(manager: ManagerClient):
             assert len(matches) == 0
 
 @pytest.mark.parametrize("mode", ["normal", "maintenance"])
-@pytest.mark.asyncio
 async def test_describe_cluster_sanity(manager: ManagerClient, mode: str):
     """
     Parametrized test that DESCRIBE CLUSTER returns correct cluster information

@@ -49,7 +49,6 @@ async def await_sync_point(client: TCPRESTClient, server_ip: IPAddress, sync_poi
             pytest.fail(f"Unexpected response from the server: {response}")
 
 # Write with RF=1 and CL=ANY to a dead node should write hints and succeed
-@pytest.mark.asyncio
 async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient):
     node_count = 2
     cmdline = ["--logger-log-level", "hints_manager=trace"]
@@ -89,7 +88,6 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ManagerClient)
             # For dropping the keyspace
             await manager.server_start(servers[1].server_id)
 
-@pytest.mark.asyncio
 async def test_limited_concurrency_of_writes(manager: ManagerClient):
     """
     We want to verify that Scylla correctly limits the concurrency of writing hints to disk.
@@ -120,7 +118,6 @@ async def test_limited_concurrency_of_writes(manager: ManagerClient):
         # For dropping the keyspace
         await manager.server_start(node2.server_id)
 
-@pytest.mark.asyncio
 async def test_sync_point(manager: ManagerClient):
     """
     We want to verify that the sync point API is compliant with its design.
@@ -174,7 +171,6 @@ async def test_sync_point(manager: ManagerClient):
         assert await await_sync_point(manager.api.client, node1.ip_addr, sync_point1, 30)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_hints_consistency_during_decommission(manager: ManagerClient):
     """
@@ -260,7 +256,6 @@ async def test_hints_consistency_during_decommission(manager: ManagerClient):
         for i in range(100):
             assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
 
-@pytest.mark.asyncio
 async def test_hints_consistency_during_replace(manager: ManagerClient):
     """
     Reproducer for https://github.com/scylladb/scylladb/issues/24980
@@ -304,7 +299,6 @@ async def test_hints_consistency_during_replace(manager: ManagerClient):
         for i in range(100):
             assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
 
-@pytest.mark.asyncio
 async def test_draining_hints(manager: ManagerClient):
     """
     This test verifies that all hints are drained when a node is being decommissioned.
@@ -333,7 +327,6 @@ async def test_draining_hints(manager: ManagerClient):
         _ = tg.create_task(manager.decommission_node(s1.server_id, timeout=60))
         _ = tg.create_task(await_sync_point(manager.api.client, s1.ip_addr, sync_point, 60))
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_canceling_hint_draining(manager: ManagerClient):
     """
@@ -380,7 +373,6 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     assert await await_sync_point(manager.api.client, s1.ip_addr, sync_point, 60)
     await s1_log.wait_for(f"Removed hint directory for {host_id2}")
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hint_to_pending(manager: ManagerClient):
     """
@@ -439,7 +431,6 @@ async def test_hint_to_pending(manager: ManagerClient):
 
         assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hint_to_leaving_when_reducing_rf(manager: ManagerClient):
     '''

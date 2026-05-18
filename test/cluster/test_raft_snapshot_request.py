@@ -16,7 +16,6 @@ from test.cluster.util import reconnect_driver, trigger_snapshot, get_topology_c
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_raft_snapshot_request(manager: ManagerClient):
     cmdline = [
         '--logger-log-level', 'raft=trace',

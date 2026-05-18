@@ -17,7 +17,6 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("migration_type", ["internode", "intranode"])
 async def test_counter_updates_during_tablet_migration(manager: ManagerClient, migration_type: str):
     """
@@ -94,7 +93,6 @@ async def test_counter_updates_during_tablet_migration(manager: ManagerClient, m
 
         assert actual_count == total_updates, f"Counter value mismatch: expected {total_updates}, got {actual_count}"
 
-@pytest.mark.asyncio
 async def test_counter_ids_reuse_in_single_rack(manager: ManagerClient):
     """
     Migrate a single counter tablet between 3 nodes in a single rack, performing counter updates on each node,
@@ -168,7 +166,6 @@ async def test_counter_ids_reuse_in_single_rack(manager: ManagerClient):
         assert len(counter_ids) >= 1, f"Expected at least 1 counter ID, but found none"
         assert len(counter_ids) <= 2, f"Expected at most 2 counter IDs, but found {len(counter_ids)}: {counter_ids}"
 
-@pytest.mark.asyncio
 async def test_counter_ids_multi_rack(manager: ManagerClient):
     """
     Test counter IDs with 3 nodes in 3 different racks with RF=3.

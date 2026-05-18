@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 # 
 # In this test, we check that creating a vector index without
 # rf_rack_valid_keyspaces being set is possible.
-@pytest.mark.asyncio
 async def test_vector_store_can_be_created_without_rf_rack_valid(manager: ManagerClient):
     # Explicitly disable the rf_rack_valid_keyspaces option.
     config = {"rf_rack_valid_keyspaces": False}

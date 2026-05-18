@@ -16,7 +16,6 @@ from test.pylib.manager_client import ManagerClient
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_streaming_deadlock_removenode(request, manager: ManagerClient):
     # Force removenode to exercise range_streamer and not repair.
     # The bug is in the streaming, and when senders are on different nodes,

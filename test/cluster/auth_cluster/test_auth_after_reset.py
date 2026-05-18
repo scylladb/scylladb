@@ -27,7 +27,6 @@ async def repeat_until_success(f):
 """
 Test if superuser is recreated after manual sstable delete (password reset procedure).
 """
-@pytest.mark.asyncio
 async def test_auth_after_reset(manager: ManagerClient) -> None:
     servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
     cql, _ = await manager.get_ready_cql(servers)

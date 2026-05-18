@@ -87,7 +87,6 @@ async def four_nodes_cluster(manager: ManagerClient) -> None:
 
 
 @pytest.mark.usefixtures("four_nodes_cluster")
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_random_failures(manager: ManagerClient,
                                random_tables: RandomTables,

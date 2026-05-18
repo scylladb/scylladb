@@ -22,7 +22,6 @@ import threading
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_intranode_migration(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
@@ -59,7 +58,6 @@ async def test_intranode_migration(manager: ManagerClient):
             assert r.c == r.pk
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_crash_during_intranode_migration(manager: ManagerClient):
     cmdline = [
@@ -111,7 +109,6 @@ async def test_crash_during_intranode_migration(manager: ManagerClient):
             assert r.c == r.pk
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cross_shard_migration(manager: ManagerClient):
     """

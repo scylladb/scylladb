@@ -95,7 +95,6 @@ async def connect_with_credentials(ip: str, username: str, password: str, timeou
     return await wait_for(try_connect, time.time() + timeout)
 
 
-@pytest.mark.asyncio
 async def test_maintenance_socket(manager: ManagerClient, cql_clusters: CqlClusters):
     """
     Test that when connecting to the maintenance socket, the user has superuser permissions,
@@ -151,7 +150,6 @@ async def test_maintenance_socket(manager: ManagerClient, cql_clusters: CqlClust
     maintenance_session.execute("CREATE TABLE ks1.t2 (pk int PRIMARY KEY, val int);")
 
 
-@pytest.mark.asyncio
 async def test_no_default_superuser_exists_by_default(manager: ManagerClient, cql_clusters: CqlClusters):
     """
     Test that no 'cassandra' user exists when no default superuser is configured.
@@ -175,7 +173,6 @@ async def test_no_default_superuser_exists_by_default(manager: ManagerClient, cq
         pass
 
 
-@pytest.mark.asyncio
 async def test_no_default_superuser_maintenance_socket_ops(manager: ManagerClient, cql_clusters: CqlClusters):
     """
     Test that we can manage user roles via the maintenance socket.
@@ -266,7 +263,6 @@ async def test_no_default_superuser_maintenance_socket_ops(manager: ManagerClien
     await wait_for(check_role_dropped, time.time() + 60)
 
 
-@pytest.mark.asyncio
 async def test_maintenance_socket_grant_revoke(manager: ManagerClient, cql_clusters: CqlClusters):
     """
     Test that GRANT, REVOKE, and REVOKE ALL via the maintenance socket work correctly.

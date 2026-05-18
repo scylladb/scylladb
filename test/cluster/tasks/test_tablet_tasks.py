@@ -80,7 +80,6 @@ async def check_and_abort_repair_task(manager: ManagerClient, tm: TaskManagerCli
 
     await asyncio.gather(wait_for_task(), abort_task())
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_task(manager: ManagerClient):
     module_name = "tablets"
@@ -97,7 +96,6 @@ async def test_tablet_repair_task(manager: ManagerClient):
 
     await asyncio.gather(repair_task(), check_and_abort_repair_task(manager, tm, servers, module_name, ks))
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_wait_with_table_drop(manager: ManagerClient):
     module_name = "tablets"
@@ -172,7 +170,6 @@ async def check_repair_task_list(tm: TaskManagerClient, servers: list[ServerInfo
 
         await tm.abort_task(servers[0].ip_addr, task0.task_id)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_task_list(manager: ManagerClient):
     module_name = "tablets"
@@ -196,7 +193,6 @@ async def test_tablet_repair_task_list(manager: ManagerClient):
 
     await asyncio.gather(run_repair(0, "test"), run_repair(1, "test2"), run_repair(2, "test3"), check_repair_task_list(tm, servers, module_name, ks))
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_wait(manager: ManagerClient):
     module_name = "tablets"
@@ -235,7 +231,6 @@ async def test_tablet_repair_wait(manager: ManagerClient):
 
     await asyncio.gather(wait_for_task(), merge_tablets())
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_task_children(manager: ManagerClient):
     module_name = "tablets"
@@ -292,7 +287,6 @@ async def prepare_migration_test(manager: ManagerClient):
 
     return (ks, servers, host_ids)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_migration_task(manager: ManagerClient):
     module_name = "tablets"
@@ -327,7 +321,6 @@ async def test_tablet_migration_task(manager: ManagerClient):
     migration_dst = (host_ids[1], 0)
     await asyncio.gather(move_tablet(migration_src, migration_dst), check("migration"))
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_migration_task_list(manager: ManagerClient):
     module_name = "tablets"
@@ -374,7 +367,6 @@ async def test_tablet_migration_task_list(manager: ManagerClient):
     await enable_injection(manager, servers, injection)
     await asyncio.gather(move_tablet(servers[0], migration_src, migration_dst), check_migration_task_list("migration"))
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_migration_task_failed(manager: ManagerClient):
     module_name = "tablets"
@@ -415,7 +407,6 @@ async def test_tablet_migration_task_failed(manager: ManagerClient):
     dst = (src[0], 1 - src[1])
     await asyncio.gather(move_tablet(src, dst), check("intranode_migration", log, mark))
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_task_info_is_none_when_no_running_repair(manager: ManagerClient):
     module_name = "tablets"
@@ -475,7 +466,6 @@ cmdline = ['--target-tablet-size-in-bytes', '30000', ]
 cmdline.extend(extra_scylla_cmdline_options)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_resize_task(manager: ManagerClient):
     module_name = "tablets"
@@ -516,7 +506,6 @@ async def test_tablet_resize_task(manager: ManagerClient):
         await wait_and_check_status(servers[0], "split", keyspace, table2)
         await wait_and_check_status(servers[0], "merge", keyspace, table1)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_resize_list(manager: ManagerClient):
     module_name = "tablets"
@@ -575,7 +564,6 @@ async def test_tablet_resize_list(manager: ManagerClient):
         await disable_injection(manager, servers, injection)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='debug mode is too time-sensitive')
 async def test_tablet_resize_revoked(manager: ManagerClient):
@@ -617,7 +605,6 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
 
         await asyncio.gather(revoke_resize(log, mark), wait_for_task(task0.task_id))
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_task_sees_latest_state(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)

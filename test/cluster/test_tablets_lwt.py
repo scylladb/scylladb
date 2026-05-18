@@ -44,7 +44,6 @@ async def inject_error_one_shot_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 
-@pytest.mark.asyncio
 async def test_lwt(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -106,7 +105,6 @@ async def test_lwt(manager: ManagerClient):
     await manager.get_cql().run_async(f"DROP KEYSPACE \"{ks}\"")
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_lwt_during_migration(manager: ManagerClient):
     # Scenario:
@@ -207,7 +205,6 @@ async def test_lwt_during_migration(manager: ManagerClient):
         assert row.c == 2
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient):
     # Scenario:
@@ -299,7 +296,6 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
         assert row.c2 is None
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
     config = {
@@ -330,7 +326,6 @@ async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
         assert res[0].val == 0
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
     # Scenario:
@@ -415,7 +410,6 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
         assert row.c == 1
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
     # The test checks that the node doesn't crash when the base table is recreated
@@ -461,7 +455,6 @@ async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
             await lwt_task
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClient, build_mode):
@@ -498,7 +491,6 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClie
                              manager.server_start(servers[2].server_id))
 
 
-@pytest.mark.asyncio
 async def test_paxos_state_table_permissions(manager: ManagerClient):
     # This test checks permission handling for paxos state tables:
     #   * Only a superuser is allowed to access a paxos state table
@@ -592,7 +584,6 @@ async def test_paxos_state_table_permissions(manager: ManagerClient):
         cql = manager.get_cql()
 
 
-@pytest.mark.asyncio
 async def test_lwt_coordinator_shard(manager: ManagerClient):
     # The test checks that an LWT coordinator runs on a replica shard, and not on a 'default' (zero) shard.
     # Scenario:
@@ -645,7 +636,6 @@ async def test_lwt_coordinator_shard(manager: ManagerClient):
         assert "shard 1" in matches[0][0]
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='debug', reason='dev is enought: the test checks non-critical functionality')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_error_message_for_timeout_due_to_write_uncertainty(manager: ManagerClient):
@@ -706,7 +696,6 @@ async def test_error_message_for_timeout_due_to_write_uncertainty(manager: Manag
             await lwt_task
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='debug', reason='dev is enought')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_no_uncertainty_for_reads(manager: ManagerClient):
@@ -769,7 +758,6 @@ async def test_no_uncertainty_for_reads(manager: ManagerClient):
         assert row.c == 2
 
 
-@pytest.mark.asyncio
 async def test_lwts_for_special_tables(manager: ManagerClient):
     """
     SELECT commands with SERIAL consistency level are historically allowed for vnode-based views,
@@ -796,7 +784,6 @@ async def test_lwts_for_special_tables(manager: ManagerClient):
             await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test_scylla_cdc_log WHERE \"cdc$stream_id\"=0xAB", consistency_level=ConsistencyLevel.SERIAL))
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_lwt_shutdown(manager: ManagerClient):
     """
@@ -871,7 +858,6 @@ async def test_lwt_shutdown(manager: ManagerClient):
         assert row.v == 2
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='debug', reason='dev is enough')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablets_merge_waits_for_lwt(manager: ManagerClient, scale_timeout):

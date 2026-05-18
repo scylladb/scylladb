@@ -23,7 +23,6 @@ async def wait_for_config(manager, server, config_name, value):
         return None
     await wait_for(config_value_equal, deadline=time.time() + 60)
 
-@pytest.mark.asyncio
 async def test_non_liveupdatable_config(manager):
 
     server = await manager.server_add()

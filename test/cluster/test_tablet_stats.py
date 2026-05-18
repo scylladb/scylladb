@@ -14,7 +14,6 @@ from test.pylib.rest_client import read_barrier
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_load_stats_on_coordinator_failover(manager: ManagerClient):
     cfg = {
@@ -85,7 +84,6 @@ async def test_load_stats_on_coordinator_failover(manager: ManagerClient):
             break
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_load_stats_refresh_during_shutdown(manager: ManagerClient):
     """Verify that _tablet_load_stats_refresh is properly joined during

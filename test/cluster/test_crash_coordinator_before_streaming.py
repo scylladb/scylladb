@@ -18,7 +18,6 @@ from test.cluster.util import (check_token_ring_and_group0_consistency, wait_for
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_kill_coordinator_during_op(manager: ManagerClient, failure_detector_timeout: int, scale_timeout: callable) -> None:
     """ Kill coordinator with error injection while topology operation is running for cluster: decommission,

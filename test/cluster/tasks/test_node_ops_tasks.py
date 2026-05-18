@@ -194,7 +194,6 @@ async def check_decommission_tasks_tree(manager: ManagerClient, tm: TaskManagerC
     vts_list = await get_new_virtual_tasks_list(tm, module_name, servers[0], previous_vts)
     return servers, previous_vts + [vts_list[0].task_id]
 
-@pytest.mark.asyncio
 async def test_node_ops_tasks_tree(manager: ManagerClient):
     """Test node ops task manager tasks."""
     module_name = "node_ops"
@@ -220,7 +219,6 @@ async def test_node_ops_tasks_tree(manager: ManagerClient):
         # live node for DROP KEYSPACE.
         await manager.driver_connect()
 
-@pytest.mark.asyncio
 async def test_node_ops_tasks_ttl(manager: ManagerClient):
     """Test node ops virtual tasks' ttl."""
     module_name = "node_ops"
@@ -230,7 +228,6 @@ async def test_node_ops_tasks_ttl(manager: ManagerClient):
     time.sleep(3)
     await get_new_virtual_tasks_statuses(tm, module_name, servers, [], expected_task_num=0)
 
-@pytest.mark.asyncio
 async def test_node_ops_task_wait(manager: ManagerClient):
     """Test node ops virtual task's wait."""
     async def _decommission(manager: ManagerClient, server: ServerInfo):

@@ -63,7 +63,6 @@ async def prepare_write_workload(cql, table_name, flush=True, n: int = None):
     if flush:
         nodetool.flush(cql, table_name)
 
-@pytest.mark.asyncio
 async def test_snapshot_on_all_nodes(manager: ManagerClient):
     """
     Tests that a topology operation snapshot is done on all nodes,

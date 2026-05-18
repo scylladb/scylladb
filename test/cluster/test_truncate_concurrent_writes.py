@@ -19,7 +19,6 @@ import os
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_validate_truncate_with_concurrent_writes(manager: ManagerClient):
 
     # This test validates that all the data before a truncate started has been deleted,

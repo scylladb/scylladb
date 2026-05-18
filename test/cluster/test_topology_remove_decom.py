@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-@pytest.mark.asyncio
 async def test_remove_node_add_column(manager: ManagerClient, random_tables: RandomTables):
     """Add a node, remove an original node, add a column"""
     servers = await manager.running_servers()
@@ -37,7 +36,6 @@ async def test_remove_node_add_column(manager: ManagerClient, random_tables: Ran
     await random_tables.verify_schema()
 
 
-@pytest.mark.asyncio
 async def test_decommission_node_add_column(manager: ManagerClient, random_tables: RandomTables):
     """Add a node, remove an original node, add a column"""
     table = await random_tables.add_table(ncolumns=5)
@@ -70,7 +68,6 @@ async def test_decommission_node_add_column(manager: ManagerClient, random_table
     await random_tables.verify_schema()
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_bug(reason="Wait for @slow attribute, #11713")
 async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_tables: RandomTables):
     stopped = False
@@ -132,14 +129,12 @@ async def test_remove_node_with_concurrent_ddl(manager: ManagerClient, random_ta
         await ddl_task
         logger.debug("ddl fiber done, finished")
 
-@pytest.mark.asyncio
 async def test_rebuild_node(manager: ManagerClient, random_tables: RandomTables):
     """rebuild a node"""
     servers = await manager.running_servers()
     await manager.rebuild_node(servers[0].server_id)
     await check_token_ring_and_group0_consistency(manager)
 
-@pytest.mark.asyncio
 async def test_concurrent_removenode_two_initiators_one_dead_node(manager: ManagerClient):
     servers = await manager.running_servers()
     assert len(servers) >= 3
@@ -154,7 +149,6 @@ async def test_concurrent_removenode_two_initiators_one_dead_node(manager: Manag
     else:
         raise Exception("concurrent removenode request should result in a failure, but unexpectedly succeeded")
 
-@pytest.mark.asyncio
 async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: ManagerClient):
     """
     Tests the execution flow in case of performing remove node
@@ -173,7 +167,6 @@ async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: Manag
     await asyncio.gather(*[manager.remove_node(servers[0].server_id, servers[2].server_id, ignore_dead=ignore_nodes),
             manager.remove_node(servers[0].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
 
-@pytest.mark.asyncio
 async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: ManagerClient):
     """
     Tests the execution flow in case of performing remove node
@@ -193,7 +186,6 @@ async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: Mana
     await asyncio.gather(*[manager.remove_node(servers[0].server_id, servers[2].server_id, ignore_dead=ignore_nodes),
             manager.remove_node(servers[3].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injection is not supported in release mode')
 async def test_decommission_left_token_ring_retry(manager: ManagerClient):
     """

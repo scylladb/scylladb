@@ -115,7 +115,6 @@ async def get_table_raft_group_id(manager: ManagerClient, ks: str, table: str):
     rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
     return str(rows[0].raft_group_id)
 
-@pytest.mark.asyncio
 async def test_basic_write_read(manager: ManagerClient):
 
     logger.info("Bootstrapping cluster")
@@ -265,7 +264,6 @@ async def test_basic_write_read(manager: ManagerClient):
     # To check that the servers can be stopped gracefully. By default the test runner just kills them.
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
-@pytest.mark.asyncio
 async def test_multi_shard_write_read(manager: ManagerClient):
     """
     Verify that strongly consistent tables work correctly on non-shard-0.
@@ -301,7 +299,6 @@ async def test_multi_shard_write_read(manager: ManagerClient):
 
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
-@pytest.mark.asyncio
 async def test_sc_multishard_metadata_reads(manager: ManagerClient):
     """
     Verify that multi-shard reads of raft metadata for strongly-consistent tables work correctly.
@@ -388,7 +385,6 @@ async def test_sc_multishard_metadata_reads(manager: ManagerClient):
 
     await manager.server_stop_gracefully(server.server_id)
 
-@pytest.mark.asyncio
 async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
     """
     Verify that the metadata for strongly-consistent tables
@@ -440,7 +436,6 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ManagerClient):
     await manager.server_stop_gracefully(server.server_id)
 
 
-@pytest.mark.asyncio
 async def test_sc_persistence_with_compaction(manager: ManagerClient):
     """
     Verify that compaction of system.raft_groups works correctly.
@@ -487,7 +482,6 @@ async def test_sc_persistence_with_compaction(manager: ManagerClient):
     await manager.server_stop_gracefully(server.server_id)
 
 
-@pytest.mark.asyncio
 async def test_sc_persistence_after_crash(manager: ManagerClient):
     """
     Verify that metadata for strongly-consistent tables is recovered
@@ -524,7 +518,6 @@ async def test_sc_persistence_after_crash(manager: ManagerClient):
 
     await manager.server_stop_gracefully(server.server_id)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_no_schema_when_apply_write(manager: ManagerClient):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
@@ -569,7 +562,6 @@ async def test_no_schema_when_apply_write(manager: ManagerClient):
         assert row.c == 20
         assert row.new_col == 30
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_old_schema_when_apply_write(manager: ManagerClient):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
@@ -612,7 +604,6 @@ async def test_old_schema_when_apply_write(manager: ManagerClient):
         assert row.c == 20
         assert row.new_col is None
 
-@pytest.mark.asyncio
 async def test_reject_user_provided_timestamps(manager: ManagerClient):
     """
     A simple validation test that makes sure that we don't accept
@@ -685,7 +676,6 @@ async def test_forward_cql_prepared_with_bound_values(manager: ManagerClient):
                 logger.info(f"Trace event: {event.description}")
                 assert "Prepared statement not found on target" not in event.description
 
-@pytest.mark.asyncio
 async def test_forward_cql_cache_invalidation(manager: ManagerClient):
     """
     Test that cql forwarding works after invalidation of prepared statement cache on schema changes.
@@ -794,7 +784,6 @@ async def test_forward_cql_exception_passthrough(manager: ManagerClient):
             await manager.api.message_injection(non_leader_replica_host.address, "wait_before_handling_forwarded_request")
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")
 async def test_drop_table_during_insert(manager: ManagerClient):
     """Regression test for SCYLLADB-1450: node crashes when DROP TABLE races with
@@ -848,7 +837,6 @@ async def test_drop_table_during_insert(manager: ManagerClient):
         await manager.api.get_host_id(server.ip_addr)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_timed_out_queries(manager: ManagerClient):
     """
@@ -954,7 +942,6 @@ async def test_timed_out_queries(manager: ManagerClient):
                 await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (11, 13) USING TIMEOUT 100ms")
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_queries_while_dropping_table(manager: ManagerClient):
     """
@@ -1028,7 +1015,6 @@ async def test_queries_while_dropping_table(manager: ManagerClient):
         await write_fut
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_queries_when_shutting_down(manager: ManagerClient):
     """
@@ -1146,7 +1132,6 @@ async def test_queries_when_shutting_down(manager: ManagerClient):
             await stop_fut
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_forwarded_write_upon_shutdown(manager: ManagerClient):
     """
@@ -1308,7 +1293,6 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerCl
         await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_bug(reason="SCYLLADB-1056")
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient):

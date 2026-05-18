@@ -20,7 +20,6 @@ from test.pylib.random_tables import RandomTables, Column, TextType
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_replace_different_ip(manager: ManagerClient, failure_detector_timeout) -> None:
     """Replace an existing node with new node using a different IP address"""
     servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout})
@@ -66,7 +65,6 @@ async def test_replace_different_ip(manager: ManagerClient, failure_detector_tim
         await wait_for(check_peers_and_gossiper, time.time() + 60)
         logger.info(f"server {s} system.peers and gossiper state is valid")
 
-@pytest.mark.asyncio
 async def test_replace_different_ip_using_host_id(manager: ManagerClient, failure_detector_timeout) -> None:
     """Replace an existing node with new node reusing the replaced node host id"""
     servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout})
@@ -75,7 +73,6 @@ async def test_replace_different_ip_using_host_id(manager: ManagerClient, failur
     await manager.server_add(replace_cfg)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
-@pytest.mark.asyncio
 async def test_replace_reuse_ip(request, manager: ManagerClient, failure_detector_timeout) -> None:
     """Replace an existing node with new node using the same IP address"""
     servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout}, auto_rack_dc="dc1")
@@ -129,7 +126,6 @@ async def test_replace_reuse_ip(request, manager: ManagerClient, failure_detecto
     await manager.server_sees_other_server(servers[1].ip_addr, servers[0].ip_addr)
     await manager.server_sees_other_server(servers[2].ip_addr, servers[0].ip_addr)
 
-@pytest.mark.asyncio
 async def test_replace_reuse_ip_using_host_id(manager: ManagerClient, failure_detector_timeout) -> None:
     """Replace an existing node with new node using the same IP address and same host id"""
     servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout})

@@ -18,7 +18,6 @@ from test.cluster.conftest import cluster_con
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_no_removed_node_event_on_ip_change(manager: ManagerClient, caplog: pytest.LogCaptureFixture):
     logger.info("starting the first node (leader)")
     servers = [await manager.server_add()]

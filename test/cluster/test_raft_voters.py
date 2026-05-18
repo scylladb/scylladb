@@ -26,7 +26,6 @@ async def get_number_of_voters(manager: ManagerClient, srv: ServerInfo):
     return len([m for m in group0_members if m[1]])
 
 
-@pytest.mark.asyncio
 # Make sure the algorithm works with different cluster sizes.
 # (3, 1, 1) specifically checks that the largest DC doesn't get 2+ voters
 # and keep half or more of all voters, which would make losing that DC unsafe.
@@ -106,7 +105,6 @@ async def test_raft_voters_multidc_kill_dc(
     await read_barrier(manager.api, dc_servers[1][0].ip_addr)
 
 
-@pytest.mark.asyncio
 async def test_raft_limited_voters_retain_coordinator(manager: ManagerClient):
     """
     Test that the topology coordinator is retained as a voter when possible.

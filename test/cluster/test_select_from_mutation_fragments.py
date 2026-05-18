@@ -14,7 +14,6 @@ from test.cluster.util import new_test_keyspace
 from test.pylib.manager_client import ManagerClient
 
 
-@pytest.mark.asyncio
 async def test_sticky_coordinator_enforced(manager: ManagerClient) -> None:
     await manager.servers_add(2, cmdline=['--logger-log-level', 'paging=trace'], auto_rack_dc="dc1")
 

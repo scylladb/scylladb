@@ -16,7 +16,6 @@ from test.pylib.rest_client import inject_error_one_shot
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_raft_snapshot_truncation(manager: ManagerClient):
     """
     Check that after snapshot creation, snapshot_trailing_size is taken into consideration,

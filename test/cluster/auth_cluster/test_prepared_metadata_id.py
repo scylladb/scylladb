@@ -141,7 +141,6 @@ def _prepare_and_execute(host: str, query: str) -> tuple[bytes, bool, int]:
             safe_driver_shutdown(cluster)
 
 
-@pytest.mark.asyncio
 async def test_prepared_list_metadata_ids(manager: ManagerClient) -> None:
     servers = await manager.running_servers()
     if servers:

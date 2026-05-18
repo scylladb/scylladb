@@ -9,7 +9,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_bootstrap_removenode_metrics(manager):
     cfg = {'enable_repair_based_node_ops': True}
     servers = [await manager.server_add(config=cfg),

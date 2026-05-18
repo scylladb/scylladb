@@ -35,7 +35,6 @@ def assert_service_levels(rows, expected):
         assert row.shares == shares
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injection is disabled in release mode")
 async def test_self_heals_service_levels_v1_after_restart(manager: ManagerClient, scale_timeout: callable):
     """Reproduces a raft-topology cluster created before service levels were initialized as v2."""

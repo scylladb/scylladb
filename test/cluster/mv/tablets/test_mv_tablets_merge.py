@@ -15,7 +15,6 @@ from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_mv_merge_allowed(manager):
     """
     Test that tablet merge is allowed for materialized views and their base tables.

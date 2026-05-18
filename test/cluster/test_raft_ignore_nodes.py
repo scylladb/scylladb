@@ -59,7 +59,6 @@ async def make_servers(manager: ManagerClient, servers_num: int,
     return servers_ordered
 
 
-@pytest.mark.asyncio
 async def test_raft_replace_ignore_nodes(manager: ManagerClient, failure_detector_timeout) -> None:
     """Replace 3 dead nodes.
 
@@ -96,7 +95,6 @@ async def test_raft_replace_ignore_nodes(manager: ManagerClient, failure_detecto
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
 
-@pytest.mark.asyncio
 async def test_raft_remove_ignore_nodes(manager: ManagerClient) -> None:
     """Remove 3 dead nodes.
 

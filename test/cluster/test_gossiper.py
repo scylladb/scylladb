@@ -10,7 +10,6 @@ import pytest
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-@pytest.mark.asyncio
 async def test_gossiper_endpoints(manager: ManagerClient) -> None:
     servers = await manager.running_servers()
     servers_ips = [await manager.get_host_ip(server.server_id) for server in servers]

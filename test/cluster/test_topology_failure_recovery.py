@@ -50,7 +50,6 @@ async def remove_error_on(manager: ManagerClient, error_name: str, servers: list
     await asyncio.gather(*errs)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -74,7 +73,6 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
         assert node.draining == False and node.excluded == False and node.status == 'NORMAL'
 
 
-@pytest.mark.asyncio
 @pytest.mark.prepare_3_nodes_cluster
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_topology_streaming_failure(request, manager: ManagerClient):

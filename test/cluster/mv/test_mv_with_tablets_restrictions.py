@@ -16,7 +16,6 @@ from test.pylib.manager_client import ManagerClient
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("rf_kind", ["numeric", "rack_list"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: ManagerClient, rf_kind: str):
@@ -96,7 +95,6 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Man
         await test_create_mv_or_index_with_rf(cql, schema_kind, 2, expected_error=expected_error)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("rf_kind", ["numeric", "rack_list"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_keyspace_rf_rack_restriction_with_mv_and_index(manager: ManagerClient, rf_kind: str):
@@ -176,7 +174,6 @@ async def test_alter_keyspace_rf_rack_restriction_with_mv_and_index(manager: Man
         await cql.run_async(f"DROP KEYSPACE {ks}")
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_add_node_in_new_rack_restriction_with_mv(manager: ManagerClient):
     """
@@ -208,7 +205,6 @@ async def test_add_node_in_new_rack_restriction_with_mv(manager: ManagerClient):
 
 
 @pytest.mark.parametrize("op", ["remove", "decommission"])
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_remove_node_violating_rf_rack(manager: ManagerClient, op: str):
     """

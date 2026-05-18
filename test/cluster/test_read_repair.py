@@ -183,7 +183,6 @@ incremental_repair_test_data = [pytest.param(row_tombstone_data, id="row-tombsto
 
 
 @pytest.mark.parametrize("data_class", incremental_repair_test_data)
-@pytest.mark.asyncio
 async def test_incremental_read_repair(data_class: DataClass, manager: ManagerClient):
     """Stress the incremental read repair logic
 
@@ -308,7 +307,6 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
         check_rows(cql, host2, all_rows)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_read_repair_with_trace_logging(request, manager):
     logger.info("Creating a new cluster")

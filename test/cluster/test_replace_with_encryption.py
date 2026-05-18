@@ -8,7 +8,6 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("join_ring", [True, False])
 async def test_replace_with_encryption(manager: ManagerClient, join_ring):
     """Test that a node can be replaced if inter-dc encryption is enabled.

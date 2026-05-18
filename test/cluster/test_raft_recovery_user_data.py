@@ -23,7 +23,6 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
         reconnect_driver, start_writes, wait_for_cdc_generations_publishing
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
 async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes_with: str):
     """

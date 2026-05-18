@@ -9,7 +9,6 @@ from test.pylib.manager_client import ManagerClient
 import pytest
 
 
-@pytest.mark.asyncio
 async def test_different_group0_ids(manager: ManagerClient):
     """
     The test starts two single-node clusters (with different group0_ids). Node B (the

@@ -45,7 +45,6 @@ def generate_client_routes_entry(i):
         "alternator_https_port": 8004
     }
 
-@pytest.mark.asyncio
 async def test_client_routes(request, manager: ManagerClient):
     num_servers = 3
     cql = None
@@ -72,7 +71,6 @@ async def test_client_routes(request, manager: ManagerClient):
     await manager.api.client.delete("/v2/client-routes", host=running_server.ip_addr, json=[generate_client_routes_entry(0)])
     await wait_for_expected_client_routes_size(cql, num_servers)
 
-@pytest.mark.asyncio
 async def test_client_routes_node_restart(request, manager: ManagerClient):
     """
     This test verifies that a node receives updates if client routes were updated
@@ -90,7 +88,6 @@ async def test_client_routes_node_restart(request, manager: ManagerClient):
     cql = await manager.get_cql_exclusive(server_to_restart)
     await wait_for_expected_client_routes_size(cql, 1)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_client_routes_upgrade(request, manager: ManagerClient):
     """
@@ -135,7 +132,6 @@ async def test_client_routes_upgrade(request, manager: ManagerClient):
     await wait_for(client_routes_ready, time.time() + 60)
 
 
-@pytest.mark.asyncio
 async def test_client_routes_lost_quorum(request, manager: ManagerClient):
     """
     This test verifies that `/v2/client-routes` fails with a timeout if the Raft quorum cannot be reached.
@@ -195,7 +191,6 @@ async def wait_for_expected_event_num(expected_num, received_events):
         return None
     await wait_for(lambda: expected_event_num(expected_num), time.time() + 60)
 
-@pytest.mark.asyncio
 async def test_events(request, manager: ManagerClient, monkeypatch):
     """
     This test verifies client routes change events in the following steps:
@@ -234,7 +229,6 @@ async def test_events(request, manager: ManagerClient, monkeypatch):
     assert received_events[2]["connection_ids"] == [generate_connection_id(0)]
     assert received_events[2]["host_ids"] == [generate_host_id(0)]
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_client_routes_snapshot_transfer(request, manager: ManagerClient, monkeypatch):
     """
@@ -275,7 +269,6 @@ async def test_client_routes_snapshot_transfer(request, manager: ManagerClient, 
     assert received_events[0]["host_ids"] == [generate_host_id(1)]
     await log.wait_for("transfer snapshot: raft snapshot includes client_routes mutation")
 
-@pytest.mark.asyncio
 async def test_huge_event(request, manager: ManagerClient, monkeypatch):
     """
     This test verifies that an event can be sent to the driver even when it contains many host_ids and connection_ids.

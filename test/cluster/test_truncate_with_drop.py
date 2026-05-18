@@ -14,7 +14,6 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_truncation_on_drop(manager: ManagerClient):
     await manager.server_add()
     cql = manager.get_cql()
@@ -39,7 +38,6 @@ async def test_truncation_on_drop(manager: ManagerClient):
         row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM system.truncated where table_uuid={table_id}'))
         assert row[0].count == 0
 
-@pytest.mark.asyncio
 async def test_truncation_records_pruned_on_dirty_restart(manager: ManagerClient):
     server = await manager.server_add()
     cql = manager.get_cql()

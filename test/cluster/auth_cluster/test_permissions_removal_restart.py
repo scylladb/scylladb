@@ -13,7 +13,6 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_permissions_removal_and_restart(manager: ManagerClient) -> None:
     """Test that a node boots successfully when role_permissions contains a
     ghost row with role and resource set but the permissions column missing.

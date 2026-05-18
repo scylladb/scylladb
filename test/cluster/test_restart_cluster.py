@@ -17,7 +17,6 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_restart_cluster(manager: ManagerClient) -> None:
     """Test that cluster can restart fine after all nodes are stopped gracefully"""
     servers = await manager.servers_add(3)
