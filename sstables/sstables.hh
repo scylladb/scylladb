@@ -49,6 +49,7 @@
 #include "sstables/file_size_stats.hh"
 
 #include <seastar/util/optimized_optional.hh>
+#include <fmt/format.h>
 
 class sstable_assertions;
 class cached_file;
@@ -975,11 +976,11 @@ public:
     const stats_metadata& get_stats_metadata() const {
         auto entry = _components->statistics.contents.find(metadata_type::Stats);
         if (entry == _components->statistics.contents.end()) {
-            throw std::runtime_error("Stats metadata not available");
+            throw std::runtime_error(fmt::format("Stats metadata not available for SSTable {}", get_filename()));
         }
         auto& p = entry->second;
         if (!p) {
-            throw std::runtime_error("Statistics is malformed");
+            throw std::runtime_error(fmt::format("Statistics is malformed for SSTable {}", get_filename()));
         }
         const stats_metadata& s = *static_cast<stats_metadata *>(p.get());
         return s;
