@@ -19,7 +19,8 @@ static const std::map<cql_protocol_extension, seastar::sstring> EXTENSION_NAMES 
     {cql_protocol_extension::LWT_ADD_METADATA_MARK, "SCYLLA_LWT_ADD_METADATA_MARK"},
     {cql_protocol_extension::RATE_LIMIT_ERROR, "SCYLLA_RATE_LIMIT_ERROR"},
     {cql_protocol_extension::TABLETS_ROUTING_V1, "TABLETS_ROUTING_V1"},
-    {cql_protocol_extension::USE_METADATA_ID, "SCYLLA_USE_METADATA_ID"}
+    {cql_protocol_extension::USE_METADATA_ID, "SCYLLA_USE_METADATA_ID"},
+    {cql_protocol_extension::EXTENDED_CONSISTENCY, "SCYLLA_EXTENDED_CONSISTENCY"}
 };
 
 cql_protocol_extension_enum_set supported_cql_protocol_extensions() {
@@ -36,6 +37,8 @@ std::vector<seastar::sstring> additional_options_for_proto_ext(cql_protocol_exte
             return {format("LWT_OPTIMIZATION_META_BIT_MASK={:d}", cql3::prepared_metadata::LWT_FLAG_MASK)};
         case cql_protocol_extension::RATE_LIMIT_ERROR:
             return {format("ERROR_CODE={}", exceptions::exception_code::RATE_LIMIT_ERROR)};
+        case cql_protocol_extension::EXTENDED_CONSISTENCY:
+            return {};
         default:
             return {};
     }
