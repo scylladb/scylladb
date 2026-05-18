@@ -65,7 +65,7 @@ bool is_request_aborted(std::exception_ptr& err) {
     return try_catch<abort_requested_exception>(err) != nullptr;
 }
 
-class client_connection_factory : public http::experimental::connection_factory {
+class client_connection_factory : public http::connection_factory {
     client::endpoint_type _endpoint;
     shared_ptr<tls::certificate_credentials> _creds;
 

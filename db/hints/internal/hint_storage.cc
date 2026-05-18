@@ -149,7 +149,7 @@ future<> rebalance_segments_for(const sstring& ep, size_t segments_per_shard,
             // Don't move the file to the same location. It's pointless.
             if (*seg_path_it != seg_new_path) {
                 manager_logger.trace("going to move: {} -> {}", *seg_path_it, seg_new_path);
-                co_await io_check(rename_file, seg_path_it->native(), seg_new_path.native());
+                co_await io_check(rename_file, seg_path_it->native(), seg_new_path.native(), rename_flags::none);
             } else {
                 manager_logger.trace("skipping: {}", *seg_path_it);
             }

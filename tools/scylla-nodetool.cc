@@ -196,7 +196,7 @@ class scylla_rest_client {
     sstring _host;
     uint16_t _port;
     sstring _host_name;
-    http::experimental::client _api_client;
+    http::client _api_client;
 
     std::vector<api_request> _request_history;
 

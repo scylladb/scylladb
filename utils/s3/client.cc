@@ -83,7 +83,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<http::experimental::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<http::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -153,7 +153,7 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
 }
 
-shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, std::unique_ptr<http::experimental::retry_strategy> rs, global_factory gf) {
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, std::unique_ptr<http::retry_strategy> rs, global_factory gf) {
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{}, std::move(rs));
 }
 
@@ -233,7 +233,7 @@ future<semaphore_units<>> client::claim_memory(size_t size, abort_source* as) {
     return get_units(_memory, size);
 }
 
-client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
+client::group_client::group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -329,8 +329,8 @@ client::group_client& client::find_or_create_client() {
     }
 }
 
-http::experimental::client::reply_handler client::wrap_handler(http::request& request,
-                                                               http::experimental::client::reply_handler handler,
+http::client::reply_handler client::wrap_handler(http::request& request,
+                                                               http::client::reply_handler handler,
                                                                std::optional<http::reply::status_type> expected) {
     return [this, &request, expected, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) -> future<> {
         auto _in = std::move(in);
@@ -383,7 +383,7 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
 }
 
 future<> client::make_request(http::request req,
-                              http::experimental::client::reply_handler handle,
+                              http::client::reply_handler handle,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
     return make_request(
@@ -393,8 +393,8 @@ future<> client::make_request(http::request req,
 }
 
 future<> client::make_request(http::request req,
-                              http::experimental::client::reply_handler handle,
-                              const http::experimental::retry_strategy& rs,
+                              http::client::reply_handler handle,
+                              const http::retry_strategy& rs,
                               error_handler err_handler,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
@@ -410,7 +410,7 @@ future<> client::make_request(http::request req,
 
 future<> client::make_request(http::request req,
                               reply_handler_ext handle_ex,
-                              const http::experimental::retry_strategy& rs,
+                              const http::retry_strategy& rs,
                               error_handler err_handler,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
@@ -428,7 +428,7 @@ future<> client::make_request(http::request req, reply_handler_ext handle_ex, st
         }, expected, as);
 }
 
-future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
+future<> client::get_object_header(sstring object_name, http::client::reply_handler handler, seastar::abort_source* as) {
     s3l.trace("HEAD {}", object_name);
     auto req = http::request::make("HEAD", _host, object_name);
     return make_request(std::move(req), std::move(handler), http::reply::status_type::ok, as);
@@ -1302,7 +1302,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     }
 
     future<> make_filling_fiber() {
-        seastar::http::experimental::no_retry_strategy no_retry;
+        seastar::http::no_retry_strategy no_retry;
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         while (!_is_finished) {
             try {

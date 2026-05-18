@@ -15,7 +15,7 @@ namespace utils::gcp::storage {
 // GCP object storage retry strategy
 // General guidelines https://docs.cloud.google.com/storage/docs/retry-strategy
 
-class object_storage_retry_strategy : public seastar::http::experimental::retry_strategy {
+class object_storage_retry_strategy : public seastar::http::retry_strategy {
 protected:
     unsigned _max_retries;
     mutable exponential_backoff_retry _exr;

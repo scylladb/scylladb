@@ -44,7 +44,7 @@ future<> sts_assume_role_credentials_provider::update_credentials() {
     req.set_query_param("Action", "AssumeRole");
     req.set_query_param("RoleSessionName", format("{}", utils::make_random_uuid()));
     req.set_query_param("RoleArn", role_arn);
-    http::experimental::client http_client(
+    http::client http_client(
         std::make_unique<utils::http::dns_connection_factory>(sts_host, port, is_secured, sts_logger), 1, 1024, std::make_unique<default_aws_retry_strategy>());
     co_await http_client.make_request(
         std::move(req),

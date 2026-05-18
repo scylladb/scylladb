@@ -13,7 +13,7 @@ namespace aws {
 
 class aws_error;
 
-class default_aws_retry_strategy : public seastar::http::experimental::retry_strategy {
+class default_aws_retry_strategy : public seastar::http::retry_strategy {
 protected:
     unsigned _max_retries;
 

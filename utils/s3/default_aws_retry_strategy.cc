@@ -13,12 +13,12 @@
 #include <seastar/util/short_streams.hh>
 #include "utils/log.hh"
 
-namespace seastar::http::experimental {
+namespace seastar::http {
 extern logging::logger rs_logger;
 }
 
 using namespace std::chrono_literals;
-using namespace seastar::http::experimental;
+using namespace seastar::http;
 
 namespace aws {
 

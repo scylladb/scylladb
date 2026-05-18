@@ -82,7 +82,7 @@ seastar::future<> rest::httpclient::send(const handler_func& f, seastar::abort_s
 
     // NOTE: similar to utils::http::dns_connection_factory, but that type does
     // not properly handle numeric hosts (don't validate certs for those)
-    class my_connection_factory : public http::experimental::connection_factory {
+    class my_connection_factory : public http::connection_factory {
         socket_address _addr;
         shared_ptr<tls::certificate_credentials> _creds;
         tls::tls_options _tls_options;
@@ -104,7 +104,7 @@ seastar::future<> rest::httpclient::send(const handler_func& f, seastar::abort_s
         }
     };
 
-    http::experimental::client client(std::make_unique<my_connection_factory>(socket_address(addr, _port), _creds, _tls_options, _host));
+    http::client client(std::make_unique<my_connection_factory>(socket_address(addr, _port), _creds, _tls_options, _host));
 
     std::exception_ptr p;
     try {
@@ -125,11 +125,11 @@ seastar::future<> rest::httpclient::send(const handler_func& f, seastar::abort_s
     }
 }
 
-seastar::future<> rest::simple_send(seastar::http::experimental::client& client, seastar::http::request& req, const handler_func_ex& f, seastar::abort_source* as) {
+seastar::future<> rest::simple_send(seastar::http::client& client, seastar::http::request& req, const handler_func_ex& f, seastar::abort_source* as) {
     co_await simple_send(client, req, f, nullptr, as);
 }
 
-seastar::future<> rest::simple_send(seastar::http::experimental::client& client, seastar::http::request& req, const handler_func_ex& f, const http::experimental::retry_strategy* strategy, seastar::abort_source* as) {
+seastar::future<> rest::simple_send(seastar::http::client& client, seastar::http::request& req, const handler_func_ex& f, const http::retry_strategy* strategy, seastar::abort_source* as) {
     if (as) {
         as->check();
     }

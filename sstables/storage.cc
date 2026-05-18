@@ -162,7 +162,7 @@ static future<file> open_sstable_component_file_non_checked(std::string_view nam
 }
 
 future<> filesystem_storage::rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const {
-    return sst.sstable_write_io_check(rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
+    return sst.sstable_write_io_check(rename_file, from_name, to_name, rename_flags::none).handle_exception([from_name, to_name] (std::exception_ptr ep) {
         sstlog.error("Could not rename SSTable component {} to {}. Found exception: {}", from_name, to_name, ep);
         return make_exception_future<>(ep);
     });
@@ -243,7 +243,7 @@ future<> filesystem_storage::seal(const sstable& sst) {
     // Guarantee that every component of this sstable reached the disk.
     co_await _dir.sync(sst._write_error_handler);
     // Rename TOC because it's no longer temporary.
-    co_await sst.sstable_write_io_check(rename_file, fmt::to_string(sst.filename(component_type::TemporaryTOC)), fmt::to_string(sst.filename(component_type::TOC)));
+    co_await sst.sstable_write_io_check(rename_file, fmt::to_string(sst.filename(component_type::TemporaryTOC)), fmt::to_string(sst.filename(component_type::TOC)), rename_flags::none);
     co_await _dir.sync(sst._write_error_handler);
     // If this point was reached, sstable should be safe in disk.
     sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", sst._generation, sst._schema->ks_name(), sst._schema->cf_name());
@@ -400,7 +400,7 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
         // Now that the source sstable is linked to new_dir, mark the source links for
         // deletion by leaving a TemporaryTOC file in the source directory.
         auto src_temp_toc = filename(sst, _dir.native(), sst._generation, component_type::TemporaryTOC);
-        co_await sst.sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc));
+        co_await sst.sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc), rename_flags::none);
         co_await _dir.sync(sst._write_error_handler);
     } else if (!leave_unsealed) {
         // Now that the source sstable is linked to dir, remove

@@ -57,14 +57,14 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << "}";
 }
 
-static http::experimental::client get_client(const test_config& c, int port = 0) {
+static http::client get_client(const test_config& c, int port = 0) {
     if (port == 0) {
         port = c.port;
     }
-    return http::experimental::client(socket_address(net::inet_address(c.remote_host), port));
+    return http::client(socket_address(net::inet_address(c.remote_host), port));
 }
 
-static future<> make_request(http::experimental::client& cli, sstring operation, sstring body) {
+static future<> make_request(http::client& cli, sstring operation, sstring body) {
     auto req = http::request::make("POST", "localhost", "/");
     req._headers["X-Amz-Target:"] = "DynamoDB_20120810." + operation;
     req.write_body("application/x-amz-json-1.0", std::move(body));
@@ -95,7 +95,7 @@ static void wait_for_alternator(const test_config& c, abort_source& as) {
     throw std::runtime_error("Timed out waiting for alternator port to become ready");
 }
 
-static void delete_alternator_table(http::experimental::client& cli) {
+static void delete_alternator_table(http::client& cli) {
     try {
         make_request(cli, "DeleteTable", R"({"TableName": "workloads_test"})").get();
     } catch(...) {
@@ -103,7 +103,7 @@ static void delete_alternator_table(http::experimental::client& cli) {
     }
 }
 
-static void create_alternator_table(http::experimental::client& cli) {
+static void create_alternator_table(http::client& cli) {
     delete_alternator_table(cli); // cleanup in case of leftovers
     make_request(cli, "CreateTable", R"(
         {
@@ -131,7 +131,7 @@ static void create_alternator_table(http::experimental::client& cli) {
     )").get();
 }
 
-static void create_alternator_table_with_gsi(http::experimental::client& cli) {
+static void create_alternator_table_with_gsi(http::client& cli) {
     delete_alternator_table(cli); // cleanup in case of leftovers
     make_request(cli, "CreateTable", R"(
         {
@@ -251,7 +251,7 @@ static constexpr auto update_item_suffix = R"(
     }}
 )";
 
-static future<> update_item(const test_config& _, http::experimental::client& cli, uint64_t seq) {
+static future<> update_item(const test_config& _, http::client& cli, uint64_t seq) {
     auto prefix = format(R"({{
             "TableName": "workloads_test",
             "Key": {{
@@ -266,7 +266,7 @@ static future<> update_item(const test_config& _, http::experimental::client& cl
     return make_request(cli, "UpdateItem", prefix + seastar::format(update_item_suffix, ""));
 }
 
-static future<> update_item_gsi(const test_config& _, http::experimental::client& cli, uint64_t seq) {
+static future<> update_item_gsi(const test_config& _, http::client& cli, uint64_t seq) {
     auto prefix = format(R"({{
             "TableName": "workloads_test",
             "Key": {{
@@ -300,7 +300,7 @@ static future<> update_item_gsi(const test_config& _, http::experimental::client
     return make_request(cli, "UpdateItem", prefix);
 }
 
-static future<> update_item_rmw(const test_config& _, http::experimental::client& cli, uint64_t seq) {
+static future<> update_item_rmw(const test_config& _, http::client& cli, uint64_t seq) {
     auto prefix = format(R"({{
             "TableName": "workloads_test",
             "Key": {{
@@ -328,7 +328,7 @@ static future<> update_item_rmw(const test_config& _, http::experimental::client
                         format(update_item_suffix, condition_attribute_values));
 }
 
-static future<> get_item(const test_config& _, http::experimental::client& cli, uint64_t seq) {
+static future<> get_item(const test_config& _, http::client& cli, uint64_t seq) {
     auto body = format(R"({{
         "TableName": "workloads_test",
         "Key": {{
@@ -346,7 +346,7 @@ static future<> get_item(const test_config& _, http::experimental::client& cli, 
     co_await make_request(cli, "GetItem", std::move(body));
 }
 
-static future<> scan(const test_config& c, http::experimental::client& cli, uint64_t seq) {
+static future<> scan(const test_config& c, http::client& cli, uint64_t seq) {
     // This uses "parallel scan" feature, see https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html#Scan.ParallelScan
     auto body = format(R"({{
         "TableName": "workloads_test",
@@ -367,7 +367,7 @@ static void flush_table(const test_config& c) {
     cli.close().get();
 }
 
-static void create_partitions(const test_config& c, http::experimental::client& cli) {
+static void create_partitions(const test_config& c, http::client& cli) {
     std::cout << "Creating " << c.partitions << " partitions..." << std::endl;
     for (unsigned seq = 0; seq < c.partitions; ++seq) {
         update_item(c, cli, seq).get();
@@ -379,7 +379,7 @@ static void create_partitions(const test_config& c, http::experimental::client& 
 }
 
 auto make_client_pool(const test_config& c) {
-    std::vector<http::experimental::client> res;
+    std::vector<http::client> res;
     res.reserve(c.concurrency);
     for (unsigned i = 0; i < c.concurrency; i++) {
         res.push_back(get_client(c));
@@ -403,7 +403,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         create_alternator_table_with_gsi(cli);
     }
 
-    using fun_t = std::function<future<>(const test_config&, http::experimental::client&, uint64_t)>;
+    using fun_t = std::function<future<>(const test_config&, http::client&, uint64_t)>;
     std::map<std::string, fun_t> workloads = {
         {"read",  get_item},
         {"scan", scan},
@@ -424,7 +424,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
     }
     fun_t fun = it->second;
 
-    static thread_local std::vector<http::experimental::client> cli_pool;
+    static thread_local std::vector<http::client> cli_pool;
     smp::invoke_on_all([&c] {
         cli_pool = make_client_pool(c);
     }).get();

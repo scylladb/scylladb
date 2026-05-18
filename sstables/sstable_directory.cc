@@ -684,7 +684,7 @@ future<sstring> sstable_directory::create_pending_deletion_log(opened_directory&
         }
 
             // Once flushed and closed, the temporary log file can be renamed.
-            io_check(rename_file, tmp_pending_delete_log, pending_delete_log).get();
+            io_check(rename_file, tmp_pending_delete_log, pending_delete_log, rename_flags::none).get();
 
             // Guarantee that the changes above reached the disk.
             base_dir.sync(general_disk_error_handler).get();
