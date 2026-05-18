@@ -386,6 +386,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
+    log_file_format = config.getini("log_file_format") or config.getini("log_format") or "%(asctime)s %(levelname)s %(name)s> %(message)s"
+    log_file_level = config.getini("log_file_level") or config.getini("log_level") or "INFO"
 
     pytest_log_dir = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_LOG_FOLDER
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
@@ -413,10 +415,11 @@ def pytest_configure(config: pytest.Config) -> None:
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
         handler.close()
+
     file_handler = logging.FileHandler(_pytest_config.stash[PYTEST_LOG_FILE])
-    file_handler.setFormatter(logging.Formatter(config.getini("log_file_format")))
+    file_handler.setFormatter(logging.Formatter(log_file_format))
     root_logger.addHandler(file_handler)
-    root_logger.setLevel(config.getini("log_file_level"))
+    root_logger.setLevel(log_file_level)
 
     if config.getoption("--exe-url") and config.getoption("--exe-path"):
         raise RuntimeError("Can't use --exe-url and exe-path simultaneously.")
