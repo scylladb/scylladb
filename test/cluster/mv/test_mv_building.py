@@ -308,3 +308,158 @@ async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
     slack = 5
 
     assert match_count <= duration + slack
+<<<<<<< HEAD
+||||||| parent of eac9449967 (test/test_mv_building: ensure nodes see each other after restart)
+
+# Test that the view builder does not finish when some replica nodes are down,
+# and resumes correctly once they come back.
+# Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_do_not_finish_view_builder_with_nodes_down(manager: ManagerClient):
+    """Test that the view builder does not complete while replica nodes are down,
+    and finishes successfully after they are restarted."""
+    node_count = 3
+    servers = await manager.servers_add(node_count, config={
+        "hinted_handoff_enabled": False,
+        "shadow_round_ms": 1000,
+    }, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+
+        n_partitions = 1000
+        for i in range(n_partitions):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, '{i}')")
+
+        # Pause the view builder using the vnode-specific injection point.
+        # view_builder_consume_end_of_partition_delay pauses processing at the end of each partition.
+        for s in servers:
+            await manager.api.enable_injection(s.ip_addr, "view_builder_consume_end_of_partition_delay", one_shot=False)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL AND key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v)")
+
+        # Wait for the view builder to start on at least one node
+        async def view_build_started():
+            rows = await cql.run_async(f"SELECT * FROM system.view_build_status_v2 WHERE keyspace_name = '{ks}' AND view_name = 'mv_cf_view' ALLOW FILTERING")
+            if len(rows) > 0:
+                return True
+        await wait_for(view_build_started, time.time() + 60, period=0.1)
+
+        # Stop two nodes. Use non-graceful stop to avoid waiting for the
+        # view_builder_consume_end_of_partition_delay injection to time out.
+        logger.info("Stopping nodes 2 and 3")
+        await manager.server_stop(servers[1].server_id)
+        await manager.server_stop(servers[2].server_id)
+
+        # Unpause the view builder on the remaining node - it should not finish
+        # because it cannot replicate view updates to the down nodes.
+        await manager.api.message_injection(servers[0].ip_addr, "view_builder_consume_end_of_partition_delay")
+        await manager.api.disable_injection(servers[0].ip_addr, "view_builder_consume_end_of_partition_delay")
+
+        # Verify the view builder does not finish while nodes are down.
+        logger.info("Verifying the view builder does not finish while nodes are down")
+        build_status = await cql.run_async(
+            f"SELECT * FROM system.view_build_status_v2 WHERE keyspace_name = '{ks}' AND view_name = 'mv_cf_view'",
+            host=cql.cluster.metadata.get_host(servers[0].ip_addr))
+        assert len(build_status) > 0 and build_status[0].status != 'SUCCESS', \
+            "View builder should still be in progress while nodes are down"
+
+        # Restart the stopped nodes
+        logger.info("Restarting nodes 2 and 3")
+        await manager.server_start(servers[1].server_id)
+        await manager.server_start(servers[2].server_id)
+
+        logger.info("Waiting for the view builder to complete")
+        await wait_for_view(cql, 'mv_cf_view', node_count)
+
+        # Verify all data
+        base_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.tab"))
+        view_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.mv_cf_view"))
+        assert view_rows == base_rows
+=======
+
+# Test that the view builder does not finish when some replica nodes are down,
+# and resumes correctly once they come back.
+# Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_do_not_finish_view_builder_with_nodes_down(manager: ManagerClient):
+    """Test that the view builder does not complete while replica nodes are down,
+    and finishes successfully after they are restarted."""
+    node_count = 3
+    servers = await manager.servers_add(node_count, config={
+        "hinted_handoff_enabled": False,
+        "shadow_round_ms": 1000,
+    }, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ], cmdline=[
+        '--logger-log-level', 'storage_proxy=debug',
+        '--logger-log-level', 'cql_server=debug',
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+
+        n_partitions = 1000
+        for i in range(n_partitions):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, '{i}')")
+
+        # Pause the view builder using the vnode-specific injection point.
+        # view_builder_consume_end_of_partition_delay pauses processing at the end of each partition.
+        for s in servers:
+            await manager.api.enable_injection(s.ip_addr, "view_builder_consume_end_of_partition_delay", one_shot=False)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL AND key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v)")
+
+        # Wait for the view builder to start on at least one node
+        async def view_build_started():
+            rows = await cql.run_async(f"SELECT * FROM system.view_build_status_v2 WHERE keyspace_name = '{ks}' AND view_name = 'mv_cf_view' ALLOW FILTERING")
+            if len(rows) > 0:
+                return True
+        await wait_for(view_build_started, time.time() + 60, period=0.1)
+
+        # Stop two nodes. Use non-graceful stop to avoid waiting for the
+        # view_builder_consume_end_of_partition_delay injection to time out.
+        logger.info("Stopping nodes 2 and 3")
+        await manager.server_stop(servers[1].server_id)
+        await manager.server_stop(servers[2].server_id)
+
+        # Unpause the view builder on the remaining node - it should not finish
+        # because it cannot replicate view updates to the down nodes.
+        await manager.api.message_injection(servers[0].ip_addr, "view_builder_consume_end_of_partition_delay")
+        await manager.api.disable_injection(servers[0].ip_addr, "view_builder_consume_end_of_partition_delay")
+
+        # Verify the view builder does not finish while nodes are down.
+        logger.info("Verifying the view builder does not finish while nodes are down")
+        build_status = await cql.run_async(
+            f"SELECT * FROM system.view_build_status_v2 WHERE keyspace_name = '{ks}' AND view_name = 'mv_cf_view'",
+            host=cql.cluster.metadata.get_host(servers[0].ip_addr))
+        assert len(build_status) > 0 and build_status[0].status != 'SUCCESS', \
+            "View builder should still be in progress while nodes are down"
+
+        # Restart the stopped nodes
+        logger.info("Restarting nodes 2 and 3")
+        await manager.server_start(servers[1].server_id)
+        await manager.server_start(servers[2].server_id)
+        await manager.servers_see_each_other(servers)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        logger.info("Waiting for the view builder to complete")
+        await wait_for_view(cql, 'mv_cf_view', node_count)
+
+        # Verify all data
+        base_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.tab"))
+        view_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.mv_cf_view"))
+        assert view_rows == base_rows
+>>>>>>> eac9449967 (test/test_mv_building: ensure nodes see each other after restart)
