@@ -12,7 +12,6 @@ from test.pylib.manager_client import ManagerClient
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_failure_after_group0_server_registration(manager: ManagerClient) -> None:
     """Test that a node shuts down cleanly when group0 startup fails after server registration.

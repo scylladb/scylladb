@@ -16,7 +16,6 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
     """ Test writing to a table with CDC enabled while adding and dropping a column.
         In particular we are interested at the behavior when the schemas of the base table
@@ -74,7 +73,6 @@ async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
         cdc_rows = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test_scylla_cdc_log")
         assert base_rows[0].count == cdc_rows[0].count, f"Base table rows: {base_rows[0].count}, CDC log rows: {cdc_rows[0].count}"
 
-@pytest.mark.asyncio
 async def test_cdc_compatible_schema(manager: ManagerClient):
     """
     Basic test that we can write to a table with CDC enabled when the schema of
@@ -110,7 +108,6 @@ async def test_cdc_compatible_schema(manager: ManagerClient):
         matches = await log.grep("has no CDC schema set")
         assert len(matches) == 0, "Found unexpected log messages indicating missing CDC schema"
 
-@pytest.mark.asyncio
 async def test_recreate_column_too_soon(manager: ManagerClient):
     """ Test that recreating a dropped column too soon fails with an appropriate error.
 
@@ -131,7 +128,6 @@ async def test_recreate_column_too_soon(manager: ManagerClient):
         with pytest.raises(Exception, match="a column with the same name was dropped too recently"):
             await cql.run_async(f"ALTER TABLE {ks}.test ADD dropped_col int")
 
-@pytest.mark.asyncio
 async def test_concurrent_writes_and_drop_column_with_cdc_preimage(manager: ManagerClient):
     """ Test concurrent writes and column drop with CDC preimage enabled.
 

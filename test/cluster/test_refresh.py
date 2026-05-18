@@ -90,7 +90,6 @@ class SSTablesOnLocalStorage:
     async def restore(self, manager, sstables_per_server, prefix, ks, cf, scope, primary_replica_only, logger):
         await asyncio.gather(*(self.refresh_one(manager, s, ks, cf, sstables, scope, primary_replica_only) for s, sstables in sstables_per_server.items()))
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("topology", [
         topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
         topo(rf = 3, nodes = 5, racks = 1, dcs = 1),

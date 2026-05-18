@@ -15,7 +15,6 @@ import json
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ManagerClient):
     """
         The tested scenario is as follows:

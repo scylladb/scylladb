@@ -23,7 +23,6 @@ from test.pylib.util import wait_for_first_completed
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_decommission_kill_then_replace(manager: ManagerClient) -> None:
     """

@@ -17,7 +17,6 @@ from cassandra.auth import PlainTextAuthProvider
 from test.pylib.manager_client import ManagerClient, safe_driver_shutdown
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
-@pytest.mark.asyncio
 async def test_startup_no_auth_response(manager: ManagerClient, build_mode):
     """
     Test behavior when client hangs on startup auth response.

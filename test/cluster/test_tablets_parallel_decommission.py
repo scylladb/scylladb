@@ -26,7 +26,6 @@ async def count_requests_queued(manager: ManagerClient, coord_srv: ServerInfo, r
     return len(list(filter(lambda t: t['type'] == request_type, tasks)))
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablets_are_drained_in_parallel(manager: ManagerClient):
     """
@@ -85,7 +84,6 @@ async def test_tablets_are_drained_in_parallel(manager: ManagerClient):
         await decomm_task2
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("same_rack", [False, True])
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack):
@@ -161,7 +159,6 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ManagerClient, same_rack
         await gather_safely(*tasks)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_can_be_canceled(manager: ManagerClient):
     """
@@ -238,7 +235,6 @@ async def test_decommission_can_be_canceled(manager: ManagerClient):
         assert load[decomm_hostid] == 0
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_is_rejected_when_another_one_is_still_pending(manager: ManagerClient):
     """
@@ -283,7 +279,6 @@ async def test_decommission_is_rejected_when_another_one_is_still_pending(manage
         await decomm_task
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_remove_is_canceled_if_there_is_node_down(manager: ManagerClient):
     """
@@ -320,7 +315,6 @@ async def test_remove_is_canceled_if_there_is_node_down(manager: ManagerClient):
             await manager.remove_node(coord_serv.server_id, servers[2].server_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_start_time_is_stable(manager: ManagerClient):
     """
@@ -367,7 +361,6 @@ async def test_decommission_start_time_is_stable(manager: ManagerClient):
         assert task2['start_time'] == task['start_time']
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_can_not_be_canceled_once_running(manager: ManagerClient):
     """
@@ -413,7 +406,6 @@ async def test_decommission_can_not_be_canceled_once_running(manager: ManagerCli
         assert load[decomm_hostid] == 0
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: ManagerClient):
     """
@@ -459,7 +451,6 @@ async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: M
             await decomm_task
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_node_lost_during_decommission_drain(manager: ManagerClient):
     """

@@ -12,7 +12,6 @@ from test.cluster.util import get_coordinator_host
 from test.pylib.manager_client import ManagerClient
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_gossiper_race_on_decommission(manager: ManagerClient):
     """

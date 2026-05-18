@@ -17,7 +17,6 @@ from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_property(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
@@ -39,7 +38,6 @@ async def test_property(manager: ManagerClient):
         with pytest.raises(ConfigurationException, match="The 'logstor' storage engine cannot be used with tables that have clustering columns"):
             await cql.run_async(f"CREATE TABLE {ks}.t_enabled (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH storage_engine = 'logstor'")
 
-@pytest.mark.asyncio
 async def test_config_option_consistency(manager: ManagerClient):
     """
     Test that logstor storage engine requires the experimental 'logstor' feature to be enabled.
@@ -56,7 +54,6 @@ async def test_config_option_consistency(manager: ManagerClient):
         with pytest.raises(ConfigurationException, match="The experimental feature 'logstor' must be enabled"):
             await cql.run_async(f"CREATE TABLE {ks}.t_logstor (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
 
-@pytest.mark.asyncio
 async def test_basic_write_and_read(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
@@ -100,7 +97,6 @@ async def test_basic_write_and_read(manager: ManagerClient):
         assert rows[0].pk == 1
         assert rows[0].v == {'a': 'apple', 'b': 'banana', 'c': 'cherry'}
 
-@pytest.mark.asyncio
 async def test_range_read(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
@@ -128,7 +124,6 @@ async def test_range_read(manager: ManagerClient):
         assert len(rows) == 3
         assert [row.tok for row in rows] == tokens[2:5]
 
-@pytest.mark.asyncio
 async def test_parallel_writes(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
@@ -147,7 +142,6 @@ async def test_parallel_writes(manager: ManagerClient):
             assert rows[0].pk == i
             assert rows[0].v == i + 1
 
-@pytest.mark.asyncio
 async def test_overwrites(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
@@ -167,7 +161,6 @@ async def test_overwrites(manager: ManagerClient):
         assert rows[0].pk == pk
         assert rows[0].v == 99
 
-@pytest.mark.asyncio
 async def test_parallel_big_writes(manager: ManagerClient):
     """
     Perform multiple writes in parallel with large values and validate to test segment switching.
@@ -193,7 +186,6 @@ async def test_parallel_big_writes(manager: ManagerClient):
             assert rows[0].pk == i
             assert rows[0].v == f"{i}-{large_value}"
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("fail_separator_flush", [False, True], ids=["normal", "fail_separator_flush"])
 async def test_recovery_basic(manager: ManagerClient, fail_separator_flush: bool):
@@ -280,7 +272,6 @@ async def test_recovery_basic(manager: ManagerClient, fail_separator_flush: bool
             assert rows[0].pk == pk, f"Key {pk} has wrong pk value"
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after additional writes"
 
-@pytest.mark.asyncio
 async def test_recovery_with_segment_reuse(manager: ManagerClient):
     """
     Test recovery after segments have been compacted and reused.
@@ -347,7 +338,6 @@ async def test_recovery_with_segment_reuse(manager: ManagerClient):
             assert len(rows) == 1, f"Key {pk} not found after recovery"
             assert rows[0].v == expected_v, f"Key {pk} value mismatch after recovery"
 
-@pytest.mark.asyncio
 async def test_compaction(manager: ManagerClient):
     """
     Test log compaction by creating dead data and verifying space reclamation.
@@ -388,7 +378,6 @@ async def test_compaction(manager: ManagerClient):
             await manager.api.logstor_compaction(servers[0].ip_addr)
         await wait_for(segments_compacted, time.time() + 60)
 
-@pytest.mark.asyncio
 async def test_drop_table(manager: ManagerClient):
     """
     Test that DROP TABLE works properly with logstor tables.
@@ -451,7 +440,6 @@ async def test_drop_table(manager: ManagerClient):
             assert len(rows) == 1, f"Expected 1 row for key {i} in test2 after all operations, but got {len(rows)}"
             assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2 after all operations, but got {len(rows[0].v)}"
 
-@pytest.mark.asyncio
 async def test_trigger_separator_flush(manager: ManagerClient):
     """
     Write to 2 tablets, one slower than the other.
@@ -491,7 +479,6 @@ async def test_trigger_separator_flush(manager: ManagerClient):
             value = f"value_{i}_" + ('x' * (value_size - 20))
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
 
-@pytest.mark.asyncio
 async def test_tablet_split_trigger_by_size(manager: ManagerClient):
     """
     Test that a logstor table automatically splits tablets when the data size
@@ -543,7 +530,6 @@ async def test_tablet_split_trigger_by_size(manager: ManagerClient):
             assert len(rows) == 1, f"Key {i} not found after tablet split"
             assert rows[0].v == value, f"Wrong value for key {i} after tablet split"
 
-@pytest.mark.asyncio
 async def test_tablet_split_and_merge(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -606,7 +592,6 @@ async def test_tablet_split_and_merge(manager: ManagerClient):
 
         await check()
 
-@pytest.mark.asyncio
 async def test_tablet_migration(manager: ManagerClient):
     """
     Test tablet migration
@@ -642,7 +627,6 @@ async def test_tablet_migration(manager: ManagerClient):
             assert len(rows) == 1, f"Expected 1 row for key {i} after tablet migration, but got {len(rows)}"
             assert rows[0].v == f"{i}_{value}", f"Expected value '{i}_{value}' for key {i} after tablet migration, but got {rows[0].v}"
 
-@pytest.mark.asyncio
 async def test_tablet_intranode_migration(manager: ManagerClient):
     """
     Test tablet intranode migration
@@ -677,7 +661,6 @@ async def test_tablet_intranode_migration(manager: ManagerClient):
             assert len(rows) == 1, f"Expected 1 row for key {i} after tablet migration, but got {len(rows)}"
             assert rows[0].v == f"{i}_{value}", f"Expected value '{i}_{value}' for key {i} after tablet migration, but got {rows[0].v}"
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_migration_with_compaction(manager: ManagerClient):
     """

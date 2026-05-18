@@ -32,7 +32,6 @@ async def await_api_task(task, allowed_exception: Optional[Type[Exception]]=None
 
 
 @pytest.mark.parametrize("action", ['move', 'add_replica', 'del_replica'])
-@pytest.mark.asyncio
 async def test_tablet_transition_sanity(manager: ManagerClient, action):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -117,7 +116,6 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
 
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage, failure_detector_timeout):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
@@ -273,7 +271,6 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         # For dropping the keyspace after the node failure
         await reconnect_driver(manager)
 
-@pytest.mark.asyncio
 async def test_tablet_back_and_forth_migration(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -321,7 +318,6 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({3}, {3});")
         await assert_rows(3)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
@@ -417,7 +413,6 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: M
 
         await check(keys)
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("migration_stage_and_injection", [("cleanup", "cleanup_tablet_wait"), ("end_migration", "handle_tablet_migration_end_migration")], ids=["cleanup", "end_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, migration_stage_and_injection):
@@ -502,7 +497,6 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
         await wait_for(tablets_merged, time.time() + 60)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
     """

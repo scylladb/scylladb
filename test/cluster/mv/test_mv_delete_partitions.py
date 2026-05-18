@@ -56,7 +56,6 @@ async def insert_with_concurrency(cql, table, value_count, concurrency):
 # The "view_update_limit" error injections will cause the test to fail due to a failed
 # replica write if the view update limit is exceeded. If, thanks to throttling, we never
 # exceed the limit, the test will pass
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) -> None:
     node_count = 2
@@ -84,7 +83,6 @@ async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) 
 # a partition in this case is expected to generate one view update for deleting
 # the corresponding view partition by a partition tombstone.
 # Reproduces #8199
-@pytest.mark.asyncio
 @pytest.mark.parametrize("permuted", [False, True])
 async def test_base_partition_deletion_with_metrics(manager: ManagerClient, permuted):
     server = await manager.server_add()
@@ -134,7 +132,6 @@ async def test_base_partition_deletion_with_metrics(manager: ManagerClient, perm
 # Perform a deletion of a base partition in a batch with deletion of individual rows. Verify the
 # partition is deleted correctly and that a single update is generated for the view for deleting
 # the whole partition, and no view updates for each row.
-@pytest.mark.asyncio
 async def test_base_partition_deletion_in_batch_with_delete_row_with_metrics(manager: ManagerClient):
     server = await manager.server_add()
     cql = manager.get_cql()

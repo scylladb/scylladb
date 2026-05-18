@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-@pytest.mark.asyncio
 async def test_snapshot(manager, random_tables):
     """
         Cluster A, B, C

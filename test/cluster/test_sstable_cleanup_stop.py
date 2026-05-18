@@ -13,7 +13,6 @@ import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cleanup_stop(manager: ManagerClient):
     logger.info("Bootstrapping cluster")

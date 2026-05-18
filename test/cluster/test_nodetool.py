@@ -70,7 +70,6 @@ async def validate_status_operation(result: str, live_eps: list, down_eps: list,
     assert lines[i] == ""
 
 
-@pytest.mark.asyncio
 async def test_zero_token_node_normal(manager: ManagerClient):
     zero_token_nodes = await manager.servers_add(servers_num=2, config={'join_ring': False})
 
@@ -115,7 +114,6 @@ async def test_zero_token_node_normal(manager: ManagerClient):
                                     host_id_map, config['num_tokens'])
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_zero_token_node_down_leaving(manager: ManagerClient):
     servers = await manager.running_servers()
@@ -161,7 +159,6 @@ async def test_zero_token_node_down_leaving(manager: ManagerClient):
     await task
 
 
-@pytest.mark.asyncio
 async def test_zero_token_node_down_normal(manager: ManagerClient):
     servers = await manager.running_servers()
 
@@ -197,7 +194,6 @@ async def test_zero_token_node_down_normal(manager: ManagerClient):
                                     host_id_map, config['num_tokens'])
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_regular_node_joining(manager: ManagerClient):
     servers = await manager.running_servers()

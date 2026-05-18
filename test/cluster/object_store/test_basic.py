@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.parametrize('replication_factor', [1, 3])
 @pytest.mark.parametrize('mode', ['normal', 'encrypted'])
-@pytest.mark.asyncio
 async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, replication_factor):
     '''verify ownership table is updated, and tables written to object storage can be read after scylla restarts.
     Parametrized over replication_factor to also verify RF=3 with multiple servers.'''
@@ -108,7 +107,6 @@ async def test_basic(manager: ManagerClient, object_storage, tmp_path, mode, rep
         rows = "\n".join(f"{row.table_id} {row.status}" for row in res)
         assert not rows, 'Unexpected entries in registry'
 
-@pytest.mark.asyncio
 async def test_garbage_collect(manager: ManagerClient, object_storage):
     '''verify ownership table is garbage-collected on boot'''
 
@@ -154,7 +152,6 @@ async def test_garbage_collect(manager: ManagerClient, object_storage):
                 assert not o.key.startswith(str(ent[2])), f'Sstable object not cleaned, found {o.key}'
 
 
-@pytest.mark.asyncio
 async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
     '''verify sstables are populated from quarantine state'''
 
@@ -193,7 +190,6 @@ async def test_populate_from_quarantine(manager: ManagerClient, object_storage):
         assert have_res == rows, f'Unexpected table content: {have_res}'
 
 
-@pytest.mark.asyncio
 async def test_misconfigured_storage(manager: ManagerClient, object_storage):
     '''creating keyspace with unknown endpoint is not allowed'''
     # scylladb/scylladb#15074
@@ -216,7 +212,6 @@ async def test_misconfigured_storage(manager: ManagerClient, object_storage):
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
-@pytest.mark.asyncio
 async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_storage):
     '''verify that memtable flush doesn't crash in case storage access keys are incorrect'''
 
@@ -260,7 +255,6 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, object_sto
         have_res = { x.name: x.value for x in res }
         assert have_res == dict(rows), f'Unexpected table content: {have_res}'
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize('config_with_full_url', [True, False])
 async def test_get_object_store_endpoints(manager: ManagerClient, config_with_full_url):
     if config_with_full_url:
@@ -291,7 +285,6 @@ async def test_get_object_store_endpoints(manager: ManagerClient, config_with_fu
     assert json.loads(res[name]) == objconf[0]
 
 
-@pytest.mark.asyncio
 async def test_create_keyspace_after_config_update(manager: ManagerClient, object_storage):
     print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
     server = await manager.server_add()

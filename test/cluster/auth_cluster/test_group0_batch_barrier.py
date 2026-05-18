@@ -14,7 +14,6 @@ from test.pylib.util import unique_name, wait_for
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injection is disabled in release mode')
 async def test_create_role_visible_on_all_nodes(manager: ManagerClient) -> None:
     """After CREATE ROLE returns, the role should be immediately visible
@@ -51,7 +50,6 @@ async def test_create_role_visible_on_all_nodes(manager: ManagerClient) -> None:
         )
 
 
-@pytest.mark.asyncio
 async def test_create_role_mixed_cluster(manager: ManagerClient,
                                                             scylla_2025_1: ScyllaVersionDescription) -> None:
     """Variant of test_create_role_visible_on_all_nodes that runs a mixed

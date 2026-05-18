@@ -21,7 +21,6 @@ async def disable_autocompaction_across_keyspaces(manager: ManagerClient, server
     for ks in (*keyspace_list, "system", "system_schema"):
         await manager.api.disable_autocompaction(server_ip_addr, ks)
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("consider_only_existing_data", [True, False])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_major_compaction_consider_only_existing_data(manager: ManagerClient, consider_only_existing_data):
@@ -92,7 +91,6 @@ async def test_major_compaction_consider_only_existing_data(manager: ManagerClie
         for k in range(10):
             assert len(await cql.run_async(f"SELECT * FROM {ks}.{cf} WHERE pk = {k}")) == expected_count
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("compaction_flush_all_tables_before_major_seconds", [0, 2, 10])
 async def test_major_compaction_flush_all_tables(manager: ManagerClient, compaction_flush_all_tables_before_major_seconds):
     """
@@ -144,7 +142,6 @@ async def test_major_compaction_flush_all_tables(manager: ManagerClient, compact
         await check_all_table_flush_in_major_compaction(compaction_flush_all_tables_before_major_seconds == 2)
 
 # Testcase for https://github.com/scylladb/scylladb/issues/20197
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_shutdown_drain_during_compaction(manager: ManagerClient):
     """
@@ -199,7 +196,6 @@ async def test_shutdown_drain_during_compaction(manager: ManagerClient):
         await manager.server_start(server.server_id)
         await reconnect_driver(manager)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_compaction_strategy_during_compaction(manager: ManagerClient):
     """
@@ -244,7 +240,6 @@ async def test_alter_compaction_strategy_during_compaction(manager: ManagerClien
         await compaction_task
 
 # Testcase for https://github.com/scylladb/scylladb/issues/24501
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_disable_autocompaction_during_major_compaction(manager: ManagerClient):
     """

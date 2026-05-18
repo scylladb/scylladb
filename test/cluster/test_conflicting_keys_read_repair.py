@@ -18,7 +18,6 @@ from test.cluster.util import new_test_keyspace
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_read_repair_with_conflicting_hash_keys(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """
     Test that conflicting hash keys are handled correctly during read repair.

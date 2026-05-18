@@ -16,7 +16,6 @@ from test.cluster.conftest import cluster_con
 from test.cluster.util import create_new_test_keyspace
 
 
-@pytest.mark.asyncio
 async def test_zero_token_nodes_no_replication(manager: ManagerClient):
     """
     Test that zero-token nodes aren't replicas in all non-local replication strategies with and without tablets.

@@ -12,7 +12,6 @@ from cassandra.auth import PlainTextAuthProvider
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_auth_cache_metrics(manager: ManagerClient):
     """
     Verify that auth cache metrics correctly track roles and permissions

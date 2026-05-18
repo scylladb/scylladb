@@ -14,7 +14,6 @@ CQL_PORT = 9042
 SHARD_AWARE_PORT = 19042
 
 
-@pytest.mark.asyncio
 async def test_uninitialized_conns_sempahore_one(manager: ManagerClient):
     """Verify that CQL queries work when uninitialized_connections_semaphore_cpu_concurrency is set to 1."""
     config = {

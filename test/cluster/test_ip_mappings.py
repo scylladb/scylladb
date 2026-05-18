@@ -18,7 +18,6 @@ from cassandra.cluster import ConsistencyLevel, SimpleStatement
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_broken_bootstrap(manager: ManagerClient):
     server_a = await manager.server_add()
     server_b = await manager.server_add(start=False)
@@ -49,7 +48,6 @@ async def test_broken_bootstrap(manager: ManagerClient):
             assert response[0].b == i
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize('reuse_ip', [False, True])
 async def test_full_shutdown_during_replace(manager: ManagerClient, reuse_ip: bool):

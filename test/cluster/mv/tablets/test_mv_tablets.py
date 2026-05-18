@@ -60,7 +60,6 @@ async def assert_one_tablet(cql, keyspace_name, table_or_view_name):
     assert len(rows) == 1
 
 
-@pytest.mark.asyncio
 async def test_tablet_mv_create(manager: ManagerClient):
     """A basic test for creating a materialized view on a table stored
        with tablets on a one-node cluster. We just create the view and
@@ -75,7 +74,6 @@ async def test_tablet_mv_create(manager: ManagerClient):
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)")
 
 
-@pytest.mark.asyncio
 async def test_tablet_mv_simple(manager: ManagerClient):
     """A simple test for reading and writing a materialized view on a table
        stored with tablets on a one-node cluster. Because it's a one-node
@@ -94,7 +92,6 @@ async def test_tablet_mv_simple(manager: ManagerClient):
         # We used SYNCHRONOUS_UPDATES=TRUE, so the view should be updated:
         assert [(3,2)] == list(await cql.run_async(f"SELECT * FROM {ks}.tv WHERE c=3"))
 
-@pytest.mark.asyncio
 async def test_tablet_mv_simple_6node(manager: ManagerClient):
     """A simple reproducer for a bug of forgetting that the view table has a
        different tablet mapping from the base: Using the wrong tablet mapping
@@ -119,7 +116,6 @@ async def inject_error_on(manager, error_name, servers):
     errs = [manager.api.enable_injection(s.ip_addr, error_name, False) for s in servers]
     await asyncio.gather(*errs)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
     """A reproducer for a bug where Alternator LSI was not using synchronous
@@ -197,7 +193,6 @@ async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
     )
     table.delete()
 
-@pytest.mark.asyncio
 async def test_tablet_si_create(manager: ManagerClient):
     """A basic test for creating a secondary index on a table stored
        with tablets on a one-node cluster. We just create the index and
@@ -226,7 +221,6 @@ async def test_tablet_lsi_create(manager: ManagerClient):
         await cql.run_async(f"CREATE INDEX my_idx ON {ks}.test((pk),c)")
         await cql.run_async(f"DROP INDEX {ks}.my_idx")
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_cql_lsi(manager: ManagerClient):
     """A simple reproducer for issue #16371 where CQL LSI (local secondary
@@ -277,7 +271,6 @@ async def test_tablet_cql_lsi(manager: ManagerClient):
         # immediately after the previous INSERT returned.
         assert [(7,42)] == list(await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk=7 AND c=42"))
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_tablet_split(manager: ManagerClient):
     """A basic test for checking that tablet split works on MV tables.

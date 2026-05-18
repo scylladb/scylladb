@@ -41,7 +41,6 @@ async def wait_for_publishing_generations(cql: Session, servers: list[ServerInfo
     return gen_timestamps
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_writes_to_recent_previous_cdc_generations(request, manager: ManagerClient):
     """
@@ -90,7 +89,6 @@ async def test_writes_to_recent_previous_cdc_generations(request, manager: Manag
             await do_write(ts - 1)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='debug', reason='test requires nodes to be started quickly')
 async def test_writes_to_old_previous_cdc_generation(request, manager: ManagerClient):
     """

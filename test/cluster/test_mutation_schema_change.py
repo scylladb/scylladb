@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-@pytest.mark.asyncio
 async def test_mutation_schema_change(manager, random_tables):
     """
         Cluster A, B, C
@@ -81,7 +80,6 @@ async def test_mutation_schema_change(manager, random_tables):
                                     execution_profile='whitelist')
 
 
-@pytest.mark.asyncio
 async def test_mutation_schema_change_restart(manager, random_tables):
     """
         Cluster A, B, C

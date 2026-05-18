@@ -131,7 +131,6 @@ async def run_random_resizes(
     }
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='debug mode is too slow for this test')
 async def test_multi_column_lwt_during_split_merge(manager: ManagerClient, scale_timeout):

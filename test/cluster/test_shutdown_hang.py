@@ -20,7 +20,6 @@ from test.cluster.util import wait_for_token_ring_and_group0_consistency, new_te
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hints_manager_shutdown_hang(manager: ManagerClient) -> None:
     """Reproducer for #8079"""

@@ -326,7 +326,6 @@ async def proxy_server(manager: ManagerClient):
     yield (server, manager)
 
 
-@pytest.mark.asyncio
 async def test_proxy_protocol_basic(proxy_server):
     """
     Test that connections through the proxy protocol port correctly report
@@ -354,7 +353,6 @@ async def test_proxy_protocol_basic(proxy_server):
     assert opcode == 0x08, f"Expected RESULT opcode (0x08), got {hex(opcode)}"
 
 
-@pytest.mark.asyncio
 async def test_proxy_protocol_shard_aware(proxy_server):
     """
     Test that shard-aware proxy protocol port correctly uses the source port
@@ -417,7 +415,6 @@ async def test_proxy_protocol_shard_aware(proxy_server):
             await writer.wait_closed()
 
 
-@pytest.mark.asyncio
 async def test_proxy_protocol_multiple_connections(proxy_server):
     """
     Test that multiple connections through the proxy protocol port
@@ -447,7 +444,6 @@ async def test_proxy_protocol_multiple_connections(proxy_server):
         assert opcode == 0x08, f"Expected RESULT opcode for {fake_src_addr}, got {hex(opcode)}"
 
 
-@pytest.mark.asyncio
 async def test_proxy_protocol_port_preserved_in_system_clients(proxy_server):
     """
     Test that the source port from the proxy protocol header is correctly
@@ -498,7 +494,6 @@ async def test_proxy_protocol_port_preserved_in_system_clients(proxy_server):
         await writer.wait_closed()
 
 
-@pytest.mark.asyncio
 async def test_proxy_protocol_ssl_basic(proxy_server):
     """
     Test proxy protocol with TLS encryption.
@@ -524,7 +519,6 @@ async def test_proxy_protocol_ssl_basic(proxy_server):
     assert opcode == 0x08, f"Expected RESULT opcode (0x08), got {hex(opcode)}"
 
 
-@pytest.mark.asyncio
 async def test_proxy_protocol_ssl_shard_aware(proxy_server):
     """
     Test proxy protocol with TLS on the shard-aware port. We connect to all
@@ -624,7 +618,6 @@ async def test_proxy_protocol_ssl_shard_aware(proxy_server):
             ssl_sock.close()
 
 
-@pytest.mark.asyncio
 async def test_proxy_protocol_ssl_port_preserved(proxy_server):
     """
     Test that the source port from the proxy protocol header is correctly

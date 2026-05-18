@@ -36,7 +36,6 @@ async def get_injection_params(manager, node_ip, injection):
         return {}
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_enable_compacting_data_for_streaming_and_repair_live_update(manager):
     """
@@ -77,7 +76,6 @@ async def test_enable_compacting_data_for_streaming_and_repair_live_update(manag
     assert (await get_injection_params(manager, node1.ip_addr, "maybe_compact_for_streaming"))["compaction_enabled"] == "true"
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tombstone_gc_for_streaming_and_repair(manager):
     """
@@ -153,7 +151,6 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
             "compaction_enabled": "true", "compaction_can_gc": "false"}
     check_nodes_have_data(True, True)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_succeeds_with_unitialized_bm(manager):
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
@@ -216,17 +213,14 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
 
     logger.debug(f"Repair nr_repairs={nr_repairs} cache_time_in_ms={cache_time_in_ms} total_repair_duration={total_repair_duration}")
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_flush_in_repair_with_cache(manager):
     await do_batchlog_flush_in_repair(manager, 5000);
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_batchlog_flush_in_repair_without_cache(manager):
     await do_batchlog_flush_in_repair(manager, 0);
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_drop_during_data_sync_repair(manager):
     cfg = {
@@ -242,7 +236,6 @@ async def test_keyspace_drop_during_data_sync_repair(manager):
 
     await manager.server_add(config=cfg)
 
-@pytest.mark.asyncio
 async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
     cfg = {
         'tablets_mode_for_new_keyspaces': 'disabled',
@@ -287,7 +280,6 @@ async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
             assert natural_endpoints == ring_endpoints, f"natural_endpoint mismatch describe_ring for {key=} {token=} {natural_endpoints=} {ring_endpoints=}"
 
 
-@pytest.mark.asyncio
 async def test_repair_timtestamp_difference(manager):
     cmdline = [ "--smp", "1", "--logger-log-level", "api=trace", "--hinted-handoff-enabled", "0" ]
     node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
@@ -342,7 +334,6 @@ async def test_repair_timtestamp_difference(manager):
     logger.info("Checking timestamps after repair")
     await check({host1: update2_timestamp, host2: update2_timestamp})
 
-@pytest.mark.asyncio
 async def test_small_table_optimization_repair(manager):
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
 
@@ -357,7 +348,6 @@ async def test_small_table_optimization_repair(manager):
     assert len(rows) == 1
 
 
-@pytest.mark.asyncio
 async def test_repair_rejects_equal_start_and_end_token(manager):
     """Verify that repair rejects a request where startToken == endToken.
     When start == end, the wrapping range (T, T] covers the full token ring,

@@ -14,7 +14,6 @@ pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 # Simple test of schema helper
-@pytest.mark.asyncio
 async def test_new_table(manager, random_tables):
     cql = manager.cql
     assert cql is not None
@@ -42,7 +41,6 @@ async def test_new_table(manager, random_tables):
 
 
 # Simple test of schema helper with alter
-@pytest.mark.asyncio
 async def test_alter_verify_schema(manager, random_tables):
     """Verify table schema"""
     cql = manager.cql
@@ -56,7 +54,6 @@ async def test_alter_verify_schema(manager, random_tables):
         await random_tables.verify_schema()
 
 
-@pytest.mark.asyncio
 async def test_new_table_insert_one(manager, random_tables):
     cql = manager.cql
     assert cql is not None
@@ -71,7 +68,6 @@ async def test_new_table_insert_one(manager, random_tables):
     assert list(res[0])[:2] == vals
 
 
-@pytest.mark.asyncio
 async def test_drop_column(manager, random_tables):
     """Drop a random column from a table"""
     cql = manager.cql
@@ -89,7 +85,6 @@ async def test_drop_column(manager, random_tables):
     await random_tables.verify_schema(table)
 
 
-@pytest.mark.asyncio
 async def test_add_index(random_tables):
     """Add and drop an index"""
     table = await random_tables.add_table(ncolumns=5)
@@ -99,7 +94,6 @@ async def test_add_index(random_tables):
     await random_tables.verify_schema(table)
 
 
-@pytest.mark.asyncio
 async def test_paged_result(manager, random_tables):
     """Test run_async with paged results"""
     cql = manager.cql

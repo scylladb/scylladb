@@ -10,7 +10,6 @@ import logging
 import pytest
 
 
-@pytest.mark.asyncio
 async def test_removing_alive_node_fails(manager: ManagerClient) -> None:
     """
     Test verifying that an attempt to remove an alive node fails as expected.

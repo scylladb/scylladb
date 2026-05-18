@@ -15,7 +15,6 @@ import time
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_data_resurrection_after_cleanup(manager: ManagerClient):
     logger.info("Bootstrapping cluster")

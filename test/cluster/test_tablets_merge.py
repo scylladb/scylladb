@@ -33,7 +33,6 @@ async def disable_injection_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_merge_simple(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
@@ -177,7 +176,6 @@ async def test_tablet_merge_simple(manager: ManagerClient):
         await check()
 
 # Multiple cycles of split and merge, with topology changes in parallel and RF > 1.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
@@ -323,7 +321,6 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             await check()
 
 @pytest.mark.parametrize("racks", [2, 3])
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks):
     cmdline = ['--target-tablet-size-in-bytes', '30000',]
@@ -375,7 +372,6 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
     await wait_for(finished_merging, time.time() + 120)
 
 # Reproduces #23284
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: ManagerClient, racks = 2):
     cmdline = ['--smp', '4', '-m', '2G', '--target-tablet-size-in-bytes', '30000', '--max-task-backlog', '200', '--logger-log-level', 'load_balancer=debug']
@@ -440,7 +436,6 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
 
     await check_logs("after merge completion")
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_missing_data(manager: ManagerClient):
 
@@ -508,7 +503,6 @@ async def test_missing_data(manager: ManagerClient):
 
         assert rec_count == len(pks), f"received {rec_count} records instead of {len(pks)} while querying server {server.server_id}; missing keys: {missing}"
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_merge_with_drop(manager: ManagerClient):
 
@@ -578,7 +572,6 @@ async def test_merge_with_drop(manager: ManagerClient):
         await drop_table_fut
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_background_merge_deadlock(manager: ManagerClient):
     """

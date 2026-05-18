@@ -23,7 +23,6 @@ from test.cluster.util import new_test_keyspace, wait_for
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 @pytest.mark.nightly
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):

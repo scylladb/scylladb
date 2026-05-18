@@ -12,7 +12,6 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_prepare_fails_if_cached_statement_is_invalidated_mid_prepare(manager: ManagerClient):
     server = await manager.server_add()

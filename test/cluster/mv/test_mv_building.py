@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 #
 # For more context, see: https://github.com/scylladb/scylladb/issues/21232.
 # This test reproduces the issue in non-tablet mode.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='debug', reason='the test needs to do some work which takes too much time in debug mode')
 async def test_view_building_scheduling_group(manager: ManagerClient):
     # Note: The view building coordinator works in the gossiping scheduling group,
@@ -74,7 +73,6 @@ async def test_view_building_scheduling_group(manager: ManagerClient):
 
 # A sanity check test ensures that starting and shutting down Scylla when view building is
 # disabled is conducted properly and we don't run into any issues.
-@pytest.mark.asyncio
 async def test_start_scylla_with_view_building_disabled(manager: ManagerClient):
     server = await manager.server_add(config={"view_building": "false"})
     await manager.server_stop_gracefully(server_id=server.server_id)
@@ -87,7 +85,6 @@ async def test_start_scylla_with_view_building_disabled(manager: ManagerClient):
 # While view building is in progress, drop the index (which changes the schema
 # of the base table). The state of the view table corresponding to the index
 # may become inconsistent with the base table because they got detached.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_building_during_drop_index(manager: ManagerClient):
     server = await manager.server_add()
@@ -118,7 +115,6 @@ async def test_view_building_during_drop_index(manager: ManagerClient):
 # We restart the node in this state and verify that when it comes up the view building
 # is completed eventually and is correct.
 # Reproduces #22989
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
     cmdline = ['--smp=4']
@@ -163,7 +159,6 @@ async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
 # which have different progress, we won't mistakenly decide that a view is built
 # even if a build step is empty due to resharding.
 # Reproduces https://github.com/scylladb/scylladb/issues/26523
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_empty_build_step_after_reshard(manager: ManagerClient):
     server = await manager.server_add(cmdline=['--smp', '1', '--logger-log-level', 'view=debug'])
@@ -206,7 +201,6 @@ async def test_empty_build_step_after_reshard(manager: ManagerClient):
 # they're most likely going to fail as well. Verify that that's the case.
 #
 # Reproduces scylladb/scylladb#26686.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
     """
@@ -315,7 +309,6 @@ async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
 # Test that the view builder does not finish when some replica nodes are down,
 # and resumes correctly once they come back.
 # Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_do_not_finish_view_builder_with_nodes_down(manager: ManagerClient):
     """Test that the view builder does not complete while replica nodes are down,

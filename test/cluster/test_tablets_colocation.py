@@ -51,7 +51,6 @@ async def wait_for_tablet_stage(manager, server, keyspace_name, table_name, toke
 # We create multiple views, some with the same partition key and some not, and
 # check that those views with the same partition key are co-located by reading
 # their tablet map from system.tablets and checking they have base_table set.
-@pytest.mark.asyncio
 async def test_base_view_colocation(manager: ManagerClient):
     cfg = {'enable_tablets': True}
     cmdline = [
@@ -98,7 +97,6 @@ async def test_base_view_colocation(manager: ManagerClient):
 # stop the other node, remaining only with the one node that should hold the
 # base and view tablets, and verify we can read both tables from this node.
 @pytest.mark.parametrize("move_table", ["base", "child"])
-@pytest.mark.asyncio
 async def test_move_tablet(manager: ManagerClient, move_table: str):
     cfg = {'enable_tablets': True}
     cmdline = [
@@ -166,7 +164,6 @@ async def test_move_tablet(manager: ManagerClient, move_table: str):
 # be split because it's co-located with the base table and their combined sizes are large enough.
 # We verify that the tablets of both tables are split, and the tables have the same tablet count.
 # Then delete some keys and verify the tablets of both tables are merged.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize(
     "with_merge",
@@ -299,7 +296,6 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
 # While it's in some transition stage, we hold it and create a co-located view.
 # We verify we can continue read and write to both tables. Then we complete the
 # migration and verify everything continues to work as expected.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("wait_stage", [("streaming", "stream_tablet_wait"), ("cleanup", "cleanup_tablet_wait")])
 async def test_create_colocated_table_while_base_is_migrating(manager: ManagerClient, wait_stage):
@@ -387,7 +383,6 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
 # 3. bring the node back up - it is now missing some data
 # 4. run tablet repair on the base table
 # 5. verify both the base table and the view contain the missing data on the node that was down
-@pytest.mark.asyncio
 @pytest.mark.skip_not_implemented(reason="tablet repair of colocated tables is not supported currently")
 async def test_repair_colocated_base_and_view(manager: ManagerClient):
     cfg = {'enable_tablets': True}
@@ -437,7 +432,6 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
 
 # Verify the default tombstone GC mode for colocated tables is 'timeout',
 # and that altering it to 'repair' is not allowed.
-@pytest.mark.asyncio
 async def test_colocated_tables_gc_mode(manager: ManagerClient):
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
     cql = manager.get_cql()

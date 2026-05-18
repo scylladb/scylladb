@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.skip_not_implemented(reason="can't make it work with the new join procedure, without error recovery")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.asyncio
 async def test_blocked_bootstrap(manager: ManagerClient):
     """
     Scenario:

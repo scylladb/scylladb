@@ -17,7 +17,6 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 async def test_remove_rpc_client_with_pending_requests(request, manager: ManagerClient) -> None:
     # Regression test for #17445
 

@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 # While the writes are in progress, we add then decommission a node in the cluster.
 # The test verifies that no node crashes as a result of the topology change combined
 # with the writes.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_topology_change(manager: ManagerClient):
     cfg = {'tablets_mode_for_new_keyspaces': 'disabled',
@@ -96,7 +95,6 @@ async def test_mv_topology_change(manager: ManagerClient):
 # With the parameter intranode=True it's the same except the tablet
 # is migrating between two shards on the same node.
 @pytest.mark.parametrize("intranode", [True, False])
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -177,7 +175,6 @@ async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
 # If the MV write handler is not completed after storing the hint, as in
 # issue #19529, it remains active until it timeouts, preventing topology changes
 # during this time.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='debug', reason='the test requires a short timeout for remove_node, but it is unpredictably slow in debug')
 async def test_mv_write_to_dead_node(manager: ManagerClient):
     servers = await manager.servers_add(4, property_file=[
@@ -251,7 +248,6 @@ async def test_mv_pairing_during_replace(manager: ManagerClient):
 # In this test we perform a write that generates a view update while the replication
 # factor of the keyspace is being changed and the corresponding base tablet finishes
 # the migration at a different time the view tablet does.
-@pytest.mark.asyncio
 @pytest.mark.parametrize("delayed_replica", ["base", "mv"])
 @pytest.mark.parametrize("altered_dc", ["dc1", "dc2"])
 # FIXME: The test relies on cross-rack tablet migrations. They're forbidden when the configuration option
@@ -326,7 +322,6 @@ async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altere
     assert len(res) == 2
 
 # The same scenario as in the test above, but the RF change affects the first replica in a DC
-@pytest.mark.asyncio
 @pytest.mark.parametrize("delayed_replica", ["base", "mv"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: str):
@@ -390,7 +385,6 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
 # verify all expected rows appear in the MV eventually.
 # Checks for issues of view update generation during migration.
 # Reproduces #24292
-@pytest.mark.asyncio
 @pytest.mark.parametrize("migration_type", ["tablets_internode", "tablets_intranode", "vnodes"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_write_during_migration(manager: ManagerClient, migration_type: str):
@@ -483,7 +477,6 @@ async def test_mv_write_during_migration(manager: ManagerClient, migration_type:
 # on the topology coordinator, but the joining node is delayed in applying the group0 state.
 # The joining node receives base mutations from the other nodes to apply as the new replica,
 # and it also should generate view updates for them while in a joining state.
-@pytest.mark.asyncio
 async def test_mv_write_during_node_join(manager: ManagerClient):
     cmdline = ['--logger-log-level', 'storage_service=debug', '--logger-log-level', 'raft_topology=debug']
     servers = await manager.servers_add(1, cmdline=cmdline)

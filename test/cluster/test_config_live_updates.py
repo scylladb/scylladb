@@ -6,7 +6,6 @@ import pytest
 from test.pylib.util import wait_for
 
 
-@pytest.mark.asyncio
 async def test_config_live_updates(manager):
     config = {
         "maintenance_socket": "ignore"  # bring back the default value

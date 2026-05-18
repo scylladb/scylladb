@@ -19,7 +19,6 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 Tests how cluster behaves when lost quorum. Ideally for operations with CL=1 live part of the
 cluster should still work but that's guaranteed only if auth data is replicated everywhere.
 """
-@pytest.mark.asyncio
 async def test_auth_no_quorum(manager: ManagerClient) -> None:
     config = {
         **auth_config,
@@ -60,7 +59,6 @@ async def test_auth_no_quorum(manager: ManagerClient) -> None:
 """
 Tests raft snapshot transfer of auth data.
 """
-@pytest.mark.asyncio
 async def test_auth_raft_snapshot_transfer(manager: ManagerClient) -> None:
     servers = await manager.servers_add(1, config=auth_config)
 

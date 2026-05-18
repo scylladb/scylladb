@@ -33,7 +33,6 @@ class CdcStreamState(IntEnum):
 # verifying that CDC streams for the table are created. Then we write to the table and verify
 # the CDC log entries are created in the table's streams.
 @pytest.mark.parametrize("with_alter", [pytest.param(False, id="create"), pytest.param(True, id="alter")])
-@pytest.mark.asyncio
 async def test_create_cdc_with_tablets(manager: ManagerClient, with_alter: bool):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
@@ -71,7 +70,6 @@ async def test_create_cdc_with_tablets(manager: ManagerClient, with_alter: bool)
 
 # Create tables with CDC and verify the CDC streams are removed from the
 # system tables when the tables or keyspaces are dropped.
-@pytest.mark.asyncio
 async def test_drop_table_and_drop_keyspace_removes_cdc_streams(manager: ManagerClient):
     servers = await manager.servers_add(1)
     cql = manager.get_cql()
@@ -105,7 +103,6 @@ async def test_drop_table_and_drop_keyspace_removes_cdc_streams(manager: Manager
 
 # Create a table with CDC, then disable CDC and drop the CDC log table, and create CDC again.
 # Verify streams are created and cleaned up correctly.
-@pytest.mark.asyncio
 async def test_drop_and_recreate_cdc(manager: ManagerClient):
     await manager.servers_add(1)
     cql = manager.get_cql()
@@ -169,7 +166,6 @@ async def validate_virtual_tables(manager, servers, cql, log_table_id, ks, table
 
 # Read CDC stream information from the virtual tables system.cdc_timestamps and system.cdc_streams
 # and verify it against the internal CDC tables.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_virtual_tables(manager: ManagerClient):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
@@ -209,7 +205,6 @@ async def test_cdc_virtual_tables(manager: ManagerClient):
         assert [] == await cql.run_async("SELECT * FROM system.cdc_streams")
         await validate_virtual_tables(manager, servers, cql, log_table_id, ks, 'test')
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_virtual_tables_with_multiple_cdc_tables(manager: ManagerClient):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
@@ -248,7 +243,6 @@ async def test_cdc_virtual_tables_with_multiple_cdc_tables(manager: ManagerClien
 # timestamp, and by applying the differences (closed / opened) in each timestamp, and verify we
 # get the same result.
 # Then trigger tablet merge and do the same, verifying streams are merged.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_stream_split_and_merge_basic(manager: ManagerClient):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
@@ -312,7 +306,6 @@ async def test_cdc_stream_split_and_merge_basic(manager: ManagerClient):
 # Test that base table writes and their corresponding CDC log writes are co-located on the same replica.
 # We create a 2-node cluster with RF=1, stop one node, and verify that the partitions available
 # on the alive node work correctly for both base table and CDC log.
-@pytest.mark.asyncio
 async def test_cdc_colocation(manager: ManagerClient):
     # Create 2-node cluster to test co-location
     servers = await manager.servers_add(2)
@@ -373,7 +366,6 @@ async def test_cdc_colocation(manager: ManagerClient):
 # Create a CDC table with short TTL, then split the tablets to create a new stream set,
 # and wait until the old streams are garbage collected and we have a single stream set again.
 # Verify the remaining stream set is equal to the most recent stream set.
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_stream_garbage_collection(manager: ManagerClient):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1, 'error_injections_at_startup': ['short_cdc_streams_gc_refresh_interval' ] }

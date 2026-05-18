@@ -204,7 +204,6 @@ async def alternator_proxy_server(manager: ManagerClient):
     yield (server, manager)
 
 
-@pytest.mark.asyncio
 async def test_alternator_proxy_protocol_basic(alternator_proxy_server):
     """Test that connections through the Alternator proxy protocol port work."""
     server, _ = alternator_proxy_server
@@ -222,7 +221,6 @@ async def test_alternator_proxy_protocol_basic(alternator_proxy_server):
     assert 'TableNames' in response, f"Expected TableNames in response: {response}"
 
 
-@pytest.mark.asyncio
 async def test_alternator_proxy_protocol_multiple_connections(alternator_proxy_server):
     """Test multiple connections with different source addresses."""
     server, _ = alternator_proxy_server
@@ -246,7 +244,6 @@ async def test_alternator_proxy_protocol_multiple_connections(alternator_proxy_s
         assert 'TableNames' in response, f"Expected TableNames in response for {fake_src_addr}: {response}"
 
 
-@pytest.mark.asyncio
 async def test_alternator_proxy_protocol_ssl_basic(alternator_proxy_server):
     """Test proxy protocol with TLS encryption."""
     server, _ = alternator_proxy_server
@@ -265,7 +262,6 @@ async def test_alternator_proxy_protocol_ssl_basic(alternator_proxy_server):
     assert 'TableNames' in response, f"Expected TableNames in response: {response}"
 
 
-@pytest.mark.asyncio
 async def test_alternator_regular_port_still_works(alternator_proxy_server):
     """Test that the regular Alternator port still works when proxy protocol ports are configured."""
     server, _ = alternator_proxy_server
@@ -281,7 +277,6 @@ async def test_alternator_regular_port_still_works(alternator_proxy_server):
     assert 'TableNames' in response, f"Expected TableNames in response: {response}"
 
 
-@pytest.mark.asyncio
 async def test_alternator_proxy_header_to_regular_port_fails(alternator_proxy_server):
     """Test that sending a proxy protocol header to the regular port fails.
 
@@ -303,7 +298,6 @@ async def test_alternator_proxy_header_to_regular_port_fails(alternator_proxy_se
         )
 
 
-@pytest.mark.asyncio
 async def test_alternator_no_proxy_header_to_proxy_port_fails(alternator_proxy_server):
     """Test that sending a request without proxy header to the proxy port fails.
 
@@ -324,7 +318,6 @@ async def test_alternator_no_proxy_header_to_proxy_port_fails(alternator_proxy_s
         )
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("use_ssl", [False, True], ids=["http", "https"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alternator_proxy_protocol_address_in_system_clients(alternator_proxy_server, use_ssl):

@@ -15,7 +15,6 @@ from test.cluster.util import new_test_keyspace, reconnect_driver
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_node_shutdown_waits_for_pending_requests(manager: ManagerClient) -> None:
     """Reproducer for #16382"""

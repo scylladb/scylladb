@@ -24,7 +24,6 @@ from typing import TypeAlias
 
 logger = logging.getLogger(__name__)
 
-@pytest.mark.asyncio
 async def test_maintenance_mode(manager: ManagerClient):
     """
     The test checks that in maintenance mode server A is not available for other nodes and for clients.

@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_not_implemented(reason="tombstone_gc repair mode is not supported yet for MVs due to #24816")
 async def test_mv_tombstone_gc_setting(manager):
     """
@@ -50,7 +49,6 @@ async def test_mv_tombstone_gc_setting(manager):
                 s = list(cql.execute(f"DESC {mv}"))[0].create_statement
                 assert "'mode': 'repair'" in s
 
-@pytest.mark.asyncio
 async def test_mv_tombstone_gc_not_inherited(manager):
     """
     Test that the tombstone_gc parameter set on a base table is NOT inherited

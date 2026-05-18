@@ -14,7 +14,6 @@ from test.cluster.conftest import cluster_con
 from test.cluster.util import create_new_test_keyspace, get_replication, get_replica_count
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 @pytest.mark.parametrize("rf_rack_valid_keyspaces", [False, True])
 async def test_create_keyspace_with_default_replication_factor(manager: ManagerClient, tablets_enabled: bool, rf_rack_valid_keyspaces: bool):

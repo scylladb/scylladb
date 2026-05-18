@@ -2102,7 +2102,6 @@ async def test_parallel_syslog_audit(manager: ManagerClient, helper_class):
     """Cluster must not fail when multiple queries are audited in parallel."""
     await CQLAuditTester(manager)._test_parallel_syslog_audit(helper_class)
 
-@pytest.mark.asyncio
 async def test_upgrade_preserves_ddl_audit_for_tables(
         manager: ManagerClient,
         scylla_2025_1: ScyllaVersionDescription,

@@ -12,7 +12,6 @@ import pytest
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
-@pytest.mark.asyncio
 async def test_start_after_sudden_stop(manager: ManagerClient, random_tables) -> None:
     """Tests a server can rejoin the cluster after being stopped suddenly"""
     servers = await manager.running_servers()

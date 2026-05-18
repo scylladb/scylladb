@@ -51,7 +51,6 @@ async def take_snapshot_on_one_server(ks, server, manager, logger):
     return snap_name, sstables[server]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("move_files", [False, True])
 async def test_simple_backup(manager: ManagerClient, object_storage, move_files):
     '''check that backing up a snapshot for a keyspace works'''
@@ -98,7 +97,6 @@ async def test_simple_backup(manager: ManagerClient, object_storage, move_files)
         assert len(res) == 1 and res[0][1].group(1) == 'bckp'
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("ne_parameter", [ "endpoint", "bucket", "snapshot" ])
 async def test_backup_with_non_existing_parameters(manager: ManagerClient, object_storage, ne_parameter):
     '''backup should fail if either of the parameters does not exist'''
@@ -132,7 +130,6 @@ async def test_backup_with_non_existing_parameters(manager: ManagerClient, objec
             assert status['error'] == 'std::invalid_argument (endpoint no-such-endpoint not found)'
 
 
-@pytest.mark.asyncio
 async def test_backup_endpoint_config_is_live_updateable(manager: ManagerClient, object_storage):
     '''backup should fail if the endpoint is invalid/inaccessible
        after updating the config, it should succeed'''
@@ -237,14 +234,12 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
 
     await do_test_backup_helper(manager, object_storage, breakpoint_name, abort_and_check)
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_backup_is_abortable(manager: ManagerClient, object_storage):
     '''check that backing up a snapshot for a keyspace works'''
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pause", min_files=0)
 
 
-@pytest.mark.asyncio
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, object_storage):
@@ -252,7 +247,6 @@ async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, object_s
     await do_test_backup_abort(manager, object_storage, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(("do_encrypt", "do_abort"), [(False, False), (False, True), (True, False)])
 async def test_simple_backup_and_restore(manager: ManagerClient, object_storage, tmpdir, do_encrypt, do_abort):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
@@ -455,7 +449,6 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
             failed |= final_status['state'] == 'failed'
         assert failed, "Expected at least one restore task to fail after aborting"
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_abort_restore_with_rpc_error(manager: ManagerClient, object_storage):
     await do_abort_restore(manager, object_storage)
@@ -661,7 +654,6 @@ class SSTablesOnObjectStorage:
         await asyncio.gather(*(do_restore_server(manager, logger, ks, cf, s, sstables, scope, primary_replica_only, prefix, self.object_storage) for s, sstables in sstables_per_server.items()))
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("topology", [
         topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
         topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
@@ -741,7 +733,6 @@ async def do_test_streaming_scopes(build_mode: str, manager: ManagerClient, topo
                 await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("topology", [
         topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
         topo(rf = 2, nodes = 2, racks = 2, dcs = 1),
@@ -778,7 +769,6 @@ async def test_restore_tablets(build_mode: str, manager: ManagerClient, object_s
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restore_tablets_vs_migration(build_mode: str, manager: ManagerClient, object_storage):
     '''Check that restore handles tablets migrating around'''
@@ -825,7 +815,6 @@ async def test_restore_tablets_vs_migration(build_mode: str, manager: ManagerCli
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restore_tablets_download_failure(build_mode: str, manager: ManagerClient, object_storage):
     '''Check that failure to download an sstable propagates back to API'''
@@ -859,7 +848,6 @@ async def test_restore_tablets_download_failure(build_mode: str, manager: Manage
         assert 'error' in status and 'Failed to download' in status['error']
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("target", ['coordinator', 'replica', 'api'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: ManagerClient, object_storage, target):
@@ -911,7 +899,6 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Ma
             await asyncio.wait_for(manager.api.wait_task(servers[1].ip_addr, tid), timeout=60)
 
 
-@pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_storage):
     '''Check that restore task fails well when given a non-existing sstable'''
 
@@ -936,7 +923,6 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, object_
         assert 'error' in status and 'Not Found' in status['error']
 
 
-@pytest.mark.asyncio
 async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
     # Define configuration for the servers.
     objconf = s3_storage.create_endpoint_conf()
@@ -1018,7 +1004,6 @@ async def test_backup_broken_streaming(manager: ManagerClient, s3_storage):
         # just make sure we had partially contained sstables as well
         await log.wait_for("partially contained SSTables", timeout=10)
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("domain", ['rack', 'dc'])
 @pytest.mark.parametrize("scope_is_same", [True, False])
 async def test_restore_primary_replica(manager: ManagerClient, object_storage, domain, scope_is_same):

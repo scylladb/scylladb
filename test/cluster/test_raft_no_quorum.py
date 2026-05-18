@@ -34,7 +34,6 @@ async def update_group0_raft_op_timeout(server_id: ServerNum, manager: ManagerCl
         await manager.server_update_config(server_id, 'group0_raft_op_timeout_in_ms', timeout)
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int) -> None:
@@ -88,7 +87,6 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
     logger.info("done")
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_timeout: int) -> None:
@@ -133,7 +131,6 @@ async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_time
     await fourth_node_future
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_quorum_lost_during_node_join_response_handler(manager: ManagerClient, raft_op_timeout: int) -> None:
@@ -184,7 +181,6 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
     await fourth_node_future
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: int) -> None:
@@ -234,7 +230,6 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
     logger.info("done")
 
 
-@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='dev mode is sufficient for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is sufficient for this test')
 async def test_can_restart(manager: ManagerClient, raft_op_timeout: int) -> None:
