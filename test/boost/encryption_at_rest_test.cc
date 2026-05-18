@@ -1640,7 +1640,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_azure_network_error, fake_azure, *check_azure_moc
 }
 
 static future<> configure_azure_mock_server(const std::string& host, const unsigned int port, const std::string& service, const std::string& error_type, int repeat) {
-    auto cln = http::experimental::client(socket_address(net::inet_address(host), uint16_t(port)));
+    auto cln = http::client(socket_address(net::inet_address(host), uint16_t(port)));
     auto close_client = deferred_close(cln);
     auto req = http::request::make("POST", host, "/config/error");
     req._headers["Content-Length"] = "0";

@@ -131,20 +131,20 @@ class client : public enable_shared_from_this<client> {
         }
     };
     struct group_client {
-        seastar::http::experimental::client http;
+        seastar::http::client http;
         io_stats read_stats;
         io_stats write_stats;
         uint64_t prefetch_bytes = 0;
         uint64_t downloads_blocked_on_memory = 0;
         seastar::metrics::metric_groups metrics;
-        group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn);
+        group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn);
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     semaphore& _memory;
-    std::unique_ptr<seastar::http::experimental::retry_strategy> _retry_strategy;
+    std::unique_ptr<seastar::http::retry_strategy> _retry_strategy;
 
     struct private_tag {};
 
@@ -157,17 +157,17 @@ class client : public enable_shared_from_this<client> {
     using error_handler = std::function<void(std::exception_ptr)>;
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
 
-    http::experimental::client::reply_handler wrap_handler(http::request& request,
-                                                           http::experimental::client::reply_handler handler,
+    http::client::reply_handler wrap_handler(http::request& request,
+                                                           http::client::reply_handler handler,
                                                            std::optional<http::reply::status_type> expected);
 
     future<> make_request(http::request req,
-                          http::experimental::client::reply_handler handle = ignore_reply,
+                          http::client::reply_handler handle = ignore_reply,
                           std::optional<http::reply::status_type> expected = std::nullopt,
                           seastar::abort_source* = nullptr);
     future<> make_request(http::request req,
-                          http::experimental::client::reply_handler handle,
-                          const http::experimental::retry_strategy& rs,
+                          http::client::reply_handler handle,
+                          const http::retry_strategy& rs,
                           error_handler err_handler,
                           std::optional<http::reply::status_type> expected,
                           seastar::abort_source* as);
@@ -178,16 +178,16 @@ class client : public enable_shared_from_this<client> {
                           seastar::abort_source* = nullptr);
     future<> make_request(http::request req,
                           reply_handler_ext handle,
-                          const seastar::http::experimental::retry_strategy& rs,
+                          const seastar::http::retry_strategy& rs,
                           error_handler err_handler,
                           std::optional<http::reply::status_type> expected = std::nullopt,
                           seastar::abort_source* = nullptr);
-    future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
+    future<> get_object_header(sstring object_name, http::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::retry_strategy> rs = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
-    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, std::unique_ptr<seastar::http::experimental::retry_strategy> rs, global_factory gf = {});
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, std::unique_ptr<seastar::http::retry_strategy> rs, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);

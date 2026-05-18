@@ -67,7 +67,7 @@ private:
     std::chrono::milliseconds backoff_retry_max() const;
 
     endpoint_type _endpoint;
-    seastar::http::experimental::client _http_client;
+    seastar::http::client _http_client;
     seastar::future<> _checking_status_future = seastar::make_ready_future();
     seastar::abort_source _as;
     logging::logger& _logger;

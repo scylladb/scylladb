@@ -3572,7 +3572,7 @@ future<sstring> make_toc_temporary(sstring sstable_toc_name, storage::sync_dir s
     sstlog.debug("Removing by TOC name: {}", sstable_toc_name);
     if (co_await sstable_io_check(sstable_write_error_handler, file_exists, sstable_toc_name)) {
         // If new_toc_name exists it will be atomically replaced.  See rename(2)
-        co_await sstable_io_check(sstable_write_error_handler, rename_file, sstable_toc_name, new_toc_name);
+        co_await sstable_io_check(sstable_write_error_handler, rename_file, sstable_toc_name, new_toc_name, rename_flags::none);
         if (sync) {
             co_await sstable_io_check(sstable_write_error_handler, sync_directory, parent_path(new_toc_name));
         }

@@ -45,7 +45,7 @@ using namespace std::chrono_literals;
 // Retry strategy for tests: same retryability logic as the default AWS
 // strategy but with a fixed 1ms delay between retries instead of
 // exponential backoff, to keep tests fast.
-class test_retry_strategy : public seastar::http::experimental::retry_strategy {
+class test_retry_strategy : public seastar::http::retry_strategy {
     unsigned _max_retries;
 
 public:
@@ -66,7 +66,7 @@ public:
     }
 };
 
-static std::unique_ptr<seastar::http::experimental::retry_strategy> make_test_retry_strategy() {
+static std::unique_ptr<seastar::http::retry_strategy> make_test_retry_strategy() {
     return std::make_unique<test_retry_strategy>();
 }
 

@@ -20,7 +20,7 @@ namespace utils::http {
 
 future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
 
-class dns_connection_factory : public seastar::http::experimental::connection_factory {
+class dns_connection_factory : public seastar::http::connection_factory {
 protected:
     std::string _host;
     int _port;

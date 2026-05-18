@@ -47,7 +47,7 @@ static s3::endpoint_config_ptr make_minio_config() {
 }
 
 static void register_policy(const std::string& key, failure_policy policy) {
-    auto cln = http::experimental::client(socket_address(net::inet_address(get_address()), get_port()));
+    auto cln = http::client(socket_address(net::inet_address(get_address()), get_port()));
     auto close_client = deferred_close(cln);
     auto req = http::request::make("PUT", get_address(), "/");
     req._headers["Content-Length"] = "0";

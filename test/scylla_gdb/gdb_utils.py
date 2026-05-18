@@ -43,16 +43,34 @@ class get_task(gdb.Function):
     Because we stopped Scylla while it was idle, we don't expect to find
     any ready task with get_local_tasks(), but we can find one with a
     find_vptrs() loop. I noticed that a nice one (with multiple tasks chained
-    to it for "scylla fiber") is one from http_server::do_accept_one.
+    to it for "scylla fiber") is one from http_server's accept loop.
+
+    Current seastar: accept_loop/do_accept_one are coroutines. find_vptrs()
+    picks up the coroutine frame via its resume function pointer (first
+    word). The task (promise_type) lives at offset +16 in the frame,
+    after the resume and destroy function pointers.
+
+    Older seastar: do_accept_one uses .then() chains, producing
+    seastar::continuation objects (which are tasks directly).
     """
     def __init__(self):
         super(get_task, self).__init__('get_task')
 
     def invoke(self):
+        continuation_task = None
         for obj_addr, vtable_addr in find_vptrs():
-            name = resolve(vtable_addr, startswith='vtable for seastar::continuation')
-            if name and 'do_accept_one' in name:
-                return obj_addr.cast(gdb.lookup_type('uintptr_t'))
+            name = resolve(vtable_addr)
+            if not name:
+                continue
+            # New seastar: accept_loop is a coroutine
+            if 'accept_loop' in name:
+                return (obj_addr + 16).cast(gdb.lookup_type('uintptr_t'))
+            # Old seastar: continuation with do_accept_one
+            if continuation_task is None \
+                    and name.startswith('vtable for seastar::continuation') \
+                    and 'do_accept_one' in name:
+                continuation_task = obj_addr.cast(gdb.lookup_type('uintptr_t'))
+        return continuation_task
 
 
 class get_coroutine(gdb.Function):
