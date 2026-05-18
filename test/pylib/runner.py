@@ -13,6 +13,7 @@ import pathlib
 import platform
 import random
 import sys
+import time
 from argparse import BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count
@@ -20,6 +21,7 @@ from functools import cache, cached_property
 from pathlib import Path
 from random import randint
 from typing import TYPE_CHECKING, Callable
+from types import SimpleNamespace
 
 import pytest
 import xdist
@@ -28,6 +30,9 @@ from _pytest.junitxml import xml_key
 
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR, HOST_ID
+from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
+    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
+from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.scylla_cluster import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.suite.base import (
@@ -63,6 +68,7 @@ logger = logging.getLogger(__name__)
 # Store pytest config globally so we can access it in hooks that only receive report
 _pytest_config: pytest.Config | None = None
 
+_system_resource_monitor: SystemResourceMonitor | None = None
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
@@ -115,6 +121,111 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      dest="exe_url", action="store",
                      help="URL to download the relocatable executable. Not working with `mode`")
 
+# Stores the per-phase test reports so that fixtures and hooks can inspect the
+# outcome of each phase (setup / call / teardown) independently.
+PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
+
+
+def _build_test_mock(item: pytest.Item) -> SimpleNamespace:
+    """Build a SimpleNamespace test object for resource gathering from any pytest item.
+
+    Works for both Python test items and C++ CppTestCase items, providing a
+    unified interface for the resource-gather subsystem.
+    """
+    from test.pylib.cpp.base import CppTestCase
+
+    params_stash = get_params_stash(node=item)
+    build_mode = params_stash[BUILD_MODE] if params_stash else item.config.build_modes[0]
+    run_id = item.stash.get(RUN_ID, None) or item.config.getoption("--run_id")
+    temp_dir = pathlib.Path(item.config.getoption("--tmpdir")).absolute()
+
+    # Strip the ".mode.run_id" suffix appended by modify_pytest_item()
+    test_name = item.name
+    suffix = f".{build_mode}.{run_id}"
+    original_test_name = test_name[:-len(suffix)] if test_name.endswith(suffix) else test_name
+
+    file_path = item.path
+    suite_path = file_path.parent
+
+    if isinstance(item, CppTestCase):
+        file_name = f"{item.parent.test_name}.cc"
+        shortname = item.test_case_name
+    else:
+        file_name = file_path.name
+        shortname = original_test_name
+
+    return SimpleNamespace(
+        time_end=0,
+        time_start=0,
+        id=run_id,
+        mode=build_mode,
+        success=False,
+        status=None,
+        path=file_path,
+        shortname=shortname,
+        suite=SimpleNamespace(
+            log_dir=temp_dir / build_mode,
+            name=suite_path.name,
+            suite_path=suite_path,
+            test_file_name=file_name,
+        ),
+    )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    test_mock = _build_test_mock(item)
+    test_mock.time_start = time.time()
+
+    resource_gather = get_resource_gather(
+        temp_dir=pathlib.Path(item.config.getoption("--tmpdir")),
+        is_switched_on=item.config.getoption("--gather-metrics"),
+        test=test_mock,
+        worker_id=os.environ.get("PYTEST_XDIST_WORKER"),
+    )
+    try:
+        resource_gather.setup_test_tracking()
+        resource_gather.cgroup_monitor()
+    except Exception:
+        resource_gather.stop_monitoring()
+        resource_gather.teardown_test_tracking()
+        raise
+    try:
+        return (yield)
+    finally:
+        if resource_gather is not None:
+            test_mock.time_end = time.time()
+            resource_gather.stop_monitoring()
+
+            try:
+                reports = item.stash.get(PHASE_REPORT_KEY, {})
+                # skipped test have no call report so need to get setup report instead
+                call_report = reports.get("call") if reports.get("call") is not None else reports.get("setup")
+                success = call_report is not None and not call_report.failed
+                test_metrics = resource_gather.get_test_metrics()
+                if call_report is not None:
+                    status = "skipped" if call_report.skipped else call_report.outcome
+                    if hasattr(call_report, "wasxfail"):
+                        if call_report.skipped:
+                            status = "xfailed"
+                        elif call_report.passed:
+                            status = "xpassed"
+                    else:
+                        # with xfail_strict = true wasxfail is not present when test is xpassed, so need to check report
+                        if 'XPASS' in call_report.longreprtext:
+                            status = "xpassed"
+                else:
+                    status = "unknown"
+                test_metrics.status = status
+
+                resource_gather.write_metrics_to_db(
+                    metrics=test_metrics,
+                    success=success
+                )
+            finally:
+                resource_gather.teardown_test_tracking()
+
+
 @pytest.fixture(scope="module", autouse=True)
 def build_mode(request: pytest.FixtureRequest) -> str:
     params_stash = get_params_stash(node=request.node)
@@ -161,7 +272,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Confi
 def pytest_sessionstart(session: pytest.Session) -> None:
     # test.py starts S3 mock and create/cleanup testlog by itself. Also, if we run with --collect-only option,
     # we don't need this stuff.
-    if TEST_RUNNER != "pytest" or session.config.getoption("--collect-only"):
+    global _system_resource_monitor
+    gather_metrics = session.config.getoption("--gather-metrics")
+    temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
+    save_log_on_success = session.config.getoption("--save-log-on-success")
+    toxiproxy_byte_limit = session.config.getoption("--byte-limit")
+    collect_only = session.config.getoption("--collect-only")
+    if TEST_RUNNER != "pytest" or collect_only:
         return
 
     # Check if this is an xdist worker
@@ -177,10 +294,19 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         prepare_environment(
             tempdir_base=temp_dir,
             modes=get_modes_to_run(session.config),
-            gather_metrics=session.config.getoption("--gather-metrics"),
-            save_log_on_success=session.config.getoption("--save-log-on-success"),
-            toxiproxy_byte_limit=session.config.getoption("--byte-limit"),
+            gather_metrics=gather_metrics,
+            save_log_on_success=save_log_on_success,
+            toxiproxy_byte_limit=toxiproxy_byte_limit,
         )
+    if gather_metrics:
+        # In the master process, set up the cgroup hierarchy if test.py hasn't done it already.
+        # Workers inherit SCYLLA_TEST_CGROUP_BASE_ENV from the master via environment inheritance.
+        if not is_xdist_worker and SCYLLA_TEST_CGROUP_BASE_ENV not in os.environ:
+            setup_cgroup(is_required=True)
+        setup_worker_cgroup()
+        _system_resource_monitor = SystemResourceMonitor(temp_dir)
+        _system_resource_monitor.start()
+
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -227,6 +353,9 @@ def pytest_runtest_logreport(report):
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
+    global _system_resource_monitor
+    if _system_resource_monitor:
+        _system_resource_monitor.stop()
 
     is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
     # If all tests passed, remove the log file to save space and avoid confusion with logs from failed runs.
@@ -303,6 +432,19 @@ def pytest_configure(config: pytest.Config) -> None:
     if testpy_run_id := config.getoption("--run_id"):
         if config.getoption("--repeat") != 1:
             raise RuntimeError("Can't use --run_id and --repeat simultaneously.")
+    # Write host hardware info once, at the very start, before any test preparation.
+    # Done unconditionally (not gated on --gather-metrics) so that the host_info FK
+    # referenced by every other table is always populated, regardless of whether
+    # full metrics collection is enabled.
+    # Only in the main process — xdist workers share the same DB and the same host_id,
+    # so there is nothing new to record.
+    if os.environ.get("PYTEST_XDIST_WORKER") is None and not config.getoption("--collect-only"):
+        temp_dir = pathlib.Path(config.getoption("--tmpdir")).absolute()
+        writer = SQLiteWriter(temp_dir / DEFAULT_DB_NAME)
+        try:
+            writer.write_row_if_not_exist(gather_host_info(), HOST_INFO_TABLE, id_column="host_id")
+        finally:
+            writer.close()
 
 
 class DisabledFile(pytest.File):
@@ -339,23 +481,32 @@ def pytest_collect_file(file_path: pathlib.Path,
 
     return collectors
 
+
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    # This hook is used to capture test failures and save their details to a file in the pytest_tests_logs directory.
-    # We use tryfirst=True to ensure that this hook runs before any other hooks that might modify the report,
-    # and we use hookwrapper=True to allow us to access the report after it has been generated by other hooks.
-    outcome = yield
+    """Post-test hook to store test result in stash and optionally save logs.
 
-    rep = outcome.get_result()
-    # we only look at actual failing test calls, not setup/teardown
-    pytest_tests_logs = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_TESTS_LOGS_FOLDER
-    if rep.failed or (_pytest_config.getoption("--save-log-on-success") and rep.when == "teardown"):
-        mode = "a" if os.path.exists(pytest_tests_logs) else "w"
-        with open(pytest_tests_logs/ f"{item._nodeid.replace("::", "-").replace("/", "-")}-{rep.when}-{HOST_ID}.log",mode) as f:
-            f.write(rep.longreprtext + "\n")
-            for section in rep.sections:
-                f.write(section[0] + "\n")
-                f.write(section[1] + "\n")
+    Stores each phase's report in item.stash[PHASE_REPORT_KEY][phase] so
+    fixtures and hooks can access the test outcome per phase.  `item.stash`
+    is the same stash as `request.node.stash` in pytest fixtures.
+
+    When --test-py-init is set, also saves failed test details to log files.
+    """
+    outcome = yield
+    report = outcome.get_result()
+
+    # Store report per phase for use by fixtures and hooks
+    item.stash.setdefault(PHASE_REPORT_KEY, {})[report.when] = report
+
+    # Optionally save test failure logs to files
+    if _pytest_config:
+        pytest_tests_logs = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_TESTS_LOGS_FOLDER
+        if report.failed or _pytest_config.getoption("--save-log-on-success"):
+            with open(pytest_tests_logs / f"{item._nodeid.replace('::', '-').replace('/', '-')}-{report.when}-{HOST_ID}.log", 'a') as f:
+                f.write(report.longreprtext + "\n")
+                for section in report.sections:
+                    f.write(section[0] + "\n")
+                    f.write(section[1] + "\n")
 
 class TestSuiteConfig:
     def __init__(self, config_file: pathlib.Path):

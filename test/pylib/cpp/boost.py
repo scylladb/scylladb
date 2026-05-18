@@ -72,7 +72,7 @@ class BoostTestFile(CppFile):
             "--color_output=false",
         ]
         if not self.no_parallel:
-            args.append(f"--{run_test=}")
+            args.append(f"--run_test={run_test}")
 
         args.append("--")
 

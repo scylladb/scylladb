@@ -9,6 +9,14 @@ from attr import define
 
 
 @define
+class HostInfo:
+    host_id: str
+    cpu_model: str
+    cpu_cores: int
+    ram_bytes: int
+
+
+@define
 class CgroupMetric:
     memory: int
     test_id: int
@@ -22,19 +30,26 @@ class Metric:
     host_id: str
     memory_peak: int = None
     success: bool = None
+    status: str = None
     system_sec: float = None
     time_end: datetime = None
     time_start: datetime = None
     time_taken: float = None
     usage_sec: float = None
     user_sec: float = None
+    worker_id: str = None
 
 
 @define
 class SystemResourceMetric:
     host_id: str
     cpu: float
-    memory: float
+    memory_free: int
+    memory_available: int
+    memory_used: int
+    memory_active: int
+    memory_inactive: int
+    memory_buffers: int
     timestamp: datetime
 
 
@@ -42,7 +57,8 @@ class SystemResourceMetric:
 class Test:
     host_id: str
     architecture: str
-    directory: str
+    path: str
+    file: str
     mode: str
     run_id: int
     test_name: str

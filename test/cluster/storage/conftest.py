@@ -59,8 +59,9 @@ def volumes_factory(pytestconfig, build_mode, request):
     # Unmount volumes and optionally preserve data. Copying cannot be done in the finally
     # clause of the wrapper above as at that point test is not yet marked as failed. So the
     # copy and consequently volumes cleanup have to be done here.
-    report = request.node.stash[PHASE_REPORT_KEY]
-    test_failed = report.when == "call" and report.failed
+    reports = request.node.stash[PHASE_REPORT_KEY]
+    call_report = reports.get("call")
+    test_failed = call_report is not None and call_report.failed
     preserve_data = test_failed or request.config.getoption("save_log_on_success")
 
     for id, volume in enumerate(volumes):

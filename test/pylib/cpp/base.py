@@ -13,7 +13,6 @@ import subprocess
 from abc import ABC, abstractmethod
 from functools import cached_property
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -21,7 +20,6 @@ from _pytest._code.code import ReprFileLocation
 
 from scripts import coverage as coverage_script
 from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, path_to
-from test.pylib.resource_gather import get_resource_gather
 from test.pylib.runner import BUILD_MODE, RUN_ID, TEST_SUITE
 from test.pylib.scylla_cluster import merge_cmdline_options
 
@@ -171,43 +169,31 @@ class CppTestCase(pytest.Item):
             (self.path.relative_to(TEST_DIR).with_suffix("") / f"{self.name}{extra}.{self.run_id}{suffix}").parts
         )
 
-    def make_testpy_test_object_mock(self) -> SimpleNamespace:
-        """Returns object that used in resource gathering.
-
-        It needed to not change the logic of writing metrics to DB that used in test types from test.py.
-        """
-        return SimpleNamespace(
-            time_end=0,
-            time_start=0,
-            id=self.run_id,
-            mode=self.parent.build_mode,
-            success=False,
-            shortname=self.name,
-            suite=SimpleNamespace(
-                log_dir=self.parent.log_dir,
-                name=self.parent.test_name,
-            ),
-        )
-
     def run_exe(self, test_args: list[str], output_file: pathlib.Path) -> subprocess.Popen[str]:
-        resource_gather = get_resource_gather(
-            is_switched_on=self.config.getoption("--gather-metrics"),
-            test=self.make_testpy_test_object_mock(),
-        )
-        resource_gather.make_cgroup()
-        process = resource_gather.run_process(
-            args=[self.parent.exe_path, *test_args, *self.test_custom_args],
-            timeout=TIMEOUT_DEBUG if self.parent.build_mode in DEBUG_MODES else TIMEOUT,
-            output_file=output_file,
-            cwd=TOP_SRC_DIR,
-            env=self.parent.test_env,
-        )
-        resource_gather.write_metrics_to_db(
-            metrics=resource_gather.get_test_metrics(),
-            success=process.returncode == 0,
-        )
-        resource_gather.remove_cgroup()
-        return process
+        args = [str(self.parent.exe_path), *test_args, *self.test_custom_args]
+        timeout = TIMEOUT_DEBUG if self.parent.build_mode in DEBUG_MODES else TIMEOUT
+        env = {**os.environ, **self.parent.test_env}
+
+        with output_file.open(mode="w", encoding="utf-8") as output_handle:
+            p = subprocess.Popen(
+                args=args,
+                bufsize=1,
+                stdout=output_handle,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                cwd=TOP_SRC_DIR,
+                env=env,
+                text=True,
+            )
+            try:
+                p.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.communicate()
+            except KeyboardInterrupt:
+                p.kill()
+                raise
+        return p
 
     def runtest(self) -> None:
         failures, output = self.parent.run_test_case(test_case=self)
