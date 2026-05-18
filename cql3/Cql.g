@@ -1855,7 +1855,8 @@ relationType returns [oper_t op = oper_t{}]
     | '>'  { $op = oper_t::GT; }
     | '>=' { $op = oper_t::GTE; }
     | '!=' { $op = oper_t::NEQ; }
-    | K_LIKE { $op = oper_t::LIKE; }
+    | K_LIKE  { $op = oper_t::LIKE; }
+    | K_MATCH { $op = oper_t::MATCH; }
     ;
 
 relation returns [uexpression e]
@@ -2175,6 +2176,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_CACHE
         | K_BYPASS
         | K_LIKE
+        | K_MATCH
         | K_PER
         | K_PARTITION
         | K_SERVICE_LEVEL
@@ -2404,6 +2406,8 @@ K_SCYLLA_CLUSTERING_BOUND: S C Y L L A '_' C L U S T E R I N G '_' B O U N D;
 K_GROUP:       G R O U P;
 
 K_LIKE:        L I K E;
+
+K_MATCH:       M A T C H;
 
 K_TIMEOUT:     T I M E O U T;
 K_PRUNE:       P R U N E;

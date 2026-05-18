@@ -24,6 +24,8 @@
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
+#include "index/fts_index.hh"
+#include "fts/fts_cdc_consumer.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "service/qos/qos_common.hh"
 #include "transport/messages/result_message.hh"
@@ -74,6 +76,8 @@ namespace statements {
 namespace {
 
 constexpr std::string_view ANN_CUSTOM_INDEX_OPTION = "vector_index";
+// FTS index class name is not hard-coded here; detection uses the
+// secondary_index_manager factory + dynamic_cast<fts_index*> pattern instead.
 
 template <typename Func>
 auto measure_index_latency(const schema& schema, const secondary_index::index& index, Func&& func) -> std::invoke_result_t<Func> {
@@ -2237,6 +2241,537 @@ future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_tab
             }));
 }
 
+// =========================================================================
+// fts_indexed_table_select_statement — implementation
+// =========================================================================
+
+::shared_ptr<cql3::statements::select_statement>
+fts_indexed_table_select_statement::prepare(
+        data_dictionary::database db,
+        schema_ptr schema,
+        uint32_t bound_terms,
+        lw_shared_ptr<const parameters> parameters,
+        ::shared_ptr<selection::selection> selection,
+        ::shared_ptr<restrictions::statement_restrictions> restrictions,
+        ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
+        bool is_reversed,
+        ordering_comparator_type ordering_comparator,
+        std::optional<expr::expression> limit,
+        std::optional<expr::expression> per_partition_limit,
+        cql_stats& stats,
+        const secondary_index::index& fts_index,
+        const column_definition* match_column,
+        std::unique_ptr<attributes> attrs)
+{
+    return ::make_shared<cql3::statements::fts_indexed_table_select_statement>(
+            schema, bound_terms, parameters,
+            std::move(selection), std::move(restrictions),
+            std::move(group_by_cell_indices),
+            is_reversed, std::move(ordering_comparator),
+            std::move(limit), std::move(per_partition_limit),
+            stats, fts_index, match_column, std::move(attrs));
+}
+
+fts_indexed_table_select_statement::fts_indexed_table_select_statement(
+        schema_ptr schema,
+        uint32_t bound_terms,
+        lw_shared_ptr<const parameters> parameters,
+        ::shared_ptr<selection::selection> selection,
+        ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+        ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
+        bool is_reversed,
+        ordering_comparator_type ordering_comparator,
+        std::optional<expr::expression> limit,
+        std::optional<expr::expression> per_partition_limit,
+        cql_stats& stats,
+        const secondary_index::index& fts_index,
+        const column_definition* match_column,
+        std::unique_ptr<attributes> attrs)
+    : select_statement{schema, bound_terms, parameters, selection, restrictions,
+          group_by_cell_indices, is_reversed, ordering_comparator,
+          limit, per_partition_limit, stats, std::move(attrs)}
+    , _fts_index{fts_index}
+    , _match_column{match_column}
+{
+    if (!limit.has_value()) {
+        throw exceptions::invalid_request_exception(
+                "FTS MATCH queries must have a LIMIT specified");
+    }
+    if (selection->is_aggregate()) {
+        throw exceptions::invalid_request_exception(
+                "FTS MATCH queries cannot be run with aggregation");
+    }
+}
+
+void fts_indexed_table_select_statement::update_stats() const {
+    ++_stats.secondary_index_reads;
+    ++_stats.query_cnt(source_selector::USER, _ks_sel,
+            cond_selector::NO_CONDITIONS, statement_type::SELECT);
+}
+
+// Override process_results to avoid applying the MATCH restriction as a
+// post-processing boolean filter.  The rows returned from the base table are
+// already narrowed to the Tantivy-hit primary keys.
+//
+// If there are additional non-MATCH restrictions (e.g. AND status = 'active'),
+// those must still be applied row-by-row.  We replace each MATCH
+// binary_operator node with constant-true before evaluating so that
+// expr::is_satisfied_by never tries to evaluate the MATCH predicate.
+future<shared_ptr<cql_transport::messages::result_message>>
+fts_indexed_table_select_statement::process_results(
+        foreign_ptr<lw_shared_ptr<query::result>> results,
+        lw_shared_ptr<query::read_command> cmd,
+        const query_options& options,
+        gc_clock::time_point now) const
+{
+    // Determine whether any non-MATCH restrictions need post-query filtering.
+    bool has_non_match_restrictions = false;
+    if (_restrictions_need_filtering) {
+        auto is_non_match_binop = [](const expr::binary_operator& bo) {
+            return bo.op != expr::oper_t::MATCH;
+        };
+        has_non_match_restrictions =
+            expr::find_binop(_restrictions->get_partition_level_filter(),   is_non_match_binop) != nullptr ||
+            expr::find_binop(_restrictions->get_clustering_row_level_filter(), is_non_match_binop) != nullptr;
+    }
+
+    cql3::selection::result_set_builder builder(*_selection, now, &options);
+    co_return co_await builder.with_thread_if_needed([&] {
+        if (has_non_match_restrictions) {
+            // Replace every MATCH binary_operator node with constant-true so that
+            // is_satisfied_by() does not throw when called row-by-row.
+            auto replace_match_with_true =
+                    [](const expr::expression& e) -> std::optional<expr::expression> {
+                const auto* bo = expr::as_if<expr::binary_operator>(&e);
+                if (bo && bo->op == expr::oper_t::MATCH) {
+                    return expr::constant::make_bool(true);
+                }
+                return std::nullopt;
+            };
+            expr::expression modified_part_filter = expr::search_and_replace(
+                    _restrictions->get_partition_level_filter(), replace_match_with_true);
+            expr::expression modified_ck_filter = expr::search_and_replace(
+                    _restrictions->get_clustering_row_level_filter(), replace_match_with_true);
+
+            // Inline filter struct that evaluates the modified expressions.
+            // Stores owned expressions (not references) so lifetime is safe.
+            struct match_stripped_filter {
+                expr::expression part_filter;
+                expr::expression ck_filter;
+                const query_options& options;
+
+                bool operator()(const cql3::selection::selection& sel,
+                                const std::vector<bytes>& pk,
+                                const std::vector<bytes>& ck,
+                                const query::result_row_view& static_row,
+                                const query::result_row_view* row) const {
+                    auto col_vals = expr::get_non_pk_values(sel, static_row, row);
+                    expr::evaluation_inputs inputs{
+                        .partition_key = pk,
+                        .clustering_key = ck,
+                        .static_and_regular_columns = col_vals,
+                        .selection = &sel,
+                        .options = &options,
+                    };
+                    return expr::is_satisfied_by(part_filter, inputs) &&
+                           expr::is_satisfied_by(ck_filter, inputs);
+                }
+
+                void reset(const partition_key* = nullptr) {}
+                uint64_t get_rows_dropped() const { return 0; }
+            };
+
+            results->ensure_counts();
+            _stats.filtered_rows_read_total += *results->row_count();
+            query::result_view::consume(*results, cmd->slice,
+                    cql3::selection::result_set_builder::visitor(builder, *_query_schema,
+                            *_selection,
+                            match_stripped_filter{
+                                std::move(modified_part_filter),
+                                std::move(modified_ck_filter),
+                                options}));
+        } else {
+            // No non-MATCH restrictions — rows are already fully filtered by
+            // Tantivy; use the fast no-filter path.
+            query::result_view::consume(*results, cmd->slice,
+                    cql3::selection::result_set_builder::visitor(builder, *_query_schema,
+                            *_selection));
+        }
+        auto rs = builder.build();
+        if (needs_post_query_ordering()) {
+            rs->sort(_ordering_comparator);
+            if (_is_reversed) {
+                rs->reverse();
+            }
+            rs->trim(cmd->get_row_limit());
+        }
+        update_stats_rows_read(rs->size());
+        return shared_ptr<cql_transport::messages::result_message>(
+                ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs))));
+    });
+}
+
+lw_shared_ptr<query::read_command>
+fts_indexed_table_select_statement::prepare_command_for_base_query(
+        query_processor& qp,
+        service::query_state& state,
+        const query_options& options,
+        uint64_t fetch_limit) const
+{
+    auto slice = make_partition_slice(options);
+    return ::make_lw_shared<query::read_command>(
+            _schema->id(), _schema->version(), std::move(slice),
+            qp.proxy().get_max_result_size(slice),
+            query::tombstone_limit(qp.proxy().get_tombstone_limit()),
+            query::row_limit(get_inner_loop_limit(fetch_limit, _selection->is_aggregate())),
+            query::partition_limit(query::max_partitions),
+            _query_start_time_point,
+            tracing::make_trace_info(state.get_trace_state()),
+            query_id::create_null_id(),
+            query::is_first_page::no,
+            options.get_timestamp(state));
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+fts_indexed_table_select_statement::do_execute(
+        query_processor& qp,
+        service::query_state& state,
+        const query_options& options) const
+{
+    tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
+    validate_for_read(options.get_consistency());
+
+    _query_start_time_point = gc_clock::now();
+    update_stats();
+
+    const uint64_t limit = get_limit(options, _limit);
+    if (limit > max_fts_query_limit) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                fmt::format("FTS MATCH queries require a LIMIT not greater than {}. "
+                            "LIMIT was {}", max_fts_query_limit, limit)));
+    }
+
+    // Extract the MATCH query string from prepared non-PK restrictions.
+    // Keep this tied to the specific column detected at prepare() time.
+    sstring match_query;
+    const auto& non_pk_restrictions = _restrictions->get_non_pk_restriction();
+    if (auto it = non_pk_restrictions.find(_match_column); it != non_pk_restrictions.end()) {
+        const expr::binary_operator* match_predicate = expr::find_binop(
+                it->second,
+                [this](const expr::binary_operator& bo) {
+                    if (bo.op != expr::oper_t::MATCH) {
+                        return false;
+                    }
+                    const auto* lhs_col = expr::as_if<expr::column_value>(&bo.lhs);
+                    return lhs_col && lhs_col->col == _match_column;
+                });
+
+        if (match_predicate) {
+            // RHS bind markers and literals are resolved against the LHS
+            // column's type during restriction preparation.  Because the
+            // LHS is restricted to text/ascii at prepare time (see
+            // `get_fts_query_info`), the bytes carried in `val` are
+            // guaranteed to be a UTF-8 string and can be decoded directly.
+            auto val = expr::evaluate(match_predicate->rhs, options);
+            if (!val.is_null()) {
+                match_query = utf8_type->to_string(to_bytes(val.view()));
+            }
+        }
+    }
+
+    if (match_query.empty()) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                "FTS MATCH query string is empty or could not be extracted from the "
+                "WHERE clause"));
+    }
+
+    // Pass the raw MATCH string directly to Tantivy's QueryParser and let
+    // the Rust side configure the parser with the correct default field.
+    // Previously the query was wrapped as `field:(expr)`, which Tantivy's
+    // parser rejects for compound boolean expressions like `wonder OR builder`.
+    const sstring& default_field = _match_column->name_as_text();
+
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+
+    auto hits = co_await qp.fts_cdc().search(
+            keyspace(),
+            column_family(),
+            _fts_index.metadata().name(),
+            match_query,
+            default_field,
+            static_cast<uint32_t>(limit));
+
+    if (hits.empty()) {
+        // Return an empty result set with the correct column metadata.
+        auto cmd = prepare_command_for_base_query(qp, state, options, 0);
+        cmd->set_row_limit(0);
+        auto empty_ranges = dht::partition_range_vector{};
+        co_return co_await qp.proxy()
+                .query_result(_query_schema, cmd, std::move(empty_ranges),
+                        options.get_consistency(),
+                        {timeout, state.get_permit(), state.get_client_state(),
+                         state.get_trace_state(), {}, {},
+                         options.get_specific_options().node_local_only},
+                        std::nullopt)
+                .then(wrap_result_to_error_message(
+                        [this, &options, cmd](
+                                service::storage_proxy::coordinator_query_result qr) {
+                    cmd->set_row_limit(0);
+                    return this->process_results(
+                            std::move(qr.query_result), cmd, options,
+                            _query_start_time_point);
+                }));
+    }
+
+    // Build dht::decorated_key list from the hit IDs.
+    // Hit IDs have the format "<pk_part>" or "<pk_part>|<ck_part>".
+    // '|' separates the partition-key part from the clustering-key part;
+    // ':' separates individual components within a multi-column key.
+    // We reconstruct partition/clustering keys from the hex-encoded components.
+    auto cmd = prepare_command_for_base_query(qp, state, options, hits.size());
+
+    // Helper: split a hex part on ':' and decode each component into bytes.
+    auto decode_key_components = [](const sstring& hex_part) -> std::vector<bytes> {
+        std::vector<bytes> comps;
+        sstring rem = hex_part;
+        while (!rem.empty()) {
+            auto colon = rem.find(':');
+            sstring comp_hex = (colon == sstring::npos) ? rem : rem.substr(0, colon);
+            comps.push_back(from_hex(comp_hex));
+            if (colon == sstring::npos) break;
+            rem = rem.substr(colon + 1);
+        }
+        return comps;
+    };
+
+    if (_schema->clustering_key_size() == 0) {
+        // No clustering key — use the partition-range fetch path.
+        std::vector<dht::partition_range> partition_ranges;
+        partition_ranges.reserve(hits.size());
+        for (const auto& [hit_id, _score] : hits) {
+            // hit_id is the full pk_part (no '|' present).
+            // Decode each ':'-separated component and reconstruct the key.
+            auto pk = partition_key::from_exploded(
+                    *_schema, decode_key_components(hit_id));
+            auto dk = dht::decorate_key(*_schema, pk);
+            partition_ranges.push_back(
+                    dht::partition_range::make_singular(std::move(dk)));
+        }
+        co_return co_await query_base_table(qp, state, options,
+                std::move(cmd), timeout, std::move(partition_ranges));
+    }
+
+    // Tables with clustering columns — use per-primary-key fetch path
+    // (same as vector_indexed_table_select_statement).
+    std::vector<vector_search::primary_key> pkeys;
+    pkeys.reserve(hits.size());
+    for (const auto& [hit_id, _score] : hits) {
+        // Split on '|' to separate the pk_part from the ck_part.
+        // Within each part, ':' separates multi-component key columns.
+        auto pipe = hit_id.find('|');
+        sstring pk_part = (pipe == sstring::npos)
+                ? hit_id : hit_id.substr(0, pipe);
+        sstring ck_part = (pipe == sstring::npos)
+                ? sstring{} : hit_id.substr(pipe + 1);
+
+        auto pk = partition_key::from_exploded(
+                *_schema, decode_key_components(pk_part));
+        auto dk = dht::decorate_key(*_schema, pk);
+
+        clustering_key_prefix ck = clustering_key_prefix::make_empty();
+        if (!ck_part.empty()) {
+            ck = clustering_key_prefix::from_exploded(
+                    *_schema, decode_key_components(ck_part));
+        }
+        pkeys.push_back({std::move(dk), std::move(ck)});
+    }
+    co_return co_await query_base_table(qp, state, options,
+            std::move(cmd), timeout, pkeys);
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+fts_indexed_table_select_statement::query_base_table(
+        query_processor& qp,
+        service::query_state& state,
+        const query_options& options,
+        lw_shared_ptr<query::read_command> command,
+        lowres_clock::time_point timeout,
+        std::vector<dht::partition_range> partition_ranges) const
+{
+    co_return co_await qp.proxy()
+            .query_result(_query_schema, command, std::move(partition_ranges),
+                    options.get_consistency(),
+                    {timeout, state.get_permit(), state.get_client_state(),
+                     state.get_trace_state(), {}, {},
+                     options.get_specific_options().node_local_only},
+                    std::nullopt)
+            .then(wrap_result_to_error_message(
+                    [this, &options, command](
+                            service::storage_proxy::coordinator_query_result qr) {
+                command->set_row_limit(get_limit(options, _limit));
+                return this->process_results(
+                        std::move(qr.query_result), command, options,
+                        _query_start_time_point);
+            }));
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+fts_indexed_table_select_statement::query_base_table(
+        query_processor& qp,
+        service::query_state& state,
+        const query_options& options,
+        lw_shared_ptr<query::read_command> command,
+        lowres_clock::time_point timeout,
+        const std::vector<vector_search::primary_key>& pkeys) const
+{
+    coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> result =
+            co_await utils::result_map_reduce(
+                    pkeys.begin(), pkeys.end(),
+                    [&](this auto, auto& key)
+                    -> future<coordinator_result<
+                            foreign_ptr<lw_shared_ptr<query::result>>>> {
+                        auto cmd = ::make_lw_shared<query::read_command>(*command);
+                        cmd->slice._row_ranges = query::clustering_row_ranges{
+                            query::clustering_range::make_singular(key.clustering)};
+                        coordinator_result<service::storage_proxy::coordinator_query_result>
+                            rqr = co_await qp.proxy().query_result(
+                                    _schema, cmd,
+                                    {dht::partition_range::make_singular(key.partition)},
+                                    options.get_consistency(),
+                                    {timeout, state.get_permit(),
+                                     state.get_client_state(),
+                                     state.get_trace_state()});
+                        if (!rqr) {
+                            co_return std::move(rqr).as_failure();
+                        }
+                        co_return std::move(rqr.value().query_result);
+                    },
+                    query::result_merger{command->get_row_limit(),
+                                        query::max_partitions});
+
+    co_return co_await wrap_result_to_error_message(
+            [this, &command, &options](auto result) {
+                command->set_row_limit(get_limit(options, _limit));
+                return process_results(std::move(result), command, options,
+                        _query_start_time_point);
+            })(std::move(result));
+}
+
+// =========================================================================
+// FTS query detection helpers
+// =========================================================================
+//
+// These mirror the ann_ordering_info / get_ann_ordering_info pattern above.
+// We scan the raw WHERE clause for a MATCH binary_operator, then resolve
+// the column definition and find the matching FTS custom index.
+
+struct fts_query_info {
+    // The FTS custom index to use.
+    secondary_index::index _index;
+    // The column definition that has the MATCH predicate applied to it.
+    const column_definition* _match_column;
+};
+
+static std::optional<fts_query_info> get_fts_query_info(
+        data_dictionary::database db,
+        schema_ptr schema,
+        lw_shared_ptr<const raw::select_statement::parameters> parameters,
+        prepare_context& ctx,
+        const expr::expression& where_clause) {
+
+    (void)parameters; // unused at this stage; kept for signature symmetry with get_ann_ordering_info
+    (void)ctx;
+
+    // Step 1: check the raw WHERE clause for a MATCH binary operator.
+    // We must do this first — if there is no MATCH predicate this is not an
+    // FTS query at all, even if the table happens to have an FTS index.
+    logger.debug("get_fts_query_info: checking where_clause for MATCH operator");
+    const expr::binary_operator* match_binop = expr::find_binop(where_clause,
+            [](const expr::binary_operator& bo) {
+                return bo.op == expr::oper_t::MATCH;
+            });
+    if (!match_binop) {
+        logger.debug("get_fts_query_info: no MATCH operator found in where_clause, returning nullopt");
+        return std::nullopt;
+    }
+    logger.debug("get_fts_query_info: found MATCH operator");
+
+    // Step 2: extract the column name from the LHS of the MATCH operator.
+    // The LHS is still an unresolved_identifier at this point because we are
+    // called before prepare_restrictions().
+    sstring match_col_name;
+    if (auto uid = expr::as_if<expr::unresolved_identifier>(&match_binop->lhs)) {
+        auto col_id = uid->ident->prepare_column_identifier(*schema);
+        match_col_name = sstring(col_id->name().begin(), col_id->name().end());
+    } else if (auto cv = expr::as_if<expr::column_value>(&match_binop->lhs)) {
+        match_col_name = cv->col->name_as_text();
+    } else {
+        throw exceptions::invalid_request_exception(
+                "FTS MATCH operator left-hand side must be a column name");
+    }
+
+    const column_definition* match_col = schema->get_column_definition(
+            utf8_type->from_string(match_col_name));
+    if (!match_col) {
+        throw exceptions::invalid_request_exception(
+                fmt::format("Unknown column '{}' in FTS MATCH predicate", match_col_name));
+    }
+    logger.debug("get_fts_query_info: MATCH column = '{}'", match_col_name);
+
+    // Step 2b: the MATCH operator is only meaningful when both sides are
+    // text.  We check the LHS column type here at prepare time so that the
+    // user sees a clear error before any query work is done; the RHS type
+    // is validated at execute time once bind markers have been resolved
+    // (see `do_execute` below).  type_of() on the raw RHS expression is
+    // unsafe at this point because unresolved bind markers and untyped
+    // literals trigger on_internal_error().
+    if (match_col->type->get_kind() != abstract_type::kind::utf8
+        && match_col->type->get_kind() != abstract_type::kind::ascii) {
+        throw exceptions::invalid_request_exception(format(
+                "FTS MATCH operator only applies to text columns; "
+                "column '{}' has type '{}'",
+                match_col_name, match_col->type->name()));
+    }
+
+    // Step 3: find an FTS custom index on the target column.
+    // The class-name comparison and per-column target match are delegated to
+    // the dedicated helpers so the substring-vs-prefix bug fixed in
+    // `fts_index::has_fts_index_on_column` cannot reappear here.
+    auto cf = db.find_column_family(schema);
+    auto& sim = cf.get_index_manager();
+    auto indexes = sim.list_indexes();
+    logger.debug("get_fts_query_info: found {} indexes on table", indexes.size());
+
+    auto it = std::find_if(indexes.begin(), indexes.end(),
+            [&match_col_name](const secondary_index::index& idx) {
+        const auto& opts = idx.metadata().options();
+        auto class_it = opts.find(db::index::secondary_index::custom_class_option_name);
+        if (class_it == opts.end() || !db::index::fts_index::is_fts_class(class_it->second)) {
+            return false;
+        }
+        auto target_it = opts.find(cql3::statements::index_target::target_option_name);
+        if (target_it == opts.end()) {
+            return false;
+        }
+        for (const auto& tgt : db::index::fts_index::parse_target_columns(target_it->second)) {
+            if (tgt == match_col_name) {
+                return true;
+            }
+        }
+        return false;
+    });
+
+    if (it == indexes.end()) {
+        // No FTS index on the column referenced by MATCH → not an FTS query.
+        // Let the normal restriction path handle this (it will likely error).
+        logger.debug("get_fts_query_info: no FTS index found for column '{}', returning nullopt", match_col_name);
+        return std::nullopt;
+    }
+    logger.debug("get_fts_query_info: found FTS index '{}' for column '{}'", it->metadata().name(), match_col_name);
+
+    return fts_query_info{*it, match_col};
+}
+
 namespace raw {
 
 static void validate_attrs(const cql3::attributes::raw& attrs) {
@@ -2330,6 +2865,16 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     std::optional<ann_ordering_info> ann_ordering_info_opt = get_ann_ordering_info(db, schema, _parameters, ctx);
     bool is_ann_query = ann_ordering_info_opt.has_value();
 
+    // Detect FTS (MATCH) query: look for any FTS custom index on this table.
+    // FTS query detection is done eagerly here before prepare_restrictions()
+    // so we can pass allow_filtering=true (like ANN queries) to avoid errors
+    // on the MATCH predicate which restrictions does not yet know about.
+    std::optional<fts_query_info> fts_query_info_opt;
+    if (!is_ann_query) {
+        fts_query_info_opt = get_fts_query_info(db, schema, _parameters, ctx, _where_clause);
+    }
+    bool is_fts_query = fts_query_info_opt.has_value();
+
     if (prepared_selectors.empty() && (!_group_by_columns.empty() || (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled))) {
         // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
         // empty, below we choose selection::wildcard() for SELECT *, and either:
@@ -2391,7 +2936,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
 
-    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query,
+    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query || is_fts_query,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()));
 
     if (_parameters->is_distinct()) {
@@ -2418,7 +2963,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     std::vector<sstring> warnings;
-    if (!is_ann_query) {
+    if (!is_ann_query && !is_fts_query) {
         check_needs_filtering(*restrictions, db.get_config().strict_allow_filtering(), warnings);
         ensure_filtering_columns_retrieval(db, *selection, *restrictions);
     }
@@ -2519,6 +3064,21 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
                 std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(ann_ordering_info_opt->_prepared_ann_ordering),
                 prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, ann_ordering_info_opt->_index, std::move(prepared_attrs));
+    } else if (is_fts_query) {
+        // Dispatch to FTS-aware select statement.  The MATCH predicate and
+        // query string are resolved lazily inside do_execute() once we have
+        // the concrete query options (bind variables, etc.).
+        stmt = fts_indexed_table_select_statement::prepare(
+                db, schema, ctx.bound_variables_size(), _parameters,
+                std::move(selection), std::move(restrictions),
+                std::move(group_by_cell_indices), is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
+                stats,
+                fts_query_info_opt->_index,
+                fts_query_info_opt->_match_column,
+                std::move(prepared_attrs));
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
                 db,

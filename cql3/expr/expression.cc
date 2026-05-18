@@ -326,6 +326,7 @@ bool_or_null limits(const expression& lhs, oper_t op, null_handling_style null_h
             case oper_t::CONTAINS:
             case oper_t::CONTAINS_KEY:
             case oper_t::LIKE:
+            case oper_t::MATCH:
             case oper_t::IS_NOT: // IS_NOT doesn't really belong here, luckily this is never reached.
                 throw exceptions::invalid_request_exception(fmt::format("Invalid comparison with null for operator \"{}\"", op));
             case oper_t::EQ:
@@ -1131,6 +1132,8 @@ cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_input
         case oper_t::IS_NOT:
             binop_result = is_not_null(binop.lhs, binop.rhs, inputs);
             break;
+        case oper_t::MATCH:
+            throw exceptions::invalid_request_exception("MATCH cannot be evaluated as a regular boolean operator");
     };
 
     if (binop_result.is_null()) {
@@ -2530,6 +2533,8 @@ std::string_view fmt::formatter<cql3::expr::oper_t>::to_string(const cql3::expr:
         return "IS NOT";
     case oper_t::LIKE:
         return "LIKE";
+    case oper_t::MATCH:
+        return "MATCH";
     }
     __builtin_unreachable();
 }

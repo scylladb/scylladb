@@ -41,6 +41,7 @@
 
 
 namespace lang { class manager; }
+namespace db::fts { class fts_cdc_consumer; }
 namespace service {
 class migration_manager;
 class query_state;
@@ -117,6 +118,7 @@ private:
     data_dictionary::database _db;
     service::migration_notifier& _mnotifier;
     vector_search::vector_store_client& _vector_store_client;
+    db::fts::fts_cdc_consumer* _fts_cdc{nullptr};
     memory_config _mcfg;
     const cql_config& _cql_config;
 
@@ -229,6 +231,17 @@ public:
 
     vector_search::vector_store_client& vector_store_client() noexcept {
         return _vector_store_client;
+    }
+
+    void set_fts_cdc_consumer(db::fts::fts_cdc_consumer& c) noexcept {
+        _fts_cdc = &c;
+    }
+
+    db::fts::fts_cdc_consumer& fts_cdc() {
+        if (!_fts_cdc) [[unlikely]] {
+            throw std::runtime_error("FTS CDC consumer not yet initialized");
+        }
+        return *_fts_cdc;
     }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {

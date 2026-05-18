@@ -144,7 +144,7 @@ public:
          const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering, uint64_t limit,
         std::optional<service::cas_shard> cas_shard) const;
 
-    future<shared_ptr<cql_transport::messages::result_message>> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
+    virtual future<shared_ptr<cql_transport::messages::result_message>> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
 
     const sstring& keyspace() const;
@@ -401,6 +401,107 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(query_processor& qp, service::query_state& state,
             const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
             std::vector<dht::partition_range> partition_ranges) const;
+};
+
+// =========================================================================
+// fts_indexed_table_select_statement
+// =========================================================================
+//
+// Handles `SELECT … WHERE col MATCH 'query'` when the target column is
+// covered by an FTS custom index.
+//
+// Execution flow (do_execute):
+//   1. Extract the MATCH query string from the bind value.
+//   2. Call fts_cdc_consumer.search() on the alien thread.
+//   3. Parse partition-key strings from the returned hit IDs.
+//   4. Fetch full rows from the base table by primary key.
+//   5. Return result set ordered by BM25 score descending.
+//
+// Columns without clustering keys use the partition-range path;
+// tables with clustering keys use per-primary-key fetches (same two-path
+// approach as vector_indexed_table_select_statement).
+class fts_indexed_table_select_statement : public select_statement {
+    secondary_index::index _fts_index;
+    /// The column targeted by the MATCH operator in the WHERE clause.
+    const column_definition* _match_column;
+    mutable gc_clock::time_point _query_start_time_point;
+
+public:
+    static constexpr size_t max_fts_query_limit = 10'000;
+
+    static ::shared_ptr<cql3::statements::select_statement> prepare(
+            data_dictionary::database db,
+            schema_ptr schema,
+            uint32_t bound_terms,
+            lw_shared_ptr<const parameters> parameters,
+            ::shared_ptr<selection::selection> selection,
+            ::shared_ptr<restrictions::statement_restrictions> restrictions,
+            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
+            bool is_reversed,
+            ordering_comparator_type ordering_comparator,
+            std::optional<expr::expression> limit,
+            std::optional<expr::expression> per_partition_limit,
+            cql_stats& stats,
+            const secondary_index::index& fts_index,
+            const column_definition* match_column,
+            std::unique_ptr<cql3::attributes> attrs);
+
+    fts_indexed_table_select_statement(
+            schema_ptr schema,
+            uint32_t bound_terms,
+            lw_shared_ptr<const parameters> parameters,
+            ::shared_ptr<selection::selection> selection,
+            ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
+            bool is_reversed,
+            ordering_comparator_type ordering_comparator,
+            std::optional<expr::expression> limit,
+            std::optional<expr::expression> per_partition_limit,
+            cql_stats& stats,
+            const secondary_index::index& fts_index,
+            const column_definition* match_column,
+            std::unique_ptr<cql3::attributes> attrs);
+
+private:
+    future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
+            query_processor& qp,
+            service::query_state& state,
+            const query_options& options) const override;
+
+    /// Override process_results to skip the MATCH restriction filter.
+    /// Results fetched from the base table are already restricted to Tantivy
+    /// hits, so no further filtering on the MATCH predicate is needed.
+    future<shared_ptr<cql_transport::messages::result_message>> process_results(
+            foreign_ptr<lw_shared_ptr<query::result>> results,
+            lw_shared_ptr<query::read_command> cmd,
+            const query_options& options,
+            gc_clock::time_point now) const override;
+
+    void update_stats() const;
+
+    lw_shared_ptr<query::read_command> prepare_command_for_base_query(
+            query_processor& qp,
+            service::query_state& state,
+            const query_options& options,
+            uint64_t fetch_limit) const;
+
+    /// Fetch rows by partition key only (tables without clustering columns).
+    future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(
+            query_processor& qp,
+            service::query_state& state,
+            const query_options& options,
+            lw_shared_ptr<query::read_command> command,
+            lowres_clock::time_point timeout,
+            std::vector<dht::partition_range> partition_ranges) const;
+
+    /// Fetch rows by full primary key (tables with clustering columns).
+    future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(
+            query_processor& qp,
+            service::query_state& state,
+            const query_options& options,
+            lw_shared_ptr<query::read_command> command,
+            lowres_clock::time_point timeout,
+            const std::vector<vector_search::primary_key>& pkeys) const;
 };
 
 }
