@@ -142,6 +142,10 @@ public:
         return true;
     }
 
+    const bytes& collection_name() const {
+        return _collection_name;
+    }
+
     std::vector<db::view::view_key_and_action> compute_values_with_action(const schema& schema, const partition_key& key,
             const db::view::clustering_or_static_row& row, const std::optional<db::view::clustering_or_static_row>& existing) const;
 };
