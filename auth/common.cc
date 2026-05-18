@@ -32,10 +32,6 @@ constinit const std::string_view AUTH_PACKAGE_NAME("org.apache.cassandra.auth.")
 
 static logging::logger auth_log("auth");
 
-std::string default_superuser(cql3::query_processor& qp) {
-    return qp.db().get_config().auth_superuser_name();
-}
-
 // Func must support being invoked more than once.
 future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_function<future<>()> func) {
     struct empty_state { };

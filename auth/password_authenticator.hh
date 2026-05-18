@@ -18,10 +18,6 @@
 #include "auth/cache.hh"
 #include "service/raft/raft_group0_client.hh"
 
-namespace db {
-    class config;
-}
-
 namespace cql3 {
 
 class query_processor;
@@ -34,6 +30,8 @@ class migration_manager;
 
 namespace auth {
 
+struct config;
+
 extern const std::string_view password_authenticator_name;
 
 class password_authenticator : public authenticator {
@@ -41,6 +39,8 @@ class password_authenticator : public authenticator {
     ::service::raft_group0_client& _group0_client;
     ::service::migration_manager& _migration_manager;
     cache& _cache;
+    std::string _superuser_name;
+    std::string _superuser_salted_password;
     future<> _stopped;
     abort_source _as;
     shared_promise<> _superuser_created_promise;
@@ -48,7 +48,7 @@ class password_authenticator : public authenticator {
     constexpr static auth::passwords::scheme _scheme = passwords::scheme::sha_512;
 
 public:
-    password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&);
+    password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&, const config&);
 
     ~password_authenticator();
 

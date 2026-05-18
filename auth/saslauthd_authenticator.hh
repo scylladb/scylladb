@@ -24,12 +24,14 @@ class raft_group0_client;
 
 namespace auth {
 
+struct config;
+
 /// Delegates authentication to saslauthd.  When this class is asked to authenticate, it passes the credentials
 /// to saslauthd, gets its response, and allows or denies authentication based on that response.
 class saslauthd_authenticator : public authenticator {
     sstring _socket_path; ///< Path to the domain socket on which saslauthd is listening.
 public:
-    saslauthd_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&);
+    saslauthd_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&, const config&);
 
     future<> start() override;
 

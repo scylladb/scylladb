@@ -21,6 +21,7 @@
 #include <seastar/core/thread.hh>
 
 #include "auth/common.hh"
+#include "auth/config.hh"
 #include "auth/role_manager.hh"
 #include "auth/roles-metadata.hh"
 #include "cql3/query_processor.hh"
@@ -70,11 +71,12 @@ static bool has_can_login(const cql3::untyped_result_set_row& row) {
     return row.has("can_login") && !(boolean_type->deserialize(row.get_blob_unfragmented("can_login")).is_null());
 }
 
-standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache)
+standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache, const config& cfg)
     : _qp(qp)
     , _group0_client(g0)
     , _migration_manager(mm)
     , _cache(cache)
+    , _superuser_name(cfg.auth_superuser_name)
     , _stopped(make_ready_future<>())
 {}
 
@@ -91,7 +93,7 @@ const resource_set& standard_role_manager::protected_resources() const {
 }
 
 future<> standard_role_manager::maybe_create_default_role() {
-    if (default_superuser(_qp).empty()) {
+    if (_superuser_name.empty()) {
         co_return;
     }
     auto has_superuser = [this] () -> future<bool> {
@@ -122,9 +124,9 @@ future<> standard_role_manager::maybe_create_default_role() {
             db::system_keyspace::NAME,
             meta::roles_table::name,
             meta::roles_table::role_col_name);
-    co_await collect_mutations(_qp, batch, insert_query, {default_superuser(_qp)});
+    co_await collect_mutations(_qp, batch, insert_query, {sstring(_superuser_name)});
     co_await std::move(batch).commit(_group0_client, _as, get_raft_timeout());
-    log.info("Created default superuser role '{}'.", default_superuser(_qp));
+    log.info("Created default superuser role '{}'.", _superuser_name);
 }
 
 future<> standard_role_manager::maybe_create_default_role_with_retries() {

@@ -33,17 +33,20 @@ class migration_manager;
 
 namespace auth {
 
+struct config;
+
 class standard_role_manager final : public role_manager {
     cql3::query_processor& _qp;
     ::service::raft_group0_client& _group0_client;
     ::service::migration_manager& _migration_manager;
     cache& _cache;
+    std::string _superuser_name;
     future<> _stopped;
     abort_source _as;
     shared_promise<> _superuser_created_promise;
 
 public:
-    standard_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&);
+    standard_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&, const config&);
 
     virtual std::string_view qualified_java_name() const noexcept override;
 

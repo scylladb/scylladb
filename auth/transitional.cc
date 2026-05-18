@@ -10,6 +10,7 @@
 
 #include "auth/transitional.hh"
 #include "auth/authenticated_user.hh"
+#include "auth/config.hh"
 #include "auth/default_authorizer.hh"
 #include "auth/password_authenticator.hh"
 #include "auth/permission.hh"
@@ -17,8 +18,8 @@
 
 namespace auth {
 
-transitional_authenticator::transitional_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache)
-        : transitional_authenticator(std::make_unique<password_authenticator>(qp, g0, mm, cache)) {
+transitional_authenticator::transitional_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache, const config& cfg)
+        : transitional_authenticator(std::make_unique<password_authenticator>(qp, g0, mm, cache, cfg)) {
 }
 
 transitional_authenticator::transitional_authenticator(std::unique_ptr<authenticator> a)

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "common.hh"
+#include "auth/config.hh"
 #include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include "seastarx.hh"
@@ -213,8 +214,8 @@ ldap_role_manager::ldap_role_manager(
         std::string_view query_template, std::string_view target_attr, std::string_view bind_name, std::string_view bind_password,
         uint32_t permissions_update_interval_in_ms,
         utils::observer<uint32_t>  permissions_update_interval_in_ms_observer,
-        cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache)
-        : _std_mgr(qp, rg0c, mm, cache), _group0_client(rg0c), _query_template(query_template), _target_attr(target_attr), _bind_name(bind_name)
+        cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache, const config& cfg)
+        : _std_mgr(qp, rg0c, mm, cache, cfg), _group0_client(rg0c), _query_template(query_template), _target_attr(target_attr), _bind_name(bind_name)
         , _bind_password(bind_password)
         , _permissions_update_interval_in_ms(permissions_update_interval_in_ms)
         , _permissions_update_interval_in_ms_observer(std::move(permissions_update_interval_in_ms_observer))
@@ -223,18 +224,19 @@ ldap_role_manager::ldap_role_manager(
         , _cache_pruner(make_ready_future<>()) {
 }
 
-ldap_role_manager::ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache)
+ldap_role_manager::ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache, const config& cfg)
     : ldap_role_manager(
-            qp.db().get_config().ldap_url_template(),
-            qp.db().get_config().ldap_attr_role(),
-            qp.db().get_config().ldap_bind_dn(),
-            qp.db().get_config().ldap_bind_passwd(),
-            qp.db().get_config().permissions_update_interval_in_ms(),
-            qp.db().get_config().permissions_update_interval_in_ms.observe([this] (const uint32_t& v) { _permissions_update_interval_in_ms = v; }),
+            cfg.ldap_url_template,
+            cfg.ldap_attr_role,
+            cfg.ldap_bind_dn,
+            cfg.ldap_bind_passwd,
+            cfg.permissions_update_interval_in_ms(),
+            cfg.permissions_update_interval_in_ms.observe([this] (const uint32_t& v) { _permissions_update_interval_in_ms = v; }),
             qp,
             rg0c,
             mm,
-            cache) {
+            cache,
+            cfg) {
 }
 
 std::string_view ldap_role_manager::qualified_java_name() const noexcept {

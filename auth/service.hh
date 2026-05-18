@@ -30,6 +30,7 @@
 #include "utils/observable.hh"
 #include "utils/serialized_action.hh"
 #include "service/maintenance_mode.hh"
+#include "auth/config.hh"
 
 namespace cql3 {
 class query_processor;
@@ -45,8 +46,8 @@ class role_or_anonymous;
 
 /// Factory function types for creating auth module instances on each shard.
 using authorizer_factory = std::function<std::unique_ptr<authorizer>()>;
-using authenticator_factory = std::function<std::unique_ptr<authenticator>()>;
-using role_manager_factory = std::function<std::unique_ptr<role_manager>()>;
+using authenticator_factory = std::function<std::unique_ptr<authenticator>(const config&)>;
+using role_manager_factory = std::function<std::unique_ptr<role_manager>(const config&)>;
 
 ///
 /// Due to poor (in this author's opinion) decisions of Apache Cassandra, certain choices of one role-manager,
@@ -77,6 +78,8 @@ class service final : public seastar::peering_sharded_service<service> {
     cql3::query_processor& _qp;
 
     ::service::raft_group0_client& _group0_client;
+
+    config _cfg;
 
     authorizer::ptr_type _authorizer;
 
@@ -109,6 +112,7 @@ public:
             authorizer_factory,
             authenticator_factory,
             role_manager_factory,
+            config,
             maintenance_socket_enabled,
             cache&);
 

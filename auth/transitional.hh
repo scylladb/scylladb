@@ -25,6 +25,8 @@ class migration_manager;
 
 namespace auth {
 
+struct config;
+
 ///
 /// Transitional authenticator that allows anonymous access when credentials are not provided
 /// or authentication fails. Used for migration scenarios.
@@ -33,7 +35,7 @@ class transitional_authenticator : public authenticator {
     std::unique_ptr<authenticator> _authenticator;
 
 public:
-    transitional_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache);
+    transitional_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, cache& cache, const config& cfg);
     transitional_authenticator(std::unique_ptr<authenticator> a);
 
     virtual future<> start() override;

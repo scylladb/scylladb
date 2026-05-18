@@ -62,6 +62,7 @@
 #include "utils/directories.hh"
 #include "debug.hh"
 #include "auth/common.hh"
+#include "auth/config.hh"
 #include "init.hh"
 #include "release.hh"
 #include "repair/repair.hh"
@@ -2226,12 +2227,27 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             std::any stop_maintenance_auth_service;
             std::any stop_maintenance_cql;
 
+            auto make_auth_cfg = [&] {
+                return auth::config {
+                    .auth_superuser_name = cfg->auth_superuser_name(),
+                    .auth_superuser_salted_password = cfg->auth_superuser_salted_password(),
+                    .saslauthd_socket_path = cfg->saslauthd_socket_path(),
+                    .auth_certificate_role_queries = cfg->auth_certificate_role_queries(),
+                    .ldap_url_template = cfg->ldap_url_template(),
+                    .ldap_attr_role = cfg->ldap_attr_role(),
+                    .ldap_bind_dn = cfg->ldap_bind_dn(),
+                    .ldap_bind_passwd = cfg->ldap_bind_passwd(),
+                    .permissions_update_interval_in_ms = cfg->permissions_update_interval_in_ms,
+                };
+            };
+
             if (cfg->maintenance_socket() != "ignore") {
                 checkpoint(stop_signal, "starting maintenance auth service");
                 maintenance_auth_service.start(std::ref(qp), std::ref(group0_client),
                         auth::make_maintenance_socket_authorizer_factory(qp),
                         auth::make_maintenance_socket_authenticator_factory(qp, group0_client, mm, auth_cache),
                         auth::make_maintenance_socket_role_manager_factory(qp, group0_client, mm, auth_cache),
+                        sharded_parameter(make_auth_cfg),
                         maintenance_socket_enabled::yes, std::ref(auth_cache)).get();
 
                 cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
@@ -2518,6 +2534,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     auth::make_authorizer_factory(cfg->authorizer(), qp),
                     auth::make_authenticator_factory(cfg->authenticator(), qp, group0_client, mm, auth_cache),
                     auth::make_role_manager_factory(cfg->role_manager(), qp, group0_client, mm, auth_cache),
+                    sharded_parameter(make_auth_cfg),
                     maintenance_socket_enabled::no, std::ref(auth_cache)).get();
 
             std::any stop_auth_service;

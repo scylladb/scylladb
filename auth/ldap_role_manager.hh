@@ -19,6 +19,8 @@
 
 namespace auth {
 
+struct config;
+
 /// Queries an LDAP server for roles.
 ///
 /// Since LDAP grants and revokes roles, calling grant() and revoke() is disallowed.
@@ -54,11 +56,12 @@ class ldap_role_manager : public role_manager {
             cql3::query_processor& qp, ///< Passed to standard_role_manager.
             ::service::raft_group0_client& rg0c, ///< Passed to standard_role_manager.
             ::service::migration_manager& mm, ///< Passed to standard_role_manager.
-            cache& cache ///< Passed to standard_role_manager.
+            cache& cache, ///< Passed to standard_role_manager.
+            const config& cfg ///< Auth configuration.
     );
 
-    /// Retrieves LDAP configuration entries from qp and invokes the other constructor.
-    ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache);
+    /// Retrieves LDAP configuration entries from cfg and invokes the other constructor.
+    ldap_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm, cache& cache, const config& cfg);
 
     /// Thrown when query-template parsing fails.
     struct url_error : public std::runtime_error {

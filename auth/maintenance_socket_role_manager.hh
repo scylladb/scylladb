@@ -25,6 +25,8 @@ class raft_group0_client;
 
 namespace auth {
 
+struct config;
+
 // This role manager is used by the maintenance socket. It has disabled all role management operations
 // in maintenance mode. In normal mode it delegates all operations to a standard_role_manager,
 // which is created on demand when the node joins the cluster.
@@ -33,6 +35,7 @@ class maintenance_socket_role_manager final : public role_manager {
     ::service::raft_group0_client& _group0_client;
     ::service::migration_manager& _migration_manager;
     cache& _cache;
+    const config& _cfg;
     std::optional<standard_role_manager> _std_mgr;
     bool _is_maintenance_mode;
 
@@ -44,7 +47,7 @@ public:
     // In the meantime all role management operations will fail.
     future<> ensure_role_operations_are_enabled() override;
 
-    maintenance_socket_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&);
+    maintenance_socket_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, cache&, const config&);
 
     virtual std::string_view qualified_java_name() const noexcept override;
 

@@ -9,6 +9,7 @@
 
 #include "auth/certificate_authenticator.hh"
 #include "auth/cache.hh"
+#include "auth/config.hh"
 
 #include <boost/regex.hpp>
 #include <fmt/ranges.h>
@@ -17,7 +18,6 @@
 #include "utils/error_injection.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
-#include "db/config.hh"
 
 
 static logging::logger clogger("certificate_authenticator");
@@ -32,10 +32,9 @@ enum class auth::certificate_authenticator::query_source {
     subject, altname
 };
 
-auth::certificate_authenticator::certificate_authenticator(cql3::query_processor& qp, ::service::raft_group0_client&, ::service::migration_manager&, auth::cache&)
+auth::certificate_authenticator::certificate_authenticator(cql3::query_processor& qp, ::service::raft_group0_client&, ::service::migration_manager&, auth::cache&, const config& cfg)
     : _queries([&] {
-        auto& conf = qp.db().get_config();
-        auto queries = conf.auth_certificate_role_queries();
+        auto& queries = cfg.auth_certificate_role_queries;
 
         if (queries.empty()) {
             throw std::invalid_argument("No role extraction queries specified.");
@@ -47,7 +46,7 @@ auth::certificate_authenticator::certificate_authenticator(cql3::query_processor
             // first, check for any invalid config keys
             if (map.size() == 2) {
                 try {
-                    auto& source = map.at(cfg_source_attr);
+                    sstring source = map.at(cfg_source_attr);
                     std::string query = map.at(cfg_query_attr);
 
                     std::transform(source.begin(), source.end(), source.begin(), ::toupper);
