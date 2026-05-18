@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #include "service/raft/group0_state_machine.hh"
+#include "audit/audit.hh"
 #include "auth/cache.hh"
 #include "db/schema_tables.hh"
 #include "mutation/atomic_cell.hh"
@@ -259,7 +260,32 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     }
     
     if (update_auth_cache_roles.size()) {
+        std::vector<sstring> audit_role_names;
+        if (audit::audit::audit_instance().local_is_initialized()) {
+            audit_role_names.assign(update_auth_cache_roles.begin(), update_auth_cache_roles.end());
+        }
+
         co_await _ss.auth_cache().load_roles(std::move(update_auth_cache_roles));
+
+        if (audit::audit::audit_instance().local_is_initialized()) {
+            // Determine which roles were created vs. dropped by checking
+            // the auth cache *after* load_roles() has completed.  If a role
+            // is present in the cache it was created (or altered); if absent,
+            // it was dropped.  This is safe because load_roles()
+            // distributes updates to all shards via distribute_role(),
+            // so each shard's local cache is fully up-to-date here.
+            auto& auth_cache_container = _ss.auth_cache().container();
+            co_await audit::audit::audit_instance().invoke_on_all(
+                [&audit_role_names, &auth_cache_container] (auto& a) {
+                    for (const auto& role : audit_role_names) {
+                        if (auth_cache_container.local().get(role)) {
+                            a.on_role_created(role);
+                        } else {
+                            a.on_role_dropped(role);
+                        }
+                    }
+                });
+        }
     }
     if (update_service_levels_cache || update_service_levels_effective_cache) { // this also updates SL effective cache
         co_await _ss.update_service_levels_cache(qos::update_both_cache_levels(update_service_levels_cache), qos::query_context::group0);
@@ -443,6 +469,25 @@ future<> group0_state_machine::enable_in_memory_state_machine() {
     }
 }
 
+future<> group0_state_machine::sync_audit_known_entities() {
+    if (audit::audit::audit_instance().local_is_initialized()) {
+        std::unordered_set<sstring> known_roles;
+        _ss.auth_cache().for_each_role([&known_roles] (const auth::cache::role_name_t& name, const auth::cache::role_record&) {
+            known_roles.insert(name);
+        });
+
+        audit::preprocessed_audit_rules::known_table_set known_tables;
+        _ss.get_database().get_tables_metadata().for_each_table_id([&known_tables](const std::pair<sstring, sstring>& ks_cf, table_id) {
+            known_tables.emplace(ks_cf.first, ks_cf.second);
+        });
+
+        co_await audit::audit::audit_instance().invoke_on_all(
+            [&known_roles, &known_tables] (auto& a) -> future<> {
+                co_await a.set_known_entities(known_roles, known_tables);
+            });
+    }
+}
+
 future<> group0_state_machine::reload_state() {
     // we assume that the apply mutex is held, topology_state_load applies
     // persisted state machine into memory so it needs to be protected with it
@@ -456,6 +501,9 @@ future<> group0_state_machine::reload_state() {
         co_await _ss.load_cdc_streams();
     }
     co_await _ss.auth_cache().load_all();
+
+    co_await sync_audit_known_entities();
+
     _ss._topology_state_machine.event.broadcast();
     _ss._view_building_state_machine.event.broadcast();
 }
@@ -535,6 +583,9 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     }
 
     co_await _ss.auth_cache().load_all();
+
+    co_await sync_audit_known_entities();
+
     co_await notify_client_route_change_if_needed(_ss, client_routes_update);
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
