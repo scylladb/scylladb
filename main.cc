@@ -32,6 +32,7 @@
 #include "supervisor.hh"
 #include "timeout_config.hh"
 #include "replica/database.hh"
+#include "replica/tablets.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sharded.hh>
