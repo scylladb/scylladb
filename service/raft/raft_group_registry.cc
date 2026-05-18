@@ -129,6 +129,7 @@ void raft_group_registry::init_rpc_verbs() {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, append_request = std::move(append_request), original_shard_id = this_shard_id(), gid] (raft_rpc& rpc) mutable {
             if (auto ignore_group_id = utils::get_local_injector().inject_parameter<std::string_view>("raft_drop_incoming_append_entries_for_specified_group"); ignore_group_id) {
                 if (gid == raft::group_id{utils::UUID(*ignore_group_id)}) {
+                    rslog.debug("Dropping append request (size: {}) from {} for group {}", append_request.entries.size(), from, gid);
                     return;
                 }
             }
