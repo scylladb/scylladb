@@ -11,13 +11,15 @@
 """
 Compare configure.py and CMake build systems by parsing their ninja build files.
 
-Checks three things:
+Checks four things:
   1. Per-file compilation flags  — are the same source files compiled with
      the same defines, warnings, optimization, and language flags?
   2. Link targets                — do both systems produce the same set of
      executables?
   3. Per-target linker settings  — are link flags and libraries identical for
      every common executable?
+  4. IDL-generated files         — do both systems generate the same set of
+     serialization headers from .idl.hh sources?
 
 configure.py is treated as the baseline.  CMake should match it.
 
@@ -727,6 +729,102 @@ def extract_cmake_link_targets(variables, rules, builds, mode):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# IDL-generated file extraction from ninja builds
+# ═══════════════════════════════════════════════════════════════════════════
+
+def extract_configure_idl_outputs(builds, mode):
+    """Extract IDL-generated output files from configure.py build.ninja.
+
+    Looks for build statements using the 'serializer' rule whose output
+    belongs to the specified mode.
+    Returns set of normalized output paths (e.g., 'cache_temperature.dist.hh').
+    """
+    result = set()
+    mode_prefix = f"build/{mode}/"
+    for b in builds:
+        if b["rule"] != "serializer":
+            continue
+        output = b["outputs"].strip()
+        # Replace ninja variable with literal prefix for filtering
+        output = output.replace("$builddir/", "build/")
+        # Only include outputs for the requested mode
+        if not output.startswith(mode_prefix):
+            continue
+        # Normalize: find gen/idl/ and keep the relative IDL path after it
+        idx = output.find("gen/idl/")
+        if idx >= 0:
+            output = output[idx + len("gen/idl/"):]
+        else:
+            # Fallback: strip mode prefix
+            output = output[len(mode_prefix):]
+        result.add(output)
+    return result
+
+
+def extract_cmake_idl_outputs(builds):
+    """Extract IDL-generated output files from CMake build.ninja.
+
+    Looks for build statements that produce .dist.hh files (IDL compiler
+    outputs).
+    Returns set of normalized output paths (e.g., 'cache_temperature.dist.hh').
+    """
+    result = set()
+    for b in builds:
+        outputs_str = b["outputs"].strip()
+        # Ninja build statements can have multiple outputs separated by |
+        # (implicit outputs). Take all outputs and process each one.
+        all_outputs = [o.strip() for o in re.split(r"\s*\|\s*", outputs_str)]
+
+        for output in all_outputs:
+            if not output.endswith(".dist.hh"):
+                continue
+            # Normalize: find gen/idl/ or idl/ and keep relative path after it
+            idx = output.find("gen/idl/")
+            if idx >= 0:
+                normalized = output[idx + len("gen/idl/"):]
+            else:
+                idx = output.find("idl/")
+                if idx >= 0:
+                    normalized = output[idx + len("idl/"):]
+                else:
+                    continue
+            result.add(normalized)
+
+    return result
+
+
+def compare_idl_outputs(conf_idls, cmake_idls, verbose=False, quiet=False):
+    """Compare IDL-generated file sets between both build systems.
+
+    Returns (ok, summary_dict).
+    """
+    only_conf = sorted(conf_idls - cmake_idls)
+    only_cmake = sorted(cmake_idls - conf_idls)
+
+    if not quiet:
+        print(f"\n  IDL files in configure.py: {len(conf_idls)}")
+        print(f"  IDL files in CMake:        {len(cmake_idls)}")
+
+        if only_conf:
+            print(f"\n  ✗ Only in configure.py ({len(only_conf)}):")
+            for f in only_conf:
+                print(f"    {f}")
+        if only_cmake:
+            print(f"\n  ✗ Only in CMake ({len(only_cmake)}):")
+            for f in only_cmake:
+                print(f"    {f}")
+
+    ok = not only_conf and not only_cmake
+    if ok and not quiet:
+        print("  ✓ All IDL files match!")
+
+    return ok, {
+        "only_conf": only_conf,
+        "only_cmake": only_cmake,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Configuration helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1114,10 +1212,25 @@ def compare_mode(mode, repo_root, conf_parsed, cmake_parsed,
     if not linker_ok:
         all_ok = False
 
+    # ── 4. IDL-generated files ─────────────────────────────────────
+    if not quiet:
+        print(f"\n  {'─'*56}")
+        print(f"  IDL-generated files")
+        print(f"  {'─'*56}")
+
+    conf_idls = extract_configure_idl_outputs(conf_builds, mode)
+    cmake_idls = extract_cmake_idl_outputs(cmake_builds)
+
+    idl_ok, idl_summary = compare_idl_outputs(
+        conf_idls, cmake_idls, verbose, quiet)
+    if not idl_ok:
+        all_ok = False
+
     details = {
         "compile": compile_summary,
         "targets": targets_summary,
         "linker": linker_summary,
+        "idl": idl_summary,
     }
 
     return all_ok, details
@@ -1137,6 +1250,7 @@ def _format_mode_details(details, quiet=False):
     compile_info = details.get("compile", {})
     targets_info = details.get("targets", {})
     linker_info = details.get("linker", {})
+    idl_info = details.get("idl", {})
 
     # Compilation flags
     files_diff = compile_info.get("files_with_diffs", 0)
@@ -1200,6 +1314,17 @@ def _format_mode_details(details, quiet=False):
             lines.append(item)
         if len(agg_items) > _MAX_AGGREGATE_ITEMS:
             lines.append(f"{indent}  ... and {len(agg_items) - _MAX_AGGREGATE_ITEMS} more")
+
+    # IDL files
+    idl_only_conf = idl_info.get("only_conf", [])
+    idl_only_cmake = idl_info.get("only_cmake", [])
+    if idl_only_conf or idl_only_cmake:
+        parts = []
+        if idl_only_conf:
+            parts.append(f"{len(idl_only_conf)} only in configure.py")
+        if idl_only_cmake:
+            parts.append(f"{len(idl_only_cmake)} only in CMake")
+        lines.append(f"{indent}IDL files: {', '.join(parts)}")
 
     return lines
 
