@@ -1136,12 +1136,22 @@ void view_updates::generate_update(
                     updatable_view_key_cols.emplace_back(view_col.id,
                         existing ? c->compute_value(*_base, base_key, *existing) : regular_column_transformation::result(),
                         c->compute_value(*_base, base_key, update));
-                } else {
-                    // The only other column_computation we have which has
-                    // depends_on_non_primary_key_column is
-                    // collection_column_computation, and we have a special
-                    // function to handle that case:
+                } else if (auto* ccc = dynamic_cast<const collection_column_computation*>(&computation)) {
+                    // A static row update cannot affect an index on a non-static
+                    // column (and vice versa), so skip this view when the column kinds
+                    // don't match — otherwise update_entry_for_computed_column
+                    // may try to read clustering key components or
+                    // collection data that don't exist in the update row.
+                    auto* base_col = _base->get_column_definition(ccc->collection_name());
+                    if (base_col && base_col->kind != update.column_kind()) {
+                        return;
+                    }
+                    // The collection_column_computation case is handled by a
+                    // separate function:
                     return update_entry_for_computed_column(base_key, update, existing, now);
+                } else {
+                    on_internal_error(vlogger, fmt::format("Unexpected type of computation for computed column {} in view {}.{}",
+                        view_col.name(), _view->ks_name(), _view->cf_name()));
                 }
             }
         } else {
