@@ -9,8 +9,6 @@
 #include "schema_mutations.hh"
 #include "mutation/canonical_mutation.hh"
 #include "db/schema_tables.hh"
-#include "utils/hashers.hh"
-#include "utils/UUID_gen.hh"
 
 schema_mutations::schema_mutations(canonical_mutation columnfamilies,
                                    canonical_mutation columns,
@@ -49,7 +47,7 @@ void schema_mutations::copy_to(utils::chunked_vector<mutation>& dst) const {
     }
 }
 
-table_schema_version schema_mutations::digest(db::schema_features sf) const {
+table_schema_version schema_mutations::digest() const {
     if (_scylla_tables) {
         auto rs = query::result_set(*_scylla_tables);
         if (!rs.empty()) {
@@ -61,39 +59,7 @@ table_schema_version schema_mutations::digest(db::schema_features sf) const {
         }
     }
 
-    md5_hasher h;
-
-    if (!sf.contains<db::schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY>()) {
-        // Disable this feature so that the digest remains compactible with Scylla
-        // versions prior to this feature.
-        // This digest affects the table schema version calculation and it's important
-        // that all nodes arrive at the same table schema version to avoid needless schema version
-        // pulls. It used to be the case that when table schema versions were calculated on boot we
-        // didn't yet know all the cluster features, so we could get different table versions after reboot
-        // in an already upgraded cluster. However, they are now available, and if
-        // TABLE_DIGEST_INSENSITIVE_TO_EXPIRY is enabled, we can compute with DIGEST_INSENSITIVE_TO_EXPIRY
-        // enabled.
-        sf.remove<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
-    }
-
-    db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies, sf);
-    db::schema_tables::feed_hash_for_schema_digest(h, _columns, sf);
-    if (_view_virtual_columns && !_view_virtual_columns->partition().empty()) {
-        db::schema_tables::feed_hash_for_schema_digest(h, *_view_virtual_columns, sf);
-    }
-    if (_computed_columns && !_computed_columns->partition().empty()) {
-        db::schema_tables::feed_hash_for_schema_digest(h, *_computed_columns, sf);
-    }
-    if (_indices && !_indices->partition().empty()) {
-        db::schema_tables::feed_hash_for_schema_digest(h, *_indices, sf);
-    }
-    if (_dropped_columns && !_dropped_columns->partition().empty()) {
-        db::schema_tables::feed_hash_for_schema_digest(h, *_dropped_columns, sf);
-    }
-    if (_scylla_tables) {
-        db::schema_tables::feed_hash_for_schema_digest(h, *_scylla_tables, sf);
-    }
-    return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
+    throw std::runtime_error("schema version not found in scylla_tables");
 }
 
 std::optional<sstring> schema_mutations::partitioner() const {

@@ -12,7 +12,6 @@
 #include "mutation/mutation.hh"
 #include "schema/schema_fwd.hh"
 #include "mutation/canonical_mutation.hh"
-#include "db/schema_features.hh"
 
 // Commutative representation of table schema
 // Equality ignores tombstones.
@@ -125,7 +124,7 @@ public:
 
     bool is_view() const;
 
-    table_schema_version digest(db::schema_features) const;
+    table_schema_version digest() const;
     std::optional<sstring> partitioner() const;
 
     bool operator==(const schema_mutations&) const;

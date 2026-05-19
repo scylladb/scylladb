@@ -288,8 +288,6 @@ index_metadata_kind deserialize_index_kind(sstring kind);
 
 mutation compact_for_schema_digest(const mutation& m);
 
-void feed_hash_for_schema_digest(hasher&, const mutation&, schema_features);
-
 template<typename K, typename V>
 std::optional<std::map<K, V>> get_map(const query::result_set_row& row, const sstring& name) {
     if (auto values = row.get<map_type_impl::native_type>(name)) {

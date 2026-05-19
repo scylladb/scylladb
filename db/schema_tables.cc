@@ -859,13 +859,6 @@ mutation compact_for_schema_digest(const mutation& m) {
     return m_compacted;
 }
 
-void feed_hash_for_schema_digest(hasher& h, const mutation& m, schema_features features) {
-    auto compacted = compact_for_schema_digest(m);
-    if (!features.contains<schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>() || !compacted.partition().empty()) {
-        feed_hash(h, compacted);
-    }
-}
-
 /// Helper function which fills a given mutation with column information
 /// provided the corresponding column_definition object.
 static void fill_column_info(const schema& table,
@@ -2280,7 +2273,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     if (version) {
         builder.with_version(*version);
     } else {
-        builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
+        builder.with_version(sm.digest());
     }
 
     if (cdc_schema) {
@@ -2510,8 +2503,9 @@ static schema_builder prepare_view_schema_builder_from_mutations(const schema_ct
     if (version) {
         builder.with_version(*version);
     } else {
-        builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
+        builder.with_version(sm.digest());
     }
+
     return builder;
 }
 
