@@ -925,7 +925,7 @@ class ScyllaServer:
                 # STATUS=serving once all configured listeners are ready, and
                 # STATUS=entering maintenance mode once the maintenance socket is ready.
                 # Both mean the server is fully started and we don't need to wait further.
-                if self.check_serving_notification():
+                if server_up_state >= ServerUpState.CQL_ALTERNATOR_QUERIED and self.check_serving_notification():
                     server_up_state = ServerUpState.SERVING
                 if server_up_state >= expected_server_up_state:
                     if expected_error is not None:
