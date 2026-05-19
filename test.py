@@ -369,6 +369,8 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append('--save-log-on-success')
     if options.markers:
         args.append(f'-m={options.markers}')
+    if options.log_level:
+        args.append(f'--log-level={options.log_level}')
     args.extend(files_to_run)
     exit_code = pytest.main(args=args)
 
