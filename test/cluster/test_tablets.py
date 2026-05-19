@@ -798,8 +798,6 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
     coord = await get_topology_coordinator(manager)
     coord_serv = await find_server_by_host_id(manager, servers, coord)
-    log = await manager.server_open_log(coord_serv.server_id)
-    mark = await log.mark()
 
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
@@ -810,7 +808,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
     alter_task = asyncio.create_task(alter_keyspace())
 
-    await log.wait_for(f'{injection}: entered', from_mark=mark)
+    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection)
     await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c']}, {'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']})
 
     task_manager_client = TaskManagerClient(manager.api)
@@ -873,8 +871,6 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
 
     coord = await get_topology_coordinator(manager)
     coord_serv = await find_server_by_host_id(manager, servers, coord)
-    log = await manager.server_open_log(coord_serv.server_id)
-    mark = await log.mark()
 
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
@@ -885,7 +881,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
 
     alter_task = asyncio.create_task(alter_keyspace())
 
-    await log.wait_for(f'{injection}: entered', from_mark=mark)
+    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection)
     await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a', 'rack1b', 'rack1c'], 'dc2': ['rack2a', 'rack2b', 'rack2c']}, {'dc1': ['rack1a', 'rack1b', 'rack1c']})
 
     task_manager_client = TaskManagerClient(manager.api)
@@ -956,8 +952,6 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
 
     coord = await get_topology_coordinator(manager)
     coord_serv = await find_server_by_host_id(manager, servers, coord)
-    log = await manager.server_open_log(coord_serv.server_id)
-    mark = await log.mark()
 
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
@@ -975,7 +969,7 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
     alter_task2 = asyncio.create_task(alter_keyspace2())
     alter_task3 = asyncio.create_task(alter_keyspace3())
 
-    await log.wait_for(*[f'{injection}: entered' for _ in range(3)], from_mark=mark)
+    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection, threshold=3)
 
     for s in servers:
         await manager.api.message_injection(s.ip_addr, injection)
@@ -1032,8 +1026,6 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
 
     coord = await get_topology_coordinator(manager)
     coord_serv = await find_server_by_host_id(manager, servers, coord)
-    log = await manager.server_open_log(coord_serv.server_id)
-    mark = await log.mark()
 
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
@@ -1044,7 +1036,7 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
 
     alter_task = asyncio.create_task(alter_keyspace())
 
-    await log.wait_for(f'{injection}: entered', from_mark=mark)
+    await manager.api.wait_for_injection_enter(coord_serv.ip_addr, injection)
 
     dc1_host_ids = set(host_ids[0:3])
     replicas_mid = await get_all_tablet_replicas(manager, servers[0], "ks1", "t")

@@ -44,7 +44,7 @@ async def test_node_shutdown_waits_for_pending_requests(manager: ManagerClient) 
 
         logger.info(f'wait until the read request hit storage_proxy::handle_read on the node {servers[1]}')
         log_file2 = await manager.server_open_log(servers[1].server_id)
-        await log_file2.wait_for("storage_proxy::handle_read injection hit", timeout=60)
+        await manager.api.wait_for_injection_enter(servers[1].ip_addr, "storage_proxy::handle_read")
 
         logger.info(f'trigger shutdown of the node {servers[1]}')
         stop_future = asyncio.create_task(manager.server_stop_gracefully(servers[1].server_id))
