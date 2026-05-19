@@ -128,6 +128,11 @@ def run_vector_store_cmd(pid, dir):
         'VECTOR_STORE_SCYLLADB_URI': f'{ip}:9042',
         'VECTOR_STORE_SCYLLADB_USERNAME': 'cassandra',
         'VECTOR_STORE_SCYLLADB_PASSWORD_FILE': f'{dir}/.password',
+        # Reduce the vector store's default sleep intervals, to make tests
+        # notice changes faster, and pass faster.
+        'VECTOR_STORE_MONITOR_INDEXES_INTERVAL': '50ms',
+        'VECTOR_STORE_CDC_FINE_SLEEP_INTERVAL': '50ms',
+        'VECTOR_STORE_INDEX_STATUS_UPDATE_INTERVAL': '50ms',
     }
     global vector_store_executable # set by the code below
     cmd = [
