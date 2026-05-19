@@ -64,11 +64,12 @@ async def test_raft_snapshot_truncation(manager: ManagerClient):
     # Change schema - trigger log truncation.
     await cql.run_async(f"drop keyspace {ks}")
 
-    log_size = await get_raft_log_size(cql, h1)
-    logger.info(f"After drop keyspace Log size on {s1}: {log_size}")
-
-    # Verify that after the snapshot was created, log size is 0 due to setting 'snapshot_trailing_size': '0'.
-    assert (log_size == 0)
+    # Wait for the log to be truncated (it happens asynchronously in the IO fiber).
+    async def log_truncated_to_0() -> bool | None:
+        log_size = await get_raft_log_size(cql, h1)
+        logger.info(f"Log size on {s1}: {log_size}")
+        return log_size == 0 or None
+    await wait_for(log_truncated_to_0, time.time() + 60)
 
     # Now test, that after truncation the records are preserved if snapshot_trailing higher than zero.
 
@@ -102,10 +103,12 @@ async def test_raft_snapshot_truncation(manager: ManagerClient):
     # Change schema by dropping the last keyspace, that will trigger log truncation.
     await cql.run_async(f"drop keyspace {keyspaces[2]}")
 
-    new_snap_id = await get_raft_snap_id(cql, h1)
-    
-    # Make sure that a new snapshot has been created.
-    assert (new_snap_id != original_snap_id)
+    # Wait for the new snapshot to be persisted (it happens asynchronously in the IO fiber).
+    async def new_snapshot_persisted() -> bool | None:
+        new_snap_id = await get_raft_snap_id(cql, h1)
+        logger.info(f"Waiting for new snapshot, current snap_id on {s1}: {new_snap_id}")
+        return new_snap_id != original_snap_id or None
+    await wait_for(new_snapshot_persisted, time.time() + 60)
 
     log_size = await get_raft_log_size(cql, h1)
     logger.info(f"After creating a new snapshot, Log size on {s1}: {log_size}.")
