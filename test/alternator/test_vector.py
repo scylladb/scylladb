@@ -2805,24 +2805,40 @@ def test_createtable_query_similarity_function(vs, needs_vector_store):
     p_small = random_string()
     p_big   = random_string()
     p_close = random_string()
-    for sf, expected_p in [('COSINE', p_small),
-                            ('DOT_PRODUCT', p_big),
-                            ('EUCLIDEAN', p_close)]:
-        with new_test_table(vs,
-                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
-            table.put_item(Item={'p': p_small, 'v': [Decimal("0.5"), Decimal("0"),    Decimal("0")]})
-            table.put_item(Item={'p': p_big,   'v': [Decimal("2"),   Decimal("0.01"), Decimal("0")]})
-            table.put_item(Item={'p': p_close, 'v': [Decimal("1"),   Decimal("0.3"),  Decimal("0")]})
+    similarity_functions = [
+        ('COSINE',      p_small),
+        ('DOT_PRODUCT', p_big),
+        ('EUCLIDEAN',   p_close),
+    ]
+    # Use a single table with all three indexes (one per similarity function),
+    # each on its own vector attribute (multiple indexes on the same attribute
+    # are not allowed). All indexes are created before waiting for any of them,
+    # so their prefill scans run in parallel. This also tests that a table can
+    # have multiple vector indexes with different similarity functions at once.
+    small_v = Vector([0.5,  0,    0])
+    big_v   = Vector([2,    0.01, 0])
+    close_v = Vector([1,    0.3,  0])
+    query_v = Vector([1,    0,    0])
+    with new_test_table(vs,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        table.put_item(Item={'p': p_small, 'v_COSINE': small_v, 'v_DOT_PRODUCT': small_v, 'v_EUCLIDEAN': small_v})
+        table.put_item(Item={'p': p_big,   'v_COSINE': big_v,   'v_DOT_PRODUCT': big_v,   'v_EUCLIDEAN': big_v})
+        table.put_item(Item={'p': p_close, 'v_COSINE': close_v, 'v_DOT_PRODUCT': close_v, 'v_EUCLIDEAN': close_v})
+        # Create all three indexes before waiting for any of them, so their
+        # prefill scans run in parallel.
+        for sf, _ in similarity_functions:
             table.update(VectorIndexUpdates=[{'Create': {
-                'IndexName': 'vind',
-                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                'IndexName': f'vind_{sf}',
+                'VectorAttribute': {'AttributeName': f'v_{sf}', 'Dimensions': 3},
                 'SimilarityFunction': sf,
             }}])
-            wait_for_vector_index_active(table, 'vind')
+        for sf, _ in similarity_functions:
+            wait_for_vector_index_active(table, f'vind_{sf}')
+        for sf, expected_p in similarity_functions:
             result = table.query(
-                IndexName='vind',
-                VectorSearch={'QueryVector': [Decimal("1"), Decimal("0"), Decimal("0")]},
+                IndexName=f'vind_{sf}',
+                VectorSearch={'QueryVector': query_v},
                 Limit=1,
                 Select='ALL_PROJECTED_ATTRIBUTES',
             )
