@@ -607,6 +607,8 @@ future<std::optional<tasks::task_status>> migration_virtual_task::wait(tasks::ta
         co_return std::nullopt;
     }
 
+    tasks::tmlogger.info("migration_virtual_task: waiting for vnodes-to-tablets migration to finish: task_id={}, keyspace={}", id, *ks_name);
+
     storage_service::migration_status status;
     while (true) {
         try {

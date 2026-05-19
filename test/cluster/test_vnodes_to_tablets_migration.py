@@ -692,8 +692,13 @@ async def test_migration_wait_task(manager: ManagerClient):
         assert tasks[0].keyspace == ks
         task_id = tasks[0].task_id
 
-        logger.info("Starting wait on the migration task")
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+
+        logger.info(f"Starting wait on the migration task '{task_id}'")
         wait_task = asyncio.create_task(tm.wait_for_task(server.ip_addr, task_id))
+
+        await log.wait_for('migration_virtual_task: waiting for vnodes-to-tablets migration to finish', from_mark=mark)
 
         logger.info("Rolling back migration")
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
@@ -719,8 +724,12 @@ async def test_migration_wait_task(manager: ManagerClient):
         await reconnect_driver(manager)
         cql, _ = await manager.get_ready_cql([server])
 
-        logger.info("Starting wait on the migration task")
+        mark = await log.mark()
+
+        logger.info(f"Starting wait on the migration task '{task_id}'")
         wait_task = asyncio.create_task(tm.wait_for_task(server.ip_addr, task_id))
+
+        await log.wait_for('migration_virtual_task: waiting for vnodes-to-tablets migration to finish', from_mark=mark)
 
         logger.info("Finalizing migration")
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
