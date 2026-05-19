@@ -654,19 +654,23 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
             ["write_rmw", 250_000],
         ]
         for workload in workloads:
-            # the tool doesn't yet support load balancing so we
-            # run one process per node
-            await clean_gather(*[run_checked([executable,
-                "perf-alternator",
-                "--smp", "1",
-                "--workload", f"{workload[0]}",
-                "--partitions", "100000",
-                # we reuse cluster data so don't need to pre-populate
-                "--prepopulate-partitions", "0",
-                "--operations-per-shard", f"{workload[1]}",
-                "--cpuset", f'{CS_CPUSET.get()}',
-                "--remote-host", addr,
-            ]) for addr in addrs])
+            try:
+                # the tool doesn't yet support load balancing so we
+                # run one process per node
+                await clean_gather(*[run_checked([str(executable),
+                    "perf-alternator",
+                    "--smp", "1",
+                    "--workload", f"{workload[0]}",
+                    "--partitions", "100000",
+                    # we reuse cluster data so don't need to pre-populate
+                    "--prepopulate-partitions", "0",
+                    "--operations-per-shard", f"{workload[1]}",
+                    "--cpuset", f'{CS_CPUSET.get()}',
+                    "--remote-host", addr,
+                ]) for addr in addrs])
+            except Exception:
+                await dump_cluster_log_tails(workdir, addrs, f"PGO alternator workload {workload[0]} failed")
+                raise
 
     await merge_profraw(workdir)
 
@@ -896,6 +900,29 @@ async def dump_log_tail(e: ProcessError):
     if e.proc.logfile:
         msg += f" Dumping last 50 lines of its log.\nDump of {e.proc.logfile}:\n"
         msg += (await query(["tail", "-n", "50", str(e.proc.logfile)])).decode()
+    process_logger.critical(msg)
+
+async def read_raw_command_output(command: list[str], allow_statuses: tuple[int, ...] = (0,)) -> str:
+    p = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    stdout, stderr = await p.communicate()
+    if p.returncode not in allow_statuses:
+        raise RuntimeError(f"{command} failed with status {p.returncode}: {stderr.decode(errors='replace')}")
+    return stdout.decode(errors="replace")
+
+async def dump_cluster_log_tails(workdir: PathLike, addrs: list[str], reason: str, lines: int = 300) -> None:
+    msg = f"{reason}. Dumping Scylla logs before cluster teardown:\n"
+    for addr in addrs:
+        logfile = os.path.join(str(workdir), f"{addr}.log")
+        msg += f"ERROR entries from {logfile}:\n"
+        try:
+            msg += await read_raw_command_output(["grep", "-a", "-F", "ERROR ", logfile], allow_statuses=(0, 1)) or "No ERROR entries found.\n"
+        except Exception as ex:
+            msg += f"Failed to dump ERROR entries from {logfile}: {ex}\n"
+        msg += f"Last {lines} lines from {logfile}:\n"
+        try:
+            msg += await read_raw_command_output(["tail", "-n", str(lines), logfile])
+        except Exception as ex:
+            msg += f"Failed to dump {logfile}: {ex}\n"
     process_logger.critical(msg)
 
 async def main() -> None:
