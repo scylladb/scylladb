@@ -167,9 +167,6 @@ future<> migration_manager::uninit_messaging_service()
     co_await ser::migration_manager_rpc_verbs::unregister(&_messaging);
 }
 
-void migration_manager::register_feature_listeners() {
-}
-
 void migration_notifier::register_listener(migration_listener* listener)
 {
     _listeners.add(listener);
