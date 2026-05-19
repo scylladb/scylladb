@@ -5355,7 +5355,7 @@ future<> test_cache_tombstone_gc_overlap_checks(apply_delete_fn apply_delete) {
 
             _fut = db.flush(sstring(keyspace_name), sstring(table_name));
 
-            while (!err_inj.get_injection_parameters(injection_point_name).contains("suspended")) {
+            while (!err_inj.inject_parameter<std::string_view>(injection_point_name, "suspended")) {
                 sleep(1s).get();
             }
         }
