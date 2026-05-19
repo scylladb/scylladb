@@ -849,7 +849,7 @@ read_keyspace_mutation(sharded<service::storage_proxy>& proxy, const sstring& ke
     co_return co_await query_partition_mutation(proxy.local(), std::move(s), std::move(cmd), std::move(key));
 }
 
-mutation compact_for_schema_digest(const mutation& m) {
+mutation compact_for_comparison(const mutation& m) {
     // Cassandra is skipping tombstones from digest calculation
     // to avoid disagreements due to tombstone GC.
     // See https://issues.apache.org/jira/browse/CASSANDRA-6862.

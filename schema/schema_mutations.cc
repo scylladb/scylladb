@@ -76,11 +76,11 @@ static mutation_opt compact(const mutation_opt& m) {
     if (!m) {
         return m;
     }
-    return db::schema_tables::compact_for_schema_digest(*m);
+    return db::schema_tables::compact_for_comparison(*m);
 }
 
 static mutation_opt compact(const mutation& m) {
-    return db::schema_tables::compact_for_schema_digest(m);
+    return db::schema_tables::compact_for_comparison(m);
 }
 
 bool schema_mutations::operator==(const schema_mutations& other) const {

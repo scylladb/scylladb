@@ -286,7 +286,7 @@ data_type parse_type(sstring str);
 sstring serialize_index_kind(index_metadata_kind kind);
 index_metadata_kind deserialize_index_kind(sstring kind);
 
-mutation compact_for_schema_digest(const mutation& m);
+mutation compact_for_comparison(const mutation& m);
 
 template<typename K, typename V>
 std::optional<std::map<K, V>> get_map(const query::result_set_row& row, const sstring& name) {
