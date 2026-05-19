@@ -294,14 +294,16 @@ private:
     std::vector<lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _version_for_reshaping = sstables::oldest_writable_sstable_format;
     migration_direction _migration_direction;
+    db::consistency_level _registry_read_cl;
 
 public:
-    table_populator(global_table_ptr& ptr, sharded<replica::database>& db, sstring ks, sstring cf, migration_direction md = migration_direction::none)
+    table_populator(global_table_ptr& ptr, sharded<replica::database>& db, sstring ks, sstring cf, migration_direction md = migration_direction::none, db::consistency_level registry_read_cl = db::consistency_level::LOCAL_QUORUM)
         : _db(db)
         , _ks(std::move(ks))
         , _cf(std::move(cf))
         , _global_table(ptr)
         , _migration_direction(md)
+        , _registry_read_cl(registry_read_cl)
     {
     }
 
@@ -364,7 +366,7 @@ future<> table_populator::collect_subdirs(const data_dictionary::storage_options
 
 future<> table_populator::collect_subdirs(const data_dictionary::storage_options::object_storage& so, sstables::sstable_state state) {
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
-    co_await dptr->start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
+    co_await dptr->start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen(), _registry_read_cl);
     _sstable_directories.push_back(std::move(dptr));
 }
 
@@ -467,7 +469,8 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
         sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name,
         std::optional<service::intended_storage_mode> storage_mode,
         bool skip_sstable_loading,
-        bool mark_writable)
+        bool mark_writable,
+        db::consistency_level registry_read_cl)
 {
     dblog.info("Populating Keyspace {}", ks_name);
 
@@ -492,7 +495,7 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
                 dblog.info("Keyspace {}: CF {} is in vnodes-to-tablets migration mode (direction: {})", ks_name, cfname, direction == md::forward ? "forward" : "rollback");
             }
 
-            auto metadata = table_populator(gtable, db, ks_name, cfname, direction);
+            auto metadata = table_populator(gtable, db, ks_name, cfname, direction, registry_read_cl);
             std::exception_ptr ex;
 
             try {

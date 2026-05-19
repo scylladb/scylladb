@@ -17,6 +17,7 @@
 #include "seastarx.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "db/system_keyspace.hh"
+#include "db/consistency_level_type.hh"
 #include "sstables/sstable_directory.hh"
 
 namespace seastar {
@@ -79,7 +80,8 @@ class distributed_loader {
     static future<> populate_keyspace(sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name,
             std::optional<service::intended_storage_mode> storage_mode = std::nullopt,
             bool skip_sstable_loading = false,
-            bool mark_writable = true);
+            bool mark_writable = true,
+            db::consistency_level registry_read_cl = db::consistency_level::LOCAL_QUORUM);
     static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
         get_sstables_from(sharded<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg,
         noncopyable_function<future<>(global_table_ptr&, sharded<sstables::sstable_directory>&)> start_dir);

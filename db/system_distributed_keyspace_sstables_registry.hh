@@ -25,8 +25,8 @@ public:
     future<> delete_entry(table_id tid, locator::host_id node_owner, sstables::generation_type gen) override {
         return _sys_dist_ks.sstables_registry_delete_entry(tid, node_owner, gen);
     }
-    future<> sstables_registry_list(table_id tid, locator::host_id node_owner, entry_consumer consumer) override {
-        return _sys_dist_ks.sstables_registry_list(tid, node_owner, std::move(consumer));
+    future<> sstables_registry_list(table_id tid, locator::host_id node_owner, entry_consumer consumer, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM) override {
+        return _sys_dist_ks.sstables_registry_list(tid, node_owner, std::move(consumer), cl);
     }
 };
 

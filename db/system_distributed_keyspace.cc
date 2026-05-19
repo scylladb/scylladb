@@ -578,11 +578,10 @@ future<> system_distributed_keyspace::sstables_registry_delete_entry(table_id ti
             cql3::query_processor::cache_internal::yes).discard_result();
 }
 
-future<> system_distributed_keyspace::sstables_registry_list(table_id tid, locator::host_id node_owner, sstable_registry_entry_consumer consumer) {
+future<> system_distributed_keyspace::sstables_registry_list(table_id tid, locator::host_id node_owner, sstable_registry_entry_consumer consumer, db::consistency_level cl) {
     static const auto req = format("SELECT status, state, generation, version, format FROM {}.{} WHERE table_id = ? AND node_owner = ?", NAME, SSTABLES_REGISTRY);
     dlogger.trace("Listing {}.{} entries from {}", tid, node_owner, SSTABLES_REGISTRY);
-    auto read_cl = _sp.get_token_metadata_ptr()->count_normal_token_owners() > 1 ? db::consistency_level::LOCAL_QUORUM : db::consistency_level::ONE;
-    co_await _qp.query_internal(req, read_cl, { tid.id, node_owner.uuid() }, 1000,
+    co_await _qp.query_internal(req, cl, { tid.id, node_owner.uuid() }, 1000,
             [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto status = row.get_as<sstring>("status");
         auto state = row.get_as<sstring>("state");

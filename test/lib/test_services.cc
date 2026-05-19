@@ -349,7 +349,7 @@ public:
         }
         co_return;
     }
-    virtual future<> sstables_registry_list(table_id tid, locator::host_id node_owner, entry_consumer consumer) override {
+    virtual future<> sstables_registry_list(table_id tid, locator::host_id node_owner, entry_consumer consumer, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM) override {
         for (auto& [key, e] : _entries) {
             if (std::get<0>(key) == tid && std::get<1>(key) == node_owner) {
                 co_await consumer(e.status, e.state, e.desc);
