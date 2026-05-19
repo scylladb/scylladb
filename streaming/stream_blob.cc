@@ -762,18 +762,15 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     } else {
         auto sstables = co_await table.take_storage_snapshot(req.range);
         co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::seconds(60)));
-        co_await utils::get_local_injector().inject("order_sstables_for_streaming", [&sstables] (auto& handler) -> future<> {
-            if (sstables.size() == 3) {
-                // make sure the sstables are ordered so that the sstable containing shadowed data is streamed last
-                const std::string_view shadowed_file = handler.template get<std::string_view>("shadowed_file").value();
-                for (int index: {0, 1}) {
-                    if (sstables[index].sst->component_basename(component_type::Data) == shadowed_file) {
-                        std::swap(sstables[index], sstables[2]);
-                    }
+        if (auto shadowed_file = utils::get_local_injector().inject_parameter<std::string_view>("order_sstables_for_streaming", "shadowed_file");
+                shadowed_file && sstables.size() == 3) {
+            // make sure the sstables are ordered so that the sstable containing shadowed data is streamed last
+            for (int index: {0, 1}) {
+                if (sstables[index].sst->component_basename(component_type::Data) == *shadowed_file) {
+                    std::swap(sstables[index], sstables[2]);
                 }
             }
-            return make_ready_future<>();
-        });
+        }
 
         auto& sst_gen = table.get_sstable_generation_generator();
 
