@@ -1734,11 +1734,10 @@ public:
             });
         }
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-            if (utils::get_local_injector().enter("sstables_mx_reader_fill_buffer_timeout")) {
-                const sstring table_name = utils::get_local_injector().get_injection_parameters("sstables_mx_reader_fill_buffer_timeout")["table"];
-                const sstring this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
+            if (auto table_name = utils::get_local_injector().inject_parameter("sstables_mx_reader_fill_buffer_timeout", "table"); table_name) {
+                const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
                 // Repeat the sleep until the permit is aborted due to timeout.
-                if (table_name == this_table_name && !get_abort_exception()) {
+                if (*table_name == this_table_name && !get_abort_exception()) {
                     return seastar::sleep(std::chrono::milliseconds(10));
                 }
             }
