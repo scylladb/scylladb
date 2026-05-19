@@ -155,8 +155,8 @@ async def test_lwt_during_migration(manager: ManagerClient):
 
         logger.info("Open log")
         log = await manager.server_open_log(target_server.server_id)
-        logger.info(f"Wait for 'migration_streaming_wait: start' injection on {target_server.ip_addr}")
-        await log.wait_for('migration_streaming_wait: start')
+        logger.info(f"Wait for 'migration_streaming_wait: waiting for message' injection on {target_server.ip_addr}")
+        await log.wait_for('migration_streaming_wait: waiting for message')
 
         logger.info("Run an LWT while migration is in-progress")
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")

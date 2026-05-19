@@ -413,10 +413,7 @@ future<utils::chunked_vector<task_identity>> task_manager::virtual_task::impl::g
     }
 
     auto nodes = module->get_nodes();
-    co_await utils::get_local_injector().inject("tasks_vt_get_children", [] (auto& handler) -> future<> {
-        tmlogger.info("tasks_vt_get_children: waiting");
-        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{60});
-    });
+    co_await utils::get_local_injector().inject("tasks_vt_get_children", utils::wait_for_message{std::chrono::seconds{60}});
     co_return co_await map_reduce(nodes, [ms, parent_id] (auto host_id) -> future<utils::chunked_vector<task_identity>> {
         return ser::tasks_rpc_verbs::send_tasks_get_children(ms, host_id, parent_id).then([host_id] (auto resp) {
             return resp | std::views::transform([host_id] (auto id) {

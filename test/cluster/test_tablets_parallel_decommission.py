@@ -219,7 +219,7 @@ async def test_decommission_can_be_canceled(manager: ManagerClient):
         mark = await coord_log.mark()
         await manager.api.enable_injection(coord_serv.ip_addr, "wait_after_tablet_cleanup", one_shot=True)
         decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
-        await coord_log.wait_for('Waiting after tablet cleanup', from_mark=mark)
+        await coord_log.wait_for('wait_after_tablet_cleanup: waiting for message', from_mark=mark)
         task = await tm.wait_task_appears(servers[0].ip_addr, 'node_ops', task_type='decommission', entity=decomm_hostid)
         task_id = task.task_id
         await manager.api.abort_task(servers[0].ip_addr, task_id)
@@ -268,7 +268,7 @@ async def test_decommission_is_rejected_when_another_one_is_still_pending(manage
         decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
 
         # Trap the first decommission in the tablet draining stage
-        await coord_log.wait_for('Waiting after tablet cleanup', from_mark=mark)
+        await coord_log.wait_for('wait_after_tablet_cleanup: waiting for message', from_mark=mark)
 
         # Second decommission should fail, because if both decommissions succeeded, the rack would be empty.
         with pytest.raises(Exception, match="node decommission rejected: "):
@@ -438,7 +438,7 @@ async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: M
 
         decomm_task = asyncio.create_task(manager.decommission_node(servers[2].server_id))
 
-        await coord_log.wait_for('Waiting after tablet cleanup', from_mark=mark)
+        await coord_log.wait_for('wait_after_tablet_cleanup: waiting for message', from_mark=mark)
 
         srv_to_remove = servers[1]
         await manager.server_stop_gracefully(srv_to_remove.server_id)
@@ -487,7 +487,7 @@ async def test_node_lost_during_decommission_drain(manager: ManagerClient):
         srv_to_remove = servers[1]
         nodetool_task = asyncio.create_task(manager.decommission_node(srv_to_remove.server_id))
 
-        mark, _ = await coord_log.wait_for('migration_streaming_wait: start', from_mark=mark)
+        mark, _ = await coord_log.wait_for('migration_streaming_wait: waiting for message', from_mark=mark)
         await manager.api.enable_injection(coord_serv.ip_addr, "topology_coordinator_pause_before_processing_backlog", one_shot=True)
         await manager.api.message_injection(coord_serv.ip_addr, "migration_streaming_wait")
 

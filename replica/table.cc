@@ -1274,11 +1274,7 @@ future<compaction::compaction_type_options::split> tablet_storage_group_manager:
 future<> tablet_storage_group_manager::split_all_storage_groups(tasks::task_info tablet_split_task_info) {
     compaction::compaction_type_options::split opt = co_await split_compaction_options();
 
-    co_await utils::get_local_injector().inject("split_storage_groups_wait", [] (auto& handler) -> future<> {
-        dblog.info("split_storage_groups_wait: waiting");
-        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-        dblog.info("split_storage_groups_wait: done");
-    }, false);
+    co_await utils::get_local_injector().inject("split_storage_groups_wait", utils::wait_for_message{std::chrono::minutes{5}}, false);
 
     co_await for_each_storage_group_gently([opt, tablet_split_task_info] (storage_group& storage_group) {
         return storage_group.split(opt, tablet_split_task_info);
@@ -5665,11 +5661,7 @@ future<> storage_group::stop(sstring reason) noexcept {
     // picking this group that is being stopped.
     auto closed_gate_fut = _async_gate.close();
 
-    co_await utils::get_local_injector().inject("wait_before_stop_compaction_groups", [] (auto& handler) -> future<> {
-        dblog.info("wait_before_stop_compaction_groups: wait");
-        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-        dblog.info("wait_before_stop_compaction_groups: done");
-    }, false);
+    co_await utils::get_local_injector().inject("wait_before_stop_compaction_groups", utils::wait_for_message{std::chrono::minutes{5}}, false);
 
     // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
 

@@ -51,7 +51,7 @@ async def test_group0_apply_while_node_is_being_shutdown(manager: ManagerClient)
 
     logger.info("Waiting for topology_state_load_before_update_cdc on s0")
     log = await manager.server_open_log(s0.server_id)
-    await log.wait_for('topology_state_load_before_update_cdc hit, wait for message')
+    await log.wait_for('topology_state_load_before_update_cdc: waiting for message')
 
     logger.info("Triggering s0 shutdown")
     stop_s0_task = asyncio.create_task(manager.server_stop_gracefully(s0.server_id))

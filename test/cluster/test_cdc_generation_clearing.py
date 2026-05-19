@@ -123,7 +123,7 @@ async def test_unpublished_cdc_generations_arent_cleared(manager: ManagerClient)
         [host2, host3] = await wait_for_cql_and_get_hosts(cql, servers[-2:], time.time() + 60)
 
         log_file1 = await manager.server_open_log(servers[0].server_id)
-        await log_file1.wait_for(f"CDC generation publisher fiber sleeps after injection")
+        await log_file1.wait_for(f"cdc_generation_publisher_fiber: waiting for message")
         mark = await log_file1.mark()
 
         # The second and third generations are committed but unpublished due to the cdc_generation_publisher_fiber
@@ -137,7 +137,7 @@ async def test_unpublished_cdc_generations_arent_cleared(manager: ManagerClient)
         # what it has done in this step. Eventually, the CDC generation publisher will publish all generations and
         # delete the first and second ones.
         await handler.message()
-        await log_file1.wait_for(f"CDC generation publisher fiber sleeps after injection", from_mark=mark)
+        await log_file1.wait_for(f"cdc_generation_publisher_fiber: waiting for message", from_mark=mark)
         mark = await log_file1.mark()
         gen_ids = await get_gen_ids()
         assert len(gen_ids) == 2 and first_gen_id not in gen_ids

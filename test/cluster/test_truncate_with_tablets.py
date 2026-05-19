@@ -45,7 +45,7 @@ async def test_truncate_while_migration(manager: ManagerClient):
         pending_node = servers[1]
         pending_log = await manager.server_open_log(pending_node.server_id)
 
-        await pending_log.wait_for('migration_streaming_wait: start')
+        await pending_log.wait_for('migration_streaming_wait: waiting for message')
         await manager.api.message_injection(pending_node.ip_addr, 'migration_streaming_wait')
 
         # Do a TRUNCATE TABLE while the tablet is being streamed
@@ -238,7 +238,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
         s1_log = await manager.server_open_log(servers[1].server_id)
 
         # Wait for tablet streaming to start
-        await s1_log.wait_for('migration_streaming_wait: start')
+        await s1_log.wait_for('migration_streaming_wait: waiting for message')
 
         # Run a truncate which will quickly time out, but the truncate fiber remains alive
         # Do not attempt to retry automatically (hense the FallthroughRetryPolicy)
@@ -322,7 +322,7 @@ async def test_parallel_truncate(manager: ManagerClient):
         s1_log = await manager.server_open_log(servers[1].server_id)
 
         # Wait for tablet streaming to start
-        await s1_log.wait_for('migration_streaming_wait: start')
+        await s1_log.wait_for('migration_streaming_wait: waiting for message')
 
         tf1 = cql.run_async(SimpleStatement(f'TRUNCATE TABLE {ks}.test', retry_policy=FallthroughRetryPolicy()))
         tf2 = cql.run_async(SimpleStatement(f'TRUNCATE TABLE {ks}.test1', retry_policy=FallthroughRetryPolicy()))

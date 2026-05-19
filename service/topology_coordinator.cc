@@ -776,11 +776,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         rtlogger.debug("start CDC generation publisher fiber");
 
         while (!_as.abort_requested()) {
-            co_await utils::get_local_injector().inject("cdc_generation_publisher_fiber", [] (auto& handler) -> future<> {
-                rtlogger.info("CDC generation publisher fiber sleeps after injection");
-                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-                rtlogger.info("CDC generation publisher fiber finishes sleeping after injection");
-            }, false);
+            co_await utils::get_local_injector().inject("cdc_generation_publisher_fiber", utils::wait_for_message{std::chrono::minutes{5}}, false);
 
             bool sleep = false;
             try {
@@ -870,11 +866,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     future<> gossiper_orphan_remover_fiber() {
         rtlogger.debug("start gossiper orphan remover fiber");
         bool do_speedup_fiber = utils::get_local_injector().is_enabled("fast_orphan_removal_fiber");
-        co_await utils::get_local_injector().inject("fast_orphan_removal_fiber", [&](auto& handler) -> future<> {
-            // While testing, orphan ip is introduced, and its presence is captured. Wait is added before remover thread so that the presence of orphan ip is
-            // confirmed and the difference of gossiper ips before and after this thread application can be easily asserted.
-            return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
-        });
+        // While testing, orphan ip is introduced, and its presence is captured. Wait is added before remover thread so that the presence of orphan ip is
+        // confirmed and the difference of gossiper ips before and after this thread application can be easily asserted.
+        co_await utils::get_local_injector().inject("fast_orphan_removal_fiber", utils::wait_for_message{std::chrono::minutes(5)});
         while (!_as.abort_requested()) {
             try {
                 auto guard = co_await start_operation();
@@ -2157,10 +2151,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                                                                            dst.host, _as, raft::server_id(dst.host.uuid()), gid);
                             });
                         }).then([] {
-                            return utils::get_local_injector().inject("wait_after_tablet_cleanup", [] (auto& handler) -> future<> {
-                                rtlogger.info("Waiting after tablet cleanup");
-                                return handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{60});
-                            });
+                            return utils::get_local_injector().inject("wait_after_tablet_cleanup", utils::wait_for_message{std::chrono::seconds{60}});
                         });
                     })) {
                         transition_to(locator::tablet_transition_stage::end_migration);
