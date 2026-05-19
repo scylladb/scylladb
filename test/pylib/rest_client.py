@@ -9,6 +9,7 @@ from __future__ import annotations                           # Type hints as str
 
 import logging
 import os.path
+import time
 from urllib.parse import quote
 from abc import ABCMeta
 from collections.abc import Mapping
@@ -366,6 +367,22 @@ class ScyllaRESTAPIClient:
 
     async def message_injection(self, node_ip: str, injection: str) -> None:
         await self.client.post(f"/v2/error_injection/injection/{quote(injection, safe='')}/message", host=node_ip)
+
+    async def wait_for_injection_enter(self, node_ip: str, injection: str, threshold: int = 1, deadline: float | None = None) -> None:
+        """Poll until the injection's enter count reaches the threshold.
+           Default threshold=1 waits for at least one enter.
+        """
+        from test.pylib.util import wait_for
+        if deadline is None:
+            deadline = time.time() + 60.0
+
+        async def _check():
+            count = await self.client.get_json(
+                f"/v2/error_injection/injection/{quote(injection, safe='')}/enters",
+                host=node_ip)
+            return count if count >= threshold else None
+
+        await wait_for(_check, deadline, label=f"injection_enter({injection})")
 
     async def inject_disconnect(self, node_ip: str, ip_to_disconnect_from: str) -> None:
         await self.client.post(f"/v2/error_injection/disconnect/{ip_to_disconnect_from}", host=node_ip)

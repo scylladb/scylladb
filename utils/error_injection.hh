@@ -24,6 +24,7 @@
 #include <ranges>
 #include <algorithm>
 #include <chrono>
+#include <numeric>
 #include <type_traits>
 #include <optional>
 #include <unordered_map>
@@ -145,6 +146,7 @@ class error_injection {
         size_t shared_read_message_count{0};
         size_t waiter_count{0};
         bool disabled{false};
+        size_t enter_count{0};
         condition_variable received_message_cv;
         error_injection_parameters parameters;
         sstring injection_name;
@@ -383,12 +385,31 @@ public:
         return data ? data->shared_data->waiter_count : 0;
     }
 
+    // \brief Returns the number of times the named injection has been entered
+    // since it was enabled.
+    // \param name error injection name to check
+    size_t enter_count(const std::string_view& injection_name) const {
+        auto data = get_data(injection_name);
+        return data ? data->shared_data->enter_count : 0;
+    }
+
+    // \brief Returns the sum of enter_count across all shards.
+    static future<size_t> enter_count_on_all(const std::string_view& injection_name) {
+        auto counts = std::vector<size_t>(smp::count, 0);
+        co_await smp::invoke_on_all([&counts, name = sstring(injection_name)] {
+            counts[this_shard_id()] = _local.enter_count(name);
+        });
+        co_return std::accumulate(counts.begin(), counts.end(), size_t(0));
+    }
+
     // \brief Enter into error injection if it's enabled
     // \param name error injection name to check
     bool enter(const std::string_view& name) {
         if (!is_enabled(name)) {
             return false;
         }
+        auto* data = get_data(name);
+        ++data->shared_data->enter_count;
         if (is_one_shot(name)) {
             disable(name);
         }
@@ -531,6 +552,7 @@ public:
         }
 
         errinj_logger.debug("Triggering injection \"{}\" with injection handler", name);
+        ++data->shared_data->enter_count;
         injection_handler handler(data->shared_data, share_messages);
         data->handlers.push_back(handler);
 
@@ -657,6 +679,14 @@ public:
 
     size_t waiters(const std::string_view& name) const {
         return 0;
+    }
+
+    size_t enter_count(const std::string_view& name) const {
+        return 0;
+    }
+
+    static future<size_t> enter_count_on_all(const std::string_view& injection_name) {
+        return make_ready_future<size_t>(0);
     }
 
     bool enter(const std::string_view& name) const {

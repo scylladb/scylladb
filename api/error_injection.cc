@@ -101,6 +101,13 @@ void set_error_injection(http_context& ctx, routes& r) {
             return make_ready_future<json::json_return_type>(json::json_void());
         });
     });
+
+    hf::get_enter_count.set(r, [](std::unique_ptr<request> req) -> future<json::json_return_type> {
+        sstring injection = req->get_path_param("injection");
+        auto& errinj = utils::get_local_injector();
+        auto count = co_await errinj.enter_count_on_all(injection);
+        co_return json::json_return_type(count);
+    });
 }
 
 } // namespace api
