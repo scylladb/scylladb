@@ -869,9 +869,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // entries from gossiper by committing the node as left in raft.
     future<> gossiper_orphan_remover_fiber() {
         rtlogger.debug("start gossiper orphan remover fiber");
-        bool do_speedup_fiber = false;
+        bool do_speedup_fiber = utils::get_local_injector().is_enabled("fast_orphan_removal_fiber");
         co_await utils::get_local_injector().inject("fast_orphan_removal_fiber", [&](auto& handler) -> future<> {
-            do_speedup_fiber = true;
             // While testing, orphan ip is introduced, and its presence is captured. Wait is added before remover thread so that the presence of orphan ip is
             // confirmed and the difference of gossiper ips before and after this thread application can be easily asserted.
             return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
@@ -881,11 +880,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 auto guard = co_await start_operation();
                 utils::chunked_vector<canonical_mutation> updates;
                 int32_t timeout = 60;
-                co_await utils::get_local_injector().inject("speedup_orphan_removal", [&](auto& handler) -> future<> {
+                if (utils::get_local_injector().enter("speedup_orphan_removal")) {
                     // Removes all unjoined nodes. Just for testing purposes.
                     timeout = 0;
-                    co_return;
-                });
+                }
                 std::string reason = ::format("Ban the orphan nodes in group0. Orphan nodes HostId/IP:");
                 _gossiper.for_each_endpoint_state([&](const gms::endpoint_state& eps) -> void {
                     // Since generation is in seconds unit, converting current time to seconds eases comparison computations.
