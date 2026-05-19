@@ -9,10 +9,21 @@
 
 #include "result_message.hh"
 #include "cql3/cql_statement.hh"
+#include "replica/tablets.hh"
+#include "types/tuple.hh"
 #include <seastar/core/format.hh>
 #include <fmt/std.h>
 
 namespace cql_transport::messages {
+
+void result_message::add_tablet_info(locator::tablet_routing_info info) {
+    auto replicas_values = make_list_value(replica::get_replica_set_type(), replica::replicas_to_data_value(info.tablet_replicas));
+    auto v1 = data_value(dht::token::to_int64(info.token_range.first));
+    auto v2 = data_value(dht::token::to_int64(info.token_range.second));
+
+    auto tablets_routing = make_tuple_value(replica::get_tablet_info_type(), {v1, v2, replicas_values});
+    add_custom_payload("tablets-routing-v1", tablets_routing.serialize_nonnull());
+}
 
 std::ostream& operator<<(std::ostream& os, const result_message::void_message& msg) {
     fmt::print(os, "{{result_message::void}}");
