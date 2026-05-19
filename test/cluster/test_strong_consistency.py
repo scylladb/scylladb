@@ -853,16 +853,13 @@ async def test_timed_out_queries(manager: ManagerClient):
     s1 = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([s1])
 
-    log = await manager.server_open_log(s1.server_id)
-
     async def try_query_with_timeout(exception_type, stmt: str, error_injection_name: str, timeout_sec: float):
         await manager.api.enable_injection(s1.ip_addr, error_injection_name, one_shot=True)
 
-        mark = await log.mark()
         request_timeout_ms = 100
 
         stmt_fut = cql.run_async(f"{stmt} USING TIMEOUT {request_timeout_ms}ms")
-        await log.wait_for(error_injection_name, from_mark=mark)
+        await manager.api.wait_for_injection_enter(s1.ip_addr, error_injection_name)
 
         sleep_length = timeout_sec + (request_timeout_ms / 1000)
         await asyncio.sleep(sleep_length)
@@ -1188,12 +1185,11 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ManagerCl
         ])
 
         log = await manager.server_open_log(target_server.server_id)
-        mark = await log.mark()
 
         # We won't wait for the follower to apply the state, so we can await this right away.
         await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
 
-        await log.wait_for(wait_before_apply_injection, from_mark=mark)
+        await manager.api.wait_for_injection_enter(target_server.ip_addr, wait_before_apply_injection)
         mark = await log.mark()
 
         await cql.run_async(f"DROP TABLE {table}")
@@ -1256,12 +1252,11 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ManagerClient)
         ])
 
         log = await manager.server_open_log(target_server.server_id)
-        mark = await log.mark()
 
         # We won't wait for the follower to apply the state, so we can await this right away.
         await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
 
-        await log.wait_for(wait_before_apply_injection, from_mark=mark)
+        await manager.api.wait_for_injection_enter(target_server.ip_addr, wait_before_apply_injection)
         mark = await log.mark()
 
         stop_task = asyncio.create_task(manager.server_stop_gracefully(target_server.server_id))
