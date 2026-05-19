@@ -315,14 +315,15 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClie
     cfg = {}
     cmdline = ['--logger-log-level', 'tablets=debug', '--logger-log-level', 'raft_topology=debug']
 
-    async def remove_node(server_id: str, expected_error: str = None):
+    async def remove_node(srv_to_remove, expected_error: str = None):
         if op == "remove":
-            await manager.server_stop_gracefully(server_id)
+            await manager.server_stop_gracefully(srv_to_remove.server_id)
+            await manager.others_not_see_server(srv_to_remove.ip_addr)
             # If remove_node fails, the node may be left not excluded, blocking later remove_node.
-            await manager.api.exclude_node(servers[0].ip_addr, [await manager.get_host_id(server_id)])
-            await manager.remove_node(servers[0].server_id, server_id, expected_error=expected_error)
+            await manager.api.exclude_node(servers[0].ip_addr, [await manager.get_host_id(srv_to_remove.server_id)])
+            await manager.remove_node(servers[0].server_id, srv_to_remove.server_id, expected_error=expected_error)
         elif op == "decommission":
-            await manager.decommission_node(server_id, expected_error=expected_error)
+            await manager.decommission_node(srv_to_remove.server_id, expected_error=expected_error)
 
     servers = await manager.servers_add(5, config=cfg, cmdline=cmdline, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -340,8 +341,8 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClie
 
     # Try to remove node from r4 (listed rack) - should be rejected
     # This would eliminate rack r4 from the available racks, violating RF-rack constraints
-    await remove_node(servers[3].server_id, expected_error=f"node {op} rejected: Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid")
+    await remove_node(servers[3], expected_error=f"node {op} rejected: Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid")
 
     # Remove node from r3 (unlisted rack) - should succeed
     # This doesn't affect RF-rack validity since r3 is not in the keyspace's rack list
-    await remove_node(servers[2].server_id)
+    await remove_node(servers[2])
