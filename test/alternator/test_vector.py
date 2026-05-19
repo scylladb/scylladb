@@ -1227,6 +1227,27 @@ def test_vectorindex_status_without_vector_store(vs):
 # vector store to index data. Centralized here so it can be adjusted easily.
 VECTOR_STORE_TIMEOUT = 20
 
+def retrying(msg, timeout=VECTOR_STORE_TIMEOUT):
+    """Retry loop generator. Yields on each attempt, sleeping 0.1s between
+    retries. Fails after timeout seconds with 'Timed out waiting for <msg>'.
+    Use timeout to override the default timeout.
+
+    Usage::
+
+        for _ in retrying('X to happen'):
+            try:
+                if condition:
+                    break
+            except ClientError:
+                pass
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        yield
+        if time.monotonic() > deadline:
+            pytest.fail('Timed out waiting for ' + msg)
+        time.sleep(0.05)
+
 # Test that a vector search Query returns the nearest-neighbour item.
 # The vector store is eventually consistent: after put_item the ANN index
 # takes time to reflect the new item, so we retry until it appears.
@@ -1242,8 +1263,7 @@ def test_query_vector_prefill(vs, needs_vector_store):
         table.update(VectorIndexUpdates=[{'Create':
             {'IndexName': 'vind',
              'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('vector store to return the expected item'):
             try:
                 result = table.query(
                     IndexName='vind',
@@ -1254,9 +1274,6 @@ def test_query_vector_prefill(vs, needs_vector_store):
                     break
             except ClientError:
                 pass
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for vector store to return the expected item')
-            time.sleep(0.1)
 
 # Same as test_query_vector_prefill but for a table with a clustering key, which
 # exercises the separate code path in query_vector() for hash+range tables.
@@ -1274,8 +1291,7 @@ def test_query_vector_with_ck_prefill(vs, needs_vector_store):
         table.update(VectorIndexUpdates=[{'Create':
             {'IndexName': 'vind',
              'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('vector store to return the expected item'):
             try:
                 result = table.query(
                     IndexName='vind',
@@ -1287,9 +1303,6 @@ def test_query_vector_with_ck_prefill(vs, needs_vector_store):
                     break
             except ClientError:
                 pass
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for vector store to return the expected item')
-            time.sleep(0.1)
 
 # Utility function for waiting until the given vector index is ACTIVE, which
 # means that when this function returns, we are guaranteed that:
@@ -1301,15 +1314,11 @@ def test_query_vector_with_ck_prefill(vs, needs_vector_store):
 # succeed, and also doesn't require knowing the dimensions of this index to
 # attempt a real Query.
 def wait_for_vector_index_active(table, index_name):
-    deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-    while True:
+    for _ in retrying(f'vector index "{index_name}" to become ACTIVE'):
         desc = table.meta.client.describe_table(TableName=table.name)
         for vi in desc.get('Table', {}).get('VectorIndexes', []):
             if vi['IndexName'] == index_name and vi['IndexStatus'] == 'ACTIVE':
                 return
-        if time.monotonic() > deadline:
-            pytest.fail(f'Timed out waiting for vector index "{index_name}" to become ACTIVE')
-        time.sleep(0.1)
 
 # Test that wait_for_vector_index_active(), waiting for IndexStatus==ACTIVE,
 # indeed reliably waits for the index to be ready. A Query issued immediately
@@ -1390,8 +1399,7 @@ def test_query_vector_cdc(vs, needs_vector_store):
         p = random_string()
         table.put_item(Item={'p': p, 'v': [1, 0, 0]})
         # Retry the query until the newly written item appears in the results.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('vector store to return the expected item via CDC'):
             try:
                 result = table.query(
                     IndexName='vind',
@@ -1402,9 +1410,6 @@ def test_query_vector_cdc(vs, needs_vector_store):
                     break
             except ClientError:
                 pass
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for vector store to return the expected item via CDC')
-            time.sleep(0.1)
 
 # Similar test to test_query_vector_cdc, where an item is written after the
 # vector index is created, but here the item is written using LWT (using a
@@ -1425,15 +1430,11 @@ def test_query_vector_cdc_lwt(vs, needs_vector_store):
         p = random_string()
         table.put_item(Item={'p': p, 'v': [1, 0, 0]},
             ConditionExpression='attribute_not_exists(p)')
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('vector store to index an item via CDC'):
             result = table.query(IndexName='vind',
                     VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1)
             if len(result['Items']) > 0:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for vector store index an item via CDC')
-            time.sleep(0.1)
         assert len(result['Items']) == 1 and result['Items'][0]['p'] == p
 
 
@@ -1474,16 +1475,11 @@ def test_query_vector_cdc_malformed_prefill(vs, needs_vector_store, malformed, u
                 ExpressionAttributeValues={':v': [1, Decimal("0.1"), 0]})
         else:
             table.put_item(Item={'p': p1, 'v': [1, Decimal("0.1"), 0]})
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('both p1 and p2 to be indexed'):
             result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]},
                                  Limit=10)
             if len(result['Items']) == 2 and {item['p'] for item in result['Items']} == {p2, p1}:
                 break
-            if time.monotonic() > deadline:
-                assert len(result['Items']) == 2 and {item['p'] for item in result['Items']} == {p2, p1}
-                break
-            time.sleep(0.1)
 
 # Test like test_query_vector_prefill, but with a query returning multiple
 # results. This helps us verify that:
@@ -1511,8 +1507,7 @@ def test_query_vector_multiple_results(vs, needs_vector_store):
             {'IndexName': 'vind',
              'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
         expected_order = [p1, p2, p3]
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying(f'items to appear in correct order: {expected_order}'):
             try:
                 result = table.query(
                     IndexName='vind',
@@ -1525,9 +1520,6 @@ def test_query_vector_multiple_results(vs, needs_vector_store):
                     break
             except ClientError:
                 pass
-            if time.monotonic() > deadline:
-                pytest.fail(f'Timed out waiting for correct ordered results; last got: {got}, expected {expected_order}')
-            time.sleep(0.1)
 
 # Same as test_query_vector_multiple_results but for a table with a
 # clustering key, to exercise the hash+range code path in query_vector().
@@ -1549,8 +1541,7 @@ def test_query_vector_with_ck_multiple_results(vs, needs_vector_store):
             {'IndexName': 'vind',
              'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
         expected_order = [(p1, c1), (p2, c2), (p3, c3)]
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying(f'items to appear in correct order: {expected_order}'):
             try:
                 result = table.query(
                     IndexName='vind',
@@ -1564,9 +1555,6 @@ def test_query_vector_with_ck_multiple_results(vs, needs_vector_store):
                     break
             except ClientError:
                 pass
-            if time.monotonic() > deadline:
-                pytest.fail(f'Timed out waiting for correct ordered results; last got: {got}, expected {expected_order}')
-            time.sleep(0.1)
 
 # Test that a vector search Query returns, with Select='ALL_ATTRIBUTES', the
 # full item content correctly (all attributes, correct key values) in the
@@ -1616,8 +1604,7 @@ def test_query_vector_full_items(vs, needs_vector_store, have_ck):
         expected_items = items[:3]
         # Wait until the returned items match the expected list exactly,
         # verifying both the full content of each item and their order.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('vector store to return the expected items'):
             try:
                 result = table.query(
                     IndexName='vind',
@@ -1629,9 +1616,6 @@ def test_query_vector_full_items(vs, needs_vector_store, have_ck):
                     break
             except ClientError:
                 pass
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for vector store to return the expected items')
-            time.sleep(0.1)
 
 # Test that PutItem rejects a vector attribute value that is invalid for
 # the declared vector index on that attribute. The index on table_vs declares
@@ -1788,8 +1772,7 @@ def test_deleteitem_vectorindex(vs, needs_vector_store, with_ck):
             item['c'] = c
             key['c'] = c
         table.put_item(Item=item)
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('item to appear in vector index'):
             result = table.query(IndexName='vind',
                                  VectorSearch={'QueryVector': [1, 0, 0]},
                                  Select='ALL_ATTRIBUTES',
@@ -1797,21 +1780,14 @@ def test_deleteitem_vectorindex(vs, needs_vector_store, with_ck):
             if len(result['Items']) > 0:
                 assert result['Items'][0] == item
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for item to appear in vector index')
-            time.sleep(0.1)
         # Delete the item and wait for it to disappear from the vector index.
         table.delete_item(Key=key)
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('deleted item to disappear from vector index'):
             result = table.query(IndexName='vind',
                                  VectorSearch={'QueryVector': [1, 0, 0]},
                                  Limit=1)
             if len(result.get('Items', [])) == 0:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for deleted item to disappear from vector index')
-            time.sleep(0.1)
 
 # Test that PutItem or UpdateItem on an existing item replaces its vector in
 # the index: the old vector is removed and the new one is indexed. Two items
@@ -1845,17 +1821,13 @@ def test_replace_vector_vectorindex(vs, needs_vector_store, use_update_item):
             table.put_item(Item={'p': p1, 'v': [-1, 0, 0]})
         # Wait until the index reflects the change: p2 should now come before p1
         # in a search for [1, 0, 0].
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('index to reflect replaced vector'):
             result = table.query(IndexName='vind',
                                  VectorSearch={'QueryVector': [1, 0, 0]},
                                  Limit=2)
             got = [item['p'] for item in result.get('Items', [])]
             if got == [p2, p1]:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail(f'Timed out waiting for index to reflect replaced vector; last order: {got}')
-            time.sleep(0.1)
 
 # Test that UpdateItem modifying non-vector attributes does not affect the
 # vector index: the item remains discoverable by its unchanged vector, and
@@ -1908,16 +1880,12 @@ def test_updateitem_remove_vector_vectorindex(vs, needs_vector_store):
         # Remove only the vector attribute, leaving the rest of the item intact.
         table.update_item(Key={'p': p}, UpdateExpression='REMOVE v')
         # The item must eventually disappear from the vector index.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('item to disappear from vector index after vector attribute removal'):
             result = table.query(IndexName='vind',
                                  VectorSearch={'QueryVector': [1, 0, 0]},
                                  Limit=1)
             if not result['Items']:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for item to disappear from vector index after vector attribute removal')
-            time.sleep(0.1)
         # The item itself must still exist in the base table, just without 'v'.
         result = table.get_item(Key={'p': p}, ConsistentRead=True)
         assert result['Item'] == {'p': p, 'x': 'hello'}
@@ -1965,17 +1933,13 @@ def test_vector_with_ttl(vs, needs_vector_store, have_ck):
         table.put_item(Item=item)
         # Wait for the item to appear in vector search. Since TTL is not yet
         # enabled, the item must be visible despite its past expiration time.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('item to appear in vector search before TTL was enabled'):
             result = table.query(IndexName='vind',
                                  VectorSearch={'QueryVector': [1, 0, 0]},
                                  Limit=1)
             if len(result.get('Items', [])) > 0:
                 assert result['Items'][0]['p'] == p
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for item to appear in vector search before TTL was enabled')
-            time.sleep(0.1)
         # Now enable TTL on the 'expiration' attribute. The item has its
         # expiration in the past, so TTL should delete it quickly.
         table.meta.client.update_time_to_live(
@@ -1984,8 +1948,8 @@ def test_vector_with_ttl(vs, needs_vector_store, have_ck):
         # Wait for the item to disappear from vector search. TTL deletes the
         # item from the database, and the deletion propagates to the vector
         # store via CDC.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT + float(period)
-        while True:
+        for _ in retrying('TTL-expired item to disappear from vector search',
+                          timeout=VECTOR_STORE_TIMEOUT + float(period)):
             result = table.query(
                 IndexName='vind',
                 VectorSearch={'QueryVector': [1, 0, 0]},
@@ -1994,9 +1958,6 @@ def test_vector_with_ttl(vs, needs_vector_store, have_ck):
             )
             if len(result['Items']) == 0:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for TTL-expired item to disappear from vector search')
-            time.sleep(0.1)
         # Since we used Select='ALL_PROJECTED_ATTRIBUTES', the loop above
         # already confirms the vector store removed the item (the results
         # come directly from the vector store, not the base table).
@@ -2046,8 +2007,7 @@ def test_query_vectorsearch_select(vs, needs_vector_store):
             {'IndexName': 'vind',
              'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
         # Wait for the item to appear in vector search.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('item to be indexed'):
             try:
                 result = table.query(
                     IndexName='vind',
@@ -2057,9 +2017,6 @@ def test_query_vectorsearch_select(vs, needs_vector_store):
                     break
             except ClientError:
                 pass
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for item to be indexed')
-            time.sleep(0.1)
         # ALL_PROJECTED_ATTRIBUTES (default when no Select): returns only the
         # primary key attributes.
         result = table.query(IndexName='vind',
@@ -2440,8 +2397,7 @@ def test_vector_projection_include_prefilter_cdc(vs, needs_vector_store):
         table.put_item(Item={'p': p + '_drop', 'v': Vector([0, 0, 1]),   'x': 'b'})
         table.put_item(Item={'p': p + '_keep', 'v': Vector([0.1, 0, 1]), 'x': 'a'})
         # Retry until both items are visible, then check that the pre-filter works.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('CDC-indexed items to appear'):
             result = table.query(
                 IndexName='vind',
                 VectorSearch={'QueryVector': [0, 0, 1]},
@@ -2449,9 +2405,6 @@ def test_vector_projection_include_prefilter_cdc(vs, needs_vector_store):
             )
             if len(result.get('Items', [])) == 2:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for CDC-indexed items to appear')
-            time.sleep(0.1)
         # Both items are now indexed. Apply the pre-filter.
         result = table.query(
             IndexName='vind',
@@ -2490,15 +2443,11 @@ def test_vector_attribute_allowed_chars(vs, needs_vector_store):
         table.put_item(Item={'p': p2, attribute_name: [0, 0, 1]})
         # Wait until the CDC-indexed update (v=[0, 0, 1]) is reflected in the
         # vector search results.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('items to appear in vector search'):
             result = table.query(IndexName='vind',
                 VectorSearch={'QueryVector': [0, 0, 1]}, Limit=2)
             if 'Items' in result and len(result['Items']) == 2 and result['Items'][0]['p'] == p2 and result['Items'][1]['p'] == p1:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for items to appear in vector search')
-            time.sleep(0.1)
 
 # Test FilterExpression for post-filtering vector search results: After Limit
 # results are found by the vector index and the full items are retrieved
@@ -2537,8 +2486,7 @@ def test_query_vectorsearch_filter_expression(vs, needs_vector_store, select):
              'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
         # Wait until nearest 4 items (nearest_ps) are visible in a query
         # without a filter.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('all items to be indexed'):
             try:
                 result = table.query(
                     IndexName='vind',
@@ -2549,9 +2497,6 @@ def test_query_vectorsearch_filter_expression(vs, needs_vector_store, select):
                     break
             except ClientError:
                 pass
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for all items to be indexed')
-            time.sleep(0.1)
         # Query with a FilterExpression that matches 2 of the 4 nearest
         # candidates (Limit=4). We expect Count=2 and ScannedCount=4. Note
         # that even though p_far also has x=keep, it was not among the 4
@@ -2594,8 +2539,7 @@ def test_query_vectorsearch_filter_expression_specific_attributes(vs, needs_vect
             {'IndexName': 'vind',
              'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
         # Wait until the 4 nearest items are visible without a filter.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('all items to be indexed'):
             try:
                 result = table.query(
                     IndexName='vind',
@@ -2606,9 +2550,6 @@ def test_query_vectorsearch_filter_expression_specific_attributes(vs, needs_vect
                     break
             except ClientError:
                 pass
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for all items to be indexed')
-            time.sleep(0.1)
         # Query with Select=SPECIFIC_ATTRIBUTES projecting only 'p', but
         # FilterExpression uses 'x' which is NOT in the projection. The
         # implementation must still retrieve 'x' from the base table to
@@ -3111,8 +3052,7 @@ def test_query_vector_float32vector_and_lon_cdc(vs, needs_vector_store):
         table.put_item(Item={'p': p_v, 'v': Vector([1.0, 0.0, 0.0])})
         table.put_item(Item={'p': p_l, 'v': [Decimal("1"), Decimal("0"), Decimal("0")]})
         # Retry the query until both items appear in the vector search results.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('V-type and L-type items to appear via CDC'):
             result = table.query(
                 IndexName='vind',
                 VectorSearch={'QueryVector': [Decimal("1"), Decimal("0"), Decimal("0")]},
@@ -3120,9 +3060,6 @@ def test_query_vector_float32vector_and_lon_cdc(vs, needs_vector_store):
             )
             if {item['p'] for item in result.get('Items', [])} == {p_v, p_l}:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for V-type and L-type items to appear via CDC')
-            time.sleep(0.1)
 
 # Test that VectorSearch.ReturnScores rejects unknown values and the
 # SIMILARITY+COUNT combination. No vector store needed.
@@ -3357,8 +3294,8 @@ def test_query_vector_max_dimension(vs, needs_vector_store, via_cdc):
                  'VectorAttribute': {'AttributeName': 'v', 'Dimensions': dim}}}])
             wait_for_vector_index_active(table, 'vind')
         # Retry the query until the item appears in the results.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying(f'MAX_VECTOR_DIMENSION={dim} item to appear via '
+                          f'{"CDC" if via_cdc else "prefill"}'):
             result = table.query(
                 IndexName='vind',
                 VectorSearch={'QueryVector': query_vec},
@@ -3366,10 +3303,6 @@ def test_query_vector_max_dimension(vs, needs_vector_store, via_cdc):
             )
             if result.get('Items') and result['Items'][0]['p'] == p:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail(f'Timed out waiting for MAX_VECTOR_DIMENSION={dim} item to appear via '
-                            f'{"CDC" if via_cdc else "prefill"}')
-            time.sleep(0.1)
 
 ##############################################################################
 # Tests for vector search pre-filtering via KeyConditionExpression.
@@ -3678,8 +3611,7 @@ def test_vector_projection_include_prefilter_updateitem_remove_column(vs, needs_
         # REMOVE the projected filtering column x from the item via CDC.
         # The item should (eventually) disappear from the filtered search:
         table.update_item(Key={'p': p}, UpdateExpression='REMOVE x')
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('x removal to be reflected in vector store pre-filter'):
             result = table.query(
                 IndexName='vind',
                 VectorSearch={'QueryVector': [1, 0, 0]},
@@ -3689,9 +3621,6 @@ def test_vector_projection_include_prefilter_updateitem_remove_column(vs, needs_
             )
             if result['Count'] == 0:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for x removal to be reflected in vector store pre-filter')
-            time.sleep(0.1)
         # The item still exists and still has its vector - so it must remain in
         # the vector index and be returned by an unfiltered query.
         #
@@ -3748,8 +3677,7 @@ def test_vector_projection_include_prefilter_updateitem_other_column_preserved(v
             UpdateExpression='SET x = :newx',
             ExpressionAttributeValues={':newx': 'new'})
         # Wait for the CDC event carrying x='new' to be picked up by the vector store.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('x=new to appear in vector store pre-filter'):
             result = table.query(
                 IndexName='vind',
                 VectorSearch={'QueryVector': [1, 0, 0]},
@@ -3759,9 +3687,6 @@ def test_vector_projection_include_prefilter_updateitem_other_column_preserved(v
             )
             if result['Count'] == 1:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for x=new to appear in vector store pre-filter')
-            time.sleep(0.1)
         # y was not changed by the UpdateItem. Its stored value must still be
         # 'stays' — the CDC event must not have erased it.
         result = table.query(
@@ -3805,8 +3730,7 @@ def test_vector_projection_include_prefilter_putitem_clears_old_column(vs, needs
         table.put_item(Item={'p': p, 'v': Vector([1, 0, 0])})
         # Once the CDC replacement event propagates, a pre-filter on x='hello'
         # must no longer match the item because x no longer exists on the item.
-        deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
-        while True:
+        for _ in retrying('stale x=hello to be cleared from vector store after PutItem'):
             result = table.query(
                 IndexName='vind',
                 VectorSearch={'QueryVector': [1, 0, 0]},
@@ -3816,9 +3740,6 @@ def test_vector_projection_include_prefilter_putitem_clears_old_column(vs, needs
             )
             if result['Count'] == 0:
                 break
-            if time.monotonic() > deadline:
-                pytest.fail('Timed out waiting for stale x=hello to be cleared from vector store after PutItem')
-            time.sleep(0.1)
         # Verify the item is still indexed (the new vector is the same as before).
         result = table.query(
             IndexName='vind',
