@@ -529,9 +529,6 @@ async def test_tablet_resize_list(manager: ManagerClient):
             'tablet_load_stats_refresh_interval_in_seconds': 1
         }))
 
-        s1_log = await manager.server_open_log(servers[0].server_id)
-        s1_mark = await s1_log.mark()
-
         injection = "tablet_split_finalization_postpone"
         compaction_injection = "split_sstable_rewrite"
         await enable_injection(manager, servers, injection)
@@ -551,7 +548,7 @@ async def test_tablet_resize_list(manager: ManagerClient):
             assert task.table == table1
             assert task.keyspace == keyspace
 
-        await s1_log.wait_for("split_sstable_rewrite: waiting", from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, "split_sstable_rewrite")
         await manager.api.message_injection(servers[0].ip_addr, "split_sstable_rewrite")
 
         status1 = await tm.get_task_status(servers[1].ip_addr, task0.task_id)

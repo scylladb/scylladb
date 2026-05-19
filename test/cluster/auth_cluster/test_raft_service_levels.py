@@ -564,22 +564,18 @@ async def test_per_service_level_cql_requests_serving(manager: ManagerClient) ->
 
         # Enable error injection to pause CQL requests.
         await manager.api.enable_injection(server.ip_addr, "transport_cql_request_pause", False)
-        log = await manager.server_open_log(server.server_id)
 
         # Send two requests from user_a (sl:sl_a) and one from the cassandra
         # superuser (sl:default). Each pauses at the injection point, keeping
         # the cql_requests_serving gauge incremented.
-        mark = await log.mark()
         task_a1 = asyncio.ensure_future(asyncio.to_thread(session_a.execute, "SELECT * FROM system.local"))
-        await log.wait_for("transport_cql_request_pause: waiting for message", from_mark=mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "transport_cql_request_pause")
 
-        mark = await log.mark()
         task_a2 = asyncio.ensure_future(asyncio.to_thread(session_a.execute, "SELECT * FROM system.local"))
-        await log.wait_for("transport_cql_request_pause: waiting for message", from_mark=mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "transport_cql_request_pause", threshold=2)
 
-        mark = await log.mark()
         task_default = asyncio.ensure_future(asyncio.to_thread(session_default.execute, "SELECT * FROM system.local"))
-        await log.wait_for("transport_cql_request_pause: waiting for message", from_mark=mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "transport_cql_request_pause", threshold=3)
 
         # All three requests are now paused. Verify the per-SL gauges.
         # Use >= because a stray request from the manager's CQL session

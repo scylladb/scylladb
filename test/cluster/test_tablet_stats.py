@@ -109,9 +109,6 @@ async def test_load_stats_refresh_during_shutdown(manager: ManagerClient):
         coord_idx = host_ids.index(coord)
         coord_server = servers[coord_idx]
 
-        log = await manager.server_open_log(coord_server.server_id)
-        mark = await log.mark()
-
         # Injection B: pause between run() returning and stop() being called.
         await manager.api.enable_injection(
             coord_server.ip_addr, "topology_coordinator_pause_before_stop", one_shot=True)
@@ -122,8 +119,7 @@ async def test_load_stats_refresh_during_shutdown(manager: ManagerClient):
 
         # Wait for injection B to fire. The coordinator has finished run() but
         # the schema change listener is still registered.
-        mark, _ = await log.wait_for(
-            "topology_coordinator_pause_before_stop: waiting", from_mark=mark)
+        await manager.api.wait_for_injection_enter(coord_server.ip_addr, "topology_coordinator_pause_before_stop")
 
         # Injection A: block refresh_tablet_load_stats() before it accesses _shared_tm.
         # Enable it now so it only catches the notification-triggered call.
@@ -137,7 +133,7 @@ async def test_load_stats_refresh_during_shutdown(manager: ManagerClient):
         async with new_test_table(manager, ks, "pk int PRIMARY KEY", reuse_tables=False):
             # Wait for injection A: refresh_tablet_load_stats() is now blocked before
             # accessing _shared_tm. The topology_coordinator is still alive (paused at B).
-            await log.wait_for("refresh_tablet_load_stats_pause: waiting", from_mark=mark)
+            await manager.api.wait_for_injection_enter(coord_server.ip_addr, "refresh_tablet_load_stats_pause")
 
             # Release injection B: coordinator proceeds through stop().
             # Without the fix, stop() returns quickly and run_topology_coordinator

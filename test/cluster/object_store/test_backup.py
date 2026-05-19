@@ -192,8 +192,6 @@ async def do_test_backup_helper(manager: ManagerClient, object_storage,
         snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
 
         await manager.api.enable_injection(server.ip_addr, breakpoint_name, one_shot=True)
-        log = await manager.server_open_log(server.server_id)
-        mark = await log.mark()
 
         print('Backup snapshot')
         # use a unique path, because we're running more than one test using the same minio and ks/cf name.
@@ -203,7 +201,7 @@ async def do_test_backup_helper(manager: ManagerClient, object_storage,
         tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
 
         print(f'Started task {tid}, aborting it early')
-        await log.wait_for(breakpoint_name + ': waiting', from_mark=mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, breakpoint_name)
         await handler(server, prefix, files, tid)
 
 async def do_test_backup_abort(manager: ManagerClient, object_storage,
@@ -415,8 +413,6 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
         await cql.run_async(f"TRUNCATE TABLE {keyspace}.{table};")
         logger.info("Initiating restore operations...")
 
-        logs = [await manager.server_open_log(server.server_id) for server in servers]
-
         injection = "stream_mutation_fragments" # "block_load_and_stream"
         await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, injection, True) for s in servers))
 
@@ -433,7 +429,7 @@ async def do_abort_restore(manager: ManagerClient, object_storage):
             )
             restore_task_ids[server.server_id] = restore_tid
 
-        await wait_all([l.wait_for(f"{injection}: waiting", timeout=10) for l in logs])
+        await wait_all([manager.api.wait_for_injection_enter(s.ip_addr, injection) for s in servers])
 
         logger.info("Aborting restore tasks...")
         await asyncio.gather(*(manager.api.abort_task(server.ip_addr, restore_task_ids[server.server_id]) for server in servers))
@@ -888,12 +884,10 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Ma
         await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
 
         await manager.api.enable_injection(servers[2].ip_addr, "pause_tablet_restore", one_shot=True)
-        log = await manager.server_open_log(servers[2].server_id)
-        mark = await log.mark()
 
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
         tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
-        await log.wait_for("pause_tablet_restore: waiting for message", from_mark=mark)
+        await manager.api.wait_for_injection_enter(servers[2].ip_addr, "pause_tablet_restore")
 
         if target == 'api':
             await manager.server_stop(servers[1].server_id, convict=True)

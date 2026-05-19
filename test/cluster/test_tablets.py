@@ -1362,7 +1362,7 @@ async def test_read_of_pending_replica_during_migration(manager: ManagerClient, 
         migration_task = asyncio.create_task(
             manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token))
 
-        await s1_log.wait_for('stream_mutation_fragments: waiting', from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(servers[1].ip_addr, "stream_mutation_fragments")
         s1_mark = await s1_log.mark()
 
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key}, 1)")

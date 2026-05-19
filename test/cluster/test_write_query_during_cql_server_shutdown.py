@@ -67,8 +67,7 @@ async def test_write_query_during_cql_server_shutdown(request: pytest.FixtureReq
 
         # Make sure nodes that have to pause the request response, got the write request and started waiting.
         for server in servers_to_pause:
-            paused_server_logs = await manager.server_open_log(server.server_id)
-            await paused_server_logs.wait_for("storage_proxy_write_response_pause: waiting for message")
+            await manager.api.wait_for_injection_enter(server.ip_addr, "storage_proxy_write_response_pause")
 
         # Start shutdown of the query coordinator node
         async def do_shutdown():

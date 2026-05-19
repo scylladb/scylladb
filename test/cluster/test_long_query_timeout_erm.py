@@ -170,11 +170,10 @@ async def test_long_query_timeout_without_failure_erm(request, manager: ManagerC
 
     logger.info("Confirm reads are waiting on the injected error")
 
-    async def wait_for_log_on_any_node(server):
-        server_log = await manager.server_open_log(server.server_id)
-        await server_log.wait_for("mapreduce_pause_parallel_dispatch: waiting for message")
-
-    await wait_for_first_completed([wait_for_log_on_any_node(server) for server in servers])
+    await wait_for_first_completed([
+        manager.api.wait_for_injection_enter(server.ip_addr, "mapreduce_pause_parallel_dispatch")
+        for server in servers
+    ])
 
     if enable_tablets:
         logger.info("Add new node - ERM should not be blocked")

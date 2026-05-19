@@ -58,8 +58,6 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
     first_group0_id = (await cql.run_async(
             "SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
 
-    coordinator_log = await manager.server_open_log(coordinator.server_id)
-
     logging.info(f'Blocking the topology coordinator in write_both_read_new on server {coordinator}')
     await manager.api.enable_injection(coordinator.ip_addr, 'delay_node_bootstrap', one_shot=False)
 
@@ -70,7 +68,7 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
                                expected_error='Crashed in crash_before_topology_request_completion'))
 
     logging.info(f'Waiting until the topology coordinator blocks in write_both_read_new on node server {coordinator}')
-    await coordinator_log.wait_for("delay_node_bootstrap: waiting for message")
+    await manager.api.wait_for_injection_enter(coordinator.ip_addr, "delay_node_bootstrap")
 
     failed_server_host_id = await manager.get_host_id(failed_server.server_id)
 

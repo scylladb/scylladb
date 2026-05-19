@@ -109,7 +109,7 @@ async def test_truncate_with_concurrent_drop(manager: ManagerClient):
         # Start a TRUNCATE in the background
         trunc_future = cql.run_async(f'TRUNCATE TABLE {ks}.test', host=trunc_host)
         # Wait for the topology coordinator to reach a point wher it is about to start sending the truncate RPCs
-        await raft_leader_log.wait_for('truncate_table_wait: waiting for message')
+        await manager.api.wait_for_injection_enter(raft_leader.ip_addr, "truncate_table_wait")
         # Execute DROP TABLE
         await cql.run_async(f'DROP TABLE {ks}.test', host=drop_host)
         # Release TRUNCATE table in topology coordinator
@@ -283,7 +283,7 @@ async def test_replay_position_check_during_truncate(manager):
 
         truncate_task = cql.run_async(f"TRUNCATE {ks}.test")
 
-        await s1_log.wait_for(f"database_truncate_wait: waiting", from_mark=s1_mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "database_truncate_wait")
 
         keys = range(10)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
@@ -386,12 +386,12 @@ async def test_split_emitted_during_truncate(manager: ManagerClient):
         expected_tablet_count = 2
         # Force split on the test table
         await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {expected_tablet_count}}}")
-        await log.wait_for("tablet_split_monitor_wait: waiting", from_mark=mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "tablet_split_monitor_wait")
 
         truncate_task = cql.run_async(f"TRUNCATE {ks}.test")
 
         # Wait for truncation to disable compaction on existing groups and pause
-        await log.wait_for("database_truncate_wait: waiting", from_mark=mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "database_truncate_wait")
 
         # Release split monitor so it calls set_split_mode(), creating new compaction groups
         await manager.api.message_injection(server.ip_addr, "tablet_split_monitor_wait")

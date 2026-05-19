@@ -545,9 +545,6 @@ async def test_merge_with_drop(manager: ManagerClient):
         expected_tablet_count = initial_tablets // 2
         await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {expected_tablet_count}}}")
 
-        s0_log = await manager.server_open_log(server.server_id)
-        s0_mark = await s0_log.mark()
-
         await manager.enable_tablet_balancing()
 
         # wait for merge to complete
@@ -561,10 +558,10 @@ async def test_merge_with_drop(manager: ManagerClient):
 
             await asyncio.sleep(.1)
 
-        await s0_log.wait_for('merge_completion_fiber: waiting', from_mark=s0_mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "merge_completion_fiber")
         await manager.api.enable_injection(server.ip_addr, "compaction_group_stop_wait", one_shot=True)
         await manager.api.message_injection(server.ip_addr, "merge_completion_fiber")
-        await s0_log.wait_for('compaction_group_stop_wait: waiting', from_mark=s0_mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "compaction_group_stop_wait")
 
         drop_table_fut = cql.run_async(f"drop table {ks}.test")
         await asyncio.sleep(0.1)
@@ -632,7 +629,7 @@ async def test_background_merge_deadlock(manager: ManagerClient):
         return tablet_count == 4 or None
     await wait_for(produced_one_merge, time.time() + 120)
 
-    mark, _ = await log.wait_for(f"merge_completion_fiber: waiting", from_mark=mark)
+    await manager.api.wait_for_injection_enter(servers[0].ip_addr, "merge_completion_fiber")
     await manager.api.message_injection(servers[0].ip_addr, "merge_completion_fiber")
     mark, _ = await log.wait_for(f"merge_completion_fiber: message received", from_mark=mark)
 

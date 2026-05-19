@@ -817,7 +817,7 @@ async def test_drop_table_during_insert(manager: ManagerClient):
         insert_fut = cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
 
         # Wait until the injection is actually hit.
-        await log.wait_for("sc_coordinator_wait_before_acquire_server: waiting for message", from_mark=mark, timeout=30)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "sc_coordinator_wait_before_acquire_server")
 
         # Drop the table while INSERT is paused.
         await cql.run_async(f"DROP TABLE {table}")

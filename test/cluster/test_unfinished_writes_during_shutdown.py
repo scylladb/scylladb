@@ -87,12 +87,11 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
 
             # Wait for the topology change to start
             logger.info("Waiting for a topology change to start")
-            mark, _ = await target_server_log.wait_for("pause_before_barrier_and_drain: waiting for message")
+            await manager.api.wait_for_injection_enter(target_server.ip_addr, "pause_before_barrier_and_drain")
 
             # Pause write responses on the other node so it keeps the
             # write_response_handler alive on the target.
             await inject_error_on(manager, "storage_proxy_write_response_pause", [other_server])
-            other_server_log = await manager.server_open_log(other_server.server_id)
 
             # Send a write with CL=ONE so it completes from the coordinator's
             # local replica without waiting for the paused server.
@@ -102,7 +101,7 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
                 host=target_host)
 
             # Make sure the other replica got the write request and is paused.
-            await other_server_log.wait_for("storage_proxy_write_response_pause: waiting for message")
+            await manager.api.wait_for_injection_enter(other_server.ip_addr, "storage_proxy_write_response_pause");
 
             # Release the first barrier_and_drain — it completes because the write
             # handler holds the current version (not stale yet).
@@ -111,7 +110,7 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
             # Wait for the second barrier_and_drain. Between the first and second,
             # topology_state_load installs a new token_metadata version. The write
             # handler still holds the old version's ERM, which is now stale.
-            await target_server_log.wait_for("pause_before_barrier_and_drain: waiting for message", from_mark=mark)
+            await manager.api.wait_for_injection_enter(target_server.ip_addr, "pause_before_barrier_and_drain", threshold=2)
 
             # Start shutdown of the target node
             logger.info(f"Starting shutdown of node {target_server.server_id}")
