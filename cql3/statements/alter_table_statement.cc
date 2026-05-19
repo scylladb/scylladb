@@ -9,7 +9,7 @@
  */
 
 #include "cdc/log.hh"
-#include "index/vector_index.hh"
+#include "index/external_index.hh"
 #include "types/types.hh"
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
@@ -432,11 +432,11 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                     // "enabled" flag not specified
                     throw exceptions::invalid_request_exception("Altering CDC options requires specifying \"enabled\" flag");
                 }
-                if (!cdc_opts.enabled() && secondary_index::vector_index::has_vector_index(*s)) {
-                    // If we are disabling CDC, we need to ensure that the vector index
-                    // is not left without a CDC log.
-                    throw exceptions::invalid_request_exception("Cannot disable CDC when Vector Search is enabled on the table.\n"
-                                                                "Please drop the vector index first, then disable CDC.");
+
+                // If we are disabling CDC, we need to ensure that neither the vector index nor the fulltext index is enabled on the table,
+                // because both of them rely on CDC to function, and disabling CDC would leave them in a broken state.
+                if (!cdc_opts.enabled()) {
+                    secondary_index::external_index::validate_cdc_not_disabled_if_present(*s);
                 }
             }
 

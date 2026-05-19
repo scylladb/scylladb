@@ -12,32 +12,30 @@
 
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/statements/index_target.hh"
-#include "index/secondary_index_manager.hh"
+#include "index/external_index.hh"
 
 #include <vector>
 
 namespace secondary_index {
 
-class vector_index: public custom_index {
+class vector_index: public external_index {
 public:
-    std::string_view index_type_name() const override { return "vector"; }
-
-    // The minimal TTL for the CDC used by Vector Search.
-    // Required to ensure that the data is not deleted until the vector index is fully built.
-    static constexpr int VS_TTL_SECONDS = 86400; // 24 hours
+    static constexpr std::string_view INDEX_TYPE_NAME = "vector";
+    static constexpr std::string_view SEARCH_TYPE_NAME = "Vector Search";
+    std::string_view index_type_name() const override { return INDEX_TYPE_NAME; }
 
     vector_index() = default;
     ~vector_index() override = default;
     std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const override;
-    bool view_should_exist() const override;
     void validate(const schema &schema, const cql3::statements::index_specific_prop_defs &properties,
             const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs,
         const data_dictionary::database& db) const override;
-    utils::UUID index_version(const schema& schema) override;
-    static bool has_vector_index(const schema& s);
+    static bool has_index(const schema& s) { return has_index_impl<vector_index>(s); }
     static bool has_vector_index_on_column(const schema& s, const sstring& target_name);
     static bool is_vector_index_on_column(const index_metadata& im, const sstring& target_name);
-    static void check_cdc_options(const schema& schema);
+    static void check_cdc_options(const schema& s) {
+        check_cdc_options_impl<vector_index>(s);
+    }
 
     static sstring serialize_targets(const std::vector<::shared_ptr<cql3::statements::index_target>>& targets);
     static sstring get_target_column(const sstring& targets);
@@ -46,7 +44,6 @@ public:
     static float get_oversampling(const index_options_map& properties);
     static sstring get_cql_similarity_function_name(const index_options_map& properties);
 private:
-    void check_uses_tablets(const schema& schema, const data_dictionary::database& db) const;
     void check_cdc_not_explicitly_disabled(const schema& schema) const;
     void check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const;
     void check_index_options(const cql3::statements::index_specific_prop_defs& properties) const;

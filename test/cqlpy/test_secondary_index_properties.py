@@ -364,5 +364,5 @@ def test_create_index_with_invalid_memtable_flush_period(cql, test_keyspace, scy
 def test_create_vector_index_with_view_properties(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
         index_name = unique_name()
-        with pytest.raises(InvalidRequest, match="You cannot use view properties with a vector index"):
+        with pytest.raises(InvalidRequest, match="You cannot use view properties with a vector_index"):
             cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(v) USING 'vector_index' WITH gc_grace_seconds = 13")
