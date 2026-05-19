@@ -465,7 +465,9 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
 
 future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
         sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name,
-        std::optional<service::intended_storage_mode> storage_mode)
+        std::optional<service::intended_storage_mode> storage_mode,
+        bool skip_sstable_loading,
+        bool mark_writable)
 {
     dblog.info("Populating Keyspace {}", ks_name);
 
@@ -477,6 +479,7 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
 
         dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf.get_storage_options());
 
+        if (!skip_sstable_loading) {
             using md = table_populator::migration_direction;
             auto& tablet_metadata = db.local().get_shared_token_metadata().get()->tablets();
             auto direction = [&]() {
@@ -513,9 +516,10 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
             if (ex) {
                 co_await coroutine::return_exception_ptr(std::move(ex));
             }
+        }
 
         // system tables are made writable through sys_ks::mark_writable
-        if (!is_system_keyspace(ks_name)) {
+        if (!is_system_keyspace(ks_name) && mark_writable) {
             co_await smp::invoke_on_all([&] {
                 auto s = gtable->schema();
                 db.local().find_column_family(s).mark_ready_for_writes(db.local().commitlog_for(s));
@@ -606,11 +610,45 @@ future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database
                     continue;
                 }
 
-                futures.emplace_back(distributed_loader::populate_keyspace(db, sys_ks, ks.second, ks_name, storage_mode));
+                bool skip_sstables = ks.second.metadata()->get_storage_options().is_object_storage_type();
+                if (skip_sstables) {
+                    dblog.info("Keyspace {}: deferring SSTable loading (object storage)", ks_name);
+                }
+                futures.emplace_back(distributed_loader::populate_keyspace(db, sys_ks, ks.second, ks_name, storage_mode, skip_sstables, true));
             }
 
             when_all_succeed(futures.begin(), futures.end()).discard_result().get();
         }
+    });
+}
+
+
+future<> distributed_loader::populate_object_storage_keyspaces(sharded<replica::database>& db,
+        sharded<db::system_keyspace>& sys_ks) {
+    return seastar::async([&db, &sys_ks] {
+        auto topology = sys_ks.local().load_topology_state({}).get();
+        auto host_id = db.local().get_token_metadata().get_my_id();
+        auto node = topology.normal_nodes.find(raft::server_id{host_id.uuid()});
+        std::optional<service::intended_storage_mode> storage_mode = node != topology.normal_nodes.end() ? node->second.storage_mode : std::nullopt;
+
+        std::vector<future<>> futures;
+
+        for (auto& ks : db.local().get_keyspaces()) {
+            auto& ks_name = ks.first;
+
+            if (is_system_keyspace(ks_name)) {
+                continue;
+            }
+
+            if (!ks.second.metadata()->get_storage_options().is_object_storage_type()) {
+                continue;
+            }
+
+            dblog.info("Populating deferred object-storage keyspace {}", ks_name);
+            futures.emplace_back(distributed_loader::populate_keyspace(db, sys_ks, ks.second, ks_name, storage_mode, false, false));
+        }
+
+        when_all_succeed(futures.begin(), futures.end()).discard_result().get();
     });
 }
 

@@ -2435,6 +2435,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 self_heal_service_levels_version(sys_ks.local(), qp.local(), group0_client, stop_signal.as_local_abort_source());
             }
 
+            // Populate object-storage keyspaces whose SSTable loading was deferred
+            // during init_non_system_keyspaces because the sstables registry
+            // (in system_distributed) was not available yet. At this point,
+            // the registry is plugged and the node is fully joined.
+            replica::distributed_loader::populate_object_storage_keyspaces(db, sys_ks).get();
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");

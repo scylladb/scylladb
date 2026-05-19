@@ -77,7 +77,9 @@ class distributed_loader {
             sharded<replica::database>& db, sharded<db::view::view_builder>& vb, sharded<db::view::view_building_worker>& vbw,
             db::view::sstable_destination_decision needs_view_update, sstring ks, sstring cf);
     static future<> populate_keyspace(sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name,
-            std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
+            std::optional<service::intended_storage_mode> storage_mode = std::nullopt,
+            bool skip_sstable_loading = false,
+            bool mark_writable = true);
     static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
         get_sstables_from(sharded<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg,
         noncopyable_function<future<>(global_table_ptr&, sharded<sstables::sstable_directory>&)> start_dir);
@@ -85,6 +87,7 @@ class distributed_loader {
 public:
     static future<> init_system_keyspace(sharded<db::system_keyspace>&, sharded<locator::effective_replication_map_factory>&, sharded<replica::database>&);
     static future<> init_non_system_keyspaces(sharded<replica::database>& db, sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks);
+    static future<> populate_object_storage_keyspaces(sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks);
 
     // Scan sstables under upload directory. Return a vector with smp::count entries.
     // Each entry with index of idx should be accessed on shard idx only.
