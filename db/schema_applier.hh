@@ -29,7 +29,7 @@ namespace db {
 
 namespace schema_tables {
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, utils::chunked_vector<mutation> mutations, bool reload = false);
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, utils::chunked_vector<mutation> mutations);
 
 enum class table_kind { table, view };
 
@@ -166,7 +166,6 @@ class schema_applier {
     sharded<service::storage_proxy>& _proxy;
     sharded<service::storage_service>& _ss;
     sharded<db::system_keyspace>& _sys_ks;
-    const bool _reload;
 
     std::set<sstring> _keyspaces;
     std::unordered_map<keyspace_name, table_selector> _affected_tables;
@@ -199,9 +198,8 @@ public:
     schema_applier(
             sharded<service::storage_proxy>& proxy,
             sharded<service::storage_service>& ss,
-            sharded<db::system_keyspace>& sys_ks,
-            bool reload = false)
-            : _proxy(proxy), _ss(ss), _sys_ks(sys_ks), _reload(reload) {};
+            sharded<db::system_keyspace>& sys_ks)
+            : _proxy(proxy), _ss(ss), _sys_ks(sys_ks) {};
 
     // Gets called before mutations are applied,
     // preferably no work should be done here but subsystem

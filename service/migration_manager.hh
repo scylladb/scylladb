@@ -88,8 +88,6 @@ public:
     // Makes sure that this node knows about all schema changes known by "nodes" that were made prior to this call.
     future<> sync_schema(const replica::database& db, const std::vector<locator::host_id>& nodes);
 
-    future<> reload_schema();
-
     // Merge mutations received from src.
     // Keep mutations alive around whole async operation.
     future<> merge_schema_from(locator::host_id src, const utils::chunked_vector<canonical_mutation>& mutations);
