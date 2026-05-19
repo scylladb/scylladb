@@ -185,7 +185,6 @@ void migration_manager::register_feature_listeners() {
                 _feature_listeners.push_back(feature.when_enabled(reload_schema_in_bg));
             }
         }
-        _feature_listeners.push_back(_feat.in_memory_tables.when_enabled(reload_schema_in_bg));
     }
 }
 

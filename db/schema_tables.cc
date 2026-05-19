@@ -302,11 +302,8 @@ schema_ptr tables() {
 
 // Holds Scylla-specific table metadata.
 schema_ptr scylla_tables(schema_features features) {
-    static thread_local schema_ptr schemas[2]{};
+    static thread_local schema_ptr s;
 
-    bool has_in_memory = features.contains(schema_feature::IN_MEMORY_TABLES);
-
-    schema_ptr& s = schemas[has_in_memory];
     if (!s) {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
         auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
@@ -319,9 +316,7 @@ schema_ptr scylla_tables(schema_features features) {
         // PER_TABLE_PARTITIONERS
         sb.with_column("partitioner", utf8_type);
 
-        if (has_in_memory) {
-            sb.with_column("in_memory", boolean_type);
-        }
+        sb.with_column("in_memory", boolean_type);
 
         // If true, this table's latest schema was committed by group 0.
         // In this case `version` column is non-null and will be used for `schema::version()` instead of calculating a hash.

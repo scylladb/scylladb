@@ -28,7 +28,7 @@ enum class schema_feature {
     // When enabled we'll add a new column to the `system_schema.scylla_tables` table.
     GROUP0_SCHEMA_VERSIONING,
 
-    // Unused.  Defined for backward compatibility only
+    // Always enabled. Defined for backward compatibility.
     IN_MEMORY_TABLES,
 
     // Per-table tablet options
