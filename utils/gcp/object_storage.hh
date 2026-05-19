@@ -92,48 +92,48 @@ namespace utils::gcp::storage {
         /**
          * Creates a named bucket in project and region, using storage_class
          */
-        future<> create_bucket(std::string_view project, std::string_view bucket, std::string_view region = {}, std::string_view storage_class = {});
+        future<> create_bucket(std::string_view project, std::string_view bucket, std::string_view region = {}, std::string_view storage_class = {}, seastar::abort_source* = nullptr);
         /**
          * Creates a named bucket in project, using provided metadata json 
          * See https://cloud.google.com/storage/docs/creating-buckets
          */
-        future<> create_bucket(std::string_view project, rjson::value meta);
+        future<> create_bucket(std::string_view project, rjson::value meta, seastar::abort_source* = nullptr);
         /**
          * Deletes a bucket. Note: bucket must be empty.
          */
-        future<> delete_bucket(std::string_view bucket);
+        future<> delete_bucket(std::string_view bucket, seastar::abort_source* = nullptr);
 
         /**
          * List objects in bucket. Optionally applies the @prefix as filter
          */
-        future<utils::chunked_vector<object_info>> list_objects(std::string_view bucket, std::string_view prefix = {});
+        future<utils::chunked_vector<object_info>> list_objects(std::string_view bucket, std::string_view prefix = {}, seastar::abort_source* = nullptr);
 
         /**
          * List objects in bucket. Optionally applies the @prefix as filter. Uses page size and offset as defined by 
          * the bucket_pager
          */
-        future<utils::chunked_vector<object_info>> list_objects(std::string_view bucket, std::string_view prefix, bucket_paging&);
+        future<utils::chunked_vector<object_info>> list_objects(std::string_view bucket, std::string_view prefix, bucket_paging&, seastar::abort_source* = nullptr);
 
         /**
          * Deletes a named object from bucket
          */
-        future<> delete_object(std::string_view bucket, std::string_view object_name);
+        future<> delete_object(std::string_view bucket, std::string_view object_name, seastar::abort_source* = nullptr);
         /**
          * Renames a named object in bucket
          */
-        future<> rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_name);
+        future<> rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_name, seastar::abort_source* = nullptr);
         /**
          * Moves a named object from one bucket to a different one using new name
          */
-        future<> rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view new_name);
+        future<> rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view new_name, seastar::abort_source* = nullptr);
         /**
          * Copies a named object to @new_name
          */
-        future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view to_name);
+        future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view to_name, seastar::abort_source* = nullptr);
         /**
          * Copies a named object to @new_bucket and @new_name
          */
-        future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view to_name);
+        future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view to_name, seastar::abort_source* = nullptr);
 
         /**
          * Merges sub-objects into a new destination. Actual file will be composed in order of subobject in `source_object`.
