@@ -117,5 +117,5 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
             await manager.server_stop(target_server.server_id)
             pytest.fail("Shutdown did not complete within 15s — deadlock reproduced")
 
-        logger.info("Cancelling addnode task")
-        add_last_node_task.cancel()
+        logger.info("Waiting for addnode to complete")
+        await add_last_node_task
