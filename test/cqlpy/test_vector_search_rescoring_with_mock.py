@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 import pytest
+from cassandra.query import UNSET_VALUE
+from cassandra.protocol import InvalidRequest
 
 from .test_vector_search_with_vector_store_mock import vector_store_mock, _vector_store_mock_session
 from .util import new_test_table
@@ -160,6 +162,80 @@ def test_oversampled_vector_store_results_are_limited_to_cql_limit(cql, test_key
         rows = list(cql.execute(f"SELECT id FROM {table} {order_by} LIMIT 1"))
 
         assert len(rows) == 1
+
+
+# Verifies that per-request oversampling in the ANN() options map overrides the
+# index-level oversampling option, affecting the limit sent to the vector store.
+# Options are passed as map<text, text>.
+#
+# Reproduces SCYLLADB-553.
+@pytest.mark.xfail(reason="per-request oversampling not yet implemented (SCYLLADB-553)")
+def test_per_request_oversampling_override(cql, test_keyspace, vector_store_mock):
+    schema = "id int primary key, embedding vector<float, 2>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index' "
+                    f"WITH OPTIONS = {{'oversampling': '2.0'}}")
+
+        prepared = cql.prepare(
+            f"SELECT id FROM {table} ORDER BY ANN(embedding, [0.5, 0.5], ?) LIMIT 2")
+
+        # Valid oversampling values and expected limits (CQL LIMIT=2).
+        valid_cases = [
+            ('1.0',        2),
+            ('50.5',       101),
+            ('100.0',      200),
+            ('10',         20),
+            ('1e1',        20),
+            ('1000000e-4', 200),
+        ]
+        for factor, expected_limit in valid_cases:
+            # Literal
+            cql.execute(f"SELECT id FROM {table} ORDER BY ANN(embedding, [0.5, 0.5], "
+                        f"{{'oversampling': '{factor}'}}) LIMIT 2")
+            actual_limit = json.loads(vector_store_mock.ann_requests[-1].body)["limit"]
+            assert actual_limit == expected_limit, (
+                f"literal OVERSAMPLING '{factor}': expected limit {expected_limit}, got {actual_limit}")
+
+            # Bound
+            cql.execute(prepared, [{'oversampling': factor}])
+            actual_limit = json.loads(vector_store_mock.ann_requests[-1].body)["limit"]
+            assert actual_limit == expected_limit, (
+                f"bound OVERSAMPLING '{factor}': expected limit {expected_limit}, got {actual_limit}")
+
+        # UNSET map → falls back to index oversampling 2.0 → limit = ceil(2.0 * 2) = 4.
+        cql.execute(prepared, [UNSET_VALUE])
+        actual_limit = json.loads(vector_store_mock.ann_requests[-1].body)["limit"]
+        assert actual_limit == 4
+
+        # Empty map {} → falls back to index oversampling 2.0 → limit 4.
+        cql.execute(prepared, [{}])
+        actual_limit = json.loads(vector_store_mock.ann_requests[-1].body)["limit"]
+        assert actual_limit == 4
+
+
+# Verifies that invalid per-request oversampling values in the ANN() options
+# map are rejected with InvalidRequest.
+#
+# Reproduces SCYLLADB-553.
+@pytest.mark.xfail(reason="per-request oversampling not yet implemented (SCYLLADB-553)")
+def test_per_request_oversampling_invalid_values(cql, test_keyspace):
+    schema = "id int primary key, embedding vector<float, 2>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index'")
+
+        prepared = cql.prepare(
+            f"SELECT id FROM {table} ORDER BY ANN(embedding, [0.5, 0.5], ?) LIMIT 2")
+
+        # Out-of-range or unparseable oversampling values → InvalidRequest.
+        invalid_values = ['0.9', '100.1', '0', '-5', 'NaN', 'INFINITY', '0x10', 'abc', 'inf']
+        for factor in invalid_values:
+            # Literal
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"SELECT id FROM {table} ORDER BY ANN(embedding, [0.5, 0.5], "
+                            f"{{'oversampling': '{factor}'}}) LIMIT 2")
+            # Bound
+            with pytest.raises(InvalidRequest):
+                cql.execute(prepared, [{'oversampling': factor}])
 
 
 # Verifies that reversed ANN order is rescored back to expected similarity order.
