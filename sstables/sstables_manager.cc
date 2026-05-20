@@ -383,8 +383,8 @@ future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
     auto& storage = ssts.front()->get_storage();
     auto ctx = co_await storage.atomic_delete_prepare(ssts);
 
-    co_await coroutine::parallel_for_each(ssts, [] (shared_sstable sst) {
-        return sst->unlink(sstables::storage::sync_dir::no);
+    co_await coroutine::parallel_for_each(ssts, [&ctx] (shared_sstable sst) {
+        return sst->unlink(&ctx);
     });
 
     co_await storage.atomic_delete_complete(std::move(ctx));

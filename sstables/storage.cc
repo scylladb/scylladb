@@ -849,7 +849,7 @@ future<> object_storage_base::change_state(const sstable& sst, sstable_state sta
     co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.manager().get_local_host_id(), sst.generation(), state);
 }
 
-future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_context*) noexcept {
+future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_context* ctx) noexcept {
     // FIXME: unlike filesystem_storage::wipe, this implementation does not
     // catch exceptions from delete_object / sstables_registry calls and may
     // return an exceptional future, breaking the contract documented on
@@ -857,7 +857,9 @@ future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_conte
     auto& sstables_registry = sst.manager().sstables_registry();
     auto node_owner = sst.manager().get_local_host_id();
 
-    co_await sstables_registry.update_entry_status(owner(), node_owner, sst.generation(), status_removing);
+    if (!ctx) {
+        co_await sstables_registry.update_entry_status(owner(), node_owner, sst.generation(), status_removing);
+    }
 
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
         co_await delete_object(make_object_name(sst, type));
@@ -866,8 +868,13 @@ future<> object_storage_base::wipe(const sstable& sst, const atomic_delete_conte
     co_await sstables_registry.delete_entry(owner(), node_owner, sst.generation());
 }
 
-future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>&) const {
-    // FIXME -- need atomicity, see #13567
+future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
+    std::vector<generation_type> gens;
+    gens.reserve(ssts.size());
+    for (auto& sst : ssts) {
+        gens.push_back(sst->generation());
+    }
+    co_await ssts.front()->manager().sstables_registry().batch_update_entry_status(owner(), ssts.front()->manager().get_local_host_id(), gens, status_removing);
     co_return atomic_delete_context{};
 }
 
