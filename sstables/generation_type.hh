@@ -136,7 +136,7 @@ public:
         } else {
             hint = gen.as_int();
         }
-        return hint % smp::count == seastar::this_shard_id();
+        return hint % this_smp_shard_count() == seastar::this_shard_id();
     }
 };
 

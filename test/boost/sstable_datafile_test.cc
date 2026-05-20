@@ -2373,7 +2373,7 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
 }
 
 SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
-    BOOST_REQUIRE(smp::count == 1);
+    BOOST_REQUIRE(this_smp_shard_count() == 1);
     return test_env::do_with_async([] (test_env& env) {
         for (auto version : writable_sstable_versions) {
             auto s = schema_builder(this_smp_shard_count(), "tests", "ts_correcness_test")
@@ -2401,7 +2401,7 @@ SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
 }
 
 SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
-    BOOST_REQUIRE(smp::count == 1);
+    BOOST_REQUIRE(this_smp_shard_count() == 1);
     return test_env::do_with_async([] (test_env& env) {
         auto s = schema_builder(this_smp_shard_count(), "tests", "ts_correcness_test")
                 .with_column("id", utf8_type, column_kind::partition_key)
@@ -3278,7 +3278,7 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
 }
 
 SEASTAR_TEST_CASE(sstable_identifier_correctness) {
-    BOOST_REQUIRE(smp::count == 1);
+    BOOST_REQUIRE(this_smp_shard_count() == 1);
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
         auto s = ss.schema();

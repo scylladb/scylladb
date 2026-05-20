@@ -3016,7 +3016,7 @@ static mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
 
 SEASTAR_TEST_CASE(compact_deleted_row) {
   return test_env::do_with_async([] (test_env& env) {
-    BOOST_REQUIRE(smp::count == 1);
+    BOOST_REQUIRE(this_smp_shard_count() == 1);
     sstring table_name = "compact_deleted_row";
     // CREATE TABLE test_deleted_row (pk text, ck text, rc1 text, rc2 text, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder(this_smp_shard_count(), "sst3", table_name);
@@ -3087,7 +3087,7 @@ SEASTAR_TEST_CASE(compact_deleted_row) {
 
 SEASTAR_TEST_CASE(compact_deleted_cell) {
   return test_env::do_with_async([] (test_env& env) {
-    BOOST_REQUIRE(smp::count == 1);
+    BOOST_REQUIRE(this_smp_shard_count() == 1);
     sstring table_name = "compact_deleted_cell";
     //  CREATE TABLE compact_deleted_cell (pk text, ck text, rc text, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     schema_builder builder(this_smp_shard_count(), "sst3", table_name);

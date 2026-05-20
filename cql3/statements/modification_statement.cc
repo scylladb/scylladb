@@ -375,7 +375,7 @@ process_forced_rebounce(unsigned shard, query_processor& qp, const query_options
     // While counter > 1 select a different shard to re-bounce to.
     // On the last iteration, re-bounce to the correct shard.
     if (counter != 0) {
-        const auto shard_num = smp::count;
+        const auto shard_num = this_smp_shard_count();
         const auto local_shard = this_shard_id();
         auto target_shard = local_shard + 1;
         if (target_shard == shard) {

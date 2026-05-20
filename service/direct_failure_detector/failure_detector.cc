@@ -104,7 +104,7 @@ struct failure_detector::impl {
     // Number of workers on each shard.
     // We use this to decide where to create new workers (we pick a shard with the smallest number of workers).
     // Used on shard 0 only.
-    // The size of this vector is smp::count on shard 0 and it's empty on other shards.
+    // The size of this vector is this_smp_shard_count() on shard 0 and it's empty on other shards.
     std::vector<size_t> _num_workers;
 
     // For each endpoint in the detected set, the shard of its worker.
@@ -190,7 +190,7 @@ failure_detector::impl::impl(
         return;
     }
 
-    _num_workers.resize(smp::count, 0);
+    _num_workers.resize(this_smp_shard_count(), 0);
     _update_endpoint_fiber = update_endpoint_fiber(sg);
 }
 
@@ -257,7 +257,7 @@ future<> failure_detector::impl::add_endpoint(pinger::endpoint_id ep) {
 
     // Pick a shard with the smallest number of workers to create a new worker.
     auto shard = std::distance(_num_workers.begin(), std::min_element(_num_workers.begin(), _num_workers.end()));
-    SCYLLA_ASSERT(_num_workers.size() == smp::count);
+    SCYLLA_ASSERT(_num_workers.size() == this_smp_shard_count());
 
     ++_num_workers[shard];
     auto [it, _] = _workers.emplace(ep, shard);
@@ -282,7 +282,7 @@ future<> failure_detector::impl::remove_endpoint(pinger::endpoint_id ep) {
     auto shard = it->second;
     co_await _parent.container().invoke_on(shard, [ep] (failure_detector& fd) { return fd._impl->destroy_worker(ep); });
 
-    SCYLLA_ASSERT(_num_workers.size() == smp::count);
+    SCYLLA_ASSERT(_num_workers.size() == this_smp_shard_count());
     SCYLLA_ASSERT(shard < _num_workers.size());
     --_num_workers[shard];
     _workers.erase(it);

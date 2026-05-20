@@ -3809,7 +3809,7 @@ SEASTAR_TEST_CASE(test_cache_bypass) {
         auto with_cache = run_and_examine_cache_read_stats_change(e, "t", [] (cql_test_env& e) {
             e.execute_cql("SELECT * FROM t").get();
         });
-        BOOST_REQUIRE(with_cache >= smp::count);  // scan may make multiple passes per shard
+        BOOST_REQUIRE(with_cache >= this_smp_shard_count());  // scan may make multiple passes per shard
         auto without_cache = run_and_examine_cache_read_stats_change(e, "t", [] (cql_test_env& e) {
             e.execute_cql("SELECT * FROM t BYPASS CACHE").get();
         });
@@ -5986,7 +5986,7 @@ bool has_tablet_routing(::shared_ptr<cql_transport::messages::result_message> re
 }
 
 SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_insert) {
-    BOOST_ASSERT(smp::count == 2);
+    BOOST_ASSERT(this_smp_shard_count() == 2);
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } and tablets = {'initial': 8};").get();
         e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
@@ -6073,7 +6073,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
         auto pk2 = partition_key::from_singular(*sptr, int32_t(2));
 
         unsigned local_shard2 = sptr->table().shard_for_reads(dht::get_token(*sptr, pk2.view()));
-        unsigned foreign_shard = (local_shard2 + 1) % smp::count;
+        unsigned foreign_shard = (local_shard2 + 1) % this_smp_shard_count();
 
         smp::submit_to(foreign_shard, [&] { 
             return seastar::async([&] {
@@ -6099,7 +6099,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
         auto pk = partition_key::from_singular(*sptr, int32_t(1));
 
         unsigned local_shard = sptr->table().shard_for_reads(dht::get_token(*sptr, pk.view()));
-        unsigned foreign_shard = (local_shard + 1) % smp::count;
+        unsigned foreign_shard = (local_shard + 1) % this_smp_shard_count();
 
         smp::submit_to(local_shard, [&] { 
             return seastar::async([&] {
@@ -6135,7 +6135,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
 // (not the tablet shard). This way local_client_state() belongs to the current
 // shard, and move_to_other_shard() is called on the owning shard.
 SEASTAR_TEST_CASE(test_tablet_routing_info_after_cas_shard_bounce) {
-    BOOST_REQUIRE_GT(smp::count, 1u);
+    BOOST_REQUIRE_GT(this_smp_shard_count(), 1u);
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create keyspace ks_tablet with replication = "
             "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
@@ -6143,12 +6143,12 @@ SEASTAR_TEST_CASE(test_tablet_routing_info_after_cas_shard_bounce) {
 
         // Create dummy tables until the next table's single tablet lands on
         // a shard other than ours. Each dummy table occupies one shard in the
-        // load balancer, so after at most smp::count dummies shard 0 (or
+        // load balancer, so after at most this_smp_shard_count() dummies shard 0 (or
         // whichever shard we're on) is no longer the least loaded.
         schema_ptr schema;
         unsigned tablet_shard;
         for (unsigned i = 0; ; ++i) {
-            BOOST_REQUIRE_MESSAGE(i <= smp::count, "Could not place tablet on a foreign shard");
+            BOOST_REQUIRE_MESSAGE(i <= this_smp_shard_count(), "Could not place tablet on a foreign shard");
             auto tbl = format("tbl_{}", i);
             e.execute_cql(format("create table ks_tablet.{} (pk int PRIMARY KEY, v int);", tbl)).get();
             schema = e.local_db().find_schema("ks_tablet", tbl);

@@ -228,7 +228,7 @@ public:
     std::optional<dht::partition_range> next(const schema& s) {
 
         // If forced shard is set and supported, return all ranges for that shard
-        if (forced_shard.has_value() && forced_shard.value() < seastar::smp::count) {
+        if (forced_shard.has_value() && forced_shard.value() < seastar::this_smp_shard_count()) {
             if (forced_shard.value() != this_shard_id() || _range_idx == _partition_ranges.size()) {
                 return std::nullopt;
             } else {
@@ -390,7 +390,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch_to_shards(
     std::optional<query::mapreduce_result> result;
     std::vector<future<query::mapreduce_result>> futures;
 
-    for (const auto& s : smp::all_cpus()) {
+    for (const auto& s : this_smp_all_shards()) {
         futures.push_back(container().invoke_on(s, [req, tr_info] (auto& fs) {
             return fs.execute_on_this_shard(req, tr_info);
         }));

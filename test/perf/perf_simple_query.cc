@@ -284,9 +284,9 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     Json::Value params;
     params["concurrency"] = cfg.concurrency;
     params["partitions"] = cfg.partitions;
-    params["cpus"] = smp::count;
+    params["cpus"] = this_smp_shard_count();
     params["duration"] = cfg.duration_in_seconds;
-    params["concurrency,partitions,cpus,duration"] = fmt::format("{},{},{},{}", cfg.concurrency, cfg.partitions, smp::count, cfg.duration_in_seconds);
+    params["concurrency,partitions,cpus,duration"] = fmt::format("{},{},{},{}", cfg.concurrency, cfg.partitions, this_smp_shard_count(), cfg.duration_in_seconds);
     if (cfg.initial_tablets) {
         params["initial_tablets"] = cfg.initial_tablets.value();
     }

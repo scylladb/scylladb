@@ -133,7 +133,7 @@ future<> rebalance_segments_for(const sstring& ep, size_t segments_per_shard,
         co_return;
     }
 
-    for (unsigned i = 0; i < smp::count && !segments_to_move.empty(); ++i) {
+    for (unsigned i = 0; i < this_smp_shard_count() && !segments_to_move.empty(); ++i) {
         const fs::path endpoint_dir_path = hint_directory / fmt::to_string(i) / ep;
         segment_list& current_shard_segments = ep_segments[i];
 
@@ -188,13 +188,13 @@ future<> rebalance_segments(const fs::path& hint_directory, hints_segments_map& 
     std::unordered_map<sstring, segment_list> segments_to_move;
 
     for (auto& [ep, ep_segments] : segments_map) {
-        const size_t q = per_ep_hints[ep] / smp::count;
+        const size_t q = per_ep_hints[ep] / this_smp_shard_count();
         auto& current_segments_to_move = segments_to_move[ep];
 
         for (auto& [shard_id, shard_segments] : ep_segments) {
             // Move all segments from the shards that are no longer relevant
             // (re-sharding to the lower number of shards).
-            if (shard_id >= smp::count) {
+            if (shard_id >= this_smp_shard_count()) {
                 current_segments_to_move.splice(current_segments_to_move.end(), shard_segments);
             } else if (shard_segments.size() > q) {
                 current_segments_to_move.splice(current_segments_to_move.end(), shard_segments,
@@ -221,8 +221,8 @@ future<> rebalance_segments(const fs::path& hint_directory, hints_segments_map& 
     // to the corresponding shard's sub-directory till the requested segments_per_shard level
     // is reached (see more details in the description of rebalance_segments_for()).
     for (const auto& [ep, N] : per_ep_hints) {
-        const size_t q = N / smp::count;
-        const size_t r = N - q * smp::count;
+        const size_t q = N / this_smp_shard_count();
+        const size_t r = N - q * this_smp_shard_count();
         auto& current_segments_to_move = segments_to_move[ep];
         auto& current_segments_map = segments_map[ep];
 
@@ -246,7 +246,7 @@ future<> remove_irrelevant_shards_directories(const fs::path& hint_directory) {
     // Shard level.
     co_await scan_shard_hint_directories(hint_directory,
             [] (fs::path dir, directory_entry de, unsigned shard_id) -> future<> {
-        if (shard_id >= smp::count) {
+        if (shard_id >= this_smp_shard_count()) {
             // IP level.
             co_await lister::scan_dir(dir / de.name, lister::dir_entry_types::full(),
                     lister::show_hidden::yes, [] (fs::path dir, directory_entry de) {

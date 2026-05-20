@@ -2295,7 +2295,7 @@ public:
         : _db(db)
         , _table_id(table_id)
         , _compaction_time(compaction_time)
-        , _contexts(smp::count) {
+        , _contexts(this_smp_shard_count()) {
     }
     virtual mutation_reader create_reader(
         schema_ptr schema,

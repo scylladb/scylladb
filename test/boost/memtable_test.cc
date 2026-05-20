@@ -1214,7 +1214,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
     // correctness tests, which do run in debug mode.
     return make_ready_future<>();
 #else
-    BOOST_ASSERT(smp::count == 2);
+    BOOST_ASSERT(this_smp_shard_count() == 2);
     // The test simulates a situation where 2 threads issue flushes to 2
     // tables. Both issue small flushes, but one has injected reactor stalls.
     // This can lead to a situation where lots of small sstables accumulate on
@@ -1609,7 +1609,7 @@ SEASTAR_TEST_CASE(memtable_reader_after_tablet_migration) {
         {
             const auto src = first_tablet_info.replicas.front();
             auto dst = src;
-            dst.shard = (src.shard + 1) % smp::count;
+            dst.shard = (src.shard + 1) % this_smp_shard_count();
             // Closing the storage-group is done in the background, so it is fine
             // to wait for this.
             ss.move_tablet(schema->id(), tablet_map.get_last_token(first_tablet_id), src, dst).get();

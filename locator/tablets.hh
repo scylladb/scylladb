@@ -996,7 +996,7 @@ public:
     friend fmt::formatter<tablet_metadata>;
 };
 
-// Check that all tablets which have replicas on this host, have a valid replica shard (< smp::count).
+// Check that all tablets which have replicas on this host, have a valid replica shard (< this_smp_shard_count()).
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host);
 
 std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter);

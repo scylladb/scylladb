@@ -5509,12 +5509,12 @@ SEASTAR_THREAD_TEST_CASE(test_get_split_token_is_compatible_with_old_behavior) {
 
 SEASTAR_THREAD_TEST_CASE(basic_tablet_storage_splitting_test) {
     auto cfg = tablet_cql_test_config();
-    cfg.initial_tablets = std::bit_floor(smp::count);
+    cfg.initial_tablets = std::bit_floor(this_smp_shard_count());
     do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql(
                 "CREATE TABLE cf (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
 
-        for (unsigned i = 0; i < smp::count * 20; i++) {
+        for (unsigned i = 0; i < this_smp_shard_count() * 20; i++) {
             e.execute_cql(format("INSERT INTO cf (pk, ck, v) VALUES ({}, 0, 0)", i)).get();
         }
 
@@ -6561,7 +6561,7 @@ SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_default_rf_up
 
 SEASTAR_TEST_CASE(test_tablet_count_metric) {
     auto cfg = tablet_cql_test_config();
-    for (unsigned n = 1; n <= smp::count; n *= 2) {
+    for (unsigned n = 1; n <= this_smp_shard_count(); n *= 2) {
         cfg.initial_tablets = n;
     }
     return do_with_cql_env_thread([cfg] (cql_test_env& e) {

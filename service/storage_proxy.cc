@@ -1300,7 +1300,7 @@ static unsigned get_cas_shard(const schema& s, dht::token token, const locator::
     if (const auto& rs = erm.get_replication_strategy(); rs.uses_tablets()) {
         const auto& tablet_map = erm.get_token_metadata().tablets().get_tablet_map(s.id());
         const auto tablet_id = tablet_map.get_tablet_id(token);
-        return tablet_map.get_primary_replica(tablet_id, erm.get_topology()).shard % smp::count;
+        return tablet_map.get_primary_replica(tablet_id, erm.get_topology()).shard % this_smp_shard_count();
     } else {
         on_internal_error(paxos::paxos_state::logger,
             format("failed to detect shard for reads for non-tablet-based rs {}, table {}.{}", 
@@ -7319,8 +7319,8 @@ const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
 
 future<db::hints::sync_point> storage_proxy::create_hint_sync_point(std::vector<locator::host_id> target_hosts) const {
     db::hints::sync_point spoint;
-    spoint.regular_per_shard_rps.resize(smp::count);
-    spoint.mv_per_shard_rps.resize(smp::count);
+    spoint.regular_per_shard_rps.resize(this_smp_shard_count());
+    spoint.mv_per_shard_rps.resize(this_smp_shard_count());
     spoint.host_id = get_token_metadata_ptr()->get_my_id();
 
     // sharded::invoke_on does not have a const-method version, so we cannot use it here
@@ -7341,7 +7341,7 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
     }
 
     std::vector<abort_source> sources;
-    sources.resize(smp::count);
+    sources.resize(this_smp_shard_count());
 
     // If the timer is triggered, it will spawn a discarded future which triggers
     // abort sources on all shards. We need to make sure that this future

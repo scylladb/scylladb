@@ -33,7 +33,7 @@ public:
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _consumer(std::move(consumer))
-        , _shards(smp::count)
+        , _shards(this_smp_shard_count())
     {}
 
     future<> consume(partition_start&& ps) {

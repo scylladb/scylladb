@@ -242,7 +242,7 @@ future<std::vector<foreign_ptr<semaphore_units<>>>> view_building_worker::lock_s
     // so other shards won't interact with their `_staging_sstables` map
     // until the caller releases them.
     std::vector<foreign_ptr<semaphore_units<>>> locks;
-    locks.resize(smp::count);
+    locks.resize(this_smp_shard_count());
     // Locks are acquired from multiple shards in parallel.
     // This is the only place where multiple-shard locks are acquired at once
     // and the method is called only once at a time (from `create_staging_sstable_tasks()`

@@ -258,7 +258,7 @@ private:
     }
 
     future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
-        sst_classification_info downloaded_sstables(smp::count);
+        sst_classification_info downloaded_sstables(this_smp_shard_count());
         for (const auto& sstable : sstables) {
             auto min_info = co_await download_sstable(_db.local(), _table, sstable, llog);
             downloaded_sstables[min_info.shard].emplace_back(min_info);
@@ -832,7 +832,7 @@ future<> sstables_loader::download_task_impl::run() {
     llog.debug("Loading sstables from {}({}/{})", _endpoint, _bucket, _prefix);
 
     auto ep_type = _loader.local()._storage_manager.get_endpoint_type(_endpoint);
-    std::vector<seastar::abort_source> shard_aborts(smp::count);
+    std::vector<seastar::abort_source> shard_aborts(this_smp_shard_count());
     auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_loader.local()._db, _ks, _cf, _sstables, _endpoint, ep_type, _bucket, _prefix, cfg, [&] {
         return &shard_aborts[this_shard_id()];
     });
@@ -1012,13 +1012,13 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                 std::move(ent.second), restore_cfg.endpoint, ep_type, restore_cfg.bucket, std::move(ent.first), cfg, [&] { return nullptr; }).then_unpack([] (table_id, auto sstables) {
                     return make_ready_future<std::vector<sstables_col>>(std::move(sstables));
                 });
-    }, std::vector<prefix_sstables>(smp::count), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
+    }, std::vector<prefix_sstables>(this_smp_shard_count()), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
         // We can't move individual elements of b[i], because these
         // are lw_shared_ptr-s collected on another shard. So we move
         // the whole sstables_col here so that subsequent code will
         // walk over it and move the pointers where it wants on proper
         // shard.
-        for (unsigned i = 0; i < smp::count; i++) {
+        for (unsigned i = 0; i < this_smp_shard_count(); i++) {
             a[i].push_back(std::move(b[i]));
         }
         return a;
@@ -1032,7 +1032,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                     sst_chunk.push_back(std::move(sst));
                 }
             }
-            std::vector<std::vector<minimal_sst_info>> local_min_infos(smp::count);
+            std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
             co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos](const auto& sst) -> future<> {
                 auto& table = loader._db.local().find_column_family(tid.table);
                 auto min_info = co_await download_sstable(loader._db.local(), table, sst, llog);
@@ -1040,7 +1040,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             });
             co_return local_min_infos;
         },
-        std::vector<std::vector<minimal_sst_info>>(smp::count),
+        std::vector<std::vector<minimal_sst_info>>(this_smp_shard_count()),
         [](auto init, auto&& item) -> std::vector<std::vector<minimal_sst_info>> {
             for (std::size_t i = 0; i < item.size(); ++i) {
                 init[i].append_range(std::move(item[i]));

@@ -64,7 +64,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
             return m;
         };
         auto cfg = std::make_unique<db::config>();
-        for (auto i : std::views::iota(0u, smp::count)) {
+        for (auto i : std::views::iota(0u, this_smp_shard_count())) {
             const auto keys = tests::generate_partition_keys(keys_per_shard, s, i);
             BOOST_REQUIRE(keys.size() == keys_per_shard);
             muts[i].reserve(keys_per_shard);
@@ -81,7 +81,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
     // for a single shard. workaround that by setting shards manually. from this test perspective,
     // it doesn't matter because we check each partition individually of each sstable created
     // for a shard that owns the shared input sstable.
-    sstables::test(sst).set_shards(std::views::iota(0u, smp::count) | std::ranges::to<std::vector<unsigned>>());
+    sstables::test(sst).set_shards(std::views::iota(0u, this_smp_shard_count()) | std::ranges::to<std::vector<unsigned>>());
 
     auto filter_size = [&env] (shared_sstable sst) -> uint64_t {
         if (!env.get_storage_options().is_local_type()) {
@@ -115,7 +115,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
     sst->destroy().get();
 
     auto new_sstables = std::move(res.new_sstables);
-    BOOST_REQUIRE(new_sstables.size() == smp::count);
+    BOOST_REQUIRE(new_sstables.size() == this_smp_shard_count());
 
     uint64_t bloom_filter_size_after = 0;
     std::unordered_set<shard_id> processed_shards;
@@ -179,7 +179,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             auto s = get_schema();
             auto sst_gen = env.make_sst_factory(s, version);
 
-            const auto keys = tests::generate_partition_keys(smp::count * 10, s);
+            const auto keys = tests::generate_partition_keys(this_smp_shard_count() * 10, s);
             utils::chunked_vector<mutation> muts;
             for (auto& k : keys) {
                 muts.push_back(get_mutation(s, k, 0));
@@ -198,7 +198,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             auto sst_gen = env.make_sst_factory(single_sharded_s, version);
 
             utils::chunked_vector<mutation> muts;
-            for (shard_id shard : std::views::iota(0u, smp::count)) {
+            for (shard_id shard : std::views::iota(0u, this_smp_shard_count())) {
                 const auto keys = tests::generate_partition_keys(10, key_s, shard);
                 for (auto& k : keys) {
                     muts.push_back(get_mutation(single_sharded_s, k, shard));
@@ -208,10 +208,10 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             auto sst = make_sstable_containing(sst_gen, muts).get();
             BOOST_REQUIRE(!sst->is_shared());
 
-            auto all_shards_s = get_schema(smp::count, cfg->murmur3_partitioner_ignore_msb_bits());
+            auto all_shards_s = get_schema(this_smp_shard_count(), cfg->murmur3_partitioner_ignore_msb_bits());
             sst = env.reusable_sst(all_shards_s, sst->generation(), version).get();
-            BOOST_REQUIRE(smp::count == 1 || sst->is_shared());
-            BOOST_REQUIRE(sst->get_shards_for_this_sstable().size() == smp::count);
+            BOOST_REQUIRE(this_smp_shard_count() == 1 || sst->is_shared());
+            BOOST_REQUIRE(sst->get_shards_for_this_sstable().size() == this_smp_shard_count());
             assert_sstable_computes_correct_owners(env, sst).get();
         }
       }

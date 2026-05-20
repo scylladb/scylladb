@@ -45,11 +45,11 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     if (exp_result) {
         BOOST_CHECK_NO_THROW(co_await start());
 
-        std::vector<std::pair<sstring, sstring>> dc_racks(smp::count);
+        std::vector<std::pair<sstring, sstring>> dc_racks(this_smp_shard_count());
         co_await snitch.invoke_on_all([&] (snitch_ptr& inst) {
             dc_racks[this_shard_id()] = {inst->get_datacenter(), inst->get_rack()};
         });
-        for (unsigned i = 1; i < smp::count; ++i) {
+        for (unsigned i = 1; i < this_smp_shard_count(); ++i) {
             BOOST_REQUIRE_EQUAL(dc_racks[i], dc_racks[0]);
         }
     } else {

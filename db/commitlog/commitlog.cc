@@ -100,7 +100,7 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.sched_group = std::move(sg);
     c.commit_log_location = cfg.commitlog_directory();
     c.metrics_category_name = "commitlog";
-    c.commitlog_total_space_in_mb = cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : (shard_available_memory * smp::count) >> 20;
+    c.commitlog_total_space_in_mb = cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : (shard_available_memory * this_smp_shard_count()) >> 20;
     c.commitlog_segment_size_in_mb = cfg.commitlog_segment_size_in_mb();
     c.commitlog_sync_period_in_ms = cfg.commitlog_sync_period_in_ms();
     c.mode = cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC;
@@ -1908,9 +1908,9 @@ db::commitlog::segment_manager::segment_manager(config c)
 
         if (cfg.max_active_flushes == 0) {
             cfg.max_active_flushes = // TODO: call someone to get an idea...
-                            5 * smp::count;
+                            5 * this_smp_shard_count();
         }
-        cfg.max_active_flushes = std::max(uint64_t(1), cfg.max_active_flushes / smp::count);
+        cfg.max_active_flushes = std::max(uint64_t(1), cfg.max_active_flushes / this_smp_shard_count());
 
         if (!cfg.base_segment_id) {
             cfg.base_segment_id = std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count() + 1;
@@ -1920,11 +1920,11 @@ db::commitlog::segment_manager::segment_manager(config c)
     }())
     , max_size(std::min<size_t>(std::numeric_limits<position_type>::max() / (1024 * 1024), std::max<size_t>(cfg.commitlog_segment_size_in_mb, 1)) * 1024 * 1024)
     , max_mutation_size(max_size >> 1) // note: can't up this by much, because we don't know the CRC sector overhead addition before we've actually opened each segment.
-    , max_disk_size(size_t(std::ceil(cfg.commitlog_total_space_in_mb / double(smp::count))) * 1024 * 1024)
+    , max_disk_size(size_t(std::ceil(cfg.commitlog_total_space_in_mb / double(this_smp_shard_count()))) * 1024 * 1024)
     // our threshold for trying to force a flush. needs heristics, for now max - segment_size/2.
     , disk_usage_threshold([&] {
         if (cfg.commitlog_flush_threshold_in_mb.has_value()) {
-            return size_t(std::ceil(*cfg.commitlog_flush_threshold_in_mb / double(smp::count))) * 1024 * 1024;
+            return size_t(std::ceil(*cfg.commitlog_flush_threshold_in_mb / double(this_smp_shard_count()))) * 1024 * 1024;
         } else {
             return max_disk_size / 2;
         }
@@ -1946,7 +1946,7 @@ db::commitlog::segment_manager::segment_manager(config c)
 
     clogger.trace("Commitlog {} maximum disk size: {} MB / cpu ({} cpus)",
             cfg.commit_log_location, max_disk_size / (1024 * 1024),
-            smp::count);
+            this_smp_shard_count());
 
     if (!cfg.metrics_category_name.empty()) {
         create_counters(cfg.metrics_category_name);
@@ -2076,7 +2076,7 @@ future<> db::commitlog::segment_manager::init() {
 
     // always run the timer now, since we need to handle segment pre-alloc etc as well.
     _timer.set_callback(std::bind(&segment_manager::on_timer, this));
-    auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
+    auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / this_smp_shard_count());
     clogger.trace("Delaying timer loop {} ms", delay);
     // We need to wait until we have scanned all other segments to actually start serving new
     // segments. We are ready now

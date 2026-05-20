@@ -169,7 +169,7 @@ SEASTAR_TEST_CASE(test_commitlog_cleanups) {
 
 // Test that commitlog cleanup records are deleted when they become irrelevant.
 SEASTAR_TEST_CASE(test_commitlog_cleanup_record_gc) {
-    BOOST_REQUIRE_EQUAL(smp::count, 1);
+    BOOST_REQUIRE_EQUAL(this_smp_shard_count(), 1);
     auto cfg = cql_test_config();
     cfg.db_config->auto_snapshot.set(false);
     cfg.db_config->commitlog_sync.set("batch");

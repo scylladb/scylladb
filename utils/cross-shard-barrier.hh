@@ -69,9 +69,9 @@ class cross_shard_barrier {
         std::atomic<bool> alive;
         std::vector<std::optional<promise<>>> wakeup;
 
-        barrier() : counter(smp::count), alive(true) {
-            wakeup.reserve(smp::count);
-            for (unsigned i = 0; i < smp::count; i++) {
+        barrier() : counter(this_smp_shard_count()), alive(true) {
+            wakeup.reserve(this_smp_shard_count());
+            for (unsigned i = 0; i < this_smp_shard_count(); i++) {
                 wakeup.emplace_back();
             }
         }
@@ -114,7 +114,7 @@ public:
     void abort() noexcept {
         // We can get here from shards that had already visited the
         // arrive_and_wait() and got the exceptional future. In this
-        // case the counter would be set to smp::count and none of the
+        // case the counter would be set to this_smp_shard_count() and none of the
         // fetch_add(-1)s below will make it call complete()
         _b->alive.store(false);
         auto i = _b->counter.fetch_add(-1);
@@ -125,7 +125,7 @@ public:
 
 private:
     future<> complete() {
-        _b->counter.fetch_add(smp::count);
+        _b->counter.fetch_add(this_smp_shard_count());
         bool alive = _b->alive.load(std::memory_order_relaxed);
         return smp::invoke_on_all([b = _b, sid = this_shard_id(), alive] {
             if (this_shard_id() != sid) {

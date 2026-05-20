@@ -4288,13 +4288,13 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         co_return;
     }
 
-    auto orchestrator = std::hash<sstring>()(name) % smp::count;
+    auto orchestrator = std::hash<sstring>()(name) % this_smp_shard_count();
     co_await smp::submit_to(orchestrator, [&] () -> future<> {
         auto& t = *table_shards;
         auto s = t.schema();
         tlogger.debug("Taking snapshot of {}.{}: name={}", s->ks_name(), s->cf_name(), name);
 
-        std::vector<snapshot_sstable_set> sstable_sets(smp::count);
+        std::vector<snapshot_sstable_set> sstable_sets(this_smp_shard_count());
 
         co_await writer->init();
         co_await smp::invoke_on_all([&] -> future<> {

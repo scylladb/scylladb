@@ -1243,14 +1243,14 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
 
 // Best run with SMP >= 2
 SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *test_label::label("nightly")) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         auto populate = [&env] (schema_ptr s, const utils::chunked_vector<mutation>& mutations) {
-            const auto remote_shard = (this_shard_id() + 1) % smp::count;
+            const auto remote_shard = (this_shard_id() + 1) % this_smp_shard_count();
             auto frozen_mutations =
                 mutations
                 | std::views::transform([] (const mutation& m) { return freeze(m); })
@@ -1646,13 +1646,13 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
 
 // Best run with SMP >= 3
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
-    if (smp::count < 3) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 3) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        std::vector<std::atomic<bool>> shards_touched(smp::count);
+        std::vector<std::atomic<bool>> shards_touched(this_smp_shard_count());
         simple_schema s;
 
         env.execute_cql(s.cql()).get();
@@ -1679,7 +1679,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
                     s.schema()->full_slice()))
                 .produces_end_of_stream();
 
-        for (unsigned i = 0; i < smp::count; ++i) {
+        for (unsigned i = 0; i < this_smp_shard_count(); ++i) {
             BOOST_REQUIRE(shards_touched.at(i));
         }
 
@@ -1816,13 +1816,13 @@ public:
 //
 // Best run with smp >= 2
 SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
-        const auto shard_of_interest = (this_shard_id() + 1) % smp::count;
+        const auto shard_of_interest = (this_shard_id() + 1) % this_smp_shard_count();
         auto s = simple_schema();
         auto remote_control_remote_reader = smp::submit_to(shard_of_interest, [&env, gs = global_simple_schema(s)] {
             using control_type = foreign_ptr<std::unique_ptr<puppet_reader::control>>;
@@ -1888,12 +1888,12 @@ struct multishard_reader_for_read_ahead {
 
 multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(simple_schema& s, reader_permit permit) {
     auto remote_controls = std::vector<foreign_ptr<std::unique_ptr<puppet_reader::control>>>();
-    remote_controls.reserve(smp::count);
-    for (unsigned i = 0; i < smp::count; ++i) {
+    remote_controls.reserve(this_smp_shard_count());
+    for (unsigned i = 0; i < this_smp_shard_count(); ++i) {
         remote_controls.emplace_back(nullptr);
     }
 
-    parallel_for_each(std::views::iota(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
+    parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [&remote_controls] (unsigned shard) mutable {
         return smp::submit_to(shard, [] {
             return make_foreign(std::make_unique<puppet_reader::control>());
         }).then([shard, &remote_controls] (foreign_ptr<std::unique_ptr<puppet_reader::control>>&& ctr) mutable {
@@ -1903,18 +1903,18 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
 
     // We need two tokens for each shard
     std::map<dht::token, unsigned> pkeys_by_tokens;
-    for (unsigned i = 0; i < smp::count * 2; ++i) {
+    for (unsigned i = 0; i < this_smp_shard_count() * 2; ++i) {
         pkeys_by_tokens.emplace(s.make_pkey(i).token(), i);
     }
 
-    auto shard_pkeys = std::vector<std::vector<uint32_t>>(smp::count, std::vector<uint32_t>{});
+    auto shard_pkeys = std::vector<std::vector<uint32_t>>(this_smp_shard_count(), std::vector<uint32_t>{});
     auto i = unsigned(0);
     for (auto pkey : pkeys_by_tokens | std::views::values) {
-        shard_pkeys[i++ % smp::count].push_back(pkey);
+        shard_pkeys[i++ % this_smp_shard_count()].push_back(pkey);
     }
 
     auto remote_control_refs = std::vector<puppet_reader::control*>();
-    remote_control_refs.reserve(smp::count);
+    remote_control_refs.reserve(this_smp_shard_count());
     for (auto& rc : remote_controls) {
         remote_control_refs.push_back(rc.get());
     }
@@ -1951,15 +1951,15 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
 
 // Regression test for #7945
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 
-    auto no_shards = smp::count - 1;
+    auto no_shards = this_smp_shard_count() - 1;
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        std::vector<std::atomic<bool>> shards_touched(smp::count);
+        std::vector<std::atomic<bool>> shards_touched(this_smp_shard_count());
         simple_schema s;
         auto sharder = std::make_unique<dht::static_sharder>(no_shards, 0);
         auto factory = [&shards_touched] (
@@ -1993,13 +1993,13 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
 
 // Regression test for #8161
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed_shards) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
         return;
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        std::vector<std::atomic<bool>> shards_touched(smp::count);
+        std::vector<std::atomic<bool>> shards_touched(this_smp_shard_count());
         simple_schema s;
         auto factory = [&shards_touched] (
                 schema_ptr s,
@@ -2016,18 +2016,18 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
         auto& table = env.db().local().find_column_family(s.schema()->ks_name(), s.schema()->cf_name());
         auto erm = table.get_effective_replication_map();
 
-        std::vector<bool> expected_shards_touched(smp::count);
+        std::vector<bool> expected_shards_touched(this_smp_shard_count());
 
         const dht::sharder& sharder = erm->get_sharder(*s.schema());
         dht::token start_token(0);
         dht::token end_token(0);
-        const auto additional_shards = tests::random::get_int<unsigned>(0, smp::count - 1);
+        const auto additional_shards = tests::random::get_int<unsigned>(0, this_smp_shard_count() - 1);
 
         auto shard = sharder.shard_for_reads(start_token);
         expected_shards_touched[shard] = true;
 
         for (auto i = 0u; i < additional_shards; ++i) {
-            shard = (shard + 1) % smp::count;
+            shard = (shard + 1) % this_smp_shard_count();
             end_token = sharder.token_for_next_shard_for_reads(end_token, shard);
             expected_shards_touched[shard] = true;
         }
@@ -2040,7 +2040,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
             expected_shards_touched[shard] = false;
         }
 
-        testlog.info("{}: including {} additional shards out of a total of {}, with an {} end", get_name(), additional_shards, smp::count,
+        testlog.info("{}: including {} additional shards out of a total of {}, with an {} end", get_name(), additional_shards, this_smp_shard_count(),
                 inclusive_end ? "inclusive" : "exclusive");
 
         assert_that(make_multishard_combining_reader(
@@ -2052,7 +2052,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
                 s.schema()->full_slice()))
             .produces_end_of_stream();
 
-        for (unsigned i = 0; i < smp::count; ++i) {
+        for (unsigned i = 0; i < this_smp_shard_count(); ++i) {
             testlog.info("[{}]: {} == {}", i, shards_touched[i], expected_shards_touched[i]);
             BOOST_CHECK(shards_touched[i] == expected_shards_touched[i]);
         }
@@ -2086,8 +2086,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
 //
 // Best run with smp >= 3
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending_read_ahead) {
-    if (smp::count < multishard_reader_for_read_ahead::min_shards) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < " << multishard_reader_for_read_ahead::min_shards << std::endl;
+    if (this_smp_shard_count() < multishard_reader_for_read_ahead::min_shards) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < " << multishard_reader_for_read_ahead::min_shards << std::endl;
         return;
     }
 
@@ -2119,7 +2119,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         testlog.debug("Starting to close the reader");
         auto fut = reader.close();
 
-        parallel_for_each(std::views::iota(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
+        parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [&remote_controls] (unsigned shard) mutable {
             return smp::submit_to(shard, [control = remote_controls.at(shard).get()] {
                 control->buffer_filled.set_value();
             });
@@ -2129,7 +2129,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         testlog.debug("Reader is closed");
 
         BOOST_REQUIRE(eventually_true([&] {
-            return map_reduce(std::views::iota(0u, smp::count), [&] (unsigned shard) {
+            return map_reduce(std::views::iota(0u, this_smp_shard_count()), [&] (unsigned shard) {
                     return smp::submit_to(shard, [&remote_controls, shard] {
                         return remote_controls.at(shard)->destroyed;
                     });
@@ -2143,8 +2143,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pending_read_ahead) {
-    if (smp::count < multishard_reader_for_read_ahead::min_shards) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < " << multishard_reader_for_read_ahead::min_shards << std::endl;
+    if (this_smp_shard_count() < multishard_reader_for_read_ahead::min_shards) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < " << multishard_reader_for_read_ahead::min_shards << std::endl;
         return;
     }
 
@@ -2204,7 +2204,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
         reader.close().get();
 
         BOOST_REQUIRE(eventually_true([&] {
-            return map_reduce(std::views::iota(0u, smp::count), [&] (unsigned shard) {
+            return map_reduce(std::views::iota(0u, this_smp_shard_count()), [&] (unsigned shard) {
                     return smp::submit_to(shard, [&remote_controls, shard] {
                         return remote_controls.at(shard)->destroyed;
                     });
@@ -2300,8 +2300,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
 // sharding configuration.
 // The reference data is provided by a filtering reader.
 SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
-    if (smp::count < 3) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 3" << std::endl;
+    if (this_smp_shard_count() < 3) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 3" << std::endl;
         return;
     }
 
@@ -4320,8 +4320,8 @@ SEASTAR_TEST_CASE(test_multishard_reader_safe_to_create_with_admitted_permit) {
         simple_schema s;
 
         std::vector<foreign_ptr<lw_shared_ptr<reader_concurrency_semaphore>>> semaphores;
-        semaphores.resize(smp::count);
-        parallel_for_each(std::views::iota(0u, smp::count), [&semaphores] (shard_id shard) {
+        semaphores.resize(this_smp_shard_count());
+        parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [&semaphores] (shard_id shard) {
             return smp::submit_to(shard, [&semaphores] {
                 semaphores[this_shard_id()] = make_foreign(make_lw_shared<reader_concurrency_semaphore>(
                         reader_concurrency_semaphore::for_tests{},
@@ -4331,7 +4331,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_safe_to_create_with_admitted_permit) {
             });
         }).get();
         auto stop_semaphores = defer([&semaphores] {
-            parallel_for_each(std::views::iota(0u, smp::count), [&semaphores] (shard_id shard) {
+            parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [&semaphores] (shard_id shard) {
                 return smp::submit_to(shard, [&semaphores] () -> future<> {
                     auto semaphore = semaphores[this_shard_id()].release();
                     co_await semaphore->stop();
@@ -4340,7 +4340,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_safe_to_create_with_admitted_permit) {
         });
 
         std::map<dht::token, unsigned> pkeys_by_tokens;
-        for (unsigned i = 0; i < smp::count * 2; ++i) {
+        for (unsigned i = 0; i < this_smp_shard_count() * 2; ++i) {
             pkeys_by_tokens.emplace(s.make_pkey(i).token(), i);
         }
         auto sharder = std::make_unique<dummy_sharder>(s.schema()->get_sharder(), std::move(pkeys_by_tokens));
@@ -4391,11 +4391,11 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
         const size_t num_rows = 200;
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        const auto pkeys_by_tokens = ss.make_pkeys(2 * smp::count)
+        const auto pkeys_by_tokens = ss.make_pkeys(2 * this_smp_shard_count())
             | std::views::transform([] (const dht::decorated_key& dk) { return std::pair(dk.token(), dk); })
             | std::ranges::to<std::map<dht::token, dht::decorated_key>>();
-        std::vector<utils::chunked_vector<frozen_mutation>> frozen_muts(smp::count, utils::chunked_vector<frozen_mutation>{});
-        std::vector<lw_shared_ptr<reader_concurrency_semaphore>> semaphore_registry(smp::count, nullptr);
+        std::vector<utils::chunked_vector<frozen_mutation>> frozen_muts(this_smp_shard_count(), utils::chunked_vector<frozen_mutation>{});
+        std::vector<lw_shared_ptr<reader_concurrency_semaphore>> semaphore_registry(this_smp_shard_count(), nullptr);
 
         unsigned i = 0;
         for (const auto& [token, dk] : pkeys_by_tokens) {
@@ -4405,7 +4405,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
                 ss.add_row(mut, ss.make_ckey(ck), value);
             }
 
-            frozen_muts[i++ % smp::count].emplace_back(mut);
+            frozen_muts[i++ % this_smp_shard_count()].emplace_back(mut);
         }
 
         size_t partition_size{0};
@@ -4435,9 +4435,9 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
             range_tombstone_size = rtc.memory_usage();
         }
 
-        std::vector<std::vector<size_t>> data_per_shard(smp::count, std::vector<size_t>{});
+        std::vector<std::vector<size_t>> data_per_shard(this_smp_shard_count(), std::vector<size_t>{});
         size_t total_data{0};
-        for (unsigned shard_id = 0; shard_id != smp::count; ++shard_id) {
+        for (unsigned shard_id = 0; shard_id != this_smp_shard_count(); ++shard_id) {
             for (const auto& _ : frozen_muts.at(shard_id)) {
                 data_per_shard.at(shard_id).push_back(partition_size);
                 total_data += partition_size;
@@ -4480,7 +4480,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
             reader.fill_buffer().get();
 
             // simulate the expected read algorithm to calculate the amount each shard should have read
-            std::vector<size_t> buffer_fill_calls_per_shard(smp::count, 0);
+            std::vector<size_t> buffer_fill_calls_per_shard(this_smp_shard_count(), 0);
             size_t shards_visited{0};
             {
                 size_t to_read = buffer_size;
@@ -4488,7 +4488,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
                 auto shard_data_left = data_per_shard;
                 const auto shard_reader_buffer_size = buffer_hint ? buffer_size : mutation_reader::default_max_buffer_size_in_bytes();
                 while (to_read > 0 && data_left > 0) {
-                    for (unsigned shard_id = 0; shard_id != smp::count && to_read > 0 && data_left > 0; ++shard_id) {
+                    for (unsigned shard_id = 0; shard_id != this_smp_shard_count() && to_read > 0 && data_left > 0; ++shard_id) {
                         auto& shard_data = shard_data_left[shard_id];
                         BOOST_REQUIRE(!shard_data.empty());
 
@@ -4540,7 +4540,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
                 }
             }
 
-            for (unsigned shard_id = 0; shard_id != smp::count; ++shard_id) {
+            for (unsigned shard_id = 0; shard_id != this_smp_shard_count(); ++shard_id) {
                 testlog.trace("shard#{}", shard_id);
 
                 if (shards_visited > shard_id) {
@@ -4574,11 +4574,11 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_small_partitions) {
         const size_t num_rows = 2;
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        const auto pkeys_by_tokens = ss.make_pkeys(64 * smp::count)
+        const auto pkeys_by_tokens = ss.make_pkeys(64 * this_smp_shard_count())
             | std::views::transform([] (const dht::decorated_key& dk) { return std::pair(dk.token(), dk); })
             | std::ranges::to<std::map<dht::token, dht::decorated_key>>();
-        std::vector<utils::chunked_vector<frozen_mutation>> frozen_muts(smp::count, utils::chunked_vector<frozen_mutation>{});
-        std::vector<lw_shared_ptr<reader_concurrency_semaphore>> semaphore_registry(smp::count, nullptr);
+        std::vector<utils::chunked_vector<frozen_mutation>> frozen_muts(this_smp_shard_count(), utils::chunked_vector<frozen_mutation>{});
+        std::vector<lw_shared_ptr<reader_concurrency_semaphore>> semaphore_registry(this_smp_shard_count(), nullptr);
 
         unsigned i = 0;
         for (const auto& [token, dk] : pkeys_by_tokens) {
@@ -4587,7 +4587,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_small_partitions) {
             for (uint32_t ck = 0; ck < num_rows; ++ck) {
                 ss.add_row(mut, ss.make_ckey(ck), value);
             }
-            frozen_muts[i++ % smp::count].emplace_back(mut);
+            frozen_muts[i++ % this_smp_shard_count()].emplace_back(mut);
         }
 
         auto sharder = std::make_unique<dummy_sharder>(schema->get_sharder(), std::move(pkeys_by_tokens));
@@ -4620,7 +4620,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_small_partitions) {
 
         reader.fill_buffer().get();
 
-        for (unsigned shard_id = 0; shard_id != smp::count; ++shard_id) {
+        for (unsigned shard_id = 0; shard_id != this_smp_shard_count(); ++shard_id) {
             const auto reads_from_shard = 1;
 
             auto& shard_semaphore = semaphore_registry.at(shard_id);

@@ -87,7 +87,7 @@ fixed_shard_sharder& fixed_shard_sharder::instance() {
 }
 
 fixed_shard_sharder::fixed_shard_sharder()
-    : static_sharder(smp::count, 0)
+    : static_sharder(this_smp_shard_count(), 0)
 {
 }
 

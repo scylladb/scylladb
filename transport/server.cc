@@ -2016,7 +2016,7 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     opts.insert({"SCYLLA_HOST_ID", _server._gossiper.my_host_id().to_sstring()});
     if (_server._config.allow_shard_aware_drivers) {
         opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
-        opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
+        opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", this_smp_shard_count())});
         opts.insert({"SCYLLA_SHARDING_ALGORITHM", dht::cpu_sharding_algorithm_name()});
         if (_server._config.shard_aware_transport_port) {
             opts.insert({"SCYLLA_SHARD_AWARE_PORT", format("{:d}", *_server._config.shard_aware_transport_port)});

@@ -455,7 +455,7 @@ private:
     template <typename T>
     future<T> map_reduce_shards(std::function<T()> map, std::function<T(T, T)> reduce = std::plus<T>{}, T initial = {}) {
         co_return co_await map_reduce(
-                std::views::iota(0u, smp::count),
+                std::views::iota(0u, this_smp_shard_count()),
                 [map] (shard_id shard) {
                     return smp::submit_to(shard, [map] {
                         return map();
@@ -780,7 +780,7 @@ class clients_table : public streaming_virtual_table {
         using client_data_vec = utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>;
         using shard_client_data = std::vector<client_data_vec>;
         std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
-        cd_vec.resize(smp::count);
+        cd_vec.resize(this_smp_shard_count());
 
         auto servers = co_await _ss.container().invoke_on(0, [] (auto& ss) { return ss.protocol_servers(); });
         co_await smp::invoke_on_all([&cd_vec_ = cd_vec, &servers_ = servers] () -> future<> {
@@ -814,7 +814,7 @@ class clients_table : public streaming_virtual_table {
         decorated_ip::compare cmp(*_s);
         std::set<decorated_ip, decorated_ip::compare> ips(cmp);
         std::unordered_map<net::inet_address, client_data_vec> cd_map;
-        for (unsigned i = 0; i < smp::count; i++) {
+        for (unsigned i = 0; i < this_smp_shard_count(); i++) {
             for (auto&& ps_cdc : *cd_vec[i]) {
                 for (auto&& cd : ps_cdc) {
                     if (cd_map.contains(cd->ip)) {

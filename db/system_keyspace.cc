@@ -1488,7 +1488,7 @@ future<> system_keyspace::drop_truncation_rp_records() {
     bool any = false;
     std::unordered_set<table_id> to_delete;
     auto db = _qp.db();
-    auto max_concurrency = std::min(1024u, smp::count * 8);
+    auto max_concurrency = std::min(1024u, this_smp_shard_count() * 8);
     co_await seastar::max_concurrent_for_each(*rs, max_concurrency, [&] (const cql3::untyped_result_set_row& row) -> future<> {
         auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
         if (!db.try_find_table(table_uuid)) {
@@ -2601,7 +2601,7 @@ future<> system_keyspace::register_view_for_building_for_all_shards(sstring ks_n
     auto timestamp = api::new_timestamp();
     mutation m{schema, partition_key::from_single_value(*schema, utf8_type->decompose(ks_name))};
 
-    for (size_t s = 0; s < smp::count; s++) {
+    for (size_t s = 0; s < this_smp_shard_count(); s++) {
         auto ck = clustering_key_prefix(std::vector<bytes>{
                 utf8_type->decompose(view_name),
                 int32_type->decompose(int32_t(s))});

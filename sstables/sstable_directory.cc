@@ -138,7 +138,7 @@ sstable_directory::sstable_directory(replica::table& table,
                                                                              std::move(sstables)))
     , _sharder_ptr(std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this()))
     , _sharder(*_sharder_ptr)
-    , _unshared_remote_sstables(smp::count)
+    , _unshared_remote_sstables(this_smp_shard_count())
 {}
 
 sstable_directory::sstable_directory(sstables_manager& manager,
@@ -174,7 +174,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _lister(make_components_lister())
     , _sharder_ptr(std::holds_alternative<unique_sharder_ptr>(sharder) ? std::move(std::get<unique_sharder_ptr>(sharder)) : nullptr)
     , _sharder(_sharder_ptr ? *_sharder_ptr : *std::get<const dht::sharder*>(sharder))
-    , _unshared_remote_sstables(smp::count)
+    , _unshared_remote_sstables(this_smp_shard_count())
 {}
 
 void sstable_directory::filesystem_components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
@@ -507,7 +507,7 @@ future<> sstable_directory::sstables_registry_components_lister::garbage_collect
 
 future<>
 sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_directory) {
-    return parallel_for_each(std::views::iota(0u, smp::count), [this, &source_directory] (unsigned shard_id) mutable {
+    return parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [this, &source_directory] (unsigned shard_id) mutable {
         auto info_vec = std::exchange(_unshared_remote_sstables[shard_id], {});
         if (info_vec.empty()) {
             return make_ready_future<>();

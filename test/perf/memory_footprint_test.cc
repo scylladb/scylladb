@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
         ("data-size", bpo::value<size_t>()->default_value(32), "cell data size");
 
     return app.run(argc, argv, [&] {
-        if (smp::count != 1) {
+        if (this_smp_shard_count() != 1) {
             throw std::runtime_error("This test has to be run with -c1");
         }
 

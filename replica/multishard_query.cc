@@ -213,8 +213,8 @@ public:
             , _cmd(cmd)
             , _ranges(ranges)
             , _trace_state(std::move(trace_state))
-            , _semaphores(smp::count, nullptr) {
-        _readers.resize(smp::count);
+            , _semaphores(this_smp_shard_count(), nullptr) {
+        _readers.resize(this_smp_shard_count());
         _permit.set_max_result_size(get_max_result_size());
 
         if (!_erm->get_replication_strategy().is_vnode_based()) {
@@ -405,7 +405,7 @@ future<> read_context::destroy_reader(stopped_reader reader) noexcept {
 }
 
 future<> read_context::stop() {
-    return parallel_for_each(smp::all_cpus(), [this] (unsigned shard) {
+    return parallel_for_each(this_smp_all_shards(), [this] (unsigned shard) {
         if (_readers[shard].rparts) {
             return _db.invoke_on(shard, [&rparts_fptr = _readers[shard].rparts] (replica::database& db) mutable {
                 auto rparts = rparts_fptr.release();
@@ -625,7 +625,7 @@ future<> read_context::save_readers(mutation_reader::tracked_buffer unconsumed_b
         tracing::trace(_trace_state, "No compaction state to dismantle, partition exhausted", cs_stats);
     }
 
-    co_await parallel_for_each(std::views::iota(0u, smp::count), [this, &last_pos] (shard_id shard) {
+    co_await parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [this, &last_pos] (shard_id shard) {
         auto& rm = _readers[shard];
         if (rm.state == reader_state::successful_lookup || rm.state == reader_state::saving) {
             return save_reader(shard, last_pos);

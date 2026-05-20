@@ -98,7 +98,7 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<r
 // Returns a reshard_shard_descriptor per shard indicating the work that each shard has to do.
 future<std::vector<replica::reshard_shard_descriptor>>
 distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector source) {
-    auto destinations = std::vector<replica::reshard_shard_descriptor>(smp::count);
+    auto destinations = std::vector<replica::reshard_shard_descriptor>(this_smp_shard_count());
 
     std::sort(source.begin(), source.end(), [] (const sstables::foreign_sstable_open_info& a, const sstables::foreign_sstable_open_info& b) {
         // Sort on descending SSTable sizes.

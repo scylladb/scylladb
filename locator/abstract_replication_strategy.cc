@@ -717,7 +717,7 @@ future<> global_static_effective_replication_map::get_keyspace_erms(sharded<repl
                 [&keyspace_name] { throw data_dictionary::no_such_keyspace{keyspace_name}; });
         auto ring_version = erm->get_token_metadata().get_ring_version();
         _erms[0] = make_foreign(std::move(erm));
-        co_await coroutine::parallel_for_each(std::views::iota(1u, smp::count), [this, &sharded_db, keyspace_name, ring_version] (unsigned shard) -> future<> {
+        co_await coroutine::parallel_for_each(std::views::iota(1u, this_smp_shard_count()), [this, &sharded_db, keyspace_name, ring_version] (unsigned shard) -> future<> {
             _erms[shard] = co_await sharded_db.invoke_on(shard, [keyspace_name, ring_version] (const replica::database& db) {
                 const auto& ks = db.find_keyspace(keyspace_name);
                 auto erm = ks.get_static_effective_replication_map();

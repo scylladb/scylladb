@@ -1974,8 +1974,8 @@ private:
 public:
     resharding_compaction(compaction_group_view& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
         : compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker::no)
-        , _estimation_per_shard(smp::count)
-        , _run_identifiers(smp::count)
+        , _estimation_per_shard(this_smp_shard_count())
+        , _run_identifiers(this_smp_shard_count())
         , _reshard_vnodes(descriptor.options.as<compaction_type_options::reshard>().vnodes_resharding)
     {
         if (_reshard_vnodes && !_owned_ranges) {
@@ -1990,7 +1990,7 @@ public:
                 _estimation_per_shard[s].estimated_partitions += std::max(uint64_t(1), uint64_t(ceil(double(estimated_partitions) / shards.size())));
             }
         }
-        for (auto i : std::views::iota(0u, smp::count)) {
+        for (auto i : std::views::iota(0u, this_smp_shard_count())) {
             _run_identifiers[i] = sstables::run_id::create_random_id();
         }
     }

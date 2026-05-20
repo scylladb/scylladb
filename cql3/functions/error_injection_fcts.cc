@@ -86,7 +86,7 @@ shared_ptr<function> make_enabled_injections_function() {
     const auto list_type_inst = list_type_impl::get_instance(ascii_type, false);
     return make_failure_injection_function<false>("enabled_injections", list_type_inst, {},
         [list_type_inst] (std::span<const bytes_opt>) -> bytes {
-            return seastar::map_reduce(smp::all_cpus(), [] (unsigned) {
+            return seastar::map_reduce(this_smp_all_shards(), [] (unsigned) {
                 return make_ready_future<std::vector<sstring>>(utils::get_local_injector().enabled_injections());
             }, std::vector<data_value>(),
             [](std::vector<data_value> a, std::vector<sstring>&& b) -> std::vector<data_value> {

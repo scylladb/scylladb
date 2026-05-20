@@ -32,7 +32,7 @@ using map_type = std::map<int, std::optional<int>>;
 using key_setter = std::pair<int, int>;
 
 static void require_multishard() {
-    tests::require_greater(smp::count, 1);
+    tests::require_greater(this_smp_shard_count(), 1);
 }
 
 // last-write-wins semantics for mutations.

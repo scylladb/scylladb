@@ -1006,7 +1006,7 @@ future<> gossiper::failure_detector_loop() {
             auto generation_number = my_endpoint_state().get_heart_beat_state().get_generation();
             co_await coroutine::parallel_for_each(std::views::iota(0u, nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
                 const auto& node = nodes[idx];
-                auto shard = idx % smp::count;
+                auto shard = idx % this_smp_shard_count();
                 logger.debug("failure_detector_loop: Started new round for node={} on shard={}, live_nodes={}, live_endpoints_version={}",
                         node, shard, nodes, live_endpoints_version);
                 return container().invoke_on(shard, [node, generation_number, live_endpoints_version] (gms::gossiper& g) {
@@ -1037,11 +1037,11 @@ future<> gossiper::replicate_live_endpoints_on_change(foreign_ptr<std::unique_pt
     logger.debug("replicating live and unreachable endpoints to other shards");
 
     std::vector<foreign_ptr<std::unique_ptr<live_and_unreachable_endpoints>>> per_shard_data;
-    per_shard_data.resize(smp::count);
+    per_shard_data.resize(this_smp_shard_count());
     per_shard_data[coordinator] = std::move(data0);
 
     // Prepare copies on each other shard
-    co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&per_shard_data, coordinator] (auto shard) -> future<> {
+    co_await coroutine::parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [&per_shard_data, coordinator] (auto shard) -> future<> {
         if (shard != this_shard_id()) {
             const auto& src = *per_shard_data[coordinator];
             per_shard_data[shard] = co_await smp::submit_to(shard, [&] {
@@ -1291,11 +1291,11 @@ future<> gossiper::replicate(endpoint_state es, permit_id pid) {
     // First pass: replicate the new endpoint_state on all shards.
     // Use foreign_ptr<std::unique_ptr> to ensure destroy on remote shards on exception
     std::vector<foreign_ptr<endpoint_state_ptr>> ep_states;
-    ep_states.resize(smp::count);
+    ep_states.resize(this_smp_shard_count());
     auto p = make_foreign(make_endpoint_state_ptr(std::move(es)));
     const auto *eps = p.get();
     ep_states[this_shard_id()] = std::move(p);
-    co_await coroutine::parallel_for_each(std::views::iota(0u, smp::count), [&, orig = this_shard_id()] (auto shard) -> future<> {
+    co_await coroutine::parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [&, orig = this_shard_id()] (auto shard) -> future<> {
         if (shard != orig) {
             ep_states[shard] = co_await smp::submit_to(shard, [eps] {
                 return make_foreign(make_endpoint_state_ptr(*eps));
@@ -2230,8 +2230,8 @@ future<> gossiper::wait_alive_helper(noncopyable_function<std::vector<locator::h
                 size_t nr_alive = co_await container().map_reduce0([node = es->get_host_id()] (gossiper& g) -> size_t {
                     return g.is_alive(node) ? 1 : 0;
                 }, 0, std::plus<size_t>());
-                logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, smp::count);
-                if (nr_alive == smp::count) {
+                logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, this_smp_shard_count());
+                if (nr_alive == this_smp_shard_count()) {
                     live_nodes.push_back(node);
                 }
             }

@@ -76,7 +76,7 @@ SEASTAR_THREAD_TEST_CASE(test_system_config_table_read) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_system_config_table_update) {
-    if (smp::count < 2) {
+    if (this_smp_shard_count() < 2) {
         fmt::print("This test should be run with at least 2 CPUs\n");
         return;
     }

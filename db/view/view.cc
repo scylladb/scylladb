@@ -2452,7 +2452,7 @@ void view_builder::setup_shard_build_step(
 
 future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) {
     std::unordered_set<table_id> loaded_views;
-    if (vbi.status_per_shard.size() != smp::count) {
+    if (vbi.status_per_shard.size() != this_smp_shard_count()) {
         reshard(std::move(vbi.status_per_shard), loaded_views);
     } else if (!vbi.status_per_shard.empty()) {
         for (auto& status : vbi.status_per_shard[this_shard_id()]) {
@@ -2600,7 +2600,7 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
         co_await mark_view_build_started(view->ks_name(), view->cf_name());
     }
 
-    if (this_shard_id() == smp::count - 1) {
+    if (this_shard_id() == this_smp_shard_count() - 1) {
         inject_failure("add_new_view_fail_last_shard");
     }
 
@@ -3223,7 +3223,7 @@ update_backlog node_update_backlog::fetch() {
 
 future<std::optional<update_backlog>> node_update_backlog::fetch_if_changed() {
     _last_update.store(clock::now(), std::memory_order_relaxed);
-    auto [np, max] = co_await map_reduce(std::views::iota(0u, smp::count),
+    auto [np, max] = co_await map_reduce(std::views::iota(0u, this_smp_shard_count()),
             [this] (shard_id shard) {
                 return smp::submit_to(shard, [this, shard] {
                     // Even if the shard's backlog didn't change, we still need to take it into account when calculating the new max.

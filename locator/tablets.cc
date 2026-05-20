@@ -473,7 +473,7 @@ future<> tablet_metadata::clear_gently() {
     // on this shard. We don't use sharded<> here since it will require a similar 
     // submit_to to each shard owner per tablet-map.
     std::vector<std::vector<tablet_map_ptr>> tablet_maps_per_shard;
-    tablet_maps_per_shard.resize(smp::count);
+    tablet_maps_per_shard.resize(this_smp_shard_count());
     for (auto& [_, map_ptr] : _tablets) {
         tablet_maps_per_shard[map_ptr.get_owner_shard()].emplace_back(std::move(map_ptr));
     }
@@ -1327,7 +1327,7 @@ future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this
         co_await tmap->for_each_tablet([this_host, &valid] (locator::tablet_id tid, const tablet_info& tinfo) -> future<> {
             for (const auto& replica : tinfo.replicas) {
                 if (replica.host == this_host) {
-                    valid &= replica.shard < smp::count;
+                    valid &= replica.shard < this_smp_shard_count();
                 }
             }
             return make_ready_future<>();

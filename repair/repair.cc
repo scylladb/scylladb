@@ -1351,7 +1351,7 @@ future<> repair::user_requested_repair_task_impl::run() {
         auto [_, hints_batchlog_flushed, flush_time] = rs.flush_hints(id, keyspace, cfs, ignore_nodes).get();
 
         std::vector<future<>> repair_results;
-        repair_results.reserve(smp::count);
+        repair_results.reserve(this_smp_shard_count());
         auto table_ids = get_table_ids(db, keyspace, cfs);
         abort_source as;
         auto off_strategy_updater = seastar::async([&rs, uuid = uuid.uuid(), &table_ids, &participants, &as] {
@@ -1395,7 +1395,7 @@ future<> repair::user_requested_repair_task_impl::run() {
 
         auto ranges_parallelism = _ranges_parallelism;
         bool small_table_optimization = _small_table_optimization;
-        for (auto shard : std::views::iota(0u, smp::count)) {
+        for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, flush_time, ranges_parallelism, small_table_optimization,
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
@@ -1433,7 +1433,7 @@ future<> repair::user_requested_repair_task_impl::run() {
 }
 
 future<std::optional<double>> repair::user_requested_repair_task_impl::expected_total_workload() const {
-    co_return _ranges.size() * _cfs.size() * smp::count;
+    co_return _ranges.size() * _cfs.size() * this_smp_shard_count();
 }
 
 future<int> repair_start(seastar::sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am,
@@ -1534,9 +1534,9 @@ future<> repair::data_sync_repair_task_impl::run() {
         }
         auto table_ids = get_table_ids(db, keyspace, cfs);
         std::vector<future<>> repair_results;
-        repair_results.reserve(smp::count);
+        repair_results.reserve(this_smp_shard_count());
         task_as.check();
-        for (auto shard : std::views::iota(0u, smp::count)) {
+        for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges_reduced_factor, ranges, neighbors, reason, germs, small_table_optimization, parent_data = get_repair_uniq_id().task_info, frozen_topology_guard] (repair_service& local_repair) mutable -> future<> {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
@@ -1583,7 +1583,7 @@ future<> repair::data_sync_repair_task_impl::run() {
 }
 
 future<std::optional<double>> repair::data_sync_repair_task_impl::expected_total_workload() const {
-    co_return _cfs_size ? std::make_optional<double>(_ranges.size() * _cfs_size * smp::count) : std::nullopt;
+    co_return _cfs_size ? std::make_optional<double>(_ranges.size() * _cfs_size * this_smp_shard_count()) : std::nullopt;
 }
 
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens, service::frozen_topology_guard frozen_topology_guard) {

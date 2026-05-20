@@ -260,7 +260,7 @@ distributed_loader::get_sstables_from(sharded<replica::database>& db, sstring ks
         start_dir(global_table, directory).get();
         auto stop = deferred_stop(directory);
 
-        std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards(smp::count);
+        std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards(this_smp_shard_count());
         lock_table(global_table, directory).get();
         sstables::sstable_directory::process_flags flags {
             .need_mutate_level = true,

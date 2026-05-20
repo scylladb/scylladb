@@ -73,7 +73,7 @@ SEASTAR_TEST_CASE(incremental_compaction_test) {
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type)
                 .with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner")
-                .with_sharder(smp::count, 0);
+                .with_sharder(this_smp_shard_count(), 0);
         auto s = builder.build();
 
         auto tmp = make_lw_shared<tmpdir>();

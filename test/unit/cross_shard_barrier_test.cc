@@ -44,17 +44,17 @@ public:
             , _last_wdog_phase(0)
     {
         // Give each shard a good chance to sleep for up to 100ms
-        auto period = std::chrono::seconds(smp::count * 100);
+        auto period = std::chrono::seconds(this_smp_shard_count() * 100);
         // Don't make them fire all at once
-        auto first = period + this_shard_id() * period / smp::count;
+        auto first = period + this_shard_id() * period / this_smp_shard_count();
         _watchdog.arm(std::chrono::steady_clock::now() + first, {period});
     }
 
     future<> loop() {
-        for (unsigned i = 0; i < smp::count * phases_scale; i++) {
+        for (unsigned i = 0; i < this_smp_shard_count() * phases_scale; i++) {
             unsigned phase = _phase.fetch_add(1);
             co_await _barrier.arrive_and_wait();
-            if (this_shard_id() == (i % smp::count)) {
+            if (this_shard_id() == (i % this_smp_shard_count())) {
                 co_await container().invoke_on_all([phase] (auto& w) {
                     auto this_phase = w._phase.load();
                     if (this_phase != phase + 1) {
@@ -92,8 +92,8 @@ public:
 int main(int argc, char **argv) {
     app_template app;
     return app.run(argc, argv, [] {
-        if (smp::count < 2) {
-            std::cerr << "Cannot run test with smp::count < 2";
+        if (this_smp_shard_count() < 2) {
+            std::cerr << "Cannot run test with this_smp_shard_count() < 2";
             return make_ready_future<>();
         }
 
@@ -103,14 +103,14 @@ int main(int argc, char **argv) {
             w.invoke_on_all(&worker::loop).get();
             w.stop().get();
 
-            for (size_t i = 0; i < smp::count * phases_scale; i++) {
+            for (size_t i = 0; i < this_smp_shard_count() * phases_scale; i++) {
                 sharded<worker> w;
                 w.start(utils::cross_shard_barrier()).get();
                 try {
                     w.invoke_on_all(&worker::loop_with_error).get();
                 } catch (...) {
                     auto ph = w.invoke_on(0, [] (auto& w) { return w.get_phase(); }).get();
-                    for (size_t c = 1; c < smp::count; c++) {
+                    for (size_t c = 1; c < this_smp_shard_count(); c++) {
                         auto ph_2 = w.invoke_on(c, [] (auto& w) { return w.get_phase(); }).get();
                         if (ph_2 != ph) {
                             fmt::print("aborted barrier passed shard through\n");

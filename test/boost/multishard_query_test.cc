@@ -151,7 +151,7 @@ api::timestamp_type no_tombstone_timestamp_generator(std::mt19937& engine, tests
 }
 
 static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_test_env& env, sstring ks_name,
-        sstring tbl_name, int partition_count = 10 * smp::count, int row_per_partition_count = 10) {
+        sstring tbl_name, int partition_count = 10 * this_smp_shard_count(), int row_per_partition_count = 10) {
     auto res = create_test_table(
             env,
             tests::random::get_int<uint32_t>(),
@@ -166,7 +166,7 @@ static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(
 }
 
 static uint64_t aggregate_querier_cache_stat(sharded<replica::database>& db, uint64_t replica::querier_cache::stats::*stat) {
-    return map_reduce(std::views::iota(0u, smp::count), [stat, &db] (unsigned shard) {
+    return map_reduce(std::views::iota(0u, this_smp_shard_count()), [stat, &db] (unsigned shard) {
         return db.invoke_on(shard, [stat] (replica::database& local_db) {
             auto& stats = local_db.get_querier_cache_stats();
             return stats.*stat;
@@ -178,7 +178,7 @@ static void check_cache_population(sharded<replica::database>& db, size_t querie
         std::source_location sl = std::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
-    parallel_for_each(std::views::iota(0u, smp::count), [queriers, &db] (unsigned shard) {
+    parallel_for_each(std::views::iota(0u, this_smp_shard_count()), [queriers, &db] (unsigned shard) {
         return db.invoke_on(shard, [queriers] (replica::database& local_db) {
             auto& stats = local_db.get_querier_cache_stats();
             tests::require_equal(stats.population, queriers);
@@ -572,7 +572,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
             }
 
             tests::require_equal(aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::drops), 0u);
-            tests::require_less_equal(new_misses - misses, smp::count - saved_readers);
+            tests::require_less_equal(new_misses - misses, this_smp_shard_count() - saved_readers);
 
             lookups = new_lookups;
             misses = new_misses;
@@ -708,7 +708,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
                 }
 
                 tests::require_equal(aggregate_querier_cache_stat(env.db(), &replica::querier_cache::stats::drops), 0u);
-                tests::require_less_equal(new_misses - misses, smp::count - saved_readers);
+                tests::require_less_equal(new_misses - misses, this_smp_shard_count() - saved_readers);
 
                 lookups = new_lookups;
                 misses = new_misses;
@@ -754,7 +754,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
             }
             lookups = new_lookups;
 
-            for (unsigned shard = 0; shard < smp::count; ++shard) {
+            for (unsigned shard = 0; shard < this_smp_shard_count(); ++shard) {
                 auto evicted = smp::submit_to(shard, [&] {
                     return env.local_db().get_querier_cache().evict_one();
                 }).get();

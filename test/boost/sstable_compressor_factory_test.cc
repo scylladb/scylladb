@@ -28,7 +28,7 @@ void test_one_numa_topology(std::span<unsigned> shard_to_numa_mapping) {
     testlog.info("Testing NUMA topology {}", shard_to_numa_mapping);
 
     // Create a compressor factory.
-    tests::require(shard_to_numa_mapping.size() == smp::count);
+    tests::require(shard_to_numa_mapping.size() == this_smp_shard_count());
     auto config = default_sstable_compressor_factory::config{
         .numa_config = std::vector(shard_to_numa_mapping.begin(), shard_to_numa_mapping.end()),
     };
@@ -48,8 +48,8 @@ void test_one_numa_topology(std::span<unsigned> shard_to_numa_mapping) {
         sstable_compressor_factory.local().set_recommended_dict(table, dict_view).get();
 
         // We'll put the owners here to check that the number of owners matches the number of NUMA nodes.
-        std::vector<unsigned> compressor_numa_nodes(smp::count);
-        std::vector<unsigned> decompressor_numa_nodes(smp::count);
+        std::vector<unsigned> compressor_numa_nodes(this_smp_shard_count());
+        std::vector<unsigned> decompressor_numa_nodes(this_smp_shard_count());
 
         // Try for both algorithms, just in case there are some differences in how dictionary
         // distribution over shards is implemented between them.
@@ -116,18 +116,18 @@ void test_one_numa_topology(std::span<unsigned> shard_to_numa_mapping) {
 
 SEASTAR_THREAD_TEST_CASE(test_numa_awareness) {
     {
-        std::vector<unsigned> one_numa_node(smp::count);
+        std::vector<unsigned> one_numa_node(this_smp_shard_count());
         test_one_numa_topology(one_numa_node);
     }
     {
-        std::vector<unsigned> two_numa_nodes(smp::count);
+        std::vector<unsigned> two_numa_nodes(this_smp_shard_count());
         for (size_t i = 0; i < two_numa_nodes.size(); ++i) {
             two_numa_nodes[i] = i % 2;
         }
         test_one_numa_topology(two_numa_nodes);
     }
     {
-        std::vector<unsigned> n_numa_nodes(smp::count);
+        std::vector<unsigned> n_numa_nodes(this_smp_shard_count());
         for (size_t i = 0; i < n_numa_nodes.size(); ++i) {
             n_numa_nodes[i] = i;
         }
