@@ -33,6 +33,12 @@ bool collection_mutation_input_stream::empty() const {
     return _src.empty();
 }
 
+collection_mutation::collection_mutation() : _data(managed_bytes::initialized_later{}, sizeof(uint8_t) + sizeof(int32_t)) {
+    auto out = managed_bytes_mutable_view(_data);
+    write<uint8_t>(out, uint8_t(false)); // No tombstone
+    write<int32_t>(out, 0); // No cells
+}
+
 collection_mutation::collection_mutation(collection_mutation_view v)
     : _data(v.data) {}
 

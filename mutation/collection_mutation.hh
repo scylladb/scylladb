@@ -124,7 +124,7 @@ class collection_mutation {
 public:
     managed_bytes _data;
 
-    collection_mutation() {}
+    collection_mutation();
     collection_mutation(collection_mutation_view);
     collection_mutation(managed_bytes);
     operator collection_mutation_view() const;
