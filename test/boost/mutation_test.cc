@@ -227,6 +227,141 @@ collection_mutation_description make_collection_mutation(tombstone t, bytes key1
     return m;
 }
 
+// Unit tests for collection_mutation_writer and collection_mutation_view::iterator,
+// which provide direct, zero-copy access to the serialized collection format.
+
+// Verifies that collection_mutation_writer correctly serializes a collection
+// and that collection_mutation_view (size(), tomb(), empty()) reads it back faithfully.
+SEASTAR_THREAD_TEST_CASE(test_collection_mutation_writer) {
+    // empty() with no tombstone and no cells
+    {
+        collection_mutation_writer w({});
+        BOOST_REQUIRE(w.empty());
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(cmv.empty());
+        BOOST_REQUIRE(!cmv.tomb());
+        BOOST_REQUIRE_EQUAL(cmv.size(), 0u);
+    }
+
+    // empty() is false when a tombstone is present even if there are no cells
+    {
+        tombstone t(api::new_timestamp(), gc_clock::now());
+        collection_mutation_writer w(t);
+        BOOST_REQUIRE(!w.empty());
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(!cmv.empty());
+        BOOST_REQUIRE_EQUAL(cmv.tomb(), t);
+        BOOST_REQUIRE_EQUAL(cmv.size(), 0u);
+    }
+
+    // size() and tomb() after pushing cells
+    {
+        auto key1 = int32_type->decompose(1);
+        auto key2 = int32_type->decompose(2);
+        auto key3 = int32_type->decompose(3);
+
+        auto cell1 = atomic_cell::make_live(*bytes_type, 1, bytes("v1"), atomic_cell::collection_member::yes);
+        auto cell2 = atomic_cell::make_live(*bytes_type, 2, bytes("v2"), atomic_cell::collection_member::yes);
+        auto cell3 = atomic_cell::make_dead(3, gc_clock::now());
+
+        tombstone t(api::new_timestamp(), gc_clock::now());
+        collection_mutation_writer w(t);
+        w.push_back(bytes_view(key1), atomic_cell_view(cell1));
+        w.push_back(bytes_view(key2), atomic_cell_view(cell2));
+        w.push_back(bytes_view(key3), atomic_cell_view(cell3));
+        BOOST_REQUIRE(!w.empty());
+
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+
+        BOOST_REQUIRE(!cmv.empty());
+        BOOST_REQUIRE_EQUAL(cmv.tomb(), t);
+        BOOST_REQUIRE_EQUAL(cmv.size(), 3u);
+    }
+}
+
+// Verifies the collection_mutation_view accessors (tomb(), size(), empty(),
+// begin()/end()) across all variants: default-constructed, tombstone only,
+// cells only, and tombstone with cells.
+SEASTAR_THREAD_TEST_CASE(test_collection_mutation_view) {
+    auto cells_equal = [] (const auto& c1, const auto& c2) {
+        return c1.first == c2.first && c1.second.value().linearize() == c2.second.value().linearize();
+    };
+
+    // default-constructed collection_mutation is semantically empty
+    {
+        collection_mutation cm;
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(cmv.empty());
+        BOOST_REQUIRE(!cmv.tomb());
+        BOOST_REQUIRE_EQUAL(cmv.size(), 0u);
+        BOOST_REQUIRE(cmv.begin() == cmv.end());
+    }
+
+    // Iterating an empty collection produces no elements
+    {
+        collection_mutation_writer w({});
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(cmv.begin() == cmv.end());
+    }
+
+    // Iterating with a tombstone but no cells also produces no elements
+    {
+        tombstone t(api::new_timestamp(), gc_clock::now());
+        collection_mutation_writer w(t);
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+        BOOST_REQUIRE(cmv.begin() == cmv.end());
+    }
+
+    // Round-trip: cells written by the writer are produced by the iterator
+    // in the same order with the same key and value.
+    {
+        auto key1 = int32_type->decompose(10);
+        auto key2 = int32_type->decompose(20);
+        auto key3 = int32_type->decompose(30);
+
+        auto cell1 = atomic_cell::make_live(*bytes_type, 1, bytes("value1"), atomic_cell::collection_member::yes);
+        auto cell2 = atomic_cell::make_live(*bytes_type, 2, bytes("value2"), atomic_cell::collection_member::yes);
+        auto cell3 = atomic_cell::make_live(*bytes_type, 3, bytes("value3"), atomic_cell::collection_member::yes);
+
+        collection_mutation_writer w({});
+        w.push_back(bytes_view(key1), atomic_cell_view(cell1));
+        w.push_back(bytes_view(key2), atomic_cell_view(cell2));
+        w.push_back(bytes_view(key3), atomic_cell_view(cell3));
+        auto cm = std::move(w).finish();
+        collection_mutation_view cmv = cm;
+
+        BOOST_REQUIRE_EQUAL(cmv.size(), 3u);
+
+        auto it = cmv.begin();
+        BOOST_REQUIRE(it != cmv.end());
+        BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(bytes_view(key1), cell1)));
+
+        ++it;
+        BOOST_REQUIRE(it != cmv.end());
+        BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(bytes_view(key2), cell2)));
+
+        ++it;
+        BOOST_REQUIRE(it != cmv.end());
+        BOOST_REQUIRE(cells_equal(*it, std::pair<bytes_view, atomic_cell_view>(bytes_view(key3), cell3)));
+
+        ++it;
+        BOOST_REQUIRE(it == cmv.end());
+
+        // A second traversal of the same view yields the same results
+        size_t count = 0;
+        for (auto& [k, v] : cmv) {
+            (void)k; (void)v;
+            ++count;
+        }
+        BOOST_REQUIRE_EQUAL(count, 3u);
+    }
+}
+
 SEASTAR_TEST_CASE(test_map_mutations) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
