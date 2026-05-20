@@ -102,7 +102,19 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
         await manager.api.message_injection(server_to_pause.ip_addr, 'storage_proxy_write_response_pause')
 
         logger.info("Waiting for the shutdown to complete")
-        await shutdown_task
+        try:
+            await asyncio.wait_for(shutdown_task, timeout=15)
+        except asyncio.TimeoutError:
+            # Deadlock reproduced — shutdown hung because stale_versions_in_use
+            # blocks on the write handler holding a stale token_metadata version.
+            # We must explicitly kill the node here: the manager's _after_test
+            # handler waits up to 120s for all outstanding tasks (including
+            # the stuck stop_gracefully request) before teardown proceeds.
+            # Killing the process lets stop_gracefully's cmd.wait() return,
+            # which unblocks _after_test.
+            logger.info("Shutdown did not complete within the timeout, killing the node")
+            await manager.server_stop(target_server.server_id)
+            pytest.fail("Shutdown did not complete within 15s — deadlock reproduced")
 
         logger.info("Cancelling addnode task")
         add_last_node_task.cancel()
