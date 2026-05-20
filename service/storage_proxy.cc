@@ -6271,8 +6271,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     auto p = shared_from_this();
-    auto& cf= _db.local().find_column_family(schema);
-    auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
+    auto cf = _db.local().find_column_family(schema).shared_from_this();
+    auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr;
 
     if (_features.range_scan_data_variant) {
         cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
@@ -6297,6 +6297,9 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         concurrency_factor = std::max(size_t(1), ranges.size());
 
         while (i != ranges.end()) {
+            co_await utils::get_local_injector().inject(
+                "query_partition_key_range_concurrent_scan_pause",
+                utils::wait_for_message(std::chrono::seconds(30)));
             dht::partition_range& range = *i;
             host_id_vector_replica_set live_endpoints = get_endpoints_for_reading(*schema, *erm, end_token(range), node_local_only);
             host_id_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
@@ -6421,7 +6424,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 throw;
             }
 
-            exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
+            exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf, p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
             ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
         }
 
