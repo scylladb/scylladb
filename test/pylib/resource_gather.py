@@ -279,13 +279,16 @@ def _is_cgroup_rw() -> bool:
     return False
 
 def propagate_subtree_controls(group: Path):
-    with open(group / 'cgroup.controllers', 'r') as f:
-        controllers = f.readline().strip()
-    if not controllers:
-        return
-    controllers = " ".join(map(lambda x: f"+{x}", controllers.split(" ")))
-    with open(group / 'cgroup.subtree_control', 'w') as f:
-        f.write(controllers)
+    # Only enable the memory controller. cpu.stat is available without
+    # enabling the cpu controller (it's base cgroup v2 accounting).
+    # Enabling all controllers (cpu, io, pids, etc.) adds unnecessary
+    # per-operation kernel overhead to child processes - in particular,
+    # the io controller adds accounting to every I/O operation.
+    with open(group / "cgroup.controllers", "r") as f:
+        if "memory" not in f.readline().split():
+            return
+    with open(group / "cgroup.subtree_control", "w") as f:
+        f.write("+memory")
 
 
 def setup_cgroup(is_required: bool) -> None:

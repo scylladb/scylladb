@@ -304,8 +304,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         if not is_xdist_worker and SCYLLA_TEST_CGROUP_BASE_ENV not in os.environ:
             setup_cgroup(is_required=True)
         setup_worker_cgroup()
-        _system_resource_monitor = SystemResourceMonitor(temp_dir)
-        _system_resource_monitor.start()
+        # System-wide resource metrics (CPU%, memory) are identical from any process.
+        # Only the master needs to record them.
+        if not is_xdist_worker:
+            _system_resource_monitor = SystemResourceMonitor(temp_dir)
+            _system_resource_monitor.start()
 
 
 
