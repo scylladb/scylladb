@@ -501,6 +501,10 @@ For Intel Xeon processors, each OCPU corresponds to two hardware execution threa
      - OCPU
      - Mem (GB)
      - Storage
+   * - VM.DenseIO.E5.Flex (see `Flexible Shapes <https://docs.oracle.com/en-us/iaas/Content/Compute/References/computeshapes.htm#flexible>`_)
+     - 8 - 48
+     - 96 - 576
+     - 6.8 - 40.8
    * - VM.DenseIO2.8
      - 8
      - 120
