@@ -20,6 +20,7 @@ add_compile_options(
   "-Werror"
   "-Wextra"
   "-Wno-error=deprecated-declarations"
+  "-Wno-error=pass-failed"
   "-Wimplicit-fallthrough"
   ${_supported_warnings})
 

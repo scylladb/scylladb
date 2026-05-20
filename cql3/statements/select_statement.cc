@@ -353,10 +353,10 @@ select_statement::make_partition_slice(const query_options& options) const
         std::move(static_columns), std::move(regular_columns), _opts, nullptr, per_partition_limit);
 }
 
-uint64_t select_statement::get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit) const
+uint64_t select_statement::get_limit(const query_options& options, const optimized_optional<expr::expression>& limit, bool is_per_partition_limit) const
 {
     const auto& unset_guard = is_per_partition_limit ? _per_partition_limit_unset_guard : _limit_unset_guard;
-    if (!limit.has_value() || unset_guard.is_unset(options)) {
+    if (!limit || unset_guard.is_unset(options)) {
         return query::max_rows;
     }
     try {
