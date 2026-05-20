@@ -280,6 +280,8 @@ table::make_mutation_reader(schema_ptr s,
         rd = _config.data_listeners->on_read(s, range, slice, std::move(rd));
     }
 
+    _read_rate_ewma.add();
+
     return rd;
 }
 
@@ -2180,6 +2182,7 @@ table::start() {
     if (_schema->memtable_flush_period() > 0) {
         _flush_timer.arm(std::chrono::milliseconds(_schema->memtable_flush_period()));
     }
+    _activity_rate_timer.arm(_config.activity_rate_tick_interval);
 }
 
 future<>
@@ -2188,6 +2191,7 @@ table::stop() noexcept {
         co_return;
     }
     _flush_timer.cancel();
+    _activity_rate_timer.cancel();
     // Allow `compaction_group::stop` to stop ongoing compactions
     // while they may still hold the table _async_gate
     auto gate_closed_fut = _async_gate.close();
@@ -3367,6 +3371,13 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _row_locker(_schema)
     , _flush_timer([this]{ on_flush_timer(); })
     , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
+    , _read_rate_ewma(std::chrono::seconds(_config.activity_ewma_window_seconds), _config.activity_rate_tick_interval)
+    , _write_rate_ewma(std::chrono::seconds(_config.activity_ewma_window_seconds), _config.activity_rate_tick_interval)
+    , _activity_rate_timer([this] {
+        _read_rate_ewma.update();
+        _write_rate_ewma.update();
+        _activity_rate_timer.arm(_config.activity_rate_tick_interval);
+    })
 {
     if (!_config.enable_disk_writes) {
         tlogger.warn("Writes disabled, column family no durable.");
@@ -5125,6 +5136,7 @@ template<typename... Args>
 void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
+    _write_rate_ewma.add();
     db::replay_position rp = h;
     check_valid_rp(rp);
     try {
@@ -5141,7 +5153,6 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
     }
     _stats.writes.mark(lc);
 }
-
 api::timestamp_type table::get_max_timestamp_for_tablet(locator::tablet_id tid) const {
     return std::ranges::max(storage_group_for_id(tid.value()).compaction_groups_immediate()
         | std::views::transform([](const compaction_group_ptr& cg_ptr) {

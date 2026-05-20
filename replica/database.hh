@@ -483,6 +483,8 @@ public:
         utils::updateable_value<bool> enable_compacting_data_for_streaming_and_repair;
         utils::updateable_value<bool> enable_tombstone_gc_for_streaming_and_repair;
         db::guardrail_config guardrail_config;
+        unsigned activity_ewma_window_seconds = 900;
+        std::chrono::seconds activity_rate_tick_interval;
     };
 
     using snapshot_details = db::snapshot_ctl::table_snapshot_details;
@@ -1221,6 +1223,10 @@ public:
 
     locator::combined_load_stats table_load_stats() const;
 
+    // Activity rates for tablet allocation (ops/sec, EWMA-smoothed).
+    double activity_read_rate() const { return _read_rate_ewma.rate(); }
+    double activity_write_rate() const { return _write_rate_ewma.rate(); }
+
     const db::view::stats& get_view_stats() const {
         return _view_stats;
     }
@@ -1420,6 +1426,10 @@ public:
 private:
     timer<> _off_strategy_trigger;
     void do_update_off_strategy_trigger();
+
+    mutable utils::moving_average _read_rate_ewma;
+    utils::moving_average _write_rate_ewma;
+    timer<lowres_clock> _activity_rate_timer;
 
     compaction_group* try_get_compaction_group_with_static_sharding() const;
 public:
