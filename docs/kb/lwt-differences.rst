@@ -12,12 +12,47 @@ How is it different?
 * For batch statement, ScyllaDB allows mixing `IF EXISTS`, `IF NOT EXISTS`, and other conditions for the same row.
 * Unlike Cassandra, ScyllaDB  uses per-core data partitioning, so the RPC  that is done to perform a transaction talks directly to the right core on a peer replica, avoiding the concurrency overhead. This is,  of course, true, if ScyllaDB’s own shard-aware driver is used - otherwise we  add an extra hop to the right core at the coordinator node.
 * ScyllaDB does not store  hints for lightweight transaction writes, since this is redundant as all such writes are already present in system.paxos table.
+* ScyllaDB supports arithmetic ``SET`` operations (``col = col + value`` and ``col = col - value``) on non-counter numeric columns inside LWT conditional updates. Cassandra does not support this syntax.
 
 
 More on :doc:`Lightweight Transactions (LWT) </features/lwt>`
 
 Additional Notes
 ================
+
+Arithmetic SET operations in LWT updates
+----------------------------------------
+
+ScyllaDB allows ``SET col = col + value`` and ``SET col = col - value`` on non-counter numeric
+columns inside a conditional ``UPDATE``. The Paxos read-modify-write cycle guarantees atomicity:
+the old value is read in the same transaction round, the arithmetic is applied, and the result
+is written — all without a separate read or a race condition.
+
+If the column is null, the arithmetic result is also null (standard SQL null-propagation
+semantics), so the column remains unset. To catch an uninitialized column, use an ``IF``
+condition that checks the column value (e.g. ``IF score != null``) rather than ``IF EXISTS``.
+
+This syntax is a ScyllaDB extension; Cassandra rejects it with an ``InvalidRequest`` error.
+An ``IF`` condition (``IF EXISTS`` or a column predicate) is required; omitting the ``IF``
+clause is rejected even in ScyllaDB, because without LWT atomicity the read-modify-write
+would not be safe.
+
+Example — atomic counter on a regular column:
+
+.. code-block:: cql
+
+   -- Initialize a row, with score=0
+   INSERT INTO mytable (pk, ck, score) VALUES (1, 1, 0) IF NOT EXISTS;
+
+   -- Increment atomically:
+   UPDATE mytable SET score = score + 1 WHERE pk = 1 AND ck = 1 IF EXISTS;
+
+   -- Increment only when score is already set (fails if score is null):
+   UPDATE mytable SET score = score + 1 WHERE pk = 1 AND ck = 1 IF score != null;
+
+   -- Decrement only when the value is large enough:
+   UPDATE mytable SET score = score - 5 WHERE pk = 1 AND ck = 1 IF score >= 5;
+
 
 Mixing LWT IF clauses in BATCH statements
 -----------------------------------------

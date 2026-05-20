@@ -20,6 +20,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/user.hh"
+#include "types/types.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 
 namespace cql3 {
@@ -151,10 +152,19 @@ operation::addition::prepare(data_dictionary::database db, const sstring& keyspa
 
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
-        if (!receiver.is_counter()) {
-            throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name_as_text()));
+        if (receiver.is_counter()) {
+            return make_shared<constants::adder>(receiver, std::move(v));
         }
-        return make_shared<constants::adder>(receiver, std::move(v));
+        // Allow arithmetic on numeric non-counter columns in LWT updates
+        // (issue #10568). Build an expression that constants:setter will use.
+        if (receiver.type->is_arithmetic()) {
+            expr::expression arith_expr = expr::binary_operator(
+                expr::column_value{&receiver},
+                expr::oper_t::ADD,
+                v);
+            return make_shared<constants::setter>(receiver, std::move(arith_expr));
+        }
+        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name_as_text()));
     } else if (!ctype->is_multi_cell()) {
         throw exceptions::invalid_request_exception(format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name_as_text()));
     }
@@ -184,12 +194,21 @@ shared_ptr<operation>
 operation::subtraction::prepare(data_dictionary::database db, const sstring& keyspace, const column_definition& receiver) const {
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
-        if (!receiver.is_counter()) {
-            throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name_as_text()));
+        if (receiver.is_counter()) {
+            auto v = prepare_expression(_value, db, keyspace, nullptr, receiver.column_specification);
+            verify_no_aggregate_functions(v, "SET clause");
+            return make_shared<constants::subtracter>(receiver, std::move(v));
         }
-        auto v = prepare_expression(_value, db, keyspace, nullptr, receiver.column_specification);
-        verify_no_aggregate_functions(v, "SET clause");
-        return make_shared<constants::subtracter>(receiver, std::move(v));
+        if (receiver.type->is_arithmetic()) {
+            auto v = prepare_expression(_value, db, keyspace, nullptr, receiver.column_specification);
+            verify_no_aggregate_functions(v, "SET clause");
+            expr::expression arith_expr = expr::binary_operator(
+                expr::column_value{&receiver},
+                expr::oper_t::SUB,
+                v);
+            return make_shared<constants::setter>(receiver, std::move(arith_expr));
+        }
+        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name_as_text()));
     }
     if (!ctype->is_multi_cell()) {
         throw exceptions::invalid_request_exception(

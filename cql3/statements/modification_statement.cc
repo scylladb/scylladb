@@ -761,6 +761,10 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
         }
     }
 
+    if (op->requires_lwt()) {
+        _requires_lwt = true;
+    }
+
     if (op->column.is_counter()) {
         auto is_raw_counter_shard_write = op->is_raw_counter_shard_write();
         if (_is_raw_counter_shard_write && _is_raw_counter_shard_write != is_raw_counter_shard_write) {

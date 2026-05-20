@@ -80,6 +80,9 @@ private:
     // True if any of update operations requires a prefetch.
     // Pre-computed during statement prepare.
     bool _requires_read = false;
+    // True if any of the update operations requires LWT (an IF condition) for
+    // atomicity, e.g. SET col = col + 1 on a non-counter column.
+    bool _requires_lwt = false;
     bool _if_not_exists = false;
     bool _if_exists = false;
 
@@ -185,6 +188,9 @@ public:
     // True if any of update operations of this statement requires
     // a prefetch of the old cell.
     bool requires_read() const { return _requires_read; }
+
+    // True if any of the update operations requires LWT for atomicity.
+    bool requires_lwt() const { return _requires_lwt; }
 
     // Columns used in this statement conditions or operations.
     const column_set& columns_to_read() const { return _columns_to_read; }

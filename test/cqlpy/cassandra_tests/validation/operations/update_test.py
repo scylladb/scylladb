@@ -575,6 +575,6 @@ def testThatUpdatesWithEmptyInRestrictionDoNotCreateMutations(cql, test_keyspace
 
 def testAdderNonCounter(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(pk int PRIMARY KEY, a int, b text)") as table:
-        # if error ever includes "b" its safe to update this test
-        with pytest.raises(InvalidRequest, match=re.escape('Invalid operation (a = a + 1) for non counter column a')):
+        # Cassandra complains about column "a", Scylla about "b", both are fine
+        with pytest.raises(InvalidRequest, match='Invalid operation.* for non counter column'):
             execute(cql, table, "UPDATE %s SET a = a + 1, b = b + 'fail' WHERE pk = 1")
