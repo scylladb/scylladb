@@ -76,9 +76,9 @@ protected:
     const ::shared_ptr<const restrictions::select_restrictions> _restrictions;
     ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
     expr::unset_bind_variable_guard _limit_unset_guard;
-    std::optional<expr::expression> _limit;
+    optimized_optional<expr::expression> _limit;
     expr::unset_bind_variable_guard _per_partition_limit_unset_guard;
-    std::optional<expr::expression> _per_partition_limit;
+    optimized_optional<expr::expression> _per_partition_limit;
 
     template<typename T>
     using compare_fn = raw::select_statement::compare_fn<T>;
@@ -183,7 +183,7 @@ protected:
     // so that a later page keeps reading the same thing. See #18992.
     virtual service::pager::query_plan scanned_plan() const;
 
-    uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
+    uint64_t get_limit(const query_options& options, const optimized_optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
 
     // Drains the pager into one result set, grouped by _group_by_cell_indices.
