@@ -3767,7 +3767,7 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 }
 
 future<>
-sstable::unlink(storage::sync_dir sync) noexcept {
+sstable::unlink(const atomic_delete_context* ctx) noexcept {
     // Serialize with other calls to unlink or potentially ongoing mutations.
     auto lock = co_await get_units(_mutate_sem, 1);
     if (_unlinked) {
@@ -3777,7 +3777,7 @@ sstable::unlink(storage::sync_dir sync) noexcept {
     _unlinked = true;
     _on_delete(*this);
 
-    auto remove_fut = _storage->wipe(*this, sync);
+    auto remove_fut = _storage->wipe(*this, ctx);
 
     try {
         if (_cloned_to_sstable_filename) {

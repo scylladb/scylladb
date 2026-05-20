@@ -454,9 +454,9 @@ public:
 
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
-    // Caller may pass sync_dir::no for batching multiple deletes in the same directory,
-    // and make sure the directory is sync'ed on or after the last call.
-    future<> unlink(storage::sync_dir sync = storage::sync_dir::yes) noexcept;
+    // When ctx is provided, it indicates the call is part of an atomic
+    // deletion sequence where atomic_delete_prepare has already been called.
+    future<> unlink(const atomic_delete_context* ctx = nullptr) noexcept;
 
     db::large_data_handler& get_large_data_handler() {
         return _large_data_handler;
