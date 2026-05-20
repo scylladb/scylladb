@@ -1641,6 +1641,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
         .collection_elements_fail_threshold = db_config.large_collection_elements_fail_threshold,
         .collection_elements_warn_threshold = db_config.compaction_collection_elements_count_warning_threshold,
     };
+    cfg.activity_ewma_window_seconds = db_config.tablets_activity_ewma_window_seconds();
 
     return cfg;
 }
