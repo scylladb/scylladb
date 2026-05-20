@@ -4441,6 +4441,7 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
 
     std::unordered_map<table_id, size_t> total_replicas;
     bool table_load_stats_invalid = false;
+    bool table_activity_incomplete = false;
 
     for (auto& [dc, nodes] : tm->get_datacenter_token_owners_nodes()) {
         locator::load_stats dc_stats;
@@ -4488,6 +4489,11 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
             }
 
             _load_stats_per_node[dst] = node_stats;
+            // If a node reports table load stats but not activity data,
+            // it is likely an older node that does not support this feature.
+            if (!node_stats.tables.empty() && node_stats.table_activity.empty()) {
+                table_activity_incomplete = true;
+            }
             dc_stats += node_stats;
         });
 
@@ -4535,6 +4541,13 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
 
     if (table_load_stats_invalid) {
         stats.tables.clear();
+    }
+
+    // If any node reported table load stats without table_activity, the
+    // cluster-wide activity view is incomplete. Clear all activity data
+    // so the allocator pins tablet counts to current values.
+    if (table_activity_incomplete) {
+        stats.table_activity.clear();
     }
 
     rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");

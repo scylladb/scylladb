@@ -542,6 +542,21 @@ struct combined_load_stats {
 
 using tablet_load_stats_map = std::unordered_map<host_id, tablet_load_stats>;
 
+// Per-table activity rates for activity-weighted tablet allocation.
+struct table_activity_stats {
+    double read_rate = 0;
+    double write_rate = 0;
+
+    table_activity_stats& operator+=(const table_activity_stats& s) noexcept {
+        read_rate += s.read_rate;
+        write_rate += s.write_rate;
+        return *this;
+    }
+    friend table_activity_stats operator+(table_activity_stats a, const table_activity_stats& b) {
+        return a += b;
+    }
+};
+
 struct load_stats {
     std::unordered_map<table_id, table_load_stats> tables;
 
@@ -553,6 +568,11 @@ struct load_stats {
 
     // Size-based load balancing data
     tablet_load_stats_map tablet_stats;
+
+    // Per-table activity rates (ops/sec) for activity-weighted allocation.
+    // An entry with zero rates means the table was observed as idle.
+    // A missing entry means the reporting node did not report activity at all.
+    std::unordered_map<table_id, table_activity_stats> table_activity;
 
     static load_stats from_v1(load_stats_v1&&);
 
