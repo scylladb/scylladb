@@ -1192,6 +1192,9 @@ load_stats& load_stats::operator+=(const load_stats& s) {
         tablet_stats[host].effective_capacity = tablet_ls.effective_capacity;
         tablet_stats[host].add_tablet_sizes(tablet_ls);
     }
+    for (auto& [id, activity] : s.table_activity) {
+        table_activity[id] += activity;
+    }
     return *this;
 }
 

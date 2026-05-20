@@ -6153,6 +6153,11 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
             load_stats.tables.emplace(id, std::move(combined_ls.table_ls));
             tablet_sizes_per_shard[this_shard_id()].size += load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
 
+            load_stats.table_activity[id] += locator::table_activity_stats{
+                table->activity_read_rate(),
+                table->activity_write_rate()
+            };
+
             co_await coroutine::maybe_yield();
         }
 
