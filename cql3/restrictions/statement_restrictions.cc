@@ -521,6 +521,9 @@ to_predicates(
                         [&] (const binary_operator&) -> std::vector<predicate> {
                             return cannot_solve(oper);
                         },
+                        [&] (const unary_operator&) -> std::vector<predicate> {
+                            return cannot_solve(oper);
+                        },
                         [&] (const conjunction&) -> std::vector<predicate> {
                             return cannot_solve(oper);
                         },
@@ -556,6 +559,9 @@ to_predicates(
                         },
                     }, oper.lhs);
                 },
+            [] (const unary_operator& uo) -> std::vector<predicate> {
+                return cannot_solve(uo);
+            },
             [] (const column_value& cv) -> std::vector<predicate> {
                 return cannot_solve(cv);
             },

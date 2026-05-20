@@ -5302,3 +5302,124 @@ BOOST_AUTO_TEST_CASE(evaluate_sub_reversed_type) {
     BOOST_REQUIRE_EQUAL(raw_to<int32_t>(result, int32_type), 7);
 }
 
+// Helper: evaluate a NEG unary_operator with a constant operand.
+static raw_value eval_neg(expression expr) {
+    return evaluate(unary_operator{unary_oper_t::NEG, std::move(expr)}, evaluation_inputs{});
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_fixed_width_integers) {
+    // int (32-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_neg(make_int_const(5)), int32_type), -5);
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(eval_neg(make_int_const(-7)), int32_type), 7);
+
+    // tinyint (8-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int8_t>(eval_neg(make_tinyint_const(10)), byte_type), int8_t(-10));
+
+    // smallint (16-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int16_t>(eval_neg(make_smallint_const(300)), short_type), int16_t(-300));
+
+    // bigint (64-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<int64_t>(eval_neg(make_bigint_const(1'000'000'000LL)), long_type), int64_t(-1'000'000'000LL));
+
+    // type_of a NEG expression is the type of the operand
+    expression neg_expr = unary_operator{unary_oper_t::NEG, make_int_const(1)};
+    BOOST_REQUIRE(type_of(neg_expr) == int32_type);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_floating_point) {
+    // float (32-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<float>(eval_neg(make_float_const(3.5f)), float_type), -3.5f);
+
+    // double (64-bit)
+    BOOST_REQUIRE_EQUAL(raw_to<double>(eval_neg(make_double_const(-2.5)), double_type), 2.5);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_varint) {
+    auto make_varint = [](int64_t v) -> constant {
+        return constant(raw_value::make_value(managed_bytes(varint_type->decompose(utils::multiprecision_int(v)))), varint_type);
+    };
+    BOOST_REQUIRE_EQUAL(
+        raw_to<utils::multiprecision_int>(eval_neg(make_varint(42)), varint_type),
+        utils::multiprecision_int(-42));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_decimal) {
+    auto make_decimal = [](const char* s) -> constant {
+        return constant(raw_value::make_value(managed_bytes(decimal_type->decompose(big_decimal(s)))), decimal_type);
+    };
+    BOOST_REQUIRE_EQUAL(
+        raw_to<big_decimal>(eval_neg(make_decimal("3.14")), decimal_type),
+        big_decimal("-3.14"));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_null_propagation) {
+    // NEG(null) → null for any numeric type
+    BOOST_REQUIRE(eval_neg(constant::make_null(int32_type)).is_null());
+    BOOST_REQUIRE(eval_neg(constant::make_null(long_type)).is_null());
+    BOOST_REQUIRE(eval_neg(constant::make_null(float_type)).is_null());
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_overflow) {
+    // Negating the minimum value of each signed integer type overflows
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_int_const(std::numeric_limits<int32_t>::min())),
+        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_tinyint_const(std::numeric_limits<int8_t>::min())),
+        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_smallint_const(std::numeric_limits<int16_t>::min())),
+        exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_bigint_const(std::numeric_limits<int64_t>::min())),
+        exceptions::invalid_request_exception);
+}
+
+// varint supports arbitrary precision, so negating INT64_MIN doesn't overflow.
+BOOST_AUTO_TEST_CASE(evaluate_neg_arbitrary_precision_no_overflow) {
+    utils::multiprecision_int min_val(std::numeric_limits<int64_t>::min());
+    constant c(raw_value::make_value(managed_bytes(varint_type->decompose(min_val))), varint_type);
+    BOOST_REQUIRE_EQUAL(
+        raw_to<utils::multiprecision_int>(eval_neg(c), varint_type),
+        -min_val);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_neg_non_numeric_type) {
+    BOOST_REQUIRE_THROW(
+        eval_neg(make_text_const("hello")),
+        exceptions::invalid_request_exception);
+
+    constant bool_const(raw_value::make_value(managed_bytes(boolean_type->decompose(true))), boolean_type);
+    BOOST_REQUIRE_THROW(
+        eval_neg(bool_const),
+        exceptions::invalid_request_exception);
+}
+
+// NEG unary_operator should print as "(-operand)"
+BOOST_AUTO_TEST_CASE(evaluate_neg_printer) {
+    expression neg_expr = unary_operator{unary_oper_t::NEG, make_int_const(3)};
+    BOOST_REQUIRE_EQUAL(expr_print(neg_expr), "(-3)");
+}
+
+// Arithmetic NEG on a column with a reversed type (DESC clustering key)
+// must work correctly, and not think reverse(int) is an unsupported type.
+BOOST_AUTO_TEST_CASE(evaluate_neg_reversed_type) {
+    // Schema with a DESC clustering key: equivalent to
+    // CREATE TABLE test_ks.test_cf (pk int, ck int, PRIMARY KEY (pk, ck)) WITH CLUSTERING ORDER BY (ck DESC);
+    schema_ptr test_schema =
+        schema_builder("test_ks", "test_cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
+            .build();
+
+    auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {
+        {"pk", make_int_raw(1)},
+        {"ck", make_int_raw(5)},
+    });
+
+    // -ck should equal -5
+    expression ck_col = column_value(test_schema->get_column_definition("ck"));
+    expression neg_expr = unary_operator{unary_oper_t::NEG, ck_col};
+    raw_value result = evaluate(neg_expr, inputs);
+    BOOST_REQUIRE_EQUAL(raw_to<int32_t>(result, int32_type), -5);
+}

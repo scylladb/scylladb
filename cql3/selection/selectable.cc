@@ -40,6 +40,9 @@ selectable_processes_selection(const expr::expression& selectable) {
         [&] (const expr::binary_operator& conj) -> bool {
             on_internal_error(slogger, "no way to express 'SELECT a binop b' in the grammar yet");
         },
+        [&] (const expr::unary_operator&) -> bool {
+            on_internal_error(slogger, "no way to express 'SELECT unop a' in the grammar yet");
+        },
         [] (const expr::subscript&) -> bool {
             return true;
         },

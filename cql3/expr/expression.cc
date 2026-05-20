@@ -75,6 +75,7 @@ static cql3::raw_value do_evaluate(const tuple_constructor&, const evaluation_in
 static cql3::raw_value do_evaluate(const collection_constructor&, const evaluation_inputs&);
 static cql3::raw_value do_evaluate(const usertype_constructor&, const evaluation_inputs&);
 static cql3::raw_value do_evaluate(const function_call&, const evaluation_inputs&);
+static cql3::raw_value do_evaluate(const unary_operator&, const evaluation_inputs&);
 
 namespace {
 
@@ -839,6 +840,9 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
             },
             [&] (const temporary& t) {
                 out = fmt::format_to(out, "@temporary{}", t.index);
+            },
+            [&] (const unary_operator& uo) {
+                out = fmt::format_to(out, "({}{})", uo.op, to_printer(uo.operand));
             }
         }, pr.expr_to_print);
     return out;
@@ -972,6 +976,9 @@ bool recurse_until(const expression& e, const noncopyable_function<bool (const e
                 }
                 return false;
             },
+            [&] (const unary_operator& uo) {
+                return recurse_until(uo.operand, predicate_fun);
+            },
             [](LeafExpression auto const&) {
                 return false;
             }
@@ -1046,6 +1053,9 @@ expression search_and_replace(const expression& e,
                         .sub = recurse(s.sub),
                         .type = s.type,
                     };
+                },
+                [&] (const unary_operator& uo) -> expression {
+                    return unary_operator{uo.op, recurse(uo.operand)};
                 },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
@@ -1452,6 +1462,51 @@ static
 cql3::raw_value
 do_evaluate(const temporary& t, const evaluation_inputs& inputs) {
     return inputs.temporaries[t.index];
+}
+
+static
+cql3::raw_value
+do_evaluate(const unary_operator& uo, const evaluation_inputs& inputs) {
+    // For now, this is do-nothing switch() supporting only the NEG operator.
+    // It will ask the compiler to warn us if we ever add a new type of unary
+    // operator and forget to update this function to handle it.
+    switch (uo.op) {
+    case unary_oper_t::NEG:
+        break;
+    }
+    raw_value operand_val = evaluate(uo.operand, inputs);
+    if (operand_val.is_null()) {
+        return raw_value::make_null();
+    }
+    const abstract_type& t = type_of(uo.operand)->without_reversed();
+    bytes result = operand_val.view().with_linearized([&](bytes_view bv) -> bytes {
+        return visit(t, make_visitor(
+            [&] <typename T> (const integer_type_impl<T>& itype) -> bytes {
+                T v = value_cast<T>(itype.deserialize(bv));
+                T res;
+                if (__builtin_sub_overflow(T(0), v, &res)) {
+                    throw exceptions::invalid_request_exception("Arithmetic negation overflow");
+                }
+                return serialized(res);
+            },
+            [&] <typename T> (const floating_type_impl<T>& ftype) -> bytes {
+                return serialized(-value_cast<T>(ftype.deserialize(bv)));
+            },
+            [&] (const varint_type_impl& vtype) -> bytes {
+                utils::multiprecision_int v = value_cast<utils::multiprecision_int>(vtype.deserialize(bv));
+                return serialized(-v);
+            },
+            [&] (const decimal_type_impl& dtype) -> bytes {
+                big_decimal v = value_cast<big_decimal>(dtype.deserialize(bv));
+                return serialized(-v);
+            },
+            [&] (const abstract_type& atype) -> bytes {
+                throw exceptions::invalid_request_exception(
+                    format("Arithmetic negation is not supported for type {}", atype.cql3_type_name()));
+            }
+        ));
+    });
+    return raw_value::make_value(managed_bytes(result));
 }
 
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
@@ -2031,6 +2086,9 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
         [](untyped_constant&) {},
         [](constant&) {},
         [](temporary&) {},
+        [&](unary_operator& uo) {
+            fill_prepare_context(uo.operand, ctx);
+        },
     }, e);
 }
 
@@ -2109,6 +2167,9 @@ type_of(const expression& e) {
                     return t;
                 },
             }, e.type);
+        },
+        [] (const unary_operator& uo) {
+            return type_of(uo.operand);
         },
         [] (const ExpressionElement auto& e) -> data_type {
             return e.type;
@@ -2407,6 +2468,9 @@ aggregation_depth(const cql3::expr::expression& e) {
         },
         [] (const usertype_constructor& uc) {
             return max_over_range(uc.elements | std::views::values);
+        },
+        [] (const unary_operator& uo) {
+            return aggregation_depth(uo.operand);
         }
     }, e);
 }
@@ -2496,6 +2560,10 @@ levellize_aggregation_depth(const cql3::expr::expression& e, unsigned desired_de
         [&] (usertype_constructor uc) -> expression {
             recurse_over_range(uc.elements | std::views::values);
             return uc;
+        },
+        [&] (unary_operator uo) -> expression {
+            recurse(uo.operand);
+            return uo;
         }
     }, e);
 }
@@ -2708,4 +2776,14 @@ std::string_view fmt::formatter<cql3::expr::oper_t>::to_string(const cql3::expr:
         return "-";
     }
     on_internal_error(cql3::expr::expr_logger, fmt::format("unexpected oper_t value {}", static_cast<int>(op)));
+}
+
+std::string_view fmt::formatter<cql3::expr::unary_oper_t>::to_string(const cql3::expr::unary_oper_t& op) {
+    using cql3::expr::unary_oper_t;
+
+    switch (op) {
+    case unary_oper_t::NEG:
+        return "-";
+    }
+    on_internal_error(cql3::expr::expr_logger, fmt::format("unexpected unary_oper_t value {}", static_cast<int>(op)));
 }
