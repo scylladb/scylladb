@@ -1859,7 +1859,8 @@ def get_warning_options(cxx):
                 for w in warnings
                 if flag_supported(flag=w, compiler=cxx)]
 
-    return ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
+    return ' '.join(warnings + ['-Wno-error=deprecated-declarations',
+                                    '-Wno-error=pass-failed'])
 
 
 def get_clang_inline_threshold():
